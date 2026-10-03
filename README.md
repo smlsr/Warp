@@ -8,6 +8,22 @@ There is no per-person cap. The only concurrency cap is `maxAgents`.
 
 ## Install
 
+Type this in a Cursor agent chat. It will not show up in autocomplete, so enter the whole line.
+
+```text
+/add-plugin https://github.com/smlsr/Warp
+```
+
+That works because the plugin manifest is at the root of that repo (.cursor-plugin/plugin.json), on main. You need Cursor 2.5 or later. Install it for yourself, or for the project, when Cursor asks.
+Then, in the repo you want Warp to build:
+
+```bash
+mkdir -p .warp
+cp ~/.cursor/plugins/local/warp/assets/config.example.yaml .warp/config.yaml
+```
+
+or Manually 
+
 ```bash
 mkdir -p .cursor/plugins .warp
 cp -R warp .cursor/plugins/warp
