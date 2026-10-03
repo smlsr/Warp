@@ -1,0 +1,15 @@
+---
+description: Warp operating constraints. Gates, locks, beam file, and merge policy. No per-person cap.
+alwaysApply: false
+---
+
+# Warp operating rules
+
+- `.warp/beam.json` is the source of truth. Update it only through `scripts/beam.py` or `scripts/scan.py`.
+- Do not dispatch unless `runState` is `running`.
+- Do not start a ticket until every dep is merged and every blocking upstream gate is green.
+- Do not run two active tickets whose lock paths overlap.
+- There is no per-person cap. The only concurrency cap is `maxAgents`.
+- S and M auto-merge only after Bugbot and CI are green. L and XL wait for Bitbucket APPROVED or `warp:proceed <id>`.
+- Coding model comes from `.warp/config.yaml`. Default `claude-sonnet-5.5`.
+- Jira, Bitbucket, Slack, and Teams go through Cursor's connected MCP servers.

@@ -1,0 +1,36 @@
+# Live state stays in the working copy and is gitignored.
+# Use an absolute path to keep it outside the repo, for example
+# /Users/you/.warp/humanifyos
+stateDir: .warp
+
+model: claude-sonnet-5.5
+# Cursor model slug for coding steps. Must match the picker.
+
+maxAgents: 18
+# Concurrent Shuttles. No per-person cap.
+
+autoMergeSizes: [S, M]
+# S and M auto-merge after Bugbot and CI. L and XL wait.
+
+messenger: both
+# slack | teams | both
+notify: verbose
+# verbose | quiet
+runner: cloud
+# cloud = Cursor cloud agent VM. local = this machine's agent.
+
+jiraProject: ""
+bugbotRequired: true
+maxFixAttempts: 3
+stuckAfterMinutes: 90
+respectMergeWindows: false
+mergeWindows: ["08:30", "13:00", "17:00"]
+pollSeconds: 300
+
+jiraMcp: atlassian
+bitbucketMcp: bitbucket
+slackMcp: slack
+teamsMcp: teams
+slackChannel: ""
+teamsChannel: ""
+# Channel to post into, and to watch for warp:status.

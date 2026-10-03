@@ -1,0 +1,17 @@
+{
+  "name": "warp",
+  "displayName": "Warp",
+  "version": "1.2.0",
+  "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, keep state out of git.",
+  "author": { "name": "HumanifyOS" },
+  "license": "MIT",
+  "keywords": ["warp", "orchestrator", "jira", "bitbucket", "cursor-plan"],
+  "category": "developer-tools",
+  "tags": ["workflow", "orchestration", "jira", "review"],
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "rules": "./rules/",
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json",
+  "logo": "assets/logo.svg"
+}

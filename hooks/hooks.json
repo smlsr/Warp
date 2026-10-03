@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "sessionStart": [
+      { "command": "./hooks/session-start.sh" }
+    ],
+    "stop": [
+      { "command": "./hooks/on-stop.sh" }
+    ],
+    "subagentStop": [
+      { "command": "./hooks/subagent-stop.sh" }
+    ]
+  }
+}

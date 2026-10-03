@@ -1,0 +1,12 @@
+---
+description: Model pin for Warp workers. Default coding model is claude-sonnet-5.5 and is overridden only by .warp/config.yaml.
+alwaysApply: false
+---
+
+# Warp models
+
+When Warp, Shuttle, or Reed is running a coding step, use the model in `.warp/config.yaml`.
+
+Default: `claude-sonnet-5.5`.
+
+If that slug is not in the Cursor model picker, stop and ask for the slug. Do not silently fall back to a different family. Judgment and notification steps may use a cheaper model; coding and Bugbot-fix loops may not.

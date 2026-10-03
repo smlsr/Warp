@@ -1,0 +1,3 @@
+# Warp live state. Do not commit. Hundreds of status writes are not source history.
+# Ticket work is committed on warp/<id> branches by Shuttles, not from this directory.
+.warp/
