@@ -13,7 +13,7 @@ Ticket id, Jira key, lock paths, size, autoMerge flag, model slug, preamble path
 
 ## Pipeline
 
-1. Claim is already recorded. Set status `planning`.
+1. Claim is already recorded. If `jira.startedAt` is not set on your ticket and it has a Jira key, move the issue to In Progress as `scripts/jira_sync.py plan --event claim` says (the claim normally already printed this). Then set status `planning`. If Jira is not connected or no transition fits, record that with `jira_sync.py record` and carry on; never stop the ticket for it.
 2. Fetch the Jira issue with the connected Jira MCP. Read What, every AC, technical details, and links. Read the module preamble, then `/HOS/spec/CURSOR_PREAMBLE.md` if present.
 3. Plan the diff inside the lock paths only. If the fix requires a path outside the locks, stop with status `alarm` and reason `lock-escape`. Do not widen the lock.
 4. Branch `warp/<id>-<jiraKey>` from fresh `main`. Set status `coding`. Use the model in `.warp/config.yaml` (default `claude-sonnet-5.5`).
@@ -28,7 +28,7 @@ After every status change, run `scripts/beam.py set`. If the session dies, the n
 ## Forbidden
 
 - Merging.
-- Transitioning Jira to Done (Reed does that).
+- Transitioning Jira to Done (Reed does that). In Progress is the only move you make.
 - Touching files outside the ticket locks.
 - Starting another ticket.
 - Skipping a failing AC.

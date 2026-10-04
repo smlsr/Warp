@@ -186,6 +186,9 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `notify` | `verbose` | Every claim and tick. `quiet` still answers `warp:status`. |
 | `runner` | `cloud` | Cloud VM, or `local` for this machine. |
 | `jiraProject` | empty | Pin a Jira key, or leave blank. |
+| `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
+| `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
+| `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
 | `bugbotRequired` | `true` | No merge without a Bugbot pass. |
 | `maxFixAttempts` | `3` | Then the ticket alarms. |
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. |

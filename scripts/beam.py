@@ -93,7 +93,7 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict)
         size = t.get("size") or "M"
         tickets[t["id"]] = {
             "id": t["id"],
-            "jiraKey": None,
+            "jiraKey": t.get("jiraKey") or None,
             "summary": t.get("summary", ""),
             "module": t.get("module"),
             "layer": t.get("layer"),
@@ -380,6 +380,12 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         {"type": "set", "id": args.id, "from": prev, "to": t["status"], "agent": t.get("agent")},
     )
     print(f"{args.id} {prev} -> {t['status']}")
+    try:
+        import jira_sync
+
+        jira_sync.on_set(beam_path, beam, t, prev, t["status"])
+    except Exception as e:  # fail-soft: Jira sync never blocks a transition
+        print(f"jira: skipped ({e})")
 
 
 def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
@@ -575,6 +581,9 @@ def default_config() -> dict:
         "notify": "verbose",
         "runner": "cloud",
         "jiraProject": "HOS",
+        "jiraTransition": True,
+        "jiraInProgressStatus": "In Progress",
+        "jiraRestoreOnRelease": False,
         "bugbotRequired": True,
         "maxFixAttempts": 3,
         "stuckAfterMinutes": 90,

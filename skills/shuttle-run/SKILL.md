@@ -17,11 +17,12 @@ You were started with `IMPLEMENT <id>` in this repo. Local and cloud are the sam
 
 ## Then
 
-1. Set `planning`. Plan the diff inside the lock paths only. An escape is `alarm` / `lock-escape`.
-2. Set `coding`. Branch `warp/<id>-<jiraKey>` off updated `main`. Use `config.model`.
-3. Implement. Prove each acceptance criterion. Checkpoint spend with `scripts/beam.py spend`.
-4. Open the pull request. Comment the URL on the Jira issue. Set `review` and hand the id to Reed.
-5. If Reed returns fixes and attempts remain, set `fix` and push. Past `maxFixAttempts`, set `alarm`.
+1. Jira status. If the ticket has a Jira key and `jira.startedAt` is empty in the beam, run `python3 <plugin>/scripts/jira_sync.py plan --beam .warp/beam.json --id <id> --event claim` and follow it: read the issue's status and transitions through the Jira MCP server, run `jira_sync.py pick`, apply the transition, then `jira_sync.py record`. No Jira connector, no matching transition, or a failed call is not an error: record `unavailable`, `no-transition`, or `failed`, which saves a note to `.warp/outbox.md`, and continue.
+2. Set `planning`. Plan the diff inside the lock paths only. An escape is `alarm` / `lock-escape`.
+3. Set `coding`. Branch `warp/<id>-<jiraKey>` off updated `main`. Use `config.model`.
+4. Implement. Prove each acceptance criterion. Checkpoint spend with `scripts/beam.py spend`.
+5. Open the pull request. Comment the URL on the Jira issue. Set `review` and hand the id to Reed.
+6. If Reed returns fixes and attempts remain, set `fix` and push. Past `maxFixAttempts`, set `alarm`.
 
 If status is already `coding` or `fix` and the branch exists, continue that branch. Do not open a second pull request.
 

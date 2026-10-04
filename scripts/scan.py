@@ -143,6 +143,7 @@ def from_schedule(path: Path) -> dict | None:
         tickets.append(
             {
                 "id": tid,
+                "jiraKey": t.get("jiraKey"),
                 "summary": t.get("summary") or t.get("title") or "",
                 "deps": t.get("deps") or t.get("blockedBy") or t.get("blockedByTempIds") or [],
                 "locks": t.get("locks") or [],
@@ -195,9 +196,11 @@ def from_jira(path: Path) -> dict | None:
                 if inward:
                     deps.append(inward)
         summary = t.get("summary") or fields.get("summary") or ""
+        key = t.get("key") or fields.get("key")
         tickets.append(
             {
                 "id": str(tid),
+                "jiraKey": key if isinstance(key, str) and re.fullmatch(r"[A-Z][A-Z0-9_]+-\d+", key) else None,
                 "summary": summary,
                 "deps": deps,
                 "locks": t.get("locks") or [],
@@ -389,6 +392,7 @@ def to_schedule(graph: dict) -> dict:
         "tickets": [
             {
                 "id": t["id"],
+                "jiraKey": t.get("jiraKey"),
                 "summary": t.get("summary") or "",
                 "deps": t.get("deps") or [],
                 "unlocks": [],
@@ -514,6 +518,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
         "tickets": [
             {
                 "id": t["id"],
+                "jiraKey": t.get("jiraKey"),
                 "summary": t.get("summary"),
                 "deps": t.get("deps"),
                 "locks": t.get("locks"),

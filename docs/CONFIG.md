@@ -12,6 +12,9 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/war
 | notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms and stops only. |
 | runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |
 | jiraProject | empty | Jira project key, if you want it pinned. |
+| jiraTransition | `true` | On claim, move the Jira issue to `jiraInProgressStatus`. Only tickets with a Jira key. No Jira connector, or no matching transition: a note goes to `.warp/outbox.md` and the claim goes on. |
+| jiraInProgressStatus | `In Progress` | Target status name. Warp reads the transitions Jira offers and matches the transition name, then the target status name, then an in-progress status category. It never uses a fixed transition id. |
+| jiraRestoreOnRelease | `false` | `true`: when a claim is released back to `queued`, move the issue back to the status it had before Warp moved it. `false`: leave it where it is. |
 | bugbotRequired | `true` | Reed will not merge without a Bugbot pass. |
 | maxFixAttempts | `3` | Then the ticket alarms. |
 | stuckAfterMinutes | `90` | No beam update in this window, and not waiting on approval, raises stuck. |

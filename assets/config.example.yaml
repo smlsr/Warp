@@ -20,6 +20,14 @@ runner: cloud
 # cloud = Cursor cloud agent VM. local = this machine's agent.
 
 jiraProject: ""
+jiraTransition: true
+# On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
+# Needs the Jira MCP server; without it Warp logs a note and the claim goes on.
+jiraInProgressStatus: "In Progress"
+# Target status name. The transition is looked up by name or status category.
+jiraRestoreOnRelease: false
+# true: when a claim is released back to queued, move the issue back to the status
+# it had before. false: leave it. Pause and stop never move an issue.
 bugbotRequired: true
 maxFixAttempts: 3
 stuckAfterMinutes: 90
