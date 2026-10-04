@@ -78,7 +78,7 @@ Estimate: agent 60.0h, human 2.5h, elapsed 43.5h
 Links point at branch main; they work once it is pushed. Next: /warp-start. Status files are in .warp/ (not committed).
 ```
 
-- `/warp-init` posts only if it changed something. A second run posts nothing. It also tries once to add the person running the agent (git `user.email`) to the channel, if the connected tools can add a user by email. If they cannot, or it fails, or the email is a bot or noreply address, Herald skips it with a one-line note. This never fails init.
+- `/warp-init` posts only if it changed something. A second run posts nothing.
 - `/warp-scan` posts the summary and links to the plan and schedule files found. Links use the `origin` remote and branch (GitHub, GitLab, bitbucket.org). Otherwise the relative path is used. Links work once the branch is pushed.
 - `/warp-status-post` uses the same header.
 - It follows `messenger` and `notify`. `notify: quiet` posts neither. Each message goes to `slackChannel` and `teamsChannel` for the messenger you chose.

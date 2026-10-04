@@ -290,21 +290,6 @@ class NotifyTests(Base):
         self.assertIn("slack", body)
         self.assertIn("teams", body)
 
-    def test_invite_uses_git_email_and_skips_bots(self):
-        git(self.repo, "config", "user.email", "dev@acme.com")
-        r = self.init()
-        self.assertEqual(payload(self.repo)["invite"], "dev@acme.com")
-        self.assertIn("add dev@acme.com to the channel", r.stdout)
-        self.assertIn("Do not create the channel", r.stdout)
-        shutil.rmtree(self.repo / ".warp")
-        for bad in ("cursoragent@cursor.com", "1+me@users.noreply.github.com"):
-            git(self.repo, "config", "user.email", bad)
-            shutil.rmtree(self.repo / ".warp", ignore_errors=True)
-            r = self.init()
-            self.assertIsNone(payload(self.repo)["invite"])
-            self.assertEqual(r.returncode, 0)
-            self.assertIn("nobody to add to the channel", r.stdout)
-
     def test_slack_uppercase_lowercased_when_posting_teams_kept(self):
         self.init()
         self.set_cfg(slackChannel="Eng-Team", teamsChannel="Eng Team")

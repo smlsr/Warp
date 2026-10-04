@@ -38,7 +38,6 @@ import herald_fmt as fmt  # noqa: E402
 PAYLOAD = "notify-post.json"
 OUTBOX = "outbox.md"
 MAX_LINKS = 12
-BOT_EMAILS = ("noreply", "no-reply", "cursoragent@cursor.com")
 
 
 def file_url(rel: str, web: str | None, branch: str | None, kind: str | None) -> str | None:
@@ -65,16 +64,6 @@ def targets(cfg: dict) -> tuple[list[dict], list[str]]:
         else:
             notes.append(f"{m}Channel is empty in .warp/config.yaml")
     return out, notes
-
-
-def invite_email(root: Path) -> tuple[str | None, str | None]:
-    """(email, note) from git user.email. Bot and noreply addresses are not users."""
-    mail = fmt.git(root, "config", "user.email")
-    if not mail:
-        return None, "no git user.email, so nobody to add to the channel"
-    if "@" not in mail or any(b in mail.lower() for b in BOT_EMAILS):
-        return None, f"git user.email ({mail}) is not a Slack or Teams user, so nobody to add to the channel"
-    return mail, None
 
 
 def init_message(root: Path, cfg: dict) -> dict:
@@ -151,11 +140,6 @@ def build(kind: str, root: Path, info: dict | None = None) -> dict:
         payload["header"] = fmt.header(root, cfg)
         tg, notes = targets(cfg)
         payload["targets"], payload["notes"] = tg, notes
-        if kind == "init" and tg:
-            email, note = invite_email(root)
-            payload["invite"] = email
-            if note:
-                payload["notes"].append(note)
         if cfg["notify"] == "quiet":
             payload["action"] = "skip"
             payload["notes"] = ["notify is quiet; init and scan messages are not posted"]
@@ -182,11 +166,6 @@ def report(payload: dict) -> None:
         where = ", ".join(f"{t['messenger']} {t['channel']}" for t in payload["targets"])
         print(f"herald: post .warp/{PAYLOAD} to {where} through the connected MCP server (slack view to Slack, teams view to Teams).")
         print(f"herald: if the connector is missing or errors, run: python3 {Path(__file__).resolve()} outbox --root .")
-        if payload.get("invite"):
-            print(
-                f"herald: optional, once: if your tools can add a user by email, add {payload['invite']} to the channel. "
-                "If they cannot, or it fails, skip and say so in one line. Do not create the channel."
-            )
         for n in payload["notes"]:
             print(f"herald: note: {n}")
     else:
