@@ -40,17 +40,62 @@ ID_RE = re.compile(r"\b([A-Z]{1,4}-\d{1,4})\b")
 AFTER_RE = re.compile(r"\bafter\s+([A-Z0-9][A-Z0-9,\s\-]{0,80})", re.I)
 
 
-def walk(root: Path):
-    for p in root.rglob("*"):
-        if any(part in SKIP for part in p.parts):
+def walk(base: Path):
+    for p in sorted(base.rglob("*")):
+        if any(part in SKIP for part in p.relative_to(base).parts):
             continue
         if p.is_file():
             yield p
 
 
-def scan(root: Path) -> dict:
+def resolve_folder(root: Path, arg: str) -> tuple[Path | None, list[Path], str | None]:
+    """Resolve a folder argument to a directory inside root.
+
+    An existing path under root wins. Otherwise the argument is matched as a
+    folder name, or a trailing path such as spec/api, anywhere under root.
+    Returns (folder, candidates, error). A folder of None with candidates means
+    the name is ambiguous; with an error it was not found.
+    """
+    root = root.resolve()
+    direct = (root / arg).resolve()
+    if direct.is_dir():
+        if direct != root and root not in direct.parents:
+            return None, [], f"folder {arg!r} is outside the repo root {root}"
+        return direct, [], None
+    if Path(arg).is_absolute():
+        return None, [], f"folder {arg!r} does not exist"
+    want = arg.strip("/").replace("\\", "/").casefold()
+    hits = []
+    for d in sorted(root.rglob("*")):
+        if not d.is_dir():
+            continue
+        rel = d.relative_to(root)
+        if any(part in SKIP for part in rel.parts):
+            continue
+        rp = rel.as_posix().casefold()
+        if rp == want or rp.endswith("/" + want):
+            hits.append(d)
+    if not hits:
+        return None, [], f"no folder named {arg!r} under {root}"
+    if len(hits) == 1:
+        return hits[0], [], None
+    return None, hits, None
+
+
+def has_plan_files(d: Path) -> bool:
+    found = scan(d, d)
+    return any(found[k] for k in ("warp", "schedules", "plans", "jira"))
+
+
+def plan_folders(found: dict) -> list[str]:
+    """Folders (relative to the repo root) that hold a plan, schedule, or export."""
+    out = {str(Path(rel).parent) for k in ("warp", "schedules", "plans", "jira") for rel in found[k]}
+    return sorted(out)
+
+
+def scan(root: Path, folder: Path | None = None) -> dict:
     found = {"plans": [], "schedules": [], "jira": [], "warp": [], "maps": []}
-    for p in walk(root):
+    for p in walk(folder or root):
         name = p.name.lower()
         rel = str(p.relative_to(root))
         if name in {"warp_plan.json", "warp-plan.json"}:
@@ -64,6 +109,8 @@ def scan(root: Path) -> dict:
         elif name.endswith(".json") and ("ticket" in name or "jira" in name or p.parent.name.lower() == "jira"):
             found["jira"].append(rel)
     found["root"] = str(root)
+    if folder is not None:
+        found["folder"] = str(folder.relative_to(root)) or "."
     found["scannedAt"] = utcnow()
     return found
 
@@ -543,6 +590,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     ps = sub.add_parser("scan")
     ps.add_argument("--root", default=".")
+    ps.add_argument("--folder", help="limit the scan to this folder (path or name under root)")
     ps.add_argument("--out", default=".warp/beam.json")
     ps.add_argument("--max-agents", type=int, default=18)
     ps.add_argument("--model", default="claude-sonnet-5.5")
@@ -564,13 +612,36 @@ def main() -> None:
     args = p.parse_args()
     if args.cmd == "scan":
         root = Path(args.root).resolve()
-        found = scan(root)
+        folder = None
+        if args.folder:
+            folder, cands, err = resolve_folder(root, args.folder)
+            if err:
+                sys.exit(f"scan: {err}")
+            if folder is None:
+                withplans = [c for c in cands if has_plan_files(c)]
+                if len(withplans) == 1:
+                    folder = withplans[0]
+                    others = ", ".join(str(c.relative_to(root)) for c in cands if c != folder)
+                    print(f"note: {args.folder!r} matches {len(cands)} folders; only {folder.relative_to(root)} has plan files (also: {others})")
+                else:
+                    print(f"scan: {args.folder!r} is ambiguous. Matching folders:")
+                    for c in cands:
+                        print(f"  {c.relative_to(root)}  {'has plan files' if c in withplans else 'no plan files'}")
+                    print("Re-run with the full path, for example: /warp-scan " + str(cands[0].relative_to(root)))
+                    sys.exit(3)
+        found = scan(root, folder)
+        if not args.folder:
+            where = plan_folders(found)
+            if len(where) > 1:
+                print(f"note: plans found in {len(where)} folders: {', '.join(where)}")
+                print("      scanning all of them and using the richest. Pass a folder to scope: /warp-scan <folder>")
         warp = root / ".warp"
         warp.mkdir(parents=True, exist_ok=True)
         atomic_write(warp / "scan.json", json.dumps(found, indent=2) + "\n")
         graph = pick(root, found)
         if not graph:
-            print("no plan found — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
+            where = f" in {folder.relative_to(root)}" if folder else ""
+            print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
             sys.exit(2)
         sched_path = warp / "_ingested_schedule.json"
         atomic_write(sched_path, json.dumps(to_schedule(graph), indent=2) + "\n")
@@ -581,6 +652,7 @@ def main() -> None:
         beam["runState"] = "stopped"
         beam["source"]["format"] = graph.get("format")
         beam["source"]["scan"] = found
+        beam["source"]["folder"] = found.get("folder")
         beam.setdefault("program", {})["estimate"] = estimate(
             list(beam["tickets"].values()),
             beam.get("gates") or [],
@@ -589,6 +661,8 @@ def main() -> None:
         )
         atomic_write(Path(args.out), json.dumps(beam, indent=2) + "\n")
         est = beam["program"]["estimate"]
+        if folder:
+            print(f"scope folder={folder.relative_to(root)}")
         print(f"scan format={graph.get('format')} tickets={len(beam['tickets'])} source={graph.get('source')}")
         print(f"estimate agentHours={est['agentHours']} humanHours={est['humanHours']} elapsedHours={est['elapsedHours']}")
         print("runState=stopped — /warp-start to dispatch")

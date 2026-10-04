@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Install or remove Warp in a repo. Both subcommands are idempotent.
+
+  init       copy the plugin to .cursor/plugins/warp, create .warp/config.yaml,
+             set the channel names to warp.<reponame>, and append the
+             gitignore snippet. Each step runs only if it is not already done.
+  uninstall  list what would be removed; delete only with --yes.
+
+Nothing here touches product code, git history, or any file outside the repo.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_REL = Path(".cursor/plugins/warp")
+STATE_REL = Path(".warp")
+COPY_IGNORE = {".git", ".cursor", ".warp", "__pycache__", "node_modules"}
+CHANNEL_KEYS = ("slackChannel", "teamsChannel")
+IGNORE_ENTRIES = {".warp", ".warp/", "/.warp", "/.warp/"}
+
+
+def git(root: Path, *args: str) -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def find_root(arg: str | None) -> Path:
+    if arg:
+        return Path(arg).resolve()
+    top = git(Path.cwd(), "rev-parse", "--show-toplevel")
+    return Path(top).resolve() if top else Path.cwd().resolve()
+
+
+def sanitize(name: str) -> str:
+    """Lowercase, [a-z0-9_-] only, no leading or trailing separators."""
+    s = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
+    s = re.sub(r"-{2,}", "-", s).strip("-_")
+    return s[:60].strip("-_") or "repo"
+
+
+def repo_name(root: Path) -> str:
+    remote = git(root, "remote", "get-url", "origin")
+    if remote:
+        last = re.split(r"[/:]", remote.rstrip("/"))[-1]
+        last = re.sub(r"\.git$", "", last)
+        if last:
+            return sanitize(last)
+    return sanitize(root.name)
+
+
+def read_snippet(root: Path) -> str | None:
+    for base in (root / PLUGIN_REL, PLUGIN_ROOT):
+        f = base / "assets" / "gitignore-snippet.txt"
+        if f.is_file():
+            return f.read_text().rstrip("\n") + "\n"
+    return None
+
+
+def example_config(root: Path) -> Path | None:
+    for base in (root / PLUGIN_REL, PLUGIN_ROOT):
+        f = base / "assets" / "config.example.yaml"
+        if f.is_file():
+            return f
+    return None
+
+
+def copy_missing(src: Path, dst: Path, dry: bool) -> int:
+    """Copy files that do not exist in dst. Never overwrite. Returns count."""
+    n = 0
+    for p in sorted(src.rglob("*")):
+        rel = p.relative_to(src)
+        if any(part in COPY_IGNORE for part in rel.parts) or not p.is_file():
+            continue
+        target = dst / rel
+        if target.exists() or target.is_symlink():
+            continue
+        n += 1
+        if not dry:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+    return n
+
+
+def channel_value(text: str, key: str) -> tuple[bool, str]:
+    m = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*(#.*)?$", text, re.M)
+    if not m:
+        return False, ""
+    return True, m.group(1).strip().strip("\"'")
+
+
+def set_channel(text: str, key: str, value: str) -> str:
+    line = f'{key}: "{value}"'
+    pat = re.compile(rf"^{key}:[^\n]*$", re.M)
+    if pat.search(text):
+        return pat.sub(lambda _: line, text, count=1)
+    return text.rstrip("\n") + "\n" + line + "\n"
+
+
+def apply_channels(text: str, channel: str) -> tuple[str, list[str]]:
+    changed = []
+    for key in CHANNEL_KEYS:
+        present, val = channel_value(text, key)
+        if val == "":
+            text = set_channel(text, key, channel)
+            changed.append(key)
+    return text, changed
+
+
+def has_ignore_entry(text: str) -> bool:
+    return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
+
+
+def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
+    steps: list[tuple[str, str]] = []
+    channel = channel or f"warp.{repo_name(root)}"
+    plugin = root / PLUGIN_REL
+    state = root / STATE_REL
+
+    for d in (root / ".cursor" / "plugins", state):
+        rel = d.relative_to(root)
+        if d.is_dir():
+            steps.append(("skip", f"{rel}/ already exists"))
+        else:
+            if not dry:
+                d.mkdir(parents=True, exist_ok=True)
+            steps.append(("done", f"created {rel}/"))
+
+    if plugin.resolve() == PLUGIN_ROOT:
+        steps.append(("skip", f"{PLUGIN_REL}/ is the running plugin"))
+    else:
+        n = copy_missing(PLUGIN_ROOT, plugin, dry)
+        if n:
+            steps.append(("done", f"copied {n} plugin file(s) to {PLUGIN_REL}/ (existing files kept)"))
+        else:
+            steps.append(("skip", f"{PLUGIN_REL}/ already has every plugin file"))
+
+    cfg = state / "config.yaml"
+    if cfg.exists():
+        text = cfg.read_text()
+        new, changed = apply_channels(text, channel)
+        if changed:
+            if not dry:
+                cfg.write_text(new)
+            steps.append(("done", f"set {', '.join(changed)} to {channel!r} in existing config (was default)"))
+        else:
+            steps.append(("skip", ".warp/config.yaml exists, channels already set; left as is"))
+    else:
+        src = example_config(root)
+        if not src:
+            steps.append(("fail", "assets/config.example.yaml not found"))
+        else:
+            new, changed = apply_channels(src.read_text(), channel)
+            if not dry:
+                cfg.write_text(new)
+            steps.append(("done", f"created .warp/config.yaml from example with channel {channel!r}"))
+
+    snippet = read_snippet(root)
+    gi = root / ".gitignore"
+    if snippet is None:
+        steps.append(("fail", "assets/gitignore-snippet.txt not found"))
+    else:
+        text = gi.read_text() if gi.exists() else ""
+        if snippet in text.replace("\r\n", "\n") or has_ignore_entry(text):
+            steps.append(("skip", ".gitignore already ignores .warp/"))
+        else:
+            sep = ""
+            if text:
+                sep = ("" if text.endswith("\n") else "\n") + "\n"
+            if not dry:
+                gi.write_text(text + sep + snippet)
+            steps.append(("done", "appended Warp snippet to .gitignore"))
+    return steps
+
+
+def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
+    plugin, state, gi = root / PLUGIN_REL, root / STATE_REL, root / ".gitignore"
+    snippet = read_snippet(root)
+    targets: list[tuple[str, Path]] = []
+    for label, p in (("plugin copy", plugin), ("Warp state", state)):
+        if p.is_symlink() or p.exists():
+            targets.append((label, p))
+
+    block_found = False
+    gi_note = None
+    if remove_gitignore:
+        text = gi.read_text() if gi.exists() else ""
+        if snippet and snippet in text.replace("\r\n", "\n"):
+            block_found = True
+        elif has_ignore_entry(text):
+            gi_note = ".gitignore has a .warp/ entry that is not the Warp snippet; leaving it alone"
+        else:
+            gi_note = ".gitignore has no Warp snippet; nothing to remove"
+
+    print(f"Repo: {root}")
+    print("Will remove:")
+    for label, p in targets:
+        extra = ""
+        if p.is_dir() and not p.is_symlink():
+            extra = f" ({sum(1 for f in p.rglob('*') if f.is_file())} files)"
+        print(f"  - {p.relative_to(root)}{'/' if p.is_dir() else ''}  [{label}]{extra}")
+    if block_found:
+        print("  - Warp snippet in .gitignore  [only that block; other lines kept]")
+    if not targets and not block_found:
+        print("  (nothing)")
+    if gi_note:
+        print(f"Note: {gi_note}")
+
+    beam = state / "beam.json"
+    if beam.is_file():
+        try:
+            run = json.loads(beam.read_text()).get("runState")
+        except Exception:
+            run = None
+        if run == "running":
+            print("Warning: the beam is still running. Run /warp-stop first.")
+        print("Warning: .warp/ holds the beam, journal, and config. They cannot be recovered.")
+    cfg = state / "config.yaml"
+    if cfg.is_file():
+        m = re.search(r"^stateDir:[ \t]*(\S+)", cfg.read_text(), re.M)
+        if m and m.group(1).strip("\"'") not in {".warp", ".warp/"}:
+            print(f"Note: config stateDir is {m.group(1)}; that location is NOT removed.")
+    print("Not touched: product code, warp/<id> branches, pull requests, the user-level plugin (Cursor Settings).")
+
+    if not targets and not block_found:
+        print("\nNothing to remove. Run /warp-init to install.")
+        return 0
+
+    if not yes:
+        print("\nNothing deleted. Show this list to the user, get an explicit yes, then re-run with --yes.")
+        return 0
+
+    for _, p in targets:
+        if p.is_symlink() or p.is_file():
+            p.unlink()
+        else:
+            shutil.rmtree(p)
+    for d in (root / ".cursor" / "plugins", root / ".cursor"):
+        try:
+            d.rmdir()
+        except OSError:
+            break
+    if block_found:
+        text = gi.read_text().replace("\r\n", "\n")
+        i = text.find(snippet)
+        before, after = text[:i], text[i + len(snippet):]
+        if before.endswith("\n\n"):
+            before = before[:-1]
+        gi.write_text(before + after)
+    print("\nRemoved. Reload Cursor, then run /warp-init for a fresh install.")
+    return 0
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Warp install / uninstall")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pi = sub.add_parser("init")
+    pi.add_argument("--root")
+    pi.add_argument("--channel", help="override the default warp.<reponame>")
+    pi.add_argument("--dry-run", action="store_true")
+    pu = sub.add_parser("uninstall")
+    pu.add_argument("--root")
+    pu.add_argument("--remove-gitignore", action="store_true")
+    pu.add_argument("--yes", action="store_true", help="delete; without it only list")
+    args = p.parse_args()
+    root = find_root(args.root)
+    if args.cmd == "init":
+        steps = init(root, args.channel, args.dry_run)
+        print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
+        for status, msg in steps:
+            print(f"  [{status}] {msg}")
+        if any(s == "fail" for s, _ in steps):
+            sys.exit(1)
+        if any(s == "done" for s, _ in steps) and not args.dry_run:
+            print("Reload Cursor so the commands and rules load. Then connect Jira, Bitbucket, and Slack or Teams in Settings.")
+        elif not args.dry_run:
+            print("Already set up. Nothing changed.")
+    else:
+        sys.exit(uninstall(root, args.remove_gitignore, args.yes))
+
+
+if __name__ == "__main__":
+    main()

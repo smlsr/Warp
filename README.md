@@ -15,14 +15,19 @@ Type this in a Cursor agent chat. It will not show up in autocomplete, so enter 
 ```
 
 That works because the plugin manifest is at the root of that repo (.cursor-plugin/plugin.json), on main. You need Cursor 2.5 or later. Install it for yourself, or for the project, when Cursor asks.
-Then, in the repo you want Warp to build:
+Then, in the repo you want Warp to build, type `/warp-init`. It does the manual steps below and is safe to run again: it checks each one and does only what is missing.
 
-```bash
-mkdir -p .warp
-cp ~/.cursor/plugins/local/warp/assets/config.example.yaml .warp/config.yaml
-```
+| Step | Skipped when |
+|---|---|
+| `mkdir -p .cursor/plugins .warp` | both folders exist |
+| Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
+| Copy `assets/config.example.yaml` to `.warp/config.yaml` | the config exists. It is never overwritten. |
+| Set `slackChannel` and `teamsChannel` to `warp.<reponame>` | the channel already has a value. Only an empty (default) channel is filled. |
+| Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
-or Manually 
+`<reponame>` comes from the `origin` remote, or the folder name if there is none. It is lowercased, and anything but letters, digits, `_` and `-` becomes `-`. Then reload Cursor.
+
+To do it by hand instead:
 
 ```bash
 mkdir -p .cursor/plugins .warp
@@ -30,7 +35,13 @@ cp -R warp .cursor/plugins/warp
 cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 ```
 
-Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, Bitbucket, and Slack or Teams in Cursor Settings. Commands then include `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, and `/warp-status-post`.
+Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, Bitbucket, and Slack or Teams in Cursor Settings.
+
+Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, and `/warp-uninstall`.
+
+## Uninstall
+
+`/warp-uninstall` removes `.cursor/plugins/warp` and `.warp/`, and optionally the snippet `/warp-init` added to `.gitignore`, so a fresh `/warp-init` works. It first prints what it will remove and deletes nothing until you confirm. `.warp/` holds the beam, journal, and config, and it cannot be recovered. Stop a running beam first with `/warp-stop`. Product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, and a plugin installed through Cursor Settings are not touched. Reload Cursor afterwards.
 
 ## Where the files are
 
@@ -41,15 +52,31 @@ Review files from the Cursor file tree. On a cloud VM, download them before the 
 ## If you have no plan file
 
 1. Paste `examples/PROMPT-make-cursor-plan.md` into an agent in that repo. It writes `CURSOR_PLAN.md` from the specs and tickets. A filled example is `examples/CURSOR_PLAN.sample.md`.
-2. `/warp-scan`. Warp also reads `schedule.json`, a Jira JSON export, or a markdown table with `id` and `deps`.
+2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json`, a Jira JSON export, or a markdown table with `id` and `deps`.
 3. A connected Jira plugin is the live system of record after the scan, not a second scheduler. Warp will not invent tickets.
+
+## Scan one folder
+
+`/warp-scan` searches the whole repo. In a monorepo with specs in several places, give a folder path or name:
+
+```
+/warp-scan HOS/spec
+/warp-scan spec
+```
+
+Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.json`, and Jira exports. `.warp/` stays at the repo root.
+
+- An existing path under the repo is used as given.
+- A name is matched against folder names, or the end of their paths, anywhere in the repo.
+- If a name matches several folders, Warp lists them, marks which have plan files, and scans nothing. If only one has plan files it uses that one and notes the others. Re-run with the full path to pick.
+- With no argument and plans in more than one folder, Warp prints the folders it found and uses the richest plan, as before.
 
 ## Session
 
 | Step | In the agent window | What you should see |
 |---|---|---|
-| Install | Copy the plugin. Copy `config.example.yaml` to `.warp/config.yaml`. Reload. | `/warp-scan` and `/warp-start` appear. |
-| Scan | `/warp-scan` | Ticket count, format, run stopped. `beam.json` exists. |
+| Install | `/warp-init`. Reload. | `/warp-scan` and `/warp-start` appear. |
+| Scan | `/warp-scan` or `/warp-scan <folder>` | Ticket count, format, run stopped. `beam.json` exists. |
 | Start | `/warp-start` | Herald posts. Shuttles claim up to `maxAgents`. |
 | Pause | `/warp-pause` | No new claims. In-flight finishes its step. |
 | Download | Ask for a bundle, or download `STATUS.md`. | The zip or the file on your machine. |
@@ -58,6 +85,7 @@ Review files from the Cursor file tree. On a cloud VM, download them before the 
 | Import | `/warp-import` on that path. | Plan replaced. Run stopped. Status kept for surviving ids. |
 | Restart | `/warp-start` | Dispatch uses the new graph. |
 | Stop | `/warp-stop` | Stays stopped until the next start. |
+| Remove | `/warp-uninstall`, then confirm. | The plugin copy and `.warp/` are gone. `/warp-init` installs again. |
 
 Pause is a hold. Stop is an end. Each repo has its own `.warp/`, so stopping one project does not stop another.
 
@@ -122,7 +150,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraMcp` | `atlassian` | Connected Jira server name. |
 | `bitbucketMcp` | `bitbucket` | Connected Bitbucket server name. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
-| `slackChannel` / `teamsChannel` | empty | Channel to post and to watch for `warp:status`. |
+| `slackChannel` / `teamsChannel` | empty, or `warp.<reponame>` after `/warp-init` | Channel to post and to watch for `warp:status`. |
 
 ## Merge policy
 

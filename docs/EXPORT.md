@@ -1,6 +1,6 @@
 # Export, edit, import
 
-Live state is not source control. Shuttles commit product code on `warp/<id>` branches. Warp does not commit `.warp/` on each tick. Add the snippet in `assets/gitignore-snippet.txt` to the repo `.gitignore`.
+Live state is not source control. Shuttles commit product code on `warp/<id>` branches. Warp does not commit `.warp/` on each tick. Add the snippet in `assets/gitignore-snippet.txt` (`/warp-init` does it) to the repo `.gitignore`.
 
 ## Where the files are
 
