@@ -1,6 +1,6 @@
 # Configuration
 
-One file: `.warp/config.yaml`, copied from `assets/config.example.yaml`. Agents re-read it. The beam keeps a copy taken at scan time; change the yaml, then restart, so the next tick picks it up.
+One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/warp-init`. Agents re-read it. The beam keeps a copy taken at scan time; change the yaml, then restart, so the next tick picks it up.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -22,5 +22,7 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml`. Agents 
 | bitbucketMcp | `bitbucket` | Connected Bitbucket server name. |
 | slackMcp | `slack` | Connected Slack server name. |
 | teamsMcp | `teams` | Connected Teams server name. |
+| slackChannel | empty | Channel to post into, and to watch for `warp:status`. `/warp-init` sets an empty value to `warp-<reponame>`; a value you set is kept. |
+| teamsChannel | empty | Same, for Teams. |
 
 There is no person cap and no people list.

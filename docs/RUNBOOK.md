@@ -26,6 +26,14 @@ Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (defa
 
 Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-reads yaml. Also set the copy inside the beam if a tick reads only the beam: re-ingest is wrong for a live run; edit `beam.config.maxAgents` with a journal note, or set it in both places.
 
+## Reinstall or reset
+
+`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` or existing plugin files, so it will not upgrade an installed copy. To start clean, copy `.warp/` aside if you want the journal, run `/warp-stop`, then `/warp-uninstall` and confirm, reload Cursor, and run `/warp-init`.
+
+## Scan one folder
+
+`/warp-scan <folder>` limits the search to that folder. If the name matches several folders the scan stops and lists them; re-run with the full path. The beam and `scan.json` record the folder.
+
 ## Rebuild the graph
 
 Only when `schedule.json` is regenerated. Copy `.warp/` aside first. Ingest overwrites live status.

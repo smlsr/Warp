@@ -11,7 +11,7 @@ Scan builds the plan. Start dispatches. Stop and pause do not.
 
 | Command | runState | Dispatch | In-flight |
 |---|---|---|---|
-| `/warp-scan` | stopped | no | none yet |
+| `/warp-scan [folder]` | stopped | no | none yet |
 | `/warp-start` | running | yes | claims up to maxAgents |
 | `/warp-pause` | paused | no | finish the current step, checkpoint |
 | `/warp-resume` | running | yes | reconcile, then claim |
