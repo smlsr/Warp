@@ -50,7 +50,7 @@ A connected Jira plugin is the live source after the scan. If the repo has no pl
 
 ## Message to Slack or Teams
 
-A successful scan writes `.warp/notify-post.json`: format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
+A successful scan writes `.warp/notify-post.json`, headed `Warp | <repo> / <project>` (the channel is shared across repos), with format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
 
 ## After the scan
 

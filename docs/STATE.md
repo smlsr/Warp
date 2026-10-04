@@ -9,7 +9,7 @@
 .warp/BOARD.md        generated
 .warp/board.html      generated
 .warp/outbox.md       Herald fallback if a messenger is down or no channel is set
-.warp/notify-post.json  Last init or scan message and where to post it
+.warp/notify-post.json  Last init or scan message (slack, teams, text views) and where to post it
 ```
 
 ## Ticket status

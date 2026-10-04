@@ -34,8 +34,8 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = (self.repo / ".warp/config.yaml").read_text()
-        self.assertIn('slackChannel: "warp-my-repo-v2"', cfg)
-        self.assertIn('teamsChannel: "warp-my-repo-v2"', cfg)
+        self.assertIn('slackChannel: "Warp"', cfg)
+        self.assertIn('teamsChannel: "Warp"', cfg)
         self.assertTrue((self.repo / ".cursor/plugins/warp/.cursor-plugin/plugin.json").exists())
         gi = (self.repo / ".gitignore").read_text()
         before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
@@ -53,25 +53,24 @@ class InitTests(Base):
         run(INSTALL, "init", "--root", ".", cwd=self.repo)
         text = cfg.read_text()
         self.assertIn("maxAgents: 3", text)
-        self.assertIn('slackChannel: "warp-my-repo-v2"', text)
+        self.assertIn('slackChannel: "Warp"', text)
         self.assertIn('teamsChannel: "keep-me"', text)
 
-    def test_channel_is_valid_and_limited(self):
-        long = self.tmp / ("Very Long.Repo Name!" + "x" * 80)
-        long.mkdir()
-        run(INSTALL, "init", "--root", ".", cwd=long)
-        cfg = (long / ".warp/config.yaml").read_text()
-        import re
+    def test_channel_is_shared_not_per_repo(self):
+        run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        cfg = (self.repo / ".warp/config.yaml").read_text()
+        self.assertNotIn("my-repo", cfg)
 
-        names = re.findall(r'^(?:slack|teams)Channel: "([^"]*)"', cfg, re.M)
-        self.assertEqual(len(names), 2)
-        for n in names:
-            self.assertRegex(n, r"^warp-[a-z0-9_-]+$")
-            self.assertLessEqual(len(n), 50)
-        self.assertTrue(names[0].startswith("warp-very-long-repo-name-x"))
+    def test_custom_channel_override_and_existing_kept(self):
+        run(INSTALL, "init", "--root", ".", "--channel", "eng-builds", cwd=self.repo)
+        cfg = (self.repo / ".warp/config.yaml").read_text()
+        self.assertIn('slackChannel: "eng-builds"', cfg)
+        self.assertIn('teamsChannel: "eng-builds"', cfg)
+        run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        self.assertIn('slackChannel: "eng-builds"', (self.repo / ".warp/config.yaml").read_text())
 
     def test_invalid_channel_override_rejected(self):
-        r = run(INSTALL, "init", "--root", ".", "--channel", "warp.bad", cwd=self.repo)
+        r = run(INSTALL, "init", "--root", ".", "--channel", 'bad"name', cwd=self.repo)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(list(self.repo.iterdir()), [])
 
@@ -162,6 +161,13 @@ def git(repo, *args):
     )
 
 
+def fmt_module():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import herald_fmt
+
+    return herald_fmt
+
+
 def payload(repo):
     return json.loads((repo / ".warp/notify-post.json").read_text())
 
@@ -171,7 +177,6 @@ class NotifyTests(Base):
         super().setUp()
         git(self.repo, "init", "-q", "-b", "feat/x")
         git(self.repo, "remote", "add", "origin", "git@github.com:acme/Demo-App.git")
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "x")
         (self.repo / "spec").mkdir()
         shutil.copy(PLAN, self.repo / "spec/CURSOR_PLAN.md")
 
@@ -193,8 +198,88 @@ class NotifyTests(Base):
         p = payload(self.repo)
         self.assertEqual(p["action"], "post")
         self.assertIn("Cursor repo Demo-App was initialized with Warp", p["text"])
-        self.assertIn("Channel: warp-demo-app", p["text"])
+        self.assertIn("Channel: Warp", p["text"])
         self.assertEqual({t["messenger"] for t in p["targets"]}, {"slack", "teams"})
+
+    def test_header_names_repo_and_workspace_in_every_view(self):
+        self.init()
+        p = payload(self.repo)
+        head = "Warp | Demo-App / My Repo.v2"
+        self.assertEqual(p["header"], head)
+        self.assertTrue(p["text"].startswith(head))
+        self.assertEqual(p["slack"]["blocks"][0]["text"]["text"], head)
+        self.assertEqual(p["slack"]["blocks"][0]["type"], "header")
+        self.assertIn(head, p["slack"]["text"])
+        self.assertTrue(p["teams"]["markdown"].startswith("**Warp | Demo-App / My Repo.v2**".replace("_", "\\_")))
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(payload(self.repo)["header"], head)
+
+    def test_slack_view_uses_mrkdwn_links_teams_uses_markdown(self):
+        self.init()
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        p = payload(self.repo)
+        url = "https://github.com/acme/Demo-App/blob/feat/x/spec/CURSOR_PLAN.md"
+        section = p["slack"]["blocks"][1]["text"]["text"]
+        self.assertIn(f"<{url}|Plan used: spec/CURSOR_PLAN.md>", section)
+        self.assertIn("*Tickets:* 7", section)
+        self.assertIn(f"]({url})", p["teams"]["markdown"])
+        self.assertIn("**Tickets:** 7", p["teams"]["markdown"])
+
+    def test_project_from_config_then_jira_then_folder(self):
+        self.init()
+        self.set_cfg(jiraProject="HOS")
+        fmt = fmt_module()
+        self.assertEqual(fmt.header(self.repo), "Warp | Demo-App / HOS")
+        self.set_cfg(projectName="Ops Platform")
+        self.assertEqual(fmt.header(self.repo), "Warp | Demo-App / Ops Platform")
+
+    def test_header_collapses_when_project_equals_repo(self):
+        other = self.tmp / "Demo-App"
+        other.mkdir()
+        git(other, "init", "-q")
+        git(other, "remote", "add", "origin", "git@github.com:acme/Demo-App.git")
+        self.assertEqual(fmt_module().header(other), "Warp | Demo-App")
+
+    def test_special_characters_are_escaped(self):
+        fmt = fmt_module()
+        out = fmt.render("Warp | a_b / c*d", "T<1>&", facts=[("k", "x < y & z")])
+        self.assertIn("T&lt;1&gt;&amp;", out["slack"]["blocks"][1]["text"]["text"])
+        self.assertIn("a\\_b", out["teams"]["markdown"])
+
+    def test_formatter_cli_for_other_herald_messages(self):
+        r = run(
+            ROOT / "scripts" / "herald_fmt.py", "--title", "Alarm L-01", "--fact", "reason=bugbot-failed",
+            "--link", "PR=https://host/pr/1", "--footer", "warp:retry L-01", cwd=self.repo,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertTrue(out["text"].startswith("Warp | "))
+        self.assertIn("<https://host/pr/1|PR>", out["slack"]["blocks"][1]["text"]["text"])
+
+    def test_status_post_uses_the_same_header(self):
+        self.init()
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        r = run(ROOT / "scripts" / "status_post.py", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        body = json.loads((self.repo / ".warp/status-post.json").read_text())
+        self.assertTrue(body["text"].startswith("Warp | Demo-App / My Repo.v2"))
+        self.assertIn("slack", body)
+        self.assertIn("teams", body)
+
+    def test_invite_uses_git_email_and_skips_bots(self):
+        git(self.repo, "config", "user.email", "dev@acme.com")
+        r = self.init()
+        self.assertEqual(payload(self.repo)["invite"], "dev@acme.com")
+        self.assertIn("add dev@acme.com to the channel", r.stdout)
+        self.assertIn("Do not create the channel", r.stdout)
+        shutil.rmtree(self.repo / ".warp")
+        for bad in ("cursoragent@cursor.com", "1+me@users.noreply.github.com"):
+            git(self.repo, "config", "user.email", bad)
+            shutil.rmtree(self.repo / ".warp", ignore_errors=True)
+            r = self.init()
+            self.assertIsNone(payload(self.repo)["invite"])
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("nobody to add to the channel", r.stdout)
 
     def test_second_init_sends_nothing_new(self):
         self.init()
@@ -233,7 +318,7 @@ class NotifyTests(Base):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(payload(self.repo)["action"], "outbox")
         self.assertIn("slackChannel is empty", r.stdout)
-        self.assertIn("Warp scan finished", (self.repo / ".warp/outbox.md").read_text())
+        self.assertIn("Scan finished", (self.repo / ".warp/outbox.md").read_text())
 
     def test_no_config_at_all_is_soft(self):
         r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
@@ -259,7 +344,7 @@ class NotifyTests(Base):
         run(SCAN, "scan", "--root", ".", cwd=self.repo)
         r = run(ROOT / "scripts" / "notify.py", "outbox", "--root", ".", cwd=self.repo)
         self.assertEqual(r.returncode, 0)
-        self.assertIn("Warp scan finished", (self.repo / ".warp/outbox.md").read_text())
+        self.assertIn("Scan finished", (self.repo / ".warp/outbox.md").read_text())
 
 
 if __name__ == "__main__":

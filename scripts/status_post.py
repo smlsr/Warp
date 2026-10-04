@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from beam import load_json, utcnow  # noqa: E402
 from scan import write_status  # noqa: E402
+import herald_fmt as fmt  # noqa: E402
 
 
 def payload(beam_path: Path) -> dict:
@@ -32,14 +33,21 @@ def payload(beam_path: Path) -> dict:
         for t in beam["tickets"].values()
         if t["status"] in {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
     ]
-    text = (
-        f"Warp status {utcnow()}\n"
-        f"runState={beam.get('runState')} done={counts['done']} working={counts['working']} left={counts['left']}\n"
-        f"working: {', '.join(working) or 'none'}\n"
-        "Reply warp:status to refresh. warp:pause / warp:resume / warp:stop / warp:start control the run."
+    root = beam_path.resolve().parent.parent
+    msg = fmt.message(
+        root,
+        "Status",
+        facts=[
+            ("Updated", utcnow()),
+            ("Run", str(beam.get("runState"))),
+            ("Done", str(counts["done"])),
+            ("Working", ", ".join(working) or "none"),
+            ("Left", str(counts["left"])),
+        ],
+        footer="Reply warp:status to refresh. warp:pause / warp:resume / warp:stop / warp:start control the run.",
     )
     return {
-        "text": text,
+        **msg,
         "files": ["STATUS.md", "status.json", "BOARD.md"],
         "statusMarkdown": status_md[:12000],
         "counts": counts,

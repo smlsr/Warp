@@ -22,7 +22,8 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/war
 | bitbucketMcp | `bitbucket` | Connected Bitbucket server name. |
 | slackMcp | `slack` | Connected Slack server name. |
 | teamsMcp | `teams` | Connected Teams server name. |
-| slackChannel | empty | Channel to post into, and to watch for `warp:status`. `/warp-init` sets an empty value to `warp-<reponame>`; a value you set is kept. |
-| teamsChannel | empty | Same, for Teams. |
+| slackChannel | `Warp` | One shared channel for every repo, to post into and to watch for `warp:status`. Warp does not create it. `/warp-init` sets an empty value to `Warp`; a value you set is kept. |
+| teamsChannel | `Warp` | Same, for Teams. |
+| projectName | empty | Shown after the repo in message headers: `Warp \| repo / project`. Empty uses `jiraProject`, then the workspace folder name. Hidden if it equals the repo name. |
 
 There is no person cap and no people list.
