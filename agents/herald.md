@@ -44,8 +44,6 @@ Post `slack` (use `blocks` if the Slack tool takes them, else `text`) to Slack, 
 - `outbox`: no channel is set for the chosen messenger. The text is already in `.warp/outbox.md`. Say which channel key is empty. Do not guess a channel.
 - `skip`: `notify` is quiet. Post nothing.
 
-For `/warp-init` the payload may have `invite`, the git `user.email`. Try once to add that person to the channel only if a connected tool can add a user by email. If none can, or it errors, skip it and say so in one line. Do not create the channel, retry, or fail init.
-
 Never fail init or scan because a message could not be sent.
 
 ## Status on request
