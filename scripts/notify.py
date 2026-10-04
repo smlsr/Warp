@@ -6,7 +6,8 @@ token. Herald (an agent) posts the payload through the connected Slack or
 Teams MCP server. This script decides whether to post and what to say, using
 the shared formatter in herald_fmt.py, and it never fails the command that
 called it. Warp does not create channels: the channel in the config must
-already exist.
+already exist. A Slack channel with uppercase letters is lowercased (Slack
+channel names are lowercase) and noted.
 
   notify.py init|scan --root .   write .warp/notify-post.json and print it
   notify.py outbox --root .      append that payload's plain text to
@@ -56,6 +57,9 @@ def targets(cfg: dict) -> tuple[list[dict], list[str]]:
             notes.append(f"messenger {m!r} is not slack, teams, or both")
             continue
         ch = cfg[f"{m}Channel"]
+        if m == "slack" and ch and ch != ch.lower():
+            notes.append(f"slackChannel {ch!r} has uppercase; Slack channel names are lowercase, using {ch.lower()!r}")
+            ch = ch.lower()
         if ch:
             out.append({"messenger": m, "channel": ch, "mcp": cfg[f"{m}Mcp"]})
         else:
@@ -75,7 +79,7 @@ def invite_email(root: Path) -> tuple[str | None, str | None]:
 
 def init_message(root: Path, cfg: dict) -> dict:
     web, branch, _ = fmt.repo_web(root)
-    names = list(dict.fromkeys(cfg[k] for k in ("slackChannel", "teamsChannel") if cfg[k]))
+    names = list(dict.fromkeys(t["channel"] for t in targets(cfg)[0]))
     facts = [("Channel", ", ".join(names) or "none set")]
     if web:
         facts.append(("Repo", (fmt.repo_name(root), web)))

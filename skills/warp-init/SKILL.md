@@ -22,10 +22,10 @@ python3 <plugin>/scripts/install.py init
 | `mkdir -p .cursor/plugins .warp` | both folders exist | create them |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is present | copy only the missing files. Existing files are never overwritten. |
 | `.warp/config.yaml` | the file exists | copy `assets/config.example.yaml` |
-| Channel | `slackChannel` and `teamsChannel` are set | set each empty one to `Warp` |
+| Channel | `slackChannel` and `teamsChannel` are set | set each empty one (or the old `Warp` default) to `warp` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 
-`Warp` is one shared channel for every repo. A channel that already has a value is left alone, and so is the rest of an existing config. `--channel NAME` sets a different name on a fresh config. Warp does not create the channel; tell the user to create `Warp` in Slack and Teams if it does not exist.
+`warp` is one shared channel for every repo. A channel that already has a value is left alone, and so is the rest of an existing config. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
 
 To upgrade an installed copy, run `/warp-uninstall` and then `/warp-init`. Init does not replace files.
 

@@ -2,7 +2,7 @@
 """Install or remove Warp in a repo. Both subcommands are idempotent.
 
   init       copy the plugin to .cursor/plugins/warp, create .warp/config.yaml,
-             set the channel names to Warp, and append the
+             set the channel names to warp, and append the
              gitignore snippet. Each step runs only if it is not already done.
   uninstall  list what would be removed; delete only with --yes.
 
@@ -26,7 +26,9 @@ PLUGIN_REL = Path(".cursor/plugins/warp")
 STATE_REL = Path(".warp")
 COPY_IGNORE = {".git", ".cursor", ".warp", "__pycache__", "node_modules"}
 CHANNEL_KEYS = ("slackChannel", "teamsChannel")
-DEFAULT_CHANNEL = "Warp"
+DEFAULT_CHANNEL = "warp"
+OLD_DEFAULT_CHANNEL = "Warp"  # shipped briefly; Slack channel names are lowercase
+CHANNEL_RE = re.compile(r"[a-z0-9_-]{1,80}")
 IGNORE_ENTRIES = {".warp", ".warp/", "/.warp", "/.warp/"}
 
 
@@ -99,7 +101,7 @@ def apply_channels(text: str, channel: str) -> tuple[str, list[str]]:
     changed = []
     for key in CHANNEL_KEYS:
         present, val = channel_value(text, key)
-        if val == "":
+        if val in ("", OLD_DEFAULT_CHANNEL):
             text = set_channel(text, key, channel)
             changed.append(key)
     return text, changed
@@ -140,9 +142,12 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
         if changed:
             if not dry:
                 cfg.write_text(new)
-            steps.append(("done", f"set {', '.join(changed)} to {channel!r} in existing config (was default)"))
+            steps.append(("done", f"set {', '.join(changed)} to {channel!r} in existing config (was empty or the old default)"))
         else:
             steps.append(("skip", ".warp/config.yaml exists, channels already set; left as is"))
+        _, slack = channel_value(new, "slackChannel")
+        if slack != slack.lower():
+            steps.append(("warn", f"slackChannel {slack!r} has uppercase; Slack channel names are lowercase, so Herald will use {slack.lower()!r}. Change it in .warp/config.yaml"))
     else:
         src = example_config(root)
         if not src:
@@ -256,7 +261,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     pi = sub.add_parser("init")
     pi.add_argument("--root")
-    pi.add_argument("--channel", help="channel to use instead of Warp")
+    pi.add_argument("--channel", help="channel to use instead of warp (lowercase letters, digits, - and _)")
     pi.add_argument("--dry-run", action="store_true")
     pu = sub.add_parser("uninstall")
     pu.add_argument("--root")
@@ -265,8 +270,13 @@ def main() -> None:
     args = p.parse_args()
     root = find_root(args.root)
     if args.cmd == "init":
-        if args.channel is not None and (not args.channel.strip() or re.search(r"[\"\\\n\r#]", args.channel)):
-            sys.exit(f"invalid --channel {args.channel!r}: use a plain channel name")
+        if args.channel is not None:
+            wanted = args.channel.strip().lstrip("#").lower()
+            if not CHANNEL_RE.fullmatch(wanted):
+                sys.exit(f"invalid --channel {args.channel!r}: use lowercase letters, digits, - and _ (max 80), no spaces or dots")
+            if wanted != args.channel:
+                print(f"note: --channel {args.channel!r} normalized to {wanted!r}")
+            args.channel = wanted
         steps = init(root, args.channel, args.dry_run)
         print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
         for status, msg in steps:

@@ -31,11 +31,12 @@ jiraMcp: atlassian
 bitbucketMcp: bitbucket
 slackMcp: slack
 teamsMcp: teams
-slackChannel: "Warp"
-teamsChannel: "Warp"
+slackChannel: "warp"
+teamsChannel: "warp"
 # Channel to post into, and to watch for warp:status. One shared channel for
 # every repo; each message names its repo in the header. Warp does not create
 # the channel. Create it once, or change these to a channel that exists.
+# Use lowercase: Slack channel names are lowercase.
 projectName: ""
 # Shown in message headers after the repo: "Warp | repo / project".
 # Empty uses jiraProject, then the workspace folder name.
