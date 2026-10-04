@@ -39,6 +39,16 @@ Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. C
 
 Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, and `/warp-uninstall`.
 
+## Slack and Teams messages from init and scan
+
+Warp has no webhook and no token. Messages go out through the Slack and Teams servers connected in Cursor Settings, posted by the Herald agent in your chat. A script cannot send them on its own, so nothing arrives unless those servers are connected, a channel is set, and the agent session that ran the command is the one that posts.
+
+- `/warp-init` posts "Cursor repo <name> was initialized with Warp" with the channel used, but only if it changed something. A second run posts nothing.
+- `/warp-scan` posts the format, ticket and gate counts, the estimate, and links to the plan and schedule files found. Links use the `origin` remote and branch (GitHub, GitLab, bitbucket.org). Otherwise the relative path is used. Links work once the branch is pushed.
+- It follows `messenger` and `notify`. `notify: quiet` posts neither. Each message goes to `slackChannel` and `teamsChannel` for the messenger you chose.
+- Fail-soft: with no channel set, or no connected server, the text is saved to `.warp/outbox.md`, the command says so, and it still succeeds. The payload is in `.warp/notify-post.json`.
+- `/warp-init` fills in `warp-<reponame>`. That channel must exist, and the Warp app or bot must be in it.
+
 ## Uninstall
 
 `/warp-uninstall` removes `.cursor/plugins/warp` and `.warp/`, and optionally the snippet `/warp-init` added to `.gitignore`, so a fresh `/warp-init` works. It first prints what it will remove and deletes nothing until you confirm. `.warp/` holds the beam, journal, and config, and it cannot be recovered. Stop a running beam first with `/warp-stop`. Product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, and a plugin installed through Cursor Settings are not touched. Reload Cursor afterwards.

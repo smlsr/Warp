@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_REL = Path(".cursor/plugins/warp")
 STATE_REL = Path(".warp")
@@ -296,6 +298,12 @@ def main() -> None:
             sys.exit(1)
         if any(s == "done" for s, _ in steps) and not args.dry_run:
             print("Reload Cursor so the commands and rules load. Then connect Jira, Bitbucket, and Slack or Teams in Settings.")
+            try:
+                import notify
+
+                notify.report(notify.build("init", root))
+            except Exception as e:
+                print(f"herald: not posted ({e})")
         elif not args.dry_run:
             print("Already set up. Nothing changed.")
     else:

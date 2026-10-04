@@ -9,7 +9,8 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 
 ## Verbose (default) — post all of these
 
-- Scan finished: format, ticket count, stopped.
+- Init finished: repo name and channel. Only when init changed something.
+- Scan finished: format, ticket count, stopped, and links to the plan and schedule files found.
 - Plan imported or exported: path.
 - Start, pause, resume, stop, with the reason.
 - Each claim: id, size, auto or review, locks.
@@ -22,6 +23,16 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Tick digest: done / working / left, and the next ready ids. Point at `.warp/STATUS.md`.
 
 Quiet mode posts only alarms, approval waits, gate red, and pause/stop. A `warp:status` request is always answered.
+
+## Init and scan messages
+
+`/warp-init` and `/warp-scan` run `scripts/notify.py` themselves. It reads `messenger`, `notify`, `slackChannel`, and `teamsChannel`, then writes `.warp/notify-post.json` with an `action`:
+
+- `post`: post `text` to each entry in `targets` through that server (`slackMcp`, `teamsMcp`). If the server is missing or the post fails, run `python3 <plugin>/scripts/notify.py outbox --root .`, and tell the user.
+- `outbox`: no channel is set for the chosen messenger. The text is already in `.warp/outbox.md`. Say which channel key is empty. Do not guess a channel.
+- `skip`: `notify` is quiet. Post nothing.
+
+Never fail init or scan because a message could not be sent.
 
 ## Status on request
 

@@ -48,6 +48,10 @@ The scan writes `.warp/scan.json` (what it found) and `.warp/beam.json` (the pla
 
 A connected Jira plugin is the live source after the scan. If the repo has no plan file, ask the user to export the Jira filter to JSON or to connect the Atlassian MCP, then scan again. Do not invent tickets.
 
+## Message to Slack or Teams
+
+A successful scan writes `.warp/notify-post.json`: format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
+
 ## After the scan
 
 Tell the user the format, ticket count, gate count, and that the plan is stopped. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.

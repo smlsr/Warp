@@ -29,6 +29,10 @@ python3 <plugin>/scripts/install.py init
 
 To upgrade an installed copy, run `/warp-uninstall` and then `/warp-init`. Init does not replace files.
 
+## Message to Slack or Teams
+
+If init changed anything, the script also writes `.warp/notify-post.json`: "Cursor repo <name> was initialized with Warp", the channel used, and the repo link. Follow the `herald:` line it prints. `post` means Herald posts that text to the listed channels through the connected Slack or Teams MCP server. No message is built when init changed nothing or ran with `--dry-run`. Respect `notify` and `messenger` in the config. If Slack or Teams is not connected, or no channel is set, the text goes to `.warp/outbox.md`. Report that to the user and carry on; it is not an error. Warp stores no webhook or token.
+
 ## After
 
 Print the script output, then tell the user to reload Cursor. Remind them to connect Jira, Bitbucket, and Slack or Teams in Cursor Settings, and that `/warp-scan` is next. Do not scan or start.

@@ -9,7 +9,7 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/war
 | maxAgents | `18` | Concurrent Shuttles. Only cap. |
 | autoMergeSizes | `S, M` | Sizes that merge without a human approval. |
 | messenger | `both` | `slack`, `teams`, or `both`. |
-| notify | `verbose` | `verbose` posts every claim and tick. `quiet` posts alarms and stops only. |
+| notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms and stops only. |
 | runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |
 | jiraProject | empty | Jira project key, if you want it pinned. |
 | bugbotRequired | `true` | Reed will not merge without a Bugbot pass. |

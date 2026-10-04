@@ -156,5 +156,111 @@ class ScanFolderTests(Base):
         self.assertEqual(self.scan("--folder", "c").returncode, 2)
 
 
+def git(repo, *args):
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=repo, check=True, capture_output=True
+    )
+
+
+def payload(repo):
+    return json.loads((repo / ".warp/notify-post.json").read_text())
+
+
+class NotifyTests(Base):
+    def setUp(self):
+        super().setUp()
+        git(self.repo, "init", "-q", "-b", "feat/x")
+        git(self.repo, "remote", "add", "origin", "git@github.com:acme/Demo-App.git")
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", "x")
+        (self.repo / "spec").mkdir()
+        shutil.copy(PLAN, self.repo / "spec/CURSOR_PLAN.md")
+
+    def init(self):
+        return run(INSTALL, "init", "--root", ".", cwd=self.repo)
+
+    def set_cfg(self, **kv):
+        import re
+
+        f = self.repo / ".warp/config.yaml"
+        text = f.read_text()
+        for k, v in kv.items():
+            text = re.sub(rf"^{k}:.*$", f'{k}: "{v}"', text, flags=re.M)
+        f.write_text(text)
+
+    def test_init_message(self):
+        r = self.init()
+        self.assertIn("herald: post", r.stdout)
+        p = payload(self.repo)
+        self.assertEqual(p["action"], "post")
+        self.assertIn("Cursor repo Demo-App was initialized with Warp", p["text"])
+        self.assertIn("Channel: warp-demo-app", p["text"])
+        self.assertEqual({t["messenger"] for t in p["targets"]}, {"slack", "teams"})
+
+    def test_second_init_sends_nothing_new(self):
+        self.init()
+        (self.repo / ".warp/notify-post.json").unlink()
+        r = self.init()
+        self.assertNotIn("herald", r.stdout)
+        self.assertFalse((self.repo / ".warp/notify-post.json").exists())
+
+    def test_scan_message_has_links(self):
+        self.init()
+        r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        p = payload(self.repo)
+        self.assertEqual(p["kind"], "scan")
+        self.assertIn("Tickets: 7", p["text"])
+        self.assertIn("https://github.com/acme/Demo-App/blob/feat/x/spec/CURSOR_PLAN.md", p["text"])
+
+    def test_relative_paths_without_remote(self):
+        git(self.repo, "remote", "remove", "origin")
+        self.init()
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        text = payload(self.repo)["text"]
+        self.assertIn("spec/CURSOR_PLAN.md", text)
+        self.assertNotIn("http", text)
+
+    def test_messenger_respected(self):
+        self.init()
+        self.set_cfg(messenger="slack")
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual([t["messenger"] for t in payload(self.repo)["targets"]], ["slack"])
+
+    def test_no_channel_goes_to_outbox_and_scan_succeeds(self):
+        self.init()
+        self.set_cfg(slackChannel="", teamsChannel="")
+        r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(payload(self.repo)["action"], "outbox")
+        self.assertIn("slackChannel is empty", r.stdout)
+        self.assertIn("Warp scan finished", (self.repo / ".warp/outbox.md").read_text())
+
+    def test_no_config_at_all_is_soft(self):
+        r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(payload(self.repo)["action"], "outbox")
+
+    def test_quiet_posts_nothing(self):
+        self.init()
+        self.set_cfg(notify="quiet")
+        r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(payload(self.repo)["action"], "skip")
+        self.assertFalse((self.repo / ".warp/outbox.md").exists())
+        self.assertIn("quiet", r.stdout)
+
+    def test_failed_scan_posts_nothing(self):
+        (self.repo / "spec/CURSOR_PLAN.md").unlink()
+        r = run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 2)
+        self.assertFalse((self.repo / ".warp/notify-post.json").exists())
+
+    def test_outbox_subcommand(self):
+        self.init()
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        r = run(ROOT / "scripts" / "notify.py", "outbox", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("Warp scan finished", (self.repo / ".warp/outbox.md").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
