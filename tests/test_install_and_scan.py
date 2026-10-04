@@ -34,8 +34,8 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = (self.repo / ".warp/config.yaml").read_text()
-        self.assertIn('slackChannel: "warp.my-repo-v2"', cfg)
-        self.assertIn('teamsChannel: "warp.my-repo-v2"', cfg)
+        self.assertIn('slackChannel: "warp-my-repo-v2"', cfg)
+        self.assertIn('teamsChannel: "warp-my-repo-v2"', cfg)
         self.assertTrue((self.repo / ".cursor/plugins/warp/.cursor-plugin/plugin.json").exists())
         gi = (self.repo / ".gitignore").read_text()
         before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
@@ -53,8 +53,27 @@ class InitTests(Base):
         run(INSTALL, "init", "--root", ".", cwd=self.repo)
         text = cfg.read_text()
         self.assertIn("maxAgents: 3", text)
-        self.assertIn('slackChannel: "warp.my-repo-v2"', text)
+        self.assertIn('slackChannel: "warp-my-repo-v2"', text)
         self.assertIn('teamsChannel: "keep-me"', text)
+
+    def test_channel_is_valid_and_limited(self):
+        long = self.tmp / ("Very Long.Repo Name!" + "x" * 80)
+        long.mkdir()
+        run(INSTALL, "init", "--root", ".", cwd=long)
+        cfg = (long / ".warp/config.yaml").read_text()
+        import re
+
+        names = re.findall(r'^(?:slack|teams)Channel: "([^"]*)"', cfg, re.M)
+        self.assertEqual(len(names), 2)
+        for n in names:
+            self.assertRegex(n, r"^warp-[a-z0-9_-]+$")
+            self.assertLessEqual(len(n), 50)
+        self.assertTrue(names[0].startswith("warp-very-long-repo-name-x"))
+
+    def test_invalid_channel_override_rejected(self):
+        r = run(INSTALL, "init", "--root", ".", "--channel", "warp.bad", cwd=self.repo)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(list(self.repo.iterdir()), [])
 
     def test_dry_run_writes_nothing(self):
         run(INSTALL, "init", "--root", ".", "--dry-run", cwd=self.repo)

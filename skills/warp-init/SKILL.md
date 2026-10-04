@@ -1,6 +1,6 @@
 ---
 name: warp-init
-description: "Install Warp in the current repo: copy the plugin to .cursor/plugins/warp, create .warp/config.yaml with a warp.<reponame> channel, and gitignore .warp/. Use on a fresh repo, or to repair a partial install. Safe to run again."
+description: "Install Warp in the current repo: copy the plugin to .cursor/plugins/warp, create .warp/config.yaml with a warp-<reponame> channel, and gitignore .warp/. Use on a fresh repo, or to repair a partial install. Safe to run again."
 ---
 
 # Warp init
@@ -22,10 +22,10 @@ python3 <plugin>/scripts/install.py init
 | `mkdir -p .cursor/plugins .warp` | both folders exist | create them |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is present | copy only the missing files. Existing files are never overwritten. |
 | `.warp/config.yaml` | the file exists | copy `assets/config.example.yaml` |
-| Channel | `slackChannel` and `teamsChannel` are set | set each empty one to `warp.<reponame>` |
+| Channel | `slackChannel` and `teamsChannel` are set | set each empty one to `warp-<reponame>` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 
-`<reponame>` comes from the `origin` remote, else the folder name. It is lowercased, and anything outside `a-z 0-9 _ -` becomes `-`. A channel that already has a value is left alone, and so is the rest of an existing config.
+`<reponame>` comes from the `origin` remote, else the folder name. It is lowercased, and anything outside `a-z 0-9 _ -` becomes `-`. The channel is cut to 50 characters, the Teams limit (Slack allows 80), so no dot or other invalid character can appear. A channel that already has a value is left alone, and so is the rest of an existing config.
 
 To upgrade an installed copy, run `/warp-uninstall` and then `/warp-init`. Init does not replace files.
 

@@ -22,10 +22,10 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | `mkdir -p .cursor/plugins .warp` | both folders exist |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
 | Copy `assets/config.example.yaml` to `.warp/config.yaml` | the config exists. It is never overwritten. |
-| Set `slackChannel` and `teamsChannel` to `warp.<reponame>` | the channel already has a value. Only an empty (default) channel is filled. |
+| Set `slackChannel` and `teamsChannel` to `warp-<reponame>` | the channel already has a value. Only an empty (default) channel is filled. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
-`<reponame>` comes from the `origin` remote, or the folder name if there is none. It is lowercased, and anything but letters, digits, `_` and `-` becomes `-`. Then reload Cursor.
+`<reponame>` comes from the `origin` remote, or the folder name if there is none. It is lowercased, and anything but letters, digits, `_` and `-` becomes `-`. The channel is cut to 50 characters, the Teams limit (Slack allows 80), so it is valid in both. Then reload Cursor.
 
 To do it by hand instead:
 
@@ -150,7 +150,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraMcp` | `atlassian` | Connected Jira server name. |
 | `bitbucketMcp` | `bitbucket` | Connected Bitbucket server name. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
-| `slackChannel` / `teamsChannel` | empty, or `warp.<reponame>` after `/warp-init` | Channel to post and to watch for `warp:status`. |
+| `slackChannel` / `teamsChannel` | empty, or `warp-<reponame>` after `/warp-init` | Channel to post and to watch for `warp:status`. |
 
 ## Merge policy
 

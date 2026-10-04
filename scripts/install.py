@@ -2,7 +2,7 @@
 """Install or remove Warp in a repo. Both subcommands are idempotent.
 
   init       copy the plugin to .cursor/plugins/warp, create .warp/config.yaml,
-             set the channel names to warp.<reponame>, and append the
+             set the channel names to warp-<reponame>, and append the
              gitignore snippet. Each step runs only if it is not already done.
   uninstall  list what would be removed; delete only with --yes.
 
@@ -24,6 +24,9 @@ PLUGIN_REL = Path(".cursor/plugins/warp")
 STATE_REL = Path(".warp")
 COPY_IGNORE = {".git", ".cursor", ".warp", "__pycache__", "node_modules"}
 CHANNEL_KEYS = ("slackChannel", "teamsChannel")
+CHANNEL_PREFIX = "warp-"
+CHANNEL_MAX = 50  # Teams allows 50 characters, Slack 80
+CHANNEL_RE = re.compile(r"[a-z0-9_-]{1,%d}" % CHANNEL_MAX)
 IGNORE_ENTRIES = {".warp", ".warp/", "/.warp", "/.warp/"}
 
 
@@ -48,7 +51,13 @@ def sanitize(name: str) -> str:
     """Lowercase, [a-z0-9_-] only, no leading or trailing separators."""
     s = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
     s = re.sub(r"-{2,}", "-", s).strip("-_")
-    return s[:60].strip("-_") or "repo"
+    return s.strip("-_") or "repo"
+
+
+def default_channel(name: str) -> str:
+    """warp-<name>, valid in Slack and Teams: [a-z0-9_-], at most CHANNEL_MAX."""
+    room = CHANNEL_MAX - len(CHANNEL_PREFIX)
+    return CHANNEL_PREFIX + (sanitize(name)[:room].strip("-_") or "repo")
 
 
 def repo_name(root: Path) -> str:
@@ -125,7 +134,7 @@ def has_ignore_entry(text: str) -> bool:
 
 def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = []
-    channel = channel or f"warp.{repo_name(root)}"
+    channel = channel or default_channel(repo_name(root))
     plugin = root / PLUGIN_REL
     state = root / STATE_REL
 
@@ -268,7 +277,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     pi = sub.add_parser("init")
     pi.add_argument("--root")
-    pi.add_argument("--channel", help="override the default warp.<reponame>")
+    pi.add_argument("--channel", help="override the default warp-<reponame> (a-z, 0-9, - and _, max 50)")
     pi.add_argument("--dry-run", action="store_true")
     pu = sub.add_parser("uninstall")
     pu.add_argument("--root")
@@ -277,6 +286,8 @@ def main() -> None:
     args = p.parse_args()
     root = find_root(args.root)
     if args.cmd == "init":
+        if args.channel and not CHANNEL_RE.fullmatch(args.channel):
+            sys.exit(f"invalid --channel {args.channel!r}: use lowercase letters, digits, - and _, at most {CHANNEL_MAX} characters")
         steps = init(root, args.channel, args.dry_run)
         print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
         for status, msg in steps:

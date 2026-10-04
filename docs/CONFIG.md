@@ -22,7 +22,7 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/war
 | bitbucketMcp | `bitbucket` | Connected Bitbucket server name. |
 | slackMcp | `slack` | Connected Slack server name. |
 | teamsMcp | `teams` | Connected Teams server name. |
-| slackChannel | empty | Channel to post into, and to watch for `warp:status`. `/warp-init` sets an empty value to `warp.<reponame>`; a value you set is kept. |
+| slackChannel | empty | Channel to post into, and to watch for `warp:status`. `/warp-init` sets an empty value to `warp-<reponame>`; a value you set is kept. |
 | teamsChannel | empty | Same, for Teams. |
 
 There is no person cap and no people list.
