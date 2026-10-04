@@ -22,10 +22,10 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | `mkdir -p .cursor/plugins .warp` | both folders exist |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
 | Copy `assets/config.example.yaml` to `.warp/config.yaml` | the config exists. It is never overwritten. |
-| Set `slackChannel` and `teamsChannel` to `Warp` | the channel already has a value. Only an empty channel is filled; a custom name is kept. |
+| Set `slackChannel` and `teamsChannel` to `warp` | the channel already has a value. Only an empty channel (or the old `Warp` default) is filled; a custom name is kept. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
-`Warp` is one shared channel for every repo, so each message names its repo in a header (see below). Warp does not create the channel: create `Warp` once in Slack and Teams, or change the config to a channel that exists. Slack lowercases channel names, so `Warp` and `warp` are the same channel there.
+`warp` is one shared channel for every repo, so each message names its repo in a header (see below). Warp does not create the channel: create `warp` once in Slack and Teams, or change the config to a channel that exists. Channel names are lowercase (letters, digits, `-`, `_`). `--channel NAME` is lowercased and checked; a custom `slackChannel` with uppercase letters is warned about by `/warp-init` and lowercased when posting.
 
 To do it by hand instead:
 
@@ -57,7 +57,7 @@ Example, `/warp-init` (shown as Slack renders it):
 Warp | Demo-App / ops-platform
 Initialized
 Cursor repo Demo-App was initialized with Warp.
-Channel: Warp
+Channel: warp
 Repo: Demo-App (https://github.com/acme/Demo-App)
 Branch: main
 Config: .warp/config.yaml
@@ -195,7 +195,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraMcp` | `atlassian` | Connected Jira server name. |
 | `bitbucketMcp` | `bitbucket` | Connected Bitbucket server name. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
-| `slackChannel` / `teamsChannel` | `Warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
+| `slackChannel` / `teamsChannel` | `warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
 | `projectName` | empty | Shown after the repo in message headers. Empty uses `jiraProject`, then the folder name. |
 
 ## Merge policy

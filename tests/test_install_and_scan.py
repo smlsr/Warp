@@ -34,8 +34,8 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = (self.repo / ".warp/config.yaml").read_text()
-        self.assertIn('slackChannel: "Warp"', cfg)
-        self.assertIn('teamsChannel: "Warp"', cfg)
+        self.assertIn('slackChannel: "warp"', cfg)
+        self.assertIn('teamsChannel: "warp"', cfg)
         self.assertTrue((self.repo / ".cursor/plugins/warp/.cursor-plugin/plugin.json").exists())
         gi = (self.repo / ".gitignore").read_text()
         before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
@@ -53,7 +53,7 @@ class InitTests(Base):
         run(INSTALL, "init", "--root", ".", cwd=self.repo)
         text = cfg.read_text()
         self.assertIn("maxAgents: 3", text)
-        self.assertIn('slackChannel: "Warp"', text)
+        self.assertIn('slackChannel: "warp"', text)
         self.assertIn('teamsChannel: "keep-me"', text)
 
     def test_channel_is_shared_not_per_repo(self):
@@ -70,9 +70,33 @@ class InitTests(Base):
         self.assertIn('slackChannel: "eng-builds"', (self.repo / ".warp/config.yaml").read_text())
 
     def test_invalid_channel_override_rejected(self):
-        r = run(INSTALL, "init", "--root", ".", "--channel", 'bad"name', cwd=self.repo)
-        self.assertNotEqual(r.returncode, 0)
+        for bad in ('bad"name', "has space", "dot.name", "", "x" * 81):
+            r = run(INSTALL, "init", "--root", ".", "--channel", bad, cwd=self.repo)
+            self.assertNotEqual(r.returncode, 0, bad)
         self.assertEqual(list(self.repo.iterdir()), [])
+
+    def test_channel_override_is_lowercased(self):
+        r = run(INSTALL, "init", "--root", ".", "--channel", "#Eng-Builds", cwd=self.repo)
+        self.assertIn("normalized to 'eng-builds'", r.stdout)
+        self.assertIn('slackChannel: "eng-builds"', (self.repo / ".warp/config.yaml").read_text())
+
+    def test_old_Warp_default_is_migrated(self):
+        (self.repo / ".warp").mkdir()
+        cfg = self.repo / ".warp/config.yaml"
+        cfg.write_text('slackChannel: "Warp"\nteamsChannel: "Warp"\n')
+        run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        text = cfg.read_text()
+        self.assertIn('slackChannel: "warp"', text)
+        self.assertIn('teamsChannel: "warp"', text)
+
+    def test_custom_uppercase_slack_channel_warned_not_changed(self):
+        (self.repo / ".warp").mkdir()
+        cfg = self.repo / ".warp/config.yaml"
+        cfg.write_text('slackChannel: "Eng-Team"\nteamsChannel: "Eng Team"\n')
+        r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        self.assertIn("[warn] slackChannel 'Eng-Team' has uppercase", r.stdout)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(cfg.read_text(), 'slackChannel: "Eng-Team"\nteamsChannel: "Eng Team"\n')
 
     def test_dry_run_writes_nothing(self):
         run(INSTALL, "init", "--root", ".", "--dry-run", cwd=self.repo)
@@ -198,7 +222,7 @@ class NotifyTests(Base):
         p = payload(self.repo)
         self.assertEqual(p["action"], "post")
         self.assertIn("Cursor repo Demo-App was initialized with Warp", p["text"])
-        self.assertIn("Channel: Warp", p["text"])
+        self.assertIn("Channel: warp", p["text"])
         self.assertEqual({t["messenger"] for t in p["targets"]}, {"slack", "teams"})
 
     def test_header_names_repo_and_workspace_in_every_view(self):
@@ -280,6 +304,15 @@ class NotifyTests(Base):
             self.assertIsNone(payload(self.repo)["invite"])
             self.assertEqual(r.returncode, 0)
             self.assertIn("nobody to add to the channel", r.stdout)
+
+    def test_slack_uppercase_lowercased_when_posting_teams_kept(self):
+        self.init()
+        self.set_cfg(slackChannel="Eng-Team", teamsChannel="Eng Team")
+        run(SCAN, "scan", "--root", ".", cwd=self.repo)
+        p = payload(self.repo)
+        chans = {t["messenger"]: t["channel"] for t in p["targets"]}
+        self.assertEqual(chans, {"slack": "eng-team", "teams": "Eng Team"})
+        self.assertTrue(any("lowercase" in n for n in p["notes"]))
 
     def test_second_init_sends_nothing_new(self):
         self.init()

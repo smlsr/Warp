@@ -15,7 +15,7 @@ python3 <plugin>/scripts/status_post.py --beam .warp/beam.json --out .warp/statu
 
 Read `.warp/status-post.json`. It is headed `Warp | <repo> / <project>`. Post `slack` to Slack and `teams.markdown` to Teams for every messenger in `config.messenger` (`text` is the plain version). Attach `.warp/STATUS.md`, `.warp/status.json`, and `.warp/BOARD.md` with the connected Slack or Teams file tool. If the connector can only send text, paste `statusMarkdown` and say the files are in `.warp/`. If a connector is missing, append the same text to `.warp/outbox.md`.
 
-Channels: `teamsChannel`, `slackChannel` in `.warp/config.yaml` (default `Warp`, shared by all repos). If a channel is empty, post to the channel the user named.
+Channels: `teamsChannel`, `slackChannel` in `.warp/config.yaml` (default `warp`, shared by all repos). If a channel is empty, post to the channel the user named.
 
 ## Pull from the channel
 

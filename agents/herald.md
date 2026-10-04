@@ -50,6 +50,8 @@ Never fail init or scan because a message could not be sent.
 
 ## Status on request
 
+Channel names are lowercase. If `slackChannel` has uppercase letters, use the lowercase name (`notify.py` already does and says so).
+
 If the channel message is `warp:status`, or the user runs `/warp-status-post`, run `scripts/status_post.py` and post the digest. Attach `.warp/STATUS.md`, `.warp/status.json`, and `.warp/BOARD.md`. Teams and Slack cannot pull these files on their own. Warp pushes them when it is running or a tick fires.
 
 Do not @-channel except on alarm or a red gate. Do not create channels. Do not invent a webhook.
