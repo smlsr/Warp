@@ -26,6 +26,10 @@ If the Bitbucket MCP cannot open a PR, `git push` and the web UI are a human fal
 
 `messenger: slack | teams | both`.
 
+There is no webhook or token in Warp. Herald posts through these connected servers only. `/warp-init` and `/warp-scan` write `.warp/notify-post.json` and tell Herald to post it; with no channel or no server the text goes to `.warp/outbox.md`. `notify: quiet` skips both. Warp does not create channels. The shared `Warp` channel must exist, and the connected app must be able to post to it.
+
+Every message starts with the header `Warp | <repo> / <project>` because one channel serves many repos. Build messages with `scripts/herald_fmt.py` so the format stays the same; see `agents/herald.md`.
+
 Post alarms, approval requests, gate flips, pause/resume, and digests. Command loopback is a message the next tick reads:
 
 - `warp:proceed HOS-14` or `warp:proceed L-01`

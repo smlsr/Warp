@@ -22,10 +22,10 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | `mkdir -p .cursor/plugins .warp` | both folders exist |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
 | Copy `assets/config.example.yaml` to `.warp/config.yaml` | the config exists. It is never overwritten. |
-| Set `slackChannel` and `teamsChannel` to `warp-<reponame>` | the channel already has a value. Only an empty (default) channel is filled. |
+| Set `slackChannel` and `teamsChannel` to `Warp` | the channel already has a value. Only an empty channel is filled; a custom name is kept. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
-`<reponame>` comes from the `origin` remote, or the folder name if there is none. It is lowercased, and anything but letters, digits, `_` and `-` becomes `-`. The channel is cut to 50 characters, the Teams limit (Slack allows 80), so it is valid in both. Then reload Cursor.
+`Warp` is one shared channel for every repo, so each message names its repo in a header (see below). Warp does not create the channel: create `Warp` once in Slack and Teams, or change the config to a channel that exists. Slack lowercases channel names, so `Warp` and `warp` are the same channel there.
 
 To do it by hand instead:
 
@@ -38,6 +38,51 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, Bitbucket, and Slack or Teams in Cursor Settings.
 
 Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, and `/warp-uninstall`.
+
+## Slack and Teams messages
+
+Warp has no webhook and no token. Messages go out through the Slack and Teams servers connected in Cursor Settings, posted by the Herald agent in your chat. A script cannot send them on its own, so nothing arrives unless those servers are connected, a channel exists and is set, and the agent session that ran the command is the one that posts. Warp does not create channels.
+
+The channel is shared across repos, so every message opens with a header that names its source:
+
+```text
+Warp | <repo> / <project>
+```
+
+`<repo>` comes from the `origin` remote, or the folder name if there is none. `<project>` is `projectName` in `.warp/config.yaml`, else `jiraProject`, else the workspace folder name. If it is the same word as the repo, only the repo is shown. One formatter, `scripts/herald_fmt.py`, builds every message that Warp's scripts generate, and Herald uses it for the rest (claims, alarms, gates). Each message has a Slack view (a header block, mrkdwn section and context, with `<url|label>` links) and a Teams view (markdown), plus plain text for `.warp/outbox.md`.
+
+Example, `/warp-init` (shown as Slack renders it):
+
+```text
+Warp | Demo-App / ops-platform
+Initialized
+Cursor repo Demo-App was initialized with Warp.
+Channel: Warp
+Repo: Demo-App (https://github.com/acme/Demo-App)
+Branch: main
+Config: .warp/config.yaml
+Next: /warp-scan, then /warp-start.
+```
+
+Example, `/warp-scan`:
+
+```text
+Warp | Demo-App / ops-platform
+Scan finished
+Format: markdown
+Tickets: 7
+Gates: 2
+Run: stopped
+Estimate: agent 60.0h, human 2.5h, elapsed 43.5h
+- Plan used: spec/CURSOR_PLAN.md (https://github.com/acme/Demo-App/blob/main/spec/CURSOR_PLAN.md)
+Links point at branch main; they work once it is pushed. Next: /warp-start. Status files are in .warp/ (not committed).
+```
+
+- `/warp-init` posts only if it changed something. A second run posts nothing. It also tries once to add the person running the agent (git `user.email`) to the channel, if the connected tools can add a user by email. If they cannot, or it fails, or the email is a bot or noreply address, Herald skips it with a one-line note. This never fails init.
+- `/warp-scan` posts the summary and links to the plan and schedule files found. Links use the `origin` remote and branch (GitHub, GitLab, bitbucket.org). Otherwise the relative path is used. Links work once the branch is pushed.
+- `/warp-status-post` uses the same header.
+- It follows `messenger` and `notify`. `notify: quiet` posts neither. Each message goes to `slackChannel` and `teamsChannel` for the messenger you chose.
+- Fail-soft: with no channel set, or no connected server, the text is saved to `.warp/outbox.md`, the command says so, and it still succeeds. The payload is in `.warp/notify-post.json`.
 
 ## Uninstall
 
@@ -150,7 +195,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraMcp` | `atlassian` | Connected Jira server name. |
 | `bitbucketMcp` | `bitbucket` | Connected Bitbucket server name. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
-| `slackChannel` / `teamsChannel` | empty, or `warp-<reponame>` after `/warp-init` | Channel to post and to watch for `warp:status`. |
+| `slackChannel` / `teamsChannel` | `Warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
+| `projectName` | empty | Shown after the repo in message headers. Empty uses `jiraProject`, then the folder name. |
 
 ## Merge policy
 

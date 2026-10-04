@@ -9,7 +9,8 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 
 ## Verbose (default) — post all of these
 
-- Scan finished: format, ticket count, stopped.
+- Init finished: repo name and channel. Only when init changed something.
+- Scan finished: format, ticket count, stopped, and links to the plan and schedule files found.
 - Plan imported or exported: path.
 - Start, pause, resume, stop, with the reason.
 - Each claim: id, size, auto or review, locks.
@@ -23,8 +24,32 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 
 Quiet mode posts only alarms, approval waits, gate red, and pause/stop. A `warp:status` request is always answered.
 
+## Message format
+
+The channel is shared across repos, so every message you post starts with the header `Warp | <repo> / <project>`. Never hand-write it. Build every message with the one formatter, which returns a Slack view (header block, mrkdwn section, context), a Teams view (markdown), and plain text:
+
+```bash
+python3 <plugin>/scripts/herald_fmt.py --title "Claim API-01" \
+  --fact size=M --fact mode=auto --line "locks: db" \
+  --link "PR=https://host/pr/1" --footer "warp:retry API-01"
+```
+
+Post `slack` (use `blocks` if the Slack tool takes them, else `text`) to Slack, and `teams.markdown` to Teams. Use `text` for `.warp/outbox.md`. `scripts/notify.py` and `scripts/status_post.py` already use it.
+
+## Init and scan messages
+
+`/warp-init` and `/warp-scan` run `scripts/notify.py` themselves. It reads `messenger`, `notify`, `slackChannel`, and `teamsChannel`, then writes `.warp/notify-post.json` with an `action`:
+
+- `post`: post the matching view (`slack` or `teams`) to each entry in `targets` through that server (`slackMcp`, `teamsMcp`). If the server is missing or the post fails, run `python3 <plugin>/scripts/notify.py outbox --root .`, and tell the user.
+- `outbox`: no channel is set for the chosen messenger. The text is already in `.warp/outbox.md`. Say which channel key is empty. Do not guess a channel.
+- `skip`: `notify` is quiet. Post nothing.
+
+For `/warp-init` the payload may have `invite`, the git `user.email`. Try once to add that person to the channel only if a connected tool can add a user by email. If none can, or it errors, skip it and say so in one line. Do not create the channel, retry, or fail init.
+
+Never fail init or scan because a message could not be sent.
+
 ## Status on request
 
 If the channel message is `warp:status`, or the user runs `/warp-status-post`, run `scripts/status_post.py` and post the digest. Attach `.warp/STATUS.md`, `.warp/status.json`, and `.warp/BOARD.md`. Teams and Slack cannot pull these files on their own. Warp pushes them when it is running or a tick fires.
 
-Do not @-channel except on alarm or a red gate. Do not invent a webhook.
+Do not @-channel except on alarm or a red gate. Do not create channels. Do not invent a webhook.

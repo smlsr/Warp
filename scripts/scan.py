@@ -666,6 +666,26 @@ def main() -> None:
         print(f"scan format={graph.get('format')} tickets={len(beam['tickets'])} source={graph.get('source')}")
         print(f"estimate agentHours={est['agentHours']} humanHours={est['humanHours']} elapsedHours={est['elapsedHours']}")
         print("runState=stopped — /warp-start to dispatch")
+        try:
+            import notify
+
+            notify.report(
+                notify.build(
+                    "scan",
+                    root,
+                    {
+                        "format": graph.get("format"),
+                        "tickets": len(beam["tickets"]),
+                        "gates": len(beam.get("gates") or []),
+                        "estimate": est,
+                        "source": graph.get("source"),
+                        "found": found,
+                        "folder": found.get("folder"),
+                    },
+                )
+            )
+        except Exception as e:
+            print(f"herald: not posted ({e})")
     elif args.cmd == "export":
         export_plan(Path(args.beam), Path(args.out))
     elif args.cmd == "import":
