@@ -18,6 +18,8 @@
 
 Side exits: `blocked` (human hold), `alarm` (needs a human), `skipped`.
 
+Jira keys: `jiraKey` is set only when the plan source has one (a Jira export, a `schedule.json` with `jiraKey`, or `beam.py set --jira KEY`). A markdown plan has none, so Warp makes no Jira moves for it. `jira.startedAt` and `jira.previousStatus` are set when Warp moves an issue to In Progress, and `jira.lastSync` holds the last result.
+
 `merged` and `done` both unblock dependents. `done` means Jira was transitioned. Reed sets `merged` then `done`. If Jira fails, the ticket stays `merged` and the next tick retries the transition.
 
 ## Fields that matter

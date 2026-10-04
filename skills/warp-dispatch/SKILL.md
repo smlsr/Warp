@@ -31,7 +31,9 @@ python3 <plugin>/scripts/beam.py set --beam .warp/beam.json \
   --id A-03 --status claimed --agent shuttle-A-03 --branch warp/A-03
 ```
 
-If the spawn fails, set status back to `queued` and clear `agent` before claiming another id that shares locks.
+`beam.py set` prints a `jira:` line. For a ticket with a Jira key it asks you to move the issue to In Progress through the Jira MCP server (see `skills/shuttle-run`); do it, or leave it to the Shuttle, which checks `jira.startedAt` first so the move happens once. A ticket without a key prints "no Jira move". Neither case blocks the claim.
+
+If the spawn fails, set status back to `queued` and clear `agent` before claiming another id that shares locks. The Jira issue is left in In Progress unless `jiraRestoreOnRelease` is true, in which case `beam.py set` prints a `move back to` instruction.
 
 ## Windows
 

@@ -7,6 +7,8 @@ Warp uses Cursor's native MCP connections. Names in `.warp/config.yaml` are hint
 Server: `jiraMcp` (Atlassian). Project `HOS`.
 
 - Fetch issue by key, or by tempId label if the key is not on the beam yet.
+- Transition to In Progress when a ticket is claimed (`jiraTransition`, default on), only if the ticket has a Jira key. Read the issue's available transitions and choose with `scripts/jira_sync.py pick`, which matches the transition name, then the target status name (`jiraInProgressStatus`), then an in-progress status category. Never hardcode a transition id. An issue already in progress is left alone, and a Done issue is never reopened. Record the outcome with `jira_sync.py record`. If Jira is not connected or no transition fits, the note goes to `.warp/outbox.md` and the claim stands.
+- Release (claim back to `queued`): leave the issue, unless `jiraRestoreOnRelease` is true, then move it back to the status it had. Pause and stop never move an issue.
 - Comment: status, PR url, AC evidence, Bugbot result.
 - Transition to Done only from Reed, only after merge.
 - Do not create tickets. The import already has 366.
