@@ -14,9 +14,19 @@ New commits after QA Ready (`--sha` while status is `awaiting_approval`) set sta
 
 ## L/XL waiting on you
 
-Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode. Jira is at QA Ready while this waits.
+Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode. Jira is at QA Ready while this waits. After the merge it moves to Done (`jiraDoneOnManualMerge`, default true).
+
+`/warp-proceed WV-01` also accepts the Jira key (`WAR-1`) or a `#` number (`#01`). Run `proceed.py`. If the ticket is not `awaiting_approval`, it replies with the current status and does not merge. When it accepts, merge in that same turn and run the post-merge MUST DO before you reply. The Slack reply includes the merge sha and the Jira status.
 
 Do not proceed a red PR. Reed will refuse.
+
+A ticket that already merged without leaving QA Ready shows up on `/warp-jira-check` as `merged-but-not-done`. `catchup` prints the Done transition, the merged comment, and the exact command:
+
+```bash
+python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json --id <id>
+```
+
+Record the result with `record --event done`. If Jira has no transition from QA Ready to Done, `pick --kind done` tries the name and then one done-category transition. `record --result no-transition` writes `.warp/outbox.md` and Herald posts Jira not updated. Set `jiraDoneOnManualMerge: false` only when QA should keep Done.
 
 ## Gate red
 

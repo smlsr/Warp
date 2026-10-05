@@ -26,7 +26,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-jira-external-id` | Write mappings into External ID, or a label if that field is missing | `jira_external_id.py` `--apply` `--yes` `--create-field` `--recheck` `--force` `--ticket` |
 | `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
 | `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--list` `--check` `--server` `--allow-server-tools` `--with-jira` `--with-git` |
-| `/warp-proceed <id>` | Merge one green manual ticket | Reed. Not a script flag. |
+| `/warp-proceed <id>` | Merge one green manual ticket and move Jira to Done | `proceed.py` `--beam` `--by` |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
@@ -34,7 +34,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 ## Run control
 
-`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket whose Bugbot pass and green CI are already on the beam. Reed refuses a red pull request.
+`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket that is already `awaiting_approval`, with Bugbot pass and green CI on the beam. The token may be the plan id (`WV-01`), the Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused: the reply names the current status and nothing is merged. There is no `--force`. After the merge, Jira moves to Done unless `jiraDoneOnManualMerge` is false.
 
 ## /warp-init
 
@@ -160,13 +160,13 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | Bugbot / CI | comment | connected mode only |
 | Waiting (`autoMerge` false, L and XL by default) | After Bugbot pass and CI green: QA Ready (`jiraQaReadyStatus`) and a comment, "Bugbot clean, ready for manual review", with the findings-fixed count | connected mode only |
 | Merged, auto | Done (`jiraDoneStatus`) and a comment | connected mode only |
-| Merged, manual | comment only. Stays at QA Ready | connected mode only |
+| Merged, manual | Done (`jiraDoneStatus`) and a merged comment, unless `jiraDoneOnManualMerge` is false (then the comment only, and the issue stays at QA Ready) | connected mode only |
 | Release to queued | no move, unless `jiraRestoreOnRelease` is true | none |
 | Pause / stop | no change | none |
 
 A plan id is not a Jira issue key. `WV-01` is not sent as `WV-01`. A key is confirmed when it is on the plan or export, in the map file, its project prefix matches `jiraProject` or `jiraKeyPrefixes`, or Jira has exactly one issue whose external id, `warp:<id>` label, or remote-link id equals the plan id. Otherwise `jiraKey` stays empty and the ticket is `needs mapping`. `/warp-scan` prints `N tickets: K keyed, U need mapping` and, when Jira is connected, resolves those matches before that summary is final. A claim on an unmapped ticket tries that search first. Only a miss or an ambiguous result writes `.warp/outbox.md` and a Herald payload, and it does not call `transitionJiraIssue`. Two Jira issues are reported and neither key is stored. A key set by hand is never replaced.
 
-`/warp-jira-check` runs `jira_sync.py verify` and `catchup`. `verify` with no flags only prints. It does not call Jira, and `needs mapping` on this report does not mean the external-id search already ran. Each ticket has `status: keyed` or `status: unmapped`, `source` (`plan`, `export`, `map`, `manual`, `external`, `label`, `link`, `summary`, `inferred`, or none), and when unmapped a `reason` plus one `fix` command. When every ticket is unmapped the report ends with `why nothing linked:` (`jiraProject is empty`, map keys never copied onto the beam, or no ticket has a Jira key in the plan, map file, or external id). The same line names `jiraMcp`, which must match the Atlassian server Cursor shows. The script cannot tell whether that server is connected.
+`/warp-jira-check` runs `jira_sync.py verify` and `catchup`. `verify` with no flags only prints. It does not call Jira, and `needs mapping` on this report does not mean the external-id search already ran. Each ticket has `status: keyed` or `status: unmapped`, `source` (`plan`, `export`, `map`, `manual`, `external`, `label`, `link`, `summary`, `inferred`, or none), and when unmapped a `reason` plus one `fix` command. When every ticket is unmapped the report ends with `why nothing linked:` (`jiraProject is empty`, map keys never copied onto the beam, or no ticket has a Jira key in the plan, map file, or external id). The same line names `jiraMcp`, which must match the Atlassian server Cursor shows. The script cannot tell whether that server is connected. A ticket whose beam status is `merged` and whose `jira.doneAt` is empty is `merged-but-not-done`. `verify` prints that line and the exact `catchup --beam --id` command. `catchup` then prints the Done transition, the merged comment, and the same command.
 
 ```bash
 python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
@@ -411,7 +411,23 @@ python3 scripts/check_version.py --against origin/main
 
 ## Beam
 
-`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--bugbot pass|fail`, `--ci green`, `--alarm`, `--attempts`, `--force`. `--status awaiting_approval`, `merging`, and `merged` are refused until CI is green and, when Bugbot applies, `--bugbot pass`. A fail sets `fix` or, at `maxFixAttempts`, `alarm` / `bugbot-failed`. A new `--sha` during `awaiting_approval` sets `bugbot_running` and does not move Jira. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
+`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--approved-by`, `--proceeded-by`, `--merge-method`, `--bugbot pass|fail`, `--ci green`, `--alarm`, `--attempts`, `--force`. `--status awaiting_approval`, `merging`, and `merged` are refused until CI is green and, when Bugbot applies, `--bugbot pass`. A fail sets `fix` or, at `maxFixAttempts`, `alarm` / `bugbot-failed`. A new `--sha` during `awaiting_approval` sets `bugbot_running` and does not move Jira. Setting `merged` stores the sha, `mergedAt`, `via`, merge method, and who approved, releases locks, and prints one post-merge MUST DO. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
+
+## /warp-proceed
+
+```bash
+python3 <plugin>/scripts/proceed.py --beam .warp/beam.json WV-01
+python3 <plugin>/scripts/proceed.py --beam .warp/beam.json "warp:proceed WAR-1"
+python3 <plugin>/scripts/proceed.py --beam .warp/beam.json --by alex "#01"
+python3 <plugin>/scripts/proceed.py ?
+```
+
+| Flag | Effect |
+|---|---|
+| `--beam` | Beam file. Default `.warp/beam.json`. |
+| `--by` | Who said `warp:proceed`. Stored on `pr.proceededBy` and, when empty, `pr.approvedBy`. |
+
+The token is a plan id, a Jira key, or a `#` number (`01` and `#01` match a ticket whose id or key ends in that number). One match that is `awaiting_approval` with the gate open is accepted. The status stays `awaiting_approval` until the merge command in the same output is run. Local mode prints `provider.py merge-local`. Connected mode prints the squash-merge, then `beam.py set --status merged --sha --via connected`. That set prints one post-merge MUST DO: Jira transition to Done, merged comments, lock release, dependents that are now ready, `status` and `board`, and the Slack reply with the merge sha and the Jira status. Do not stop after the provider merge. A miss, a ticket in any other status, or a closed gate is a refusal and a Slack reply. Nothing is merged.
 
 ## Channel verbs
 

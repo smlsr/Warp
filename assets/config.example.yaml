@@ -72,10 +72,14 @@ jiraRestoreOnRelease: false
 # it had before. false: leave it. Pause and stop never move an issue.
 jiraQaReadyStatus: "QA Ready"
 # Manual path (L and XL by default, any ticket with autoMerge false): the issue moves
-# here when it is ready for a person to review and merge. Warp does not move it to
-# Done after that; QA does.
+# here when it is ready for a person to review and merge. It stays here until the
+# merge. warp:proceed or a provider approval is what moves it on.
 jiraDoneStatus: "Done"
-# Auto-merge path (S and M by default): the issue moves here after the merge.
+# Status after a merge, auto or manual, connected or local.
+jiraDoneOnManualMerge: true
+# true: after a manual merge (warp:proceed or a provider approval), move Jira to
+# jiraDoneStatus. false: leave the issue at jiraQaReadyStatus and let QA set Done.
+# QA Ready is still the status while the ticket waits for approval.
 jiraSite: ""
 # Atlassian site URL, for example https://yoursite.atlassian.net. Passed as cloudId
 # when you have more than one site. Empty: look the site up with getAccessibleAtlassianResources.

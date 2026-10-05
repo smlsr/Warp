@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.18
+
+- A manual merge (`warp:proceed` or a provider approval) moves Jira to Done, posts the merged comments, records sha, mergedAt, via, merge method, and who approved, releases locks, and unblocks dependents. The set prints one post-merge MUST DO, including the Slack reply with the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready.
+- `proceed.py` accepts a plan id (`WV-01`), a Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused and nothing is merged.
+- `/warp-jira-check` shows `merged-but-not-done` when the beam is merged and `jira.doneAt` is empty, and `catchup` prints the Done transition, the merged comment, and the exact command. If QA Ready has no path to Done, the transition picker uses the name and then one done-category transition; a miss is recorded in the outbox and Herald.
+
 ## 1.3.17
 
 - Manual tickets run Bugbot and the fix loop before QA Ready. awaiting_approval and merge wait for a Bugbot pass and green CI. bugbotManual false skips Bugbot on the manual path only. New commits after QA Ready re-run Bugbot and leave the Jira status in place.
