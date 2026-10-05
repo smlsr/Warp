@@ -32,6 +32,7 @@ SWITCHES = {
     "--auto",
     "--list",
     "--link",
+    "--probe",
 }
 
 

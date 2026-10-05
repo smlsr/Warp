@@ -91,6 +91,20 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict,
     tickets = {}
     for t in sched["tickets"]:
         size = t.get("size") or "M"
+        if t.get("autoMerge") is True:
+            merged = True
+        elif t.get("autoMerge") is False:
+            merged = False
+        else:
+            merged = auto_merge(size, auto_sizes)
+        jira = {"status": t.get("jiraStatus") or None, "lastCommentAt": None}
+        if t.get("externalId"):
+            jira["externalId"] = t.get("externalId")
+        prev = (previous or {}).get(t["id"]) or {}
+        prev_jira = prev.get("jira") if isinstance(prev.get("jira"), dict) else {}
+        for field in ("id", "cloudId", "lastAttempt"):
+            if prev_jira.get(field):
+                jira[field] = prev_jira[field]
         tickets[t["id"]] = {
             "id": t["id"],
             "jiraKey": t.get("jiraKey") or None,
@@ -104,7 +118,7 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict,
             "owner": t.get("owner") or t.get("home"),
             "size": size,
             "complexity": complexity(size, auto_sizes),
-            "autoMerge": auto_merge(size, auto_sizes),
+            "autoMerge": merged,
             "hours": t.get("hours"),
             "deps": list(t.get("deps") or []),
             "unlocks": list(t.get("unlocks") or []),
@@ -134,7 +148,7 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict,
                 "approvedAt": None,
                 "mergedAt": None,
             },
-            "jira": {"status": None, "lastCommentAt": None},
+            "jira": jira,
             "updatedAt": None,
         }
     try:
