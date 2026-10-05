@@ -45,7 +45,7 @@ Do not mark a gate green because the member PRs merged. The schedule's `checks` 
 
 ## Model
 
-Coding steps use `config.model`, default `claude-sonnet-5.5`. Change the yaml, then the next Shuttle picks it up. In-flight tickets keep the model they started with; the branch records it in the PR body.
+Coding steps use `config.model`, default `grok-4.7-high`. Change the yaml, then the next Shuttle picks it up. In-flight tickets keep the model they started with; the branch records it in the PR body.
 
 ## 24/7 board
 

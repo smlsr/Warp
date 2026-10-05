@@ -10,7 +10,7 @@ After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Heral
 
 ## L/XL waiting on you
 
-Herald posts the PR and `warp:proceed <id>`. Approving in Bitbucket is enough; Reed polls participant status APPROVED. The chat command is the override if the Bitbucket connection cannot see approvals.
+Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode. Jira is at QA Ready while this waits.
 
 Do not proceed a red PR. Reed will refuse.
 

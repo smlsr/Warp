@@ -24,6 +24,7 @@ python3 <plugin>/scripts/install.py init
 | `.warp/config.yaml` | the file exists | copy `assets/config.example.yaml` |
 | Channel | `slackChannel` and `teamsChannel` are set | set each empty one (or the old `Warp` default) to `warp` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
+| Git provider | `gitProvider` is already `github` or `bitbucket` | read `origin` and write it. A custom value is left alone, with a warning if it disagrees with the remote. No remote sets `pushMerge: false`. |
 
 `warp` is one shared channel for every repo. A channel that already has a value is left alone, and so is the rest of an existing config. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
 
@@ -35,4 +36,4 @@ If init changed anything, the script also writes `.warp/notify-post.json`: a mes
 
 ## After
 
-Print the script output, then tell the user to reload Cursor. Remind them to connect Jira, Bitbucket, and Slack or Teams in Cursor Settings, and that `/warp-scan` is next. Do not scan or start.
+Print the script output, including every `[warn]` about a missing GitHub or Bitbucket connector or `gh`. Warp does not install `gh`, create keys, or connect an app. Then tell the user to reload Cursor. Remind them to connect Jira, the git provider if they want pull requests, and Slack or Teams in Cursor Settings, and that `/warp-scan` is next. Do not scan or start.

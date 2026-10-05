@@ -3,8 +3,9 @@
 # /Users/you/.warp/humanifyos
 stateDir: .warp
 
-model: claude-sonnet-5.5
+model: grok-4.7-high
 # Cursor model slug for coding steps. Must match the picker.
+# Grok 4.7 High. Do not substitute a fast variant. Override the slug here.
 
 maxAgents: 18
 # Concurrent Shuttles. No per-person cap.
@@ -28,6 +29,12 @@ jiraInProgressStatus: "In Progress"
 jiraRestoreOnRelease: false
 # true: when a claim is released back to queued, move the issue back to the status
 # it had before. false: leave it. Pause and stop never move an issue.
+jiraQaReadyStatus: "QA Ready"
+# Manual path (L and XL by default, any ticket with autoMerge false): the issue moves
+# here when it is ready for a person to review and merge. Warp does not move it to
+# Done after that; QA does.
+jiraDoneStatus: "Done"
+# Auto-merge path (S and M by default): the issue moves here after the merge.
 bugbotRequired: true
 maxFixAttempts: 3
 stuckAfterMinutes: 90
@@ -36,7 +43,20 @@ mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300
 
 jiraMcp: atlassian
+gitProvider: auto
+# auto | github | bitbucket. auto reads the host of the origin remote, and
+# /warp-init writes the one it finds. Other hosts run local-only.
+githubMcp: github
 bitbucketMcp: bitbucket
+ghCli: true
+# GitHub only: use the gh CLI when no GitHub server is connected, if gh is
+# installed and logged in. Warp never installs gh or logs in.
+pushMerge: true
+# true: connected mode, push branches, open and merge PRs through the provider.
+# false: local-only. Never push, never open PRs, never call a provider; merge
+# ticket branches into baseBranch with local git. No remote also means local.
+baseBranch: ""
+# Branch tickets start from and merge into. Empty uses origin's default, then main or master.
 slackMcp: slack
 teamsMcp: teams
 slackChannel: "warp"

@@ -574,7 +574,7 @@ def cmd_check(beam: dict) -> int:
 
 def default_config() -> dict:
     return {
-        "model": "claude-sonnet-5.5",
+        "model": "grok-4.7-high",
         "maxAgents": 18,
         "autoMergeSizes": ["S", "M"],
         "messenger": "both",

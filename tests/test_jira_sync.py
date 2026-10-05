@@ -14,7 +14,13 @@ sys.path.insert(0, str(SCRIPTS))
 import jira_sync  # noqa: E402
 
 PLAN = ROOT / "examples" / "CURSOR_PLAN.sample.md"
-CFG = {"jiraTransition": True, "jiraInProgressStatus": "In Progress", "jiraRestoreOnRelease": False}
+CFG = {
+    "jiraTransition": True,
+    "jiraInProgressStatus": "In Progress",
+    "jiraQaReadyStatus": "QA Ready",
+    "jiraDoneStatus": "Done",
+    "jiraRestoreOnRelease": False,
+}
 
 T_START = {"id": "A", "name": "Start progress", "to": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}}
 T_REVIEW = {"id": "B", "name": "Send to review", "to": {"name": "In Review", "statusCategory": {"key": "indeterminate"}}}
@@ -56,6 +62,22 @@ class PlanTests(unittest.TestCase):
         t = {"id": "A", "jiraKey": "HOS-1", "jira": {}}
         self.assertEqual(jira_sync.plan(t, "release", {**CFG, "jiraRestoreOnRelease": True})["action"], "skip")
 
+    def test_manual_path_goes_to_qa_ready_and_not_done(self):
+        manual = {"id": "L-01", "jiraKey": "HOS-9", "autoMerge": False}
+        p = jira_sync.plan(manual, "qa-ready", CFG)
+        self.assertEqual((p["action"], p["target"], p["kind"]), ("transition", "QA Ready", "qa"))
+        p = jira_sync.plan({**manual, "jiraInProgressStatus": "x"}, "done", {**CFG, "jiraQaReadyStatus": "Ready for QA"})
+        self.assertEqual(p["action"], "skip")
+        self.assertIn("stays at Ready for QA", p["reason"])
+
+    def test_auto_path_goes_to_done_and_not_qa_ready(self):
+        auto = {"id": "S-01", "jiraKey": "HOS-3", "autoMerge": True}
+        p = jira_sync.plan(auto, "done", {**CFG, "jiraDoneStatus": "Complete"})
+        self.assertEqual((p["action"], p["target"], p["kind"]), ("transition", "Complete", "done"))
+        self.assertEqual(jira_sync.plan(auto, "qa-ready", CFG)["action"], "skip")
+        done = {**auto, "jira": {"doneAt": "2026-01-01T00:00:00Z"}}
+        self.assertIn("already moved to Done", jira_sync.plan(done, "done", CFG)["reason"])
+
 
 class PickTests(unittest.TestCase):
     def test_matches_transition_name_then_target_status_case_insensitively(self):
@@ -74,6 +96,19 @@ class PickTests(unittest.TestCase):
         r = jira_sync.pick([T_REVIEW, {**T_REVIEW, "id": "Z", "name": "QA", "to": {"name": "QA", "statusCategory": {"key": "indeterminate"}}}], "Doing")
         self.assertIsNone(r["transition"])
         self.assertEqual(r["result"], "no-transition")
+
+    def test_qa_ready_is_name_only_and_done_uses_category(self):
+        qa = {"id": "Q", "name": "Send to QA", "to": {"name": "QA Ready", "statusCategory": {"key": "indeterminate"}}}
+        r = jira_sync.pick([T_START, qa], "Ready for QA", kind="qa")
+        self.assertEqual(r["result"], "no-transition")
+        r = jira_sync.pick([qa], "QA Ready", kind="qa")
+        self.assertEqual(r["transition"]["id"], "Q")
+        r = jira_sync.pick([qa], "QA Ready", {"name": "Done", "category": "done"}, kind="qa")
+        self.assertEqual(r["result"], "skipped")
+        r = jira_sync.pick([T_DONE, T_START], "Complete", kind="done")
+        self.assertEqual((r["transition"]["id"], r["how"]), ("C", "category"))
+        r = jira_sync.pick([T_DONE], "Done", {"name": "Done", "category": "done"}, kind="done")
+        self.assertEqual(r["result"], "already")
 
     def test_no_matching_transition(self):
         r = jira_sync.pick([T_DONE, T_TODO], "In Progress")
@@ -111,7 +146,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(jira_sync.settings(beam, {"config": {"jiraInProgressStatus": "Doing"}})["jiraInProgressStatus"], "Doing")
         (d / "config.yaml").write_text('jiraTransition: false\njiraInProgressStatus: "Working"  # name\njiraRestoreOnRelease: true\n')
         s = jira_sync.settings(beam, {"config": {"jiraInProgressStatus": "Doing"}})
-        self.assertEqual(s, {"jiraTransition": False, "jiraInProgressStatus": "Working", "jiraRestoreOnRelease": True})
+        self.assertFalse(s["jiraTransition"])
+        self.assertEqual(s["jiraInProgressStatus"], "Working")
+        self.assertTrue(s["jiraRestoreOnRelease"])
+        self.assertEqual(s["jiraQaReadyStatus"], "QA Ready")
+        self.assertEqual(s["jiraDoneStatus"], "Done")
 
 
 class BeamFlowTests(unittest.TestCase):
@@ -147,7 +186,7 @@ class BeamFlowTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn('move to "In Progress"', r.stdout)
         self.assertIn("connected Jira MCP", r.stdout)
-        self.assertIn("The claim stands", r.stdout)
+        self.assertIn("Nothing else is blocked", r.stdout)
         self.assertEqual(self.beam_json()["tickets"]["HOS-1"]["status"], "claimed")
 
     def test_claim_without_key_skips_but_succeeds(self):
@@ -197,7 +236,7 @@ class BeamFlowTests(unittest.TestCase):
         (self.repo / ".warp/config.yaml").write_text("jiraRestoreOnRelease: true\n")
         r = self.set("HOS-1", "queued", "--agent", "")
         self.assertIn('move back to "To Do"', r.stdout)
-        self.assertIn("--no-category", r.stdout)
+        self.assertIn("--kind restore", r.stdout)
         run("jira_sync.py", "record", "--beam", self.beam, "--id", "HOS-1", "--event", "release", "--result", "moved", "--to", "To Do", cwd=self.repo)
         j = self.beam_json()["tickets"]["HOS-1"]["jira"]
         self.assertNotIn("startedAt", j)
@@ -214,6 +253,33 @@ class BeamFlowTests(unittest.TestCase):
         (self.repo / ".warp/config.yaml").write_text("jiraTransition: false\n")
         r = self.set("HOS-1", "claimed", "--agent", "s1")
         self.assertIn("jiraTransition is false", r.stdout)
+
+    def _auto(self, tid, auto):
+        beam = self.beam_json()
+        beam["tickets"][tid]["autoMerge"] = auto
+        beam["tickets"][tid]["size"] = "S" if auto else "L"
+        (self.repo / ".warp/beam.json").write_text(json.dumps(beam))
+
+    def test_awaiting_approval_moves_manual_ticket_to_qa_ready(self):
+        self._auto("HOS-1", False)
+        r = self.set("HOS-1", "awaiting_approval")
+        self.assertIn('ready for manual review and merge, so move to "QA Ready"', r.stdout)
+        self.assertIn("--kind qa", r.stdout)
+        self.set("HOS-1", "merged")
+        r = self.set("HOS-1", "done")
+        self.assertNotIn("jira:", r.stdout)
+
+    def test_merge_moves_auto_ticket_to_done(self):
+        self._auto("HOS-1", True)
+        r = self.set("HOS-1", "awaiting_approval")
+        self.assertNotIn("jira:", r.stdout)
+        r = self.set("HOS-1", "merged")
+        self.assertIn('merged, so move to "Done"', r.stdout)
+        self.assertIn("--kind done", r.stdout)
+        run("jira_sync.py", "record", "--beam", self.beam, "--id", "HOS-1", "--event", "done", "--result", "moved", "--to", "Done", cwd=self.repo)
+        self.assertTrue(self.beam_json()["tickets"]["HOS-1"]["jira"]["doneAt"])
+        r = self.set("HOS-1", "done")
+        self.assertNotIn("jira:", r.stdout)
 
     def test_jira_key_survives_export_and_import(self):
         run("scan.py", "export", cwd=self.repo)

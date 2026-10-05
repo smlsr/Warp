@@ -160,6 +160,13 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
                 cfg.write_text(new)
             steps.append(("done", f"created .warp/config.yaml from example with channel {channel!r}"))
 
+    try:
+        import provider
+
+        steps += provider.init_steps(root, dry)
+    except Exception as e:  # provider detection must never fail init
+        steps.append(("warn", f"could not check the git provider: {e}"))
+
     snippet = read_snippet(root)
     gi = root / ".gitignore"
     if snippet is None:
@@ -284,7 +291,7 @@ def main() -> None:
         if any(s == "fail" for s, _ in steps):
             sys.exit(1)
         if any(s == "done" for s, _ in steps) and not args.dry_run:
-            print("Reload Cursor so the commands and rules load. Then connect Jira, Bitbucket, and Slack or Teams in Settings.")
+            print("Reload Cursor so the commands and rules load. Then connect Jira, your git provider (GitHub or Bitbucket, if you want PRs), and Slack or Teams in Settings.")
             try:
                 import notify
 

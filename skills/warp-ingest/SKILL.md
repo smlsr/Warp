@@ -23,7 +23,7 @@ python3 <plugin>/scripts/beam.py ingest \
   --plan HOS/spec/CURSOR_PLAN.md \
   --out .warp/beam.json \
   --max-agents 18 \
-  --model claude-sonnet-5.5
+  --model grok-4.7-high
 python3 <plugin>/scripts/beam.py check --beam .warp/beam.json
 python3 <plugin>/scripts/beam.py board --beam .warp/beam.json
 ```

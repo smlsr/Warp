@@ -10,19 +10,33 @@ Server: `jiraMcp` (Atlassian). Project `HOS`.
 - Transition to In Progress when a ticket is claimed (`jiraTransition`, default on), only if the ticket has a Jira key. Read the issue's available transitions and choose with `scripts/jira_sync.py pick`, which matches the transition name, then the target status name (`jiraInProgressStatus`), then an in-progress status category. Never hardcode a transition id. An issue already in progress is left alone, and a Done issue is never reopened. Record the outcome with `jira_sync.py record`. If Jira is not connected or no transition fits, the note goes to `.warp/outbox.md` and the claim stands.
 - Release (claim back to `queued`): leave the issue, unless `jiraRestoreOnRelease` is true, then move it back to the status it had. Pause and stop never move an issue.
 - Comment: status, PR url, AC evidence, Bugbot result.
-- Transition to Done only from Reed, only after merge.
-- Do not create tickets. The import already has 366.
+- Manual path (`autoMerge` false, L and XL by default): when the ticket moves to `awaiting_approval`, transition to `jiraQaReadyStatus` (default QA Ready). After the merge, leave it there.
+- Auto-merge path (`autoMerge` true, S and M by default): after the merge, connected or local, transition to `jiraDoneStatus` (default Done). Retry next tick if it fails; the beam stays `merged`.
+- Both use `scripts/jira_sync.py` the same way as the claim move: `plan`, `pick` (by transition name, target status name, then status category; `--kind qa` is name-only, `--kind done` may use the done category), `record`. Never a fixed transition id. A failure is a note in `.warp/outbox.md`, not a failed merge or claim.
+- Do not create tickets.
 
-## Bitbucket
+## GitHub and Bitbucket
 
-Server: `bitbucketMcp`. Repos `HumanifyOS` and `HumanifyOS-UI`.
+`scripts/provider.py resolve` chooses the mode from `.warp/config.yaml`.
 
-- Open PR from `warp/<id>-<jiraKey>` into `main`.
-- Read CI and participant status. APPROVED is the L/XL merge signal.
-- Comment Bugbot evidence and AC ids.
-- Squash merge only from Reed, only on the policy in MERGE-POLICY.md.
+| Config | Effect |
+|---|---|
+| `gitProvider: auto` | GitHub if `origin` is a GitHub host, Bitbucket if it is Bitbucket. `/warp-init` writes the detected value and leaves a custom one alone. |
+| `gitProvider: github` | Pull requests through `githubMcp`, then the `gh` CLI if `ghCli` is true and `gh` is already logged in. |
+| `gitProvider: bitbucket` | Pull requests through `bitbucketMcp`. |
+| `pushMerge: false` | Local-only. No push, no pull request, no provider call. |
+| no `origin`, or another host | Local-only. `/warp-init` sets `pushMerge: false` when there is no remote. |
 
-If the Bitbucket MCP cannot open a PR, `git push` and the web UI are a human fallback — raise an alarm rather than scraping credentials into the repo.
+Connected mode, in order:
+
+- Open the pull request from `warp/<id>-<jiraKey>` into `baseBranch` (empty detects origin's default, then `main` or `master`).
+- Read CI and approvals. A GitHub approving review, or a Bitbucket participant status APPROVED, is the L/XL merge signal, along with `warp:proceed <id>`.
+- Comment Bugbot evidence and acceptance-criterion ids.
+- Squash-merge only from Reed, only on the policy in MERGE-POLICY.md.
+
+Warp does not install `gh`, create SSH keys, or connect an app. If the connector and the CLI are both missing or error, do not raise an alarm and do not scrape credentials: run `scripts/provider.py note` and take the local path for that ticket.
+
+Local-only: stay on the ticket branch. Reed squash-merges it into `baseBranch` with `scripts/provider.py merge-local`, which also writes `.warp/outbox.md` and asks Herald to post that it was local. A conflict leaves the branches untouched.
 
 ## Slack and Teams
 

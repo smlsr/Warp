@@ -14,7 +14,8 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Plan imported or exported: path.
 - Start, pause, resume, stop, with the reason.
 - Each claim: id, size, auto or review, locks.
-- Jira not updated on a claim (no connector, no matching transition, or a failure): id, Jira key, reason. Same text is in `.warp/outbox.md`.
+- Jira not updated (no connector, no matching transition, or a failure), on a claim, a move to QA Ready, or a move to Done: id, Jira key, reason. Same text is in `.warp/outbox.md`.
+- A ticket ran local-only, or was merged locally: post the message `scripts/provider.py note` wrote. Nothing was pushed.
 - PR opened: id and url.
 - Bugbot pass or fail: id and one line of evidence.
 - Awaiting approval: id, url, `warp:proceed <id>`.
