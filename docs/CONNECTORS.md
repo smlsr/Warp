@@ -44,7 +44,7 @@ Who moves the issue:
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
 | Waiting (L/XL, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
 | Merge, auto (`autoMerge` true) | Reed. Connected: `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected). |
-| Merge, manual | Reed, same commands | Merged comment only. The issue stays at QA Ready. |
+| Merge, manual | Reed, after `warp:proceed` or a provider approval. Connected: squash-merge, then `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment, unless `jiraDoneOnManualMerge` is false. The set prints one post-merge MUST DO. |
 | Release back to queued | dispatch | No move, unless `jiraRestoreOnRelease` is true. |
 | Pause / stop | nobody | No Jira change. |
 | Blocked / alarm | whoever sets that status | Jira comment. A failed transition is the Herald message above. |

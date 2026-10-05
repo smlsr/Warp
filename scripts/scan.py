@@ -583,6 +583,9 @@ def write_status(beam_path: Path) -> None:
             "bugbot": pr.get("bugbot"),
             "ci": pr.get("ci"),
             "bugbotFixed": pr.get("bugbotFixed") or 0,
+            "sha": pr.get("sha"),
+            "via": pr.get("via"),
+            "jiraDone": bool((t.get("jira") or {}).get("doneAt")),
             "agent": t.get("agent"),
             "tokens": t.get("tokens") or 0,
             "minutes": t.get("minutes") or 0,
@@ -630,7 +633,10 @@ def write_status(beam_path: Path) -> None:
         for t in working
     ] or ["None."]
     lines += ["", "## Done", ""]
-    lines += [f"- **{t['id']}** {t['status']} — {t['summary']}" for t in done[:40]] or ["None."]
+    lines += [
+        f"- **{t['id']}** {t['status']} sha={t.get('sha') or 'none'} via={t.get('via') or 'none'} jira={'Done' if t.get('jiraDone') else 'not Done'} — {t['summary']}"
+        for t in done[:40]
+    ] or ["None."]
     if len(done) > 40:
         lines.append(f"- … {len(done) - 40} more in status.json")
     lines += ["", "## Left", ""]

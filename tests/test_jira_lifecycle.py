@@ -189,6 +189,13 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("doneAt=", report.stdout)
         self.assertNotIn("doneAt=(none)", report.stdout)
 
+    def test_local_manual_merge_moves_jira_to_done(self):
+        repo = self.make("local")
+        fake = FakeClient(repo)
+        self._manual(repo, fake, expect_pr=False)
+        self.assertNotIn("merged", [e for e, _ in fake.pr_comments])
+        self.assertEqual(fake.status["ABC-456"]["name"], "Done")
+
     def test_local_mode_comments_on_jira_only(self):
         repo = self.make("local")
         fake = FakeClient(repo)
@@ -345,17 +352,20 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("Findings fixed: 1", qa)
         if expect_pr:
             self.assertIn("qa-ready", [e for e, _ in fake.pr_comments])
-        self.set(repo, "T-9", "--status", "merged", "--sha", "fff9999")
+        merged_out = self.set(repo, "T-9", "--status", "merged", "--sha", "fff9999", "--via", "connected" if expect_pr else "local")
+        self.assertIn("post-merge MUST DO", merged_out.stdout)
+        self.assertIn("locks: released", merged_out.stdout)
         todo = fake.follow()
         trans = [a["plan"]["event"] for t in todo["tickets"] for a in t["actions"] if a["type"] == "transition"]
-        self.assertEqual(trans, [])
-        self.assertEqual(fake.status["ABC-456"]["name"], "QA Ready")
+        self.assertEqual(trans, ["done"])
+        self.assertEqual(fake.transition_ids[-1], "33")
+        self.assertEqual(fake.status["ABC-456"]["name"], "Done")
         merged = [body for event, body in fake.jira_comments if event == "merged"][-1]
         self.assertIn("fff9999", merged)
         self.assertIn("https://github.com/acme/app/pull/9", merged)
         report = run(repo, "jira_sync.py", "verify", "--beam", ".warp/beam.json", "--id", "T-9")
         self.assertIn("missing: (nothing)", report.stdout)
-        self.assertNotIn("transition done", report.stdout)
+        self.assertNotIn("merged-but-not-done", report.stdout)
 
 
 if __name__ == "__main__":

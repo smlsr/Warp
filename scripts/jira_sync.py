@@ -18,6 +18,7 @@ Settings (.warp/config.yaml, else the beam copy, else the defaults below):
   jiraInProgressStatus    "In Progress"
   jiraQaReadyStatus       "QA Ready"
   jiraDoneStatus          "Done"
+  jiraDoneOnManualMerge   true     manual merge moves to Done; false leaves QA Ready
   jiraRestoreOnRelease    false
   jiraMcp                 "atlassian"   Cursor server name, not a tool name
   jiraSite                ""            site URL used as cloudId when set
@@ -75,6 +76,7 @@ DEFAULTS = {
     "jiraInProgressStatus": "In Progress",
     "jiraQaReadyStatus": "QA Ready",
     "jiraDoneStatus": "Done",
+    "jiraDoneOnManualMerge": True,
     "jiraRestoreOnRelease": False,
     "jiraMcp": "atlassian",
     "jiraSite": "",
@@ -239,8 +241,17 @@ def apply_review(ticket: dict, cfg: Optional[dict], args) -> Optional[str]:
         pr["reviewedAt"] = pr.get("reviewedAt") or now()
         if pr.get("sha") and not pr.get("reviewedSha"):
             pr["reviewedSha"] = pr.get("sha")
+    if getattr(args, "approved_by", None):
+        pr["approvedBy"] = args.approved_by
+    if getattr(args, "proceeded_by", None):
+        pr["proceededBy"] = args.proceeded_by
     if ticket.get("status") == "merged":
         pr["mergedAt"] = pr.get("mergedAt") or now()
+        method = getattr(args, "merge_method", None)
+        if method:
+            pr["mergeMethod"] = method
+        elif not pr.get("mergeMethod"):
+            pr["mergeMethod"] = "squash"
     return note
 
 
@@ -560,6 +571,13 @@ def refuse_unmapped(beam_path: Path, ticket: dict, cfg: dict) -> str:
     return note
 
 
+def moves_to_done(ticket: dict, cfg: Optional[dict]) -> bool:
+    """Auto-merge always closes Jira. A manual merge does too unless the flag is false."""
+    if ticket.get("autoMerge"):
+        return True
+    return _flag((cfg or {}).get("jiraDoneOnManualMerge", True), True)
+
+
 def plan(ticket: dict, event: str, cfg: dict) -> dict:
     """What should happen to the Jira issue for this event. Uses a confirmed key only."""
     prefixes = prefixes_from(cfg)
@@ -596,8 +614,11 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
         else:
             out.update(action="transition", target=cfg["jiraQaReadyStatus"], kind="qa")
     elif event == "done":
-        if not auto:
-            out["reason"] = f"manual-path ticket; it stays at {cfg['jiraQaReadyStatus']} for QA, Warp does not move it to Done"
+        if not moves_to_done(ticket, cfg):
+            out["reason"] = (
+                f"manual-path ticket; jiraDoneOnManualMerge is false, so it stays at "
+                f"{cfg['jiraQaReadyStatus']} for QA"
+            )
         elif jira.get("doneAt"):
             out["reason"] = "already moved to Done"
         else:
@@ -723,6 +744,13 @@ def instruction(p: dict) -> str:
     me = Path(__file__).resolve()
     if p["action"] == "skip":
         return f"jira: {p['id']}: no Jira move ({p['reason']})."
+    tail = "If Jira is not connected or nothing fits, record that and carry on. Nothing else is blocked."
+    if p.get("event") == "done":
+        tail = (
+            "Pick by transition name, then by the target status name, then by one done-category transition. "
+            "If none fits, record --result no-transition. That writes .warp/outbox.md and Herald posts Jira not updated. "
+            "The merge stands."
+        )
     return (
         f"jira: {p['id']} ({p['jiraKey']}): {VERB[p['event']]} \"{p['target']}\" through the connected Jira MCP server. "
         f"Read the issue with {TOOL_ISSUE} and its transitions with {TOOL_TRANSITIONS} "
@@ -731,7 +759,7 @@ def instruction(p: dict) -> str:
         f"Call {TOOL_TRANSITION} with the id it picks (argument transition.id, or transitionId if that is the schema's field). "
         f"Then record: python3 {me} record --beam <beam> --id {p['id']} --event {p['event']} "
         f"--result moved|already|skipped|unavailable|no-transition|failed --from '<old status>' --to '<new status>'. "
-        "If Jira is not connected or nothing fits, record that and carry on. Nothing else is blocked."
+        + tail
     )
 
 
@@ -750,6 +778,8 @@ def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] =
     bug_line = f"Bugbot: {bug}." + (f" {evidence}" if evidence else "")
     alarm = ticket.get("alarm") or ticket.get("status") or "blocked"
     tid = ticket.get("id")
+    who = pr.get("proceededBy") or pr.get("approvedBy")
+    who_bit = f" Approved by {who}." if who else ""
     fixed = int(pr.get("bugbotFixed") or 0)
     if bugbot_applies(ticket, cfg):
         ready = f"Bugbot clean, ready for manual review. Findings fixed: {fixed}."
@@ -760,7 +790,7 @@ def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] =
         "pr-opened-jira": f"{head}\nPull request: {url}",
         "pr-opened-pr": f"{head}\nTicket {tid}. Jira {key}.",
         "qa-ready": f"{head}\n{ready}\nReview and merge, or reply warp:proceed {tid}.",
-        "merged": f"{head}\nMerged ({where}). PR {url}. sha {sha}.",
+        "merged": f"{head}\nMerged ({where}). PR {url}. sha {sha}.{who_bit}",
         "bugbot": f"{head}\n{bug_line}",
         "bugbot-rerun": f"{head}\nnew commits, re-running Bugbot.",
         "ci": f"{head}\nCI: {pr.get('ci')}.",
@@ -953,6 +983,114 @@ def _snapshot(prev, ticket: dict) -> dict:
     }
 
 
+def _just_merged(before, ticket: dict) -> bool:
+    prev = before.get("status") if isinstance(before, dict) else before
+    return ticket.get("status") in DONE and prev not in DONE
+
+
+def _cleared_dependents(beam: dict, tid: str) -> list[str]:
+    """Tickets that listed tid and whose deps are now all terminal."""
+    terminal = {"merged", "done", "skipped"}
+    tickets = beam.get("tickets") or {}
+    out = []
+    for other in tickets.values():
+        deps = other.get("deps") or []
+        if tid not in deps:
+            continue
+        if other.get("status") not in {"queued", "blocked"}:
+            continue
+        unmet = [d for d in deps if (tickets.get(d) or {}).get("status") not in terminal]
+        if not unmet:
+            out.append(str(other.get("id")))
+    return sorted(out)
+
+
+def _ready_ids(beam: dict) -> list[str]:
+    try:
+        import beam as beam_mod
+
+        return [str(t.get("id")) for t in beam_mod.ready(beam)]
+    except Exception:
+        return []
+
+
+def post_merge_text(beam_path: Path, beam: dict, ticket: dict, cfg: dict, mode: str, rendered: str = "") -> str:
+    """One block for the turn that recorded the merge. Jira text is included when present."""
+    tid = ticket.get("id")
+    pr = ticket.get("pr") or {}
+    jira = ticket.get("jira") or {}
+    locks = ticket.get("locks") or []
+    if not isinstance(locks, list):
+        locks = [str(locks)]
+    if ticket.get("status") in ACTIVE:
+        lock_line = "locks: still held because the status is still active."
+    else:
+        names = ", ".join(str(x) for x in locks) if locks else "none"
+        lock_line = f"locks: released ({names})."
+    cleared = _cleared_dependents(beam, str(tid))
+    ready_ids = [i for i in _ready_ids(beam) if i in set(cleared)]
+    target = cfg.get("jiraDoneStatus") or "Done"
+    sha = pr.get("sha") or "unknown"
+    if moves_to_done(ticket, cfg):
+        if jira.get("doneAt"):
+            jira_line = f"jira: Done already recorded ({target})."
+        else:
+            jira_line = f"jira: move to {target}. QA Ready was the wait before approval."
+        reply = f"slack reply: Merged {tid} sha {sha}. Jira status {target}."
+    else:
+        qa = cfg.get("jiraQaReadyStatus") or "QA Ready"
+        jira_line = f"jira: left at {qa}. jiraDoneOnManualMerge is false, so QA sets Done."
+        reply = f"slack reply: Merged {tid} sha {sha}. Jira stays at {qa}."
+    try:
+        import beam as beam_mod
+
+        beam_py = Path(beam_mod.__file__).resolve()
+    except Exception:
+        beam_py = Path(__file__).resolve().parent / "beam.py"
+    status_py = Path(__file__).resolve().parent / "status_post.py"
+    scan_py = Path(__file__).resolve().parent / "scan.py"
+    lines = [
+        f"post-merge MUST DO {tid}.",
+        (
+            f"beam: status {ticket.get('status')} sha {sha} "
+            f"mergedAt {pr.get('mergedAt') or 'unknown'} via {pr.get('via') or mode} "
+            f"method {pr.get('mergeMethod') or 'squash'} "
+            f"approvedBy {pr.get('approvedBy') or 'unknown'} "
+            f"proceededBy {pr.get('proceededBy') or 'unknown'}."
+        ),
+        lock_line,
+        "unblocked: " + (", ".join(cleared) if cleared else "(none)") + ".",
+        "ready: " + (", ".join(ready_ids) if ready_ids else "(none)") + ".",
+        jira_line,
+    ]
+    if rendered.strip():
+        lines.append(rendered.strip())
+    lines.append(f"board: python3 {beam_py} board --beam {beam_path}")
+    lines.append(f"status: python3 {scan_py} status --beam {beam_path}")
+    lines.append(f"slack: python3 {status_py} --beam {beam_path} --out {beam_path.parent / 'status-post.json'}")
+    lines.append("slack: post that payload in the Warp channel.")
+    lines.append(reply)
+    if moves_to_done(ticket, cfg) and not jira.get("doneAt"):
+        lines.append(
+            f"jira: merged-but-not-done {tid}. "
+            f"python3 {Path(__file__).resolve()} catchup --beam {beam_path} --id {tid}"
+        )
+    return "\n".join(lines)
+
+
+def _emit_merge(beam_path: Path, beam: dict, ticket: dict, before, cfg: dict, mode: str, text: str) -> None:
+    if not _just_merged(before, ticket):
+        if text:
+            print(text)
+        return
+    try:
+        print(post_merge_text(beam_path, beam, ticket, cfg, mode, text))
+    except Exception as e:
+        if text:
+            print(text)
+        print(f"post-merge: state note skipped ({e})")
+
+
 def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: Optional[str] = None) -> None:
     """Called by beam.py set. Prints what the agent must do. Never raises.
 
@@ -990,22 +1128,25 @@ def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: Optional[str] =
         )
         prefixes = prefixes_from(cfg)
         if not jira_key(ticket, prefixes):
+            printed = ""
             if watched and cfg.get("jiraTransition", True):
-                print(prepare_resolve(beam_path, only_ids=[str(ticket.get("id") or "")]))
+                printed = prepare_resolve(beam_path, only_ids=[str(ticket.get("id") or "")])
             _write_todo(beam_path, [])
+            _emit_merge(beam_path, beam, ticket, before, cfg, mode, printed)
             return
         if not cfg["jiraTransition"]:
-            if watched:
-                print(instruction(plan(ticket, event or "claim", cfg)))
+            printed = instruction(plan(ticket, event or "claim", cfg)) if watched else ""
             _write_todo(beam_path, [])
+            _emit_merge(beam_path, beam, ticket, before, cfg, mode, printed)
             return
         actions = actions_for(ticket, before, cfg, mode, root)
         if not actions:
             _write_todo(beam_path, [])
+            _emit_merge(beam_path, beam, ticket, before, cfg, mode, "")
             return
         payload = _todo_payload(ticket, actions, cfg, mode)
         _write_todo(beam_path, [payload])
-        print(render(ticket, actions, cfg))
+        _emit_merge(beam_path, beam, ticket, before, cfg, mode, render(ticket, actions, cfg))
         _journal(beam_path, {"type": "jira-intent", "id": ticket.get("id"), "actions": [a.get("event") or a.get("plan", {}).get("event") for a in actions]})
     except Exception as e:  # a Jira problem must not break a status change
         print(f"jira: skipped ({e})")
@@ -1226,10 +1367,13 @@ def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]
             "Already merged. Catch-up requests the closing move only, not a backwards move to In Progress, "
             "and it does not repeat claim or pull-request-opened comments."
         )
-        if auto:
+        if moves_to_done(ticket, cfg):
             items.append({"type": "transition", "event": "done", "target": cfg["jiraDoneStatus"]})
+            if not auto:
+                note += " Manual merge moves Jira to Done. QA Ready was only the wait before approval."
         else:
             items.append({"type": "transition", "event": "qa-ready", "target": cfg["jiraQaReadyStatus"]})
+            note += " jiraDoneOnManualMerge is false, so catch-up leaves the issue at QA Ready and still posts the merged comment."
         items.append({"type": "comment", "where": "jira", "event": "merged"})
         if _wants_pr(ticket, mode):
             items.append({"type": "comment", "where": "pr", "event": "merged"})
@@ -1323,7 +1467,7 @@ def _actions_from_missing(ticket: dict, missing: list[dict], cfg: dict, mode: st
     return actions
 
 
-def format_diagnosis(row: dict) -> str:
+def format_diagnosis(row: dict, beam_path: Optional[Path] = None) -> str:
     rec = row["recorded"]
     jira_comments = ", ".join(f"{k}={v}" for k, v in rec["jiraComments"].items()) or "(none)"
     pr_comments = ", ".join(f"{k}={v}" for k, v in rec["prComments"].items()) or "(none)"
@@ -1345,6 +1489,15 @@ def format_diagnosis(row: dict) -> str:
     ]
     if rec.get("lastSync"):
         lines.append(f"lastSync: {rec['lastSync'].get('event')} {rec['lastSync'].get('result')}")
+    wants_done = any(item.startswith("transition done") for item in row["should"])
+    if row.get("status") in DONE and not rec.get("doneAt") and wants_done:
+        beam_bit = str(beam_path) if beam_path else "<beam>"
+        lines.append("merged-but-not-done: beam status is merged and jira.doneAt is empty.")
+        lines.append(
+            f"command: python3 {Path(__file__).resolve()} catchup --beam {beam_bit} --id {row['id']}"
+        )
+    elif row.get("status") in DONE and not rec.get("doneAt"):
+        lines.append("merged-and-left-at-qa: jiraDoneOnManualMerge is false. Jira stays at QA Ready.")
     if row["note"]:
         lines.append(f"note: {row['note']}")
     return "\n".join(lines)
@@ -1660,7 +1813,7 @@ def verify(
         if row["needsMapping"]:
             unmapped.append(str(i))
         reported.append(t)
-        parts.append(format_diagnosis(row) + "\n" + link_lines(t, cfg, beam_path))
+        parts.append(format_diagnosis(row, beam_path) + "\n" + link_lines(t, cfg, beam_path))
     diagnosis = why_nothing_linked(reported, cfg, beam_path)
     if diagnosis:
         parts.append(diagnosis)
@@ -1714,7 +1867,10 @@ def catchup(beam_path: Path, tid: Optional[str], write: bool) -> str:
             lines.append(f"jira: {i}: nothing missing")
             continue
         payloads.append(_todo_payload(t, actions, cfg, mode))
-        lines.append(render(t, actions, cfg))
+        rendered = render(t, actions, cfg)
+        if (t.get("status") or "") in DONE:
+            rendered = post_merge_text(beam_path, beam, t, cfg, mode, rendered)
+        lines.append(rendered)
     if refused:
         note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
         _outbox(beam_path, note)

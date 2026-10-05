@@ -20,8 +20,9 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | jiraProject | empty | Jira project key, for example `WAR`. A plan id is sent to Jira only when its prefix matches this or `jiraKeyPrefixes`. `WV-01` is not `WAR-1`. `/warp-init` and `/warp-scan` write it when one prefix is clear from the plan, branches, or recent commits, or when Jira shows one matching project. A value already set is left alone. |
 | jiraTransition | `true` | On claim, move the Jira issue to `jiraInProgressStatus`. Only tickets with a Jira key. No Jira connector, or no matching transition: a note goes to `.warp/outbox.md` and the claim goes on. |
 | jiraInProgressStatus | `In Progress` | Target status name. Warp reads the transitions Jira offers and matches the transition name, then the target status name, then an in-progress status category. It never uses a fixed transition id. |
-| jiraQaReadyStatus | `QA Ready` | Manual path (ticket `autoMerge` false, L and XL by default): Jira moves here only after Bugbot is clean and CI is green. Warp does not move it to Done afterwards. |
-| jiraDoneStatus | `Done` | Auto-merge path (`autoMerge` true, S and M by default): Jira moves here after the merge, connected or local. |
+| jiraQaReadyStatus | `QA Ready` | Manual path (ticket `autoMerge` false, L and XL by default): Jira moves here only after Bugbot is clean and CI is green, and stays here until the merge. |
+| jiraDoneStatus | `Done` | Jira moves here after the merge, auto or manual, connected or local. |
+| jiraDoneOnManualMerge | `true` | Manual merge (`warp:proceed` or a provider approval) moves Jira to `jiraDoneStatus`. `false` leaves the issue at `jiraQaReadyStatus` so QA can set Done. QA Ready is still the waiting status before approval. |
 | jiraRestoreOnRelease | `false` | `true`: when a claim is released back to `queued`, move the issue back to the status it had before Warp moved it. `false`: leave it where it is. |
 | bugbotRequired | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. `false` skips that gate on both. |
 | bugbotManual | `true` | Manual tickets only (`autoMerge` false). `false` skips Bugbot before QA Ready. Auto-merge still follows `bugbotRequired`. |

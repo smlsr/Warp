@@ -103,6 +103,7 @@ class ScriptHelpTests(unittest.TestCase):
             "bump_version.py": ("--minor", "--major", "--note"),
             "notify.py": ("outbox", "quiet"),
             "status_post.py": ("--beam", "--out"),
+            "proceed.py": ("--beam", "--by", "WV-01", "awaiting_approval"),
             "check_version.py": ("--against",),
             "jira_view.py": ("--results", "--comments", "--links", "--all", "--full", "--verbose", "getJiraIssue"),
             "jira_match.py": (
@@ -145,6 +146,7 @@ class ScriptHelpTests(unittest.TestCase):
             "notify.py",
             "allow_notify.py",
             "status_post.py",
+            "proceed.py",
             "check_version.py",
             "herald_fmt.py",
             "jira_view.py",

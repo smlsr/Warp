@@ -67,13 +67,18 @@ class PlanTests(unittest.TestCase):
         t = {"id": "A", "jiraKey": "HOS-1", "jira": {}}
         self.assertEqual(jira_sync.plan(t, "release", {**CFG, "jiraRestoreOnRelease": True})["action"], "skip")
 
-    def test_manual_path_goes_to_qa_ready_and_not_done(self):
+    def test_manual_path_goes_to_qa_ready_then_done(self):
         manual = {"id": "L-01", "jiraKey": "HOS-9", "autoMerge": False}
         p = jira_sync.plan(manual, "qa-ready", CFG)
         self.assertEqual((p["action"], p["target"], p["kind"]), ("transition", "QA Ready", "qa"))
-        p = jira_sync.plan({**manual, "jiraInProgressStatus": "x"}, "done", {**CFG, "jiraQaReadyStatus": "Ready for QA"})
+        p = jira_sync.plan(manual, "done", CFG)
+        self.assertEqual((p["action"], p["target"], p["kind"]), ("transition", "Done", "done"))
+        waiting = {**manual, "jira": {"qaReadyAt": "2026-01-01T00:00:00Z"}}
+        self.assertEqual(jira_sync.plan(waiting, "done", CFG)["action"], "transition")
+        p = jira_sync.plan(manual, "done", {**CFG, "jiraDoneOnManualMerge": False, "jiraQaReadyStatus": "Ready for QA"})
         self.assertEqual(p["action"], "skip")
-        self.assertIn("stays at Ready for QA", p["reason"])
+        self.assertIn("jiraDoneOnManualMerge is false", p["reason"])
+        self.assertIn("Ready for QA", p["reason"])
 
     def test_auto_path_goes_to_done_and_not_qa_ready(self):
         auto = {"id": "S-01", "jiraKey": "HOS-3", "autoMerge": True}
@@ -114,6 +119,11 @@ class PickTests(unittest.TestCase):
         self.assertEqual((r["transition"]["id"], r["how"]), ("C", "category"))
         r = jira_sync.pick([T_DONE], "Done", {"name": "Done", "category": "done"}, kind="done")
         self.assertEqual(r["result"], "already")
+        r = jira_sync.pick([qa, T_DONE], "Done", {"name": "QA Ready", "category": "indeterminate"}, kind="done")
+        self.assertEqual((r["transition"]["id"], r["how"]), ("C", "name"))
+        r = jira_sync.pick([qa], "Done", {"name": "QA Ready", "category": "indeterminate"}, kind="done")
+        self.assertEqual(r["result"], "no-transition")
+        self.assertIn("no transition to Done", r["reason"])
 
     def test_no_matching_transition(self):
         r = jira_sync.pick([T_DONE, T_TODO], "In Progress")
@@ -310,7 +320,11 @@ class BeamFlowTests(unittest.TestCase):
         self.assertIn('ready for manual review and merge, so move to "QA Ready"', r.stdout)
         self.assertIn("Bugbot clean, ready for manual review", r.stdout)
         self.assertIn("--kind qa", r.stdout)
-        self.set("HOS-1", "merged")
+        r = self.set("HOS-1", "merged", "--sha", "abc1234", "--via", "connected", "--proceeded-by", "alex")
+        self.assertIn('merged, so move to "Done"', r.stdout)
+        self.assertIn("post-merge MUST DO", r.stdout)
+        self.assertIn("Approved by alex", r.stdout)
+        self.assertIn("slack reply: Merged HOS-1 sha abc1234. Jira status Done.", r.stdout)
         r = self.set("HOS-1", "done")
         self.assertNotIn("jira:", r.stdout)
 

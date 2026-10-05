@@ -443,6 +443,8 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     )
     extra = f" ({note})" if note else ""
     print(f"{args.id} {prev} -> {t['status']}{extra}")
+    if t["status"] in {"merged", "done"} and prev not in {"merged", "done"}:
+        refresh_outputs(beam_path, beam)
     try:
         if jira_sync is None:
             import jira_sync as jira_sync  # noqa: F811
@@ -538,6 +540,19 @@ def render_board(beam: dict) -> str:
     else:
         for t in active:
             lines.append(f"- **{t['id']}** {t['status']} agent={t.get('agent')} locks={', '.join(t['locks'][:2])}")
+    merged_rows = [t for t in beam["tickets"].values() if t["status"] in {"merged", "done"}]
+    lines += ["", "## Merged", ""]
+    if not merged_rows:
+        lines.append("None.")
+    else:
+        for t in sorted(merged_rows, key=lambda x: x["id"])[:20]:
+            pr = t.get("pr") or {}
+            jira_bit = "Done" if (t.get("jira") or {}).get("doneAt") else "not Done"
+            lines.append(
+                f"- **{t['id']}** sha={pr.get('sha') or 'none'} via={pr.get('via') or 'none'} jira={jira_bit} — {t['summary']}"
+            )
+        if len(merged_rows) > 20:
+            lines.append(f"- … {len(merged_rows) - 20} more")
     nxt = ready(beam, limit=12)
     lines += ["", "## Next ready (critical first)", ""]
     if not nxt:
@@ -545,7 +560,7 @@ def render_board(beam: dict) -> str:
     else:
         for t in nxt:
             lines.append(
-                f"- **{t['id']}** {t['size']}/{t['complexity']} {'AUTO' if t['autoMerge'] else 'REVIEW'} — {t['summary']}"
+                f"- **{t['id']}** {t.get('size')}/{t.get('complexity')} {'AUTO' if t.get('autoMerge') else 'REVIEW'} — {t.get('summary')}"
             )
     lines.append("")
     return "\n".join(lines)
@@ -597,6 +612,22 @@ td,th {{ text-align:left; padding:6px 8px; border-bottom:1px solid #1c2c30; }}
 <tbody>{''.join(rows) or '<tr><td colspan=5>Nothing started.</td></tr>'}</tbody></table>
 </main></body></html>
 """
+
+
+def refresh_outputs(beam_path: Path, beam: dict) -> None:
+    """Rewrite status and board files after a merge. A failure here does not undo the beam write."""
+    parent = beam_path.parent
+    try:
+        import scan
+
+        scan.write_status(beam_path)
+    except Exception as e:
+        print(f"status: not rewritten ({e})")
+    try:
+        (parent / "BOARD.md").write_text(render_board(beam))
+        (parent / "board.html").write_text(render_html(beam))
+    except Exception as e:
+        print(f"board: not rewritten ({e})")
 
 
 def cmd_check(beam: dict) -> int:
@@ -658,6 +689,7 @@ def default_config() -> dict:
         "jiraRestoreOnRelease": False,
         "jiraQaReadyStatus": "QA Ready",
         "jiraDoneStatus": "Done",
+        "jiraDoneOnManualMerge": True,
         "jiraMcp": "atlassian",
         "jiraSite": "",
         "bugbotRequired": True,
@@ -679,10 +711,13 @@ examples:
 
 Subcommands: ingest, ready, set, spend, gate, pause, resume, board, check, eta.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
---via local|connected, --bugbot pass|fail, --ci green, --alarm, --attempts, --force.
+--via local|connected, --approved-by, --proceeded-by, --merge-method,
+--bugbot pass|fail, --ci green, --alarm, --attempts, --force.
 awaiting_approval, merging, and merged wait for CI green and, when Bugbot
 applies, --bugbot pass. A new --sha while awaiting_approval returns the ticket
-to bugbot_running and does not move Jira backwards.
+to bugbot_running and does not move Jira backwards. Setting merged records
+sha, mergedAt, via, merge method, and who approved, then prints one
+post-merge MUST DO (Jira Done, comments, locks, dependents, Slack).
 --jira KEY is rejected when it does not match jiraProject or jiraKeyPrefixes,
 unless --force is set. A plan id is not a Jira key.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
@@ -722,6 +757,9 @@ def main() -> None:
     ps.add_argument("--pr")
     ps.add_argument("--sha", help="merge commit sha, stored on pr.sha and included in the Jira comment")
     ps.add_argument("--via", choices=["local", "connected"], help="how this merge happened; local skips pull-request comments")
+    ps.add_argument("--approved-by", help="who approved the merge; stored on pr.approvedBy")
+    ps.add_argument("--proceeded-by", help="who said warp:proceed; stored on pr.proceededBy")
+    ps.add_argument("--merge-method", help="merge method, default squash once status is merged")
     ps.add_argument("--bugbot")
     ps.add_argument("--ci")
     ps.add_argument("--alarm")

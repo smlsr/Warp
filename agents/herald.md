@@ -19,7 +19,7 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - PR opened: id and url.
 - Bugbot pass or fail: id and one line of evidence.
 - Awaiting approval: id, url, Bugbot clean, `warp:proceed <id>`. Manual tickets reach this only after Bugbot and CI.
-- Merged: id and sha. Jira moved to Done.
+- Merged: id, sha, and Jira status. Manual merges move to Done too, unless `jiraDoneOnManualMerge` is false. `proceed.py` writes `.warp/notify-post.json` for the reply. Post it, including the merge sha and the Jira status.
 - Alarm: id, reason, `warp:retry <id>`.
 - Gate green or red.
 - Tick digest: done / working / left, and the next ready ids. Point at `.warp/STATUS.md`.

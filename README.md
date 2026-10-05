@@ -70,7 +70,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-jira-external-id` | Write existing mappings into External ID, or a label if that field is missing | `--apply`, `--yes`, `--force`, `--force-external-id`, `--ticket`, `--create-field`, `--recheck` |
 | `/warp-jira-map` | Review or set plan id to issue key | `--set`, `--import`, `--from-jira`, `--yes` |
 | `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--list`, `--check`, `--server`, `--allow-server-tools`, `--user`, `--yes`, `--revoke` |
-| `/warp-proceed` | Merge one green manual ticket | |
+| `/warp-proceed` | Merge one green manual ticket and move Jira to Done | `proceed.py` |
 | `/warp-version` | Installed copy, source copy, and `.warp/version` | |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `--yes`, `--remove-gitignore` |
 
@@ -383,8 +383,9 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraExternalIdFallback` | `label` | `label`, `remote-link`, or `none` when the External ID field is missing. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
-| `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here after Bugbot is clean and CI is green. |
-| `jiraDoneStatus` | `Done` | Auto-merge path (S and M): Jira moves here after the merge. |
+| `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here after Bugbot is clean and CI is green, and waits here until the merge. |
+| `jiraDoneStatus` | `Done` | Jira moves here after the merge, auto or manual. |
+| `jiraDoneOnManualMerge` | `true` | `false` leaves a manual merge at QA Ready so QA can set Done. |
 | `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
 | `bugbotRequired` | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. |
 | `bugbotManual` | `true` | Manual tickets only. `false` skips Bugbot before QA Ready. Auto-merge still uses `bugbotRequired`. |
@@ -408,7 +409,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 
 ## Merge policy
 
-S and M (`autoMerge` true) and L and XL (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. S and M then auto-merge and Jira moves to Done. L and XL then move to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>`, and Reed merges. Jira stays at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is.
+S and M (`autoMerge` true) and L and XL (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. S and M then auto-merge and Jira moves to Done. L and XL then move to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number), and Reed merges in that same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 
 ## Estimate
 
