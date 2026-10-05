@@ -41,6 +41,16 @@ Run `scripts/provider.py resolve` before the first claim in a tick and pass its 
 
 `respectMergeWindows` defaults false so dispatch runs all day and night. Merge windows `08:30`, `13:00`, `17:00` are digest times unless the yaml sets `respectMergeWindows: true`. Auto-merge does not wait for a window.
 
+## When the ready set stays empty
+
+If nothing is queued or active (every ticket is merged, done, skipped, blocked, or alarmed), or the run was stopped, the completion report should already exist. `reportOnComplete` (default true) writes it from `beam.py set` and from `scan.py stop`. If `.warp/warp-complete.html` is missing, run:
+
+```bash
+python3 <plugin>/scripts/report.py --beam .warp/beam.json
+```
+
+Post the Herald payload it writes. The file is gitignored and stays on this machine.
+
 ## Do not
 
 - Borrow a lock from a running ticket.

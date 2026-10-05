@@ -18,6 +18,7 @@ Hand the user these paths:
 - `.warp/status.json` — the same, machine-readable, full lists
 - `.warp/BOARD.md` — gates, alarms, next ready, tokens, ETA
 - `.warp/board.html` — the same board in a browser
+- `.warp/warp-complete.html` — the completion report, when the status footer names it
 
 Lead the reply with the three counts and the working ids. Do not paste the whole left list if it is long; point at the file.
 

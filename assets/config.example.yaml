@@ -94,6 +94,14 @@ stuckAfterMinutes: 90
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300
+reportOnComplete: true
+# true: when every ticket is merged, done, skipped, blocked, or alarmed, or the run
+# is stopped, write .warp/warp-complete.html and ask Herald to post the totals.
+# false: write the file only when someone runs /warp-report.
+reportPath: ".warp/warp-complete.html"
+# Where the completion report is written, relative to the repo. The default is
+# inside .warp, which /warp-init gitignores. A second copy is not made when this
+# is already that path.
 
 jiraMcp: atlassian
 gitProvider: auto

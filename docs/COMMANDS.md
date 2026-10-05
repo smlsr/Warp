@@ -27,6 +27,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
 | `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--list` `--check` `--server` `--allow-server-tools` `--with-jira` `--with-git` |
 | `/warp-proceed <id>` | Merge one green manual ticket and move Jira to Done | `proceed.py` `--beam` `--by` |
+| `/warp-report` | Completion report, or a partial snapshot | `report.py` `--beam` `--out` `--open` `--partial` |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
@@ -34,7 +35,30 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 ## Run control
 
-`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket that is already `awaiting_approval`, with Bugbot pass and green CI on the beam. The token may be the plan id (`WV-01`), the Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused: the reply names the current status and nothing is merged. There is no `--force`. After the merge, Jira moves to Done unless `jiraDoneOnManualMerge` is false.
+`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. When `.warp/warp-complete.html` exists, the status footer names it. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket that is already `awaiting_approval`, with Bugbot pass and green CI on the beam. The token may be the plan id (`WV-01`), the Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused: the reply names the current status and nothing is merged. There is no `--force`. After the merge, Jira moves to Done unless `jiraDoneOnManualMerge` is false.
+
+## /warp-report
+
+Writes `.warp/warp-complete.html`. `reportOnComplete` (default true) also writes it from `beam.py set` when no ticket is queued or active, and from `scan.py stop`. `false` leaves the write to this command.
+
+```bash
+python3 <plugin>/scripts/report.py --beam .warp/beam.json
+python3 <plugin>/scripts/report.py --beam .warp/beam.json --partial
+python3 <plugin>/scripts/report.py --beam .warp/beam.json --out .warp/warp-complete.html --open
+```
+
+A run that still has queued or active tickets exits 2 and prints `not complete; pass --partial`. It does not write the file. `--partial` writes a snapshot with a Partial banner. `--open` prints a `file://` URL. `reportPath` is a second copy when it is not already `.warp/warp-complete.html`.
+
+Waves are concurrency-run segments. A ticket is active from the status event that enters the working set until a status event leaves it. The interval is half-open. Each stretch between two boundaries has one set of active tickets. An empty set is drawn on the concurrency chart and is not a wave, and it splits waves so the same tickets resuming later are a new wave. Adjacent stretches with the same set are one wave. A handoff that keeps the count the same but changes who is running is two waves. Dependency levels are not used.
+
+`beam.py set` appends a `status` event (and `bugbot`, `ci`, `alarm` when those change) to the ticket and to `.warp/events.jsonl`. The first status that leaves `queued` sets `runStartedAt`. Usage is recorded with `beam.py usage` or on `set`:
+
+```bash
+python3 <plugin>/scripts/beam.py usage --beam .warp/beam.json --id WV-01 --tokens-in 1000 --tokens-out 200 --tokens-cached 50 --cost 1.25
+python3 <plugin>/scripts/beam.py set --beam .warp/beam.json --id WV-01 --tokens-in 1000 --tokens-out 200 --cost 1.25
+```
+
+Pass the totals the Cursor run reported for that ticket. Each flag replaces the previous value. If the run did not report usage, do not call this and do not invent numbers. The report shows n/a. `beam.py spend` remains the additive `tokens` and `minutes` total and is not tokens in, out, or cached. A non-green `--ci` increments `pr.ciRetries`.
 
 ## /warp-init
 

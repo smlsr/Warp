@@ -71,6 +71,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-jira-map` | Review or set plan id to issue key | `--set`, `--import`, `--from-jira`, `--yes` |
 | `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--list`, `--check`, `--server`, `--allow-server-tools`, `--user`, `--yes`, `--revoke` |
 | `/warp-proceed` | Merge one green manual ticket and move Jira to Done | `proceed.py` |
+| `/warp-report` | Completion report, or a partial snapshot | `--out`, `--open`, `--partial` |
 | `/warp-version` | Installed copy, source copy, and `.warp/version` | |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `--yes`, `--remove-gitignore` |
 
@@ -187,7 +188,7 @@ The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same nu
 python3 <plugin>/scripts/version.py
 ```
 
-Every change bumps the patch version and adds a `CHANGELOG.md` entry. `python3 scripts/bump_version.py` does both (`--minor` or `--major` when those are intended). A pull request that does not move the version past `main` fails CI.
+Every change bumps the patch version and adds a `CHANGELOG.md` entry. `python3 scripts/bump_version.py` does both (`--minor` or `--major` when those are intended). A pull request that does not move the version past `main` fails CI. `scripts/check_version.py --against origin/main` is that check. An equal version passes when the working tree already matches `main`, which is what happens when the check starts after the merge. An equal version with other changes still fails.
 
 ## Upgrade
 
@@ -348,7 +349,19 @@ Upload by dragging the file into the agent chat, or saving it in the workspace. 
 
 ## Status
 
-`/warp-status` rewrites `.warp/STATUS.md` and `.warp/status.json`. Working means claimed, coding, review, fix, or waiting on approval. Done means merged or moved to Done in Jira. Left is everything else. `.warp/BOARD.md` and `board.html` add gates, alarms, and ETA.
+`/warp-status` rewrites `.warp/STATUS.md` and `.warp/status.json`. Working means claimed, coding, review, fix, or waiting on approval. Done means merged or moved to Done in Jira. Left is everything else. `.warp/BOARD.md` and `board.html` add gates, alarms, and ETA. When `.warp/warp-complete.html` exists, the status file names it.
+
+## Completion report
+
+When every ticket is merged, done, skipped, blocked, or alarmed, or when the run is stopped, Warp writes `.warp/warp-complete.html` and Herald posts the headline totals plus that path. The file is gitignored with `.warp`. It is not on the remote. `reportOnComplete: false` skips the automatic write. `/warp-report` still writes it, and `--partial` writes a snapshot while work is in progress.
+
+```bash
+python3 <plugin>/scripts/report.py --beam .warp/beam.json
+python3 <plugin>/scripts/report.py --beam .warp/beam.json --partial
+python3 <plugin>/scripts/report.py --beam .warp/beam.json --out .warp/warp-complete.html --open
+```
+
+The page is one self-contained HTML file. Waves are concurrency-run segments: tickets active at the same time, from claim until the status leaves the working set. A gap with nobody running is not a wave. A handoff that keeps the count the same but changes who is running is two waves. Token and cost figures come from `beam.py usage` (or the same flags on `set`). If the Cursor run did not report them, the page says n/a. It does not invent numbers.
 
 ## Status in Teams or Slack
 
@@ -394,6 +407,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
 | `pollSeconds` | `300` | How often pull requests and channel commands are read. |
+| `reportOnComplete` | `true` | Write `.warp/warp-complete.html` and ask Herald to post the totals when the run finishes or is stopped. `false` writes the file only from `/warp-report`. |
+| `reportPath` | `.warp/warp-complete.html` | Where the completion report is written, relative to the repo. The default stays inside `.warp`, which is gitignored. |
 | `jiraMcp` | `atlassian` | Connected Jira server name, not a tool name. |
 | `jiraSite` | empty | Optional site URL used as `cloudId` when you have more than one Atlassian site. |
 | `gitProvider` | `auto` | `github`, `bitbucket`, or `auto` (from the `origin` host). |

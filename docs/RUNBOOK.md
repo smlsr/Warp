@@ -28,6 +28,10 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json --id <id>
 
 Record the result with `record --event done`. If Jira has no transition from QA Ready to Done, `pick --kind done` tries the name and then one done-category transition. `record --result no-transition` writes `.warp/outbox.md` and Herald posts Jira not updated. Set `jiraDoneOnManualMerge: false` only when QA should keep Done.
 
+## Run finished or stopped
+
+When nothing is queued or active, or you run `/warp-stop`, Warp writes `.warp/warp-complete.html` and Herald posts the totals and the path. The file is local and gitignored. `reportOnComplete: false` skips that automatic write. While the run is still going, `/warp-report --partial` writes a snapshot and does not wait for the end.
+
 ## Gate red
 
 Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship.

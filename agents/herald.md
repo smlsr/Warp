@@ -23,8 +23,9 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Alarm: id, reason, `warp:retry <id>`.
 - Gate green or red.
 - Tick digest: done / working / left, and the next ready ids. Point at `.warp/STATUS.md`.
+- Run complete: `report.py` or `beam.py set` writes `.warp/notify-post.json` with the headline totals and the path `.warp/warp-complete.html`. Post it even when notify is quiet. Say the file is gitignored and stays on the machine. Do not link it as if it were on the remote.
 
-Quiet mode posts only alarms, approval waits, gate red, and pause/stop. A `warp:status` request is always answered.
+Quiet mode posts only alarms, approval waits, gate red, pause/stop, and the completion report. A `warp:status` request is always answered.
 
 ## Message format
 
