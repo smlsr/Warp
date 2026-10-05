@@ -327,7 +327,14 @@ def resolve_ticket(tid: str, summary: str, project: str | None, configured: str,
     if text:
         issues = _search(client, summary_jql(text, project), notes, "summary")
         if issues:
-            keys = _unique_keys(issues, prefixes, lambda issue: _summary_text(issue).casefold() == text.casefold())
+            import jira_match
+
+            wanted = jira_match.normalize_summary(text)
+            keys = _unique_keys(
+                issues,
+                prefixes,
+                lambda issue: jira_match.normalize_summary(_summary_text(issue)) == wanted,
+            )
             if len(keys) == 1:
                 return _result(tid, "proposed", key=keys[0], source="summary", confidence="low", matches=keys, notes=notes)
             if len(keys) > 1:

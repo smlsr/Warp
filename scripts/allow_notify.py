@@ -832,7 +832,9 @@ Default tools, from scripts/mcp_tools.py, on slackMcp and teamsMcp:
   getJiraIssue, getTransitionsForJiraIssue, listJiraIssueTransitions,
   transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue,
   searchJiraIssuesUsingJql, getJiraProjectIssueTypesMetadata,
-  getJiraIssueRemoteIssueLinks, getVisibleJiraProjects).
+  getJiraIssueRemoteIssueLinks, getVisibleJiraProjects, editJiraIssue,
+  getJiraIssueEditmeta). editJiraIssue writes the External ID field.
+  Scan and claim do not call it unless jiraWriteExternalId is true.
 --with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
   put that in notifyAllow.
 

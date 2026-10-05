@@ -81,6 +81,7 @@ DEFAULTS = {
     "jiraKeyPrefixes": "",
     "jiraKeyMap": {},
     "jiraExternalIdField": "externalId",
+    "jiraWriteExternalId": False,
 }
 EVENTS = ["claim", "release", "qa-ready", "done"]
 COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "ci", "alarm", "blocked"]
@@ -939,6 +940,7 @@ def record_resolved(
     cloud_id: str | None = None,
     status: str | None = None,
     source: str = "external",
+    confidence: str | None = None,
 ) -> str:
     """Write a lookup hit onto the beam and the map file. Does not call Jira.
 
@@ -962,7 +964,8 @@ def record_resolved(
             "Pass the issue key from the search (WAR-1), not the external id."
         )
     origin = source if source in CONFIRMED_SOURCES else "external"
-    confidence = "high" if origin == "external" else ("medium" if origin in {"label", "link"} else "low")
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "high" if origin == "external" else ("medium" if origin in {"label", "link"} else "low")
     t["jiraKey"] = norm
     t["jiraKeySource"] = origin
     t["jiraKeyConfidence"] = confidence
@@ -1005,6 +1008,11 @@ def record_resolved(
     else:
         lines.append("jira: key stored. No transition is due while the ticket is queued.")
     lines.append(f"jira: transitionJiraIssue and comments must use {norm}. Do not pass {tid}.")
+    import jira_match
+
+    write_hint = jira_match.hint_for_resolve(cfg)
+    if write_hint:
+        lines.append(write_hint)
     return "\n".join(lines)
 
 
@@ -1309,7 +1317,11 @@ def link_lines(ticket: dict, cfg: dict, beam_path: Path) -> str:
     if key:
         return f"status: keyed\nsource: {source}\n{report}"
     reason, fix = unmapped_reason(ticket, cfg, beam_path)
-    return f"status: unmapped\nsource: {source}\nreason: {reason}\nfix: {fix}\n{report}"
+    import jira_match
+
+    extra = jira_match.hint_line(ticket, beam_path)
+    hint = f"{extra}\n" if extra else ""
+    return f"status: unmapped\nsource: {source}\nreason: {reason}\nfix: {fix}\n{hint}{report}"
 
 
 def why_nothing_linked(tickets: list[dict], cfg: dict, beam_path: Path) -> str | None:
@@ -1803,7 +1815,7 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None, write: b
     shown = ", ".join(row["id"] for row in rows[:30])
     extra = f" (+{len(rows) - 30} more)" if len(rows) > 30 else ""
     me = Path(__file__).resolve()
-    return (
+    text = (
         f"{summary}\n"
         f"jira: RESOLVE {shown}{extra} by external id (exact single match), then label warp:<id>, then a remote link. "
         f"Call {TOOL_FIELDS} once, then {TOOL_SEARCH} on server {payload['server']} for each jql in .warp/{RESOLVE_NAME}. "
@@ -1815,8 +1827,16 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None, write: b
         "jira: /warp-jira-map is only for tickets that stay unmapped or ambiguous.\n"
         f"jira: RECORD each hit before any transition: python3 {me} resolve --ticket <id> --key <WAR-1> "
         "--issue-id <id> --cloud-id <cloudId>. That writes the beam and .warp/jira-map.json together. "
-        "transitionJiraIssue uses only the stored key. Do not pass the plan id."
+        "transitionJiraIssue uses only the stored key. Do not pass the plan id.\n"
+        "jira: An unmapped ticket with a summary can be matched by jira_match.py. "
+        "An exact or prefix hit is stored with --apply. A fuzzy hit stays a proposal until --yes."
     )
+    import jira_match
+
+    write_hint = jira_match.hint_for_resolve(cfg)
+    if write_hint:
+        text += "\n" + write_hint
+    return text
 
 
 def _external_values(issue: dict, field: str) -> list[str]:
@@ -2148,6 +2168,8 @@ examples:
   python3 scripts/jira_sync.py map --from-jira --results results.json --yes
   python3 scripts/jira_sync.py resolve --apply results.json
   python3 scripts/jira_sync.py resolve --ticket WV-01 --key WAR-1 --issue-id 10001 --cloud-id cloud-1
+  python3 scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --yes
+  python3 scripts/jira_match.py --results candidates.json --apply
   python3 scripts/jira_sync.py record --id WV-01 --event claim --result failed --error "transition rejected"
   python3 scripts/jira_sync.py project --list
   python3 scripts/jira_sync.py project --probe
@@ -2299,6 +2321,14 @@ def main() -> None:
     pj.add_argument("--apply", dest="project_apply", help="JSON from getVisibleJiraProjects and getAccessibleAtlassianResources")
     pj.add_argument("--probe", action="store_true", help="write JQL that checks each visible project for a plan id")
     pj.add_argument("--record", dest="project_record", help="probe transcript; one matching project is stored")
+    pe = sub.add_parser("external-id", help="write a plan id into the Jira External ID field")
+    pe.add_argument("--beam", default=".warp/beam.json")
+    pe.add_argument("--ticket", help="plan id, for example WV-01")
+    pe.add_argument("--key", help="Jira issue key, for example WAR-1")
+    pe.add_argument("--set", dest="pair", help="WV-01=WAR-1")
+    pe.add_argument("--results", help="edit transcript from editJiraIssue")
+    pe.add_argument("--yes", action="store_true", help="confirm the write")
+    pe.add_argument("--force-external-id", action="store_true", help="replace a different non-empty External ID")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -2398,6 +2428,32 @@ def main() -> None:
                 print(jira_project.record_probe(root, data if isinstance(data, dict) else {}))
             else:
                 print(jira_project.ensure(root, write=True, report_set=True))
+        elif args.cmd == "external-id":
+            import jira_match
+
+            beam_path = Path(args.beam)
+            pairs = []
+            if args.pair:
+                parsed = jira_match._parse_pair(args.pair)
+                if not parsed:
+                    print(f"jira: --set {args.pair!r} must be ID=KEY")
+                    return
+                pairs.append(parsed)
+            elif args.ticket and args.key:
+                key = normalize_key(args.key)
+                if not key:
+                    print(f"jira: {args.key!r} is not a Jira issue key")
+                    return
+                pairs.append((args.ticket, key))
+            if args.results and args.yes:
+                data = json.loads(Path(args.results).read_text())
+                print(jira_match.record_write(beam_path, data if isinstance(data, dict) else {}, yes=True, force=bool(args.force_external_id)))
+            else:
+                if not pairs:
+                    loaded = _load(beam_path) if beam_path.is_file() else {"tickets": {}}
+                    rows = jira_match._pairs_from_beam(loaded, settings(beam_path, loaded), args.ticket, [])
+                    pairs = [(row["id"], row["key"]) for row in rows]
+                print(jira_match.prepare_write(beam_path, pairs, yes=bool(args.yes), force=bool(args.force_external_id)))
         elif args.cmd == "resolve":
             beam_path = Path(args.beam)
             if args.ticket and args.key:

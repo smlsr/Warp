@@ -21,6 +21,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-import` | `scan.py import` |
 | `/warp-jira-check` | `jira_sync.py verify` and `catchup` |
 | `/warp-jira-view <key-or-id>` | `jira_view.py` |
+| `/warp-jira-match` | `jira_match.py` |
 | `/warp-jira-map` | `jira_sync.py map` |
 | `/warp-allow-notify` | `allow_notify.py` |
 | `/warp-version` | `version.py` |
@@ -135,6 +136,8 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | `searchJiraIssuesUsingJql` | Scan and claim: exact external-id match, then a `warp:<id>` label. One hit is stored. Summary search waits for `--yes` |
 | `getJiraProjectIssueTypesMetadata` | Field names and ids, so `jiraExternalIdField` or External ID can be queried as `cf[NNNNN]` |
 | `getJiraIssueRemoteIssueLinks` | Remote-link ids, checked after the external-id field and the label |
+| `editJiraIssue` | Write the plan id into the External ID field. Only `/warp-jira-match --write-external-id` or `jira_sync.py external-id`, and only after `--yes`. Not a comment. |
+| `getJiraIssueEditmeta` | Whether that field exists and is editable on the issue. A missing or read-only field is skipped. |
 
 | When | Jira | Pull request |
 |---|---|---|
@@ -195,6 +198,43 @@ python3 <plugin>/scripts/jira_view.py WAR-1 --results view.json --comments --lin
 | `--beam` | Beam path. Default `.warp/beam.json`. |
 
 The report starts with `resolved: WAR-1 (external id)` or `resolved: WAR-1 (issue key)`, the status, the external-id field name and id, and `beam:` / `map:` lines for the stored key. `discovered field` is the id to set as `jiraExternalIdField` when the configured name is different. Custom fields print as `External ID (customfield_10050): WV-01`. Description and comments are plain text. Users are the display name. Labels, components, and versions are comma-joined. Dates are ISO. A field whose name is a token, password, or secret is `<redacted>`.
+
+## /warp-jira-match
+
+Link Warp tickets to Jira issues by summary, then optionally write the plan id into the External ID field. Dry-run is the default. The script does not call Jira. `summary ~` in Jira is fuzzy, so the agent fetches a bounded candidate list (50 issues, at most 2 pages) and the script matches locally.
+
+Order for each unmapped ticket: exact summary (case-insensitive, punctuation and whitespace ignored), then the first `--chars` characters (default 60) when both summaries are at least that long, then a token/ratio score at or above `--min-score` (default 0.9) as a proposal only. `--all` includes tickets that already have a key; those keys are not replaced. A manual key is never overwritten. Done and closed issues are skipped unless `--include-done`. An issue already mapped to another ticket is skipped. Two matches, or one issue claimed by two tickets, are listed and not stored.
+
+```bash
+python3 <plugin>/scripts/jira_match.py
+python3 <plugin>/scripts/jira_match.py --results candidates.json
+python3 <plugin>/scripts/jira_match.py --results candidates.json --apply
+python3 <plugin>/scripts/jira_match.py --results candidates.json --apply --yes
+python3 <plugin>/scripts/jira_match.py --all --chars 60 --min-score 0.9 --include-done
+python3 <plugin>/scripts/jira_match.py --write-external-id --yes
+python3 <plugin>/scripts/jira_match.py --set-external-id WV-01=WAR-1 --yes --results edits.json
+python3 <plugin>/scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --yes
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Write `.warp/jira-match.json` with JQL. Print the searches. Store nothing. |
+| `--results FILE` | Match a saved candidate list, or record an External ID edit. |
+| `--apply` | Store one exact or prefix match on the beam and in `.warp/jira-map.json` (source `summary`). |
+| `--yes` | Also store one fuzzy proposal. Confirms an External ID write. |
+| `--all` | Report tickets that already have a key. Do not replace them. |
+| `--chars N` | Prefix length. Default 60. |
+| `--min-score N` | Fuzzy threshold. Default 0.9. |
+| `--include-done` | Match Done and closed issues. |
+| `--id ID` | One plan id. |
+| `--write-external-id` | Prepare or record an External ID write for mapped tickets. |
+| `--set-external-id ID=KEY` | One pair, for example `WV-01=WAR-1`. |
+| `--force-external-id` | Replace a different non-empty External ID. |
+| `--dry-run` | Print the match or the before/after and write nothing. |
+
+`--apply` uses the same recording as `resolve --ticket`: the beam and `.warp/jira-map.json` are written together. `/warp-jira-map --from-jira` still tries the external id first, then this same summary comparison, and still waits for `--yes` before storing a summary hit.
+
+`--write-external-id` is a write to Jira through `editJiraIssue`. It needs the connector permission from `/warp-allow-notify --with-jira` (`editJiraIssue` and `getJiraIssueEditmeta` are on that list). The field name comes from `jiraExternalIdField` and the field catalog. A missing or read-only field is skipped and the command still succeeds. Dry-run shows before and after. A different non-empty value is left alone unless `--force-external-id`. A second run sees `jira.externalIdWritten` and does not send the edit again. No Jira comment is added. `jiraWriteExternalId` defaults to false, so scan and claim never write the field. These flags work even when that key is false, once `--yes` is set.
 
 ## /warp-jira-map
 
