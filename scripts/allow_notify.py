@@ -798,8 +798,69 @@ def config_text(root: Path) -> str:
     return ""
 
 
+HELP = """
+examples:
+  python3 scripts/allow_notify.py ?
+  python3 scripts/allow_notify.py --dry-run
+  python3 scripts/allow_notify.py
+  python3 scripts/allow_notify.py --with-jira --with-git
+  python3 scripts/allow_notify.py --user --dry-run
+  python3 scripts/allow_notify.py --user --yes
+  python3 scripts/allow_notify.py --revoke
+
+What it writes (project is the default; --user writes the home-directory files):
+  IDE    .cursor/permissions.json   mcpAllowlist server:tool
+         ~/.cursor/permissions.json with --user
+         Skips the Run prompt when Run Mode is Auto-review, Allowlist, or
+         Run Everything. Ask Every Time does not consult it. Setting the key
+         replaces the in-app MCP allowlist. Per-user and per-repo files are
+         concatenated. A team admin Run Mode override ignores the file.
+  CLI    .cursor/cli.json permissions.allow Mcp(server:tool)
+         ~/.cursor/cli-config.json with --user
+         Does not change the IDE Run button.
+  Hook   .cursor/hooks.json beforeMCPExecution (.cursor/hooks/warp-mcp-allow.py)
+         ~/.cursor/hooks.json and ./hooks/warp-mcp-allow.py with --user
+         Returns allow for this list and ask for every other tool. A hook
+         allow does not currently skip the Run prompt. failClosed is off.
+  Cloud  nothing. Cloud agents do not ask for approval, and beforeMCPExecution
+         does not run there.
+
+Default tools, from scripts/mcp_tools.py, on slackMcp and teamsMcp:
+  slack_post_message, slack_send_message
+  send_channel_message, teams_send_message
+--with-jira adds the Atlassian tools Warp calls (getAccessibleAtlassianResources,
+  getJiraIssue, getTransitionsForJiraIssue, listJiraIssueTransitions,
+  transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue).
+--with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
+  put that in notifyAllow.
+
+notifyAllow in .warp/config.yaml is a list of extra server:tool pairs. No
+wildcards. If the Run prompt shows a different tool, add that server:tool and
+run this again.
+
+Merges into existing JSON. Other hooks, other allow entries, the terminal
+allowlist, and autoRun stay. A file that already exists is copied to a .bak
+before it changes. A second run with the same flags writes nothing. --dry-run
+prints a unified diff and writes nothing. --revoke removes only the entries
+recorded in .cursor/warp-allow.json (or ~/.cursor/warp-allow.json). An emptied
+mcpAllowlist key is deleted so Cursor can use the in-app list again.
+/warp-uninstall removes the project entries and does not touch ~/.cursor.
+--user refuses to write unless --yes is also set. --cursor-home stands in for
+~/.cursor (used by tests).
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+A bare help after an option that takes a value stays that value.
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Allow Warp Slack/Teams (and optional Jira/GitHub) MCP writes without a prompt")
+    import usage
+
+    p = argparse.ArgumentParser(
+        description="Allow Warp Slack/Teams (and optional Jira/GitHub) MCP writes without a prompt",
+        epilog=HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--root", help="repo root (default: git toplevel or cwd)")
     p.add_argument("--user", action="store_true", help="edit ~/.cursor instead of the repo")
     p.add_argument("--yes", action="store_true", help="required with --user before anything is written")
@@ -808,7 +869,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="print diffs and write nothing")
     p.add_argument("--revoke", action="store_true", help="remove only the entries this command recorded")
     p.add_argument("--cursor-home", help="directory standing in for ~/.cursor (tests)")
-    args = p.parse_args(argv)
+    args = p.parse_args(usage.normalize_argv(argv))
 
     if args.user and not args.yes and not args.dry_run:
         print("Refusing to edit user-level Cursor files without --yes.")

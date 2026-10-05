@@ -9,6 +9,8 @@ description: "Print the Warp plugin version of the project copy and of the sourc
 python3 <plugin>/scripts/version.py
 ```
 
+`version.py ?` prints the options (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
+
 Read the output to the user.
 
 - `Warp v<version>` means the project copy and the source copy match.

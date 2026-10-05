@@ -1,5 +1,7 @@
 # Guide
 
+Commands, flags, and config keys are in [COMMANDS.md](COMMANDS.md) and [CONFIG.md](CONFIG.md). Install, upgrade, and troubleshooting are in the README.
+
 ## What Warp replaces
 
 The manual plan is 3 people, 6 Cursor windows each, merge windows at 08:30, 13:00, and 17:00. Warp keeps the caps and the gates, and drops the calendar as a blocker. Dispatch is continuous. Windows are digest times unless `respectMergeWindows` is true.
@@ -35,7 +37,7 @@ reconcile in-flight → advance gates → ready() → claim → Shuttle → Reed
 - a dep is not merged
 - a blocking upstream gate is not green
 - a lock path overlaps an active ticket
-- `maxAgents` or `maxAgentsPerPerson` is full
+- `maxAgents` is full. There is no per-person cap.
 
 ## Gates
 

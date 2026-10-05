@@ -26,6 +26,8 @@ Default tools are the Slack post tools on `slackMcp` and the Teams post tools on
 
 ## Run
 
+`python3 <plugin>/scripts/allow_notify.py ?` prints every option (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it. Show that output when the user asks what the command can do.
+
 1. Show a dry run first. This writes nothing.
 
 ```bash

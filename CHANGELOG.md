@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2
+
+- README covers `/warp-allow-notify` (project and `--user --yes`, dry run, revoke, Jira and GitHub tools, `notifyAllow`, backups, idempotency, and which Cursor surface each file changes). `docs/COMMANDS.md` is the command reference. `docs/CONFIG.md` lists every config key and its default.
+- Quick start, upgrade (`/warp-uninstall` then `/warp-init`, or init alone to backfill keys), and troubleshooting (Run prompts, Jira not moving, no Slack message, channel name).
+- Scripts people run directly accept `?`, `help`, `-h`, and `--help`. `?` is always help. A bare `help` after an option that takes a value stays that value.
+- `beam.py` no longer defaults `jiraProject` to `HOS` when a config file is absent. The default is empty, matching `assets/config.example.yaml`.
+
 ## 1.3.1
 
 - `/warp-allow-notify` writes a specific MCP allowlist so Slack and Teams posts, and optionally the Jira and GitHub tools Warp calls, can run without a Cursor Run prompt.

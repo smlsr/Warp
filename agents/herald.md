@@ -44,7 +44,7 @@ The tool names are `scripts/mcp_tools.py` (`SLACK_TOOLS`, `TEAMS_TOOLS`) on the 
 
 `/warp-init` and `/warp-scan` run `scripts/notify.py` themselves. It reads `messenger`, `notify`, `slackChannel`, and `teamsChannel`, then writes `.warp/notify-post.json` with an `action`:
 
-- `post`: post the matching view (`slack` or `teams`) to each entry in `targets` through that server (`slackMcp`, `teamsMcp`). If the server is missing or the post fails, run `python3 <plugin>/scripts/notify.py outbox --root .`, and tell the user.
+- `post`: post the matching view (`slack` or `teams`) to each entry in `targets` through that server (`slackMcp`, `teamsMcp`). If the server is missing or the post fails, run `python3 <plugin>/scripts/notify.py outbox --root .`, and tell the user. `notify.py ?` prints init, scan, and outbox.
 - `outbox`: no channel is set for the chosen messenger. The text is already in `.warp/outbox.md`. Say which channel key is empty. Do not guess a channel.
 - `skip`: `notify` is quiet. Post nothing.
 

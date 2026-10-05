@@ -59,14 +59,24 @@ def write_changelog(path: Path, new: str, note: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Bump the Warp patch, minor, or major version")
+    p = argparse.ArgumentParser(
+        description="Bump the Warp patch, minor, or major version",
+        epilog="examples:\n  python3 scripts/bump_version.py ?\n  python3 scripts/bump_version.py\n"
+        "  python3 scripts/bump_version.py --minor\n  python3 scripts/bump_version.py --note \"What changed.\"\n\n"
+        "Updates VERSION, the version in .cursor-plugin/plugin.json, and prepends a CHANGELOG heading.\n"
+        "Patch is the default. Replace the stub bullet unless you passed --note.\n"
+        "?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--root", default=str(version.PLUGIN_ROOT))
     group = p.add_mutually_exclusive_group()
     group.add_argument("--patch", action="store_true", help="bump patch (default)")
     group.add_argument("--minor", action="store_true")
     group.add_argument("--major", action="store_true")
     p.add_argument("--note", help="changelog bullet; default is a stub you replace")
-    args = p.parse_args(argv)
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(argv))
     root = Path(args.root).resolve()
     kind = "major" if args.major else "minor" if args.minor else "patch"
     current = version.read_version_file(root) or version.read_manifest_version(root)

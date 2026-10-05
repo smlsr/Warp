@@ -80,7 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Check Warp version files")
     p.add_argument("--root", default=str(version.PLUGIN_ROOT))
     p.add_argument("--against", help="git ref that this version must be newer than")
-    args = p.parse_args(argv)
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(argv))
     root = Path(args.root).resolve()
     found = problems(root)
     if args.against:

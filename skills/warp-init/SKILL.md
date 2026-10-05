@@ -13,7 +13,7 @@ Automates the manual install. Each step checks first. A second run on a complete
 python3 <plugin>/scripts/install.py init
 ```
 
-`<plugin>` is wherever this plugin is loaded from. The script works from the repo root (the git top level, or the current directory outside git). Add `--dry-run` to preview, or `--channel NAME` to override the channel.
+`<plugin>` is wherever this plugin is loaded from. The script works from the repo root (the git top level, or the current directory outside git). Add `--dry-run` to preview, or `--channel NAME` to override the channel. `install.py ?` (and `init ?`, `help`, `-h`, `--help`) prints the options. Quote `?` if the shell expands it.
 
 ## Steps
 

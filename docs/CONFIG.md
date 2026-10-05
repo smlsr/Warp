@@ -2,7 +2,7 @@
 
 One file: `.warp/config.yaml`. `/warp-init` copies `assets/config.example.yaml` on a fresh install, including the comments. On a later run it appends any key the file does not have yet, with that key's default and comments, and it prints the names it added. It does not change or remove a value or a comment you already have. A line that starts with `#` is not a key, so the commented local-only hints (`# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, `# ghCli: false`) do not count as the setting and do not block adding the real line.
 
-An old file that never got the new keys still behaves as the defaults. `jira_sync.py` fills a missing Jira key from its defaults, then the beam copy, then the yaml. `herald_fmt.read_config` (used by notify) does the same for the keys it knows. You do not have to re-run init for the defaults to apply. Re-run it when you want the keys written down.
+An old file that never got the new keys still behaves as the defaults in the table. `jira_sync.py` fills a missing Jira key from its defaults, then the beam copy, then the yaml. `herald_fmt.read_config` does the same for the keys it knows, with one exception: a missing `slackChannel` or `teamsChannel` is empty, so notify writes `.warp/outbox.md` until `/warp-init` writes `warp`. Re-run init when you want the keys written down.
 
 Agents re-read the yaml. The beam keeps a copy taken at scan time; change the yaml, then restart, so the next tick picks it up.
 
@@ -15,7 +15,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | maxAgents | `18` | Concurrent Shuttles. Only cap. |
 | autoMergeSizes | `S, M` | Sizes that merge without a human approval. |
 | messenger | `both` | `slack`, `teams`, or `both`. |
-| notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms and stops only. |
+| notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms, approval waits, a red gate, and pause/stop. A `warp:status` request is always answered. |
 | runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |
 | jiraProject | empty | Jira project key, if you want it pinned. |
 | jiraTransition | `true` | On claim, move the Jira issue to `jiraInProgressStatus`. Only tickets with a Jira key. No Jira connector, or no matching transition: a note goes to `.warp/outbox.md` and the claim goes on. |
@@ -29,7 +29,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | respectMergeWindows | `false` | If true, new claims wait for a window. |
 | mergeWindows | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag above is true. |
 | pollSeconds | `300` | How often a running loop reconciles PRs. |
-| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue`, `transitionJiraIssue`, and `addOrEditJiraIssueComment`. |
+| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools in `scripts/mcp_tools.py` are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` (or `listJiraIssueTransitions`), `transitionJiraIssue`, and `addOrEditJiraIssueComment` (or `addCommentToJiraIssue`). |
 | jiraSite | empty | Site URL passed as `cloudId` when you have more than one Atlassian site. Empty: the agent calls `getAccessibleAtlassianResources`. |
 | gitProvider | `auto` | `auto`, `github`, or `bitbucket`. `auto` reads the `origin` host. `/warp-init` writes the one it finds and leaves a custom value alone. Other hosts run local-only. |
 | githubMcp | `github` | Connected GitHub server name. |

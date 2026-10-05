@@ -366,8 +366,37 @@ def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
     return 0
 
 
+INSTALL_HELP = """
+examples:
+  python3 scripts/install.py ?
+  python3 scripts/install.py init
+  python3 scripts/install.py init --dry-run
+  python3 scripts/install.py init --channel eng-builds
+  python3 scripts/install.py uninstall
+  python3 scripts/install.py uninstall --remove-gitignore --yes
+
+init is idempotent. It copies missing plugin files, appends missing config
+keys with their defaults, sets an empty slackChannel or teamsChannel (or the
+old Warp default) to warp, detects gitProvider from origin, and writes
+.warp/version. --dry-run writes nothing. --channel is lowercased (letters,
+digits, - and _, max 80). --root is the repo (default: git top level).
+
+uninstall without --yes only lists. --yes deletes .cursor/plugins/warp and
+.warp/, and the project allow-notify entries. --remove-gitignore removes only
+the snippet init added. ~/.cursor is not touched.
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+A bare help after an option that takes a value stays that value
+(--channel help is a channel name).
+"""
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Warp install / uninstall")
+    p = argparse.ArgumentParser(
+        description="Warp install / uninstall",
+        epilog=INSTALL_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     pi = sub.add_parser("init")
     pi.add_argument("--root")
@@ -377,7 +406,9 @@ def main() -> None:
     pu.add_argument("--root")
     pu.add_argument("--remove-gitignore", action="store_true")
     pu.add_argument("--yes", action="store_true", help="delete; without it only list")
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     root = find_root(args.root)
     if args.cmd == "init":
         if args.channel is not None:

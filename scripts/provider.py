@@ -310,8 +310,29 @@ def init_steps(root: Path, dry: bool = False, gh: dict | None = None) -> list[tu
     return steps
 
 
+PROVIDER_HELP = """
+examples:
+  python3 scripts/provider.py ?
+  python3 scripts/provider.py resolve --root .
+  python3 scripts/provider.py resolve --json
+  python3 scripts/provider.py merge-local --id T-9 --branch warp/T-9
+  python3 scripts/provider.py note --id T-9 --reason "no GitHub connector"
+
+resolve reads gitProvider (auto, github, bitbucket). auto uses the origin
+host. No origin, another host, or pushMerge false is local-only.
+merge-local squash-merges --branch into --base (default baseBranch) and
+requires --id and --branch. note requires --reason and writes the outbox line.
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+"""
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Git provider and local mode")
+    p = argparse.ArgumentParser(
+        description="Git provider and local mode",
+        epilog=PROVIDER_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     pr = sub.add_parser("resolve")
     pr.add_argument("--root", default=".")
@@ -328,7 +349,9 @@ def main() -> None:
     pn.add_argument("--beam", default=".warp/beam.json")
     pn.add_argument("--id")
     pn.add_argument("--reason", required=True)
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     root = Path(args.root).resolve()
     try:
         if args.cmd == "resolve":

@@ -13,6 +13,8 @@ First step on every repo. Do not assume HumanifyOS paths.
 python3 <plugin>/scripts/scan.py scan --root . --out .warp/beam.json
 ```
 
+`scan.py ?` prints every subcommand and flag (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
+
 ## Scope to a folder
 
 `/warp-scan` takes an optional folder, as a path or a name. Without it the whole repo is scanned, as before.

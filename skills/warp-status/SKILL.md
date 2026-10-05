@@ -10,6 +10,8 @@ python3 <plugin>/scripts/scan.py status --beam .warp/beam.json
 python3 <plugin>/scripts/beam.py board --beam .warp/beam.json
 ```
 
+`scan.py ?` and `beam.py ?` print the options. Quote `?` if the shell expands it.
+
 Hand the user these paths:
 
 - `.warp/STATUS.md` — done, working now, left

@@ -223,7 +223,9 @@ def main() -> None:
     p.add_argument("--line", action="append", default=[], help="a bullet")
     p.add_argument("--link", action="append", default=[], help="label=url, or a plain path")
     p.add_argument("--footer")
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     links = [tuple(l.split("=", 1)) if "=" in l else (l, None) for l in args.link]
     out = message(
         Path(args.root),

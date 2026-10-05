@@ -1,6 +1,6 @@
 # State
 
-`.warp/` is the checkpoint. Commit it. Do not commit `.env` or MCP tokens; Warp never writes those.
+`.warp/` is the checkpoint. `/warp-init` gitignores it. Warp does not commit it. Copy the folder aside if you need to keep it. Do not commit `.env` or MCP tokens; Warp never writes those.
 
 ```
 .warp/config.yaml     caps, model, messenger, connector names
@@ -11,6 +11,7 @@
 .warp/outbox.md       Herald fallback if a messenger is down or no channel is set. Also a failed Jira move.
 .warp/notify-post.json  Last Herald payload (init, scan, or a failed Jira move) and where to post it
 .warp/jira-todo.json  Actions the current turn must do: transitions and comment bodies
+.warp/version        One line, the plugin version init recorded from .cursor/plugins/warp
 ```
 
 ## Ticket status

@@ -82,6 +82,9 @@ Post alarms, approval requests, gate flips, pause/resume, and digests. Command l
 - `warp:retry L-01`
 - `warp:pause`
 - `warp:resume`
+- `warp:stop`
+- `warp:start`
+- `warp:status`
 
 A PR comment with the same verb counts. Record the source.
 

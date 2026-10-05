@@ -37,6 +37,6 @@ Runner: `config.runner`. `cloud` uses Cursor cloud/background agents. `local` us
 
 - Edit product code.
 - Start a ticket with an unmet dep or a red upstream gate.
-- Exceed `maxAgents` or `maxAgentsPerPerson`.
+- Exceed `maxAgents`. There is no per-person cap.
 - Hand-edit `beam.json`. Use `scripts/beam.py`.
 - Invent Jira, GitHub, or Bitbucket credentials. Use the connected MCP servers or an already-authenticated `gh`. If neither works, local-only.
