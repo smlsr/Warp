@@ -72,6 +72,26 @@ class CloudHookDocTests(unittest.TestCase):
         self.assertIn("Not every MCP tool", blobs["README.md"])
         self.assertIn("does not approve shell", blobs["docs/CONFIG.md"])
 
+    def test_readme_install_lists_mcp_allow_globs(self):
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Install")
+        self.assertGreaterEqual(start, 0)
+        section, sep, _after = readme[start:].partition("\n## ")
+        self.assertTrue(sep, "install section has no following heading")
+        strings = (
+            "*slack*:slack_send_message",
+            "*atlassian*:transitionJiraIssue",
+            "*atlassian*:addOrEditJiraIssueComment",
+            "*teams*:send_channel_message",
+            "*teams*:teams_send_message",
+            "*teams*:teams_read_channel",
+            "*teams*:teams_read_thread",
+            "*teams*:teams_search_channels",
+            "*github*:add_issue_comment",
+        )
+        missing = [item for item in strings if "`%s`" % item not in section]
+        self.assertEqual(missing, [], "allowlist globs missing from the README install section")
+
 
 class HelpTokenTests(unittest.TestCase):
     def test_question_mark_is_always_help_and_help_can_be_a_value(self):

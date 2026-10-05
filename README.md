@@ -34,6 +34,26 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | Set `slackChannel` and `teamsChannel` to `warp` | the channel already has a value. Only an empty channel (or the old `Warp` default) is filled; a custom name is kept. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
+After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
+
+Required for the Jira and Slack prompts:
+
+- `*slack*:slack_send_message`
+- `*atlassian*:transitionJiraIssue`
+- `*atlassian*:addOrEditJiraIssueComment`
+
+Teams (does not cover the three above):
+
+- `*teams*:send_channel_message`
+- `*teams*:teams_send_message`
+- `*teams*:teams_read_channel`
+- `*teams*:teams_read_thread`
+- `*teams*:teams_search_channels`
+
+GitHub, only when git comments are on:
+
+- `*github*:add_issue_comment`
+
 `warp` is one shared channel for every repo, so each message names its repo in a header (see below). Warp does not create the channel: create `warp` once in Slack and Teams, or change the config to a channel that exists. Channel names are lowercase (letters, digits, `-`, `_`). `--channel NAME` is lowercased and checked; a custom `slackChannel` with uppercase letters is warned about by `/warp-init` and lowercased when posting.
 
 To do it by hand instead:

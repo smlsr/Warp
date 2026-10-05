@@ -6,6 +6,7 @@
 - `sessionStart` prints the beam hint from `resume_hint.py` on `/warp-start`, `/warp-resume`, and `/warp-status`. It does not dispatch.
 - `stop` and `subagentStop` append `session-stop` and `subagent-stop` through `session_note.py`. `/warp-stop` and `/warp-pause` write `session-stop`. A Shuttle writes `subagent-stop` when it finishes. A repeat is skipped while that line is still last.
 - `beforeMCPExecution` stays a local IDE duplicate. Cloud agents run `mcp_allow.py` and call a tool only when it prints `allow`. The list is the same Slack, Teams, Jira, and optional GitHub pairs. It is not every MCP tool, and it does not approve shell commands.
+- The README install section lists the `mcpAllowlist` globs for Slack, Jira, Teams, and GitHub. `/warp-init` and `/warp-allow-notify` write them. Run Mode must be Auto-review, Allowlist, or Run Everything.
 
 ## 1.3.19
 
