@@ -10,7 +10,7 @@ There is no per-person cap. The only concurrency cap is `maxAgents`.
 
 1. `/add-plugin https://github.com/smlsr/Warp`, then `/warp-init` in the repo you want built. Reload Cursor.
 2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`.
-3. `/warp-scan` (or `/warp-scan <folder>`). Keys in the plan, a Jira export, or `.warp/jira-map.json` are stored. If Jira is connected, a plan id that equals one issue's external id is stored too. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-map` is only for ids that are still unmapped or ambiguous. Then `/warp-start`.
+3. `/warp-scan` (or `/warp-scan <folder>`). Keys in the plan, a Jira export, or `.warp/jira-map.json` are stored. If Jira is connected, a plan id that equals one issue's external id (then a `warp:<id>` label, then a remote link) is stored too. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-map` is only for ids that are still unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` to read the board. `/warp-allow-notify` if the Run prompt blocks Slack or Teams posts. `/warp-version` to see which copy is installed.
 
 The command reference is [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md).
@@ -170,7 +170,7 @@ A config that is only missing new keys does not need an uninstall. Re-run `/warp
 
 **Run prompt on every Slack or Teams post.** Run `/warp-allow-notify` (start with `?` or `--dry-run`). Set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time never consults the allowlist. If the prompt's tool name is not in the default list, add `server:tool` to `notifyAllow` and run the command again. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show this prompt.
 
-**Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. Set `jiraProject: WAR` (or `jiraKeyPrefixes`) in `.warp/config.yaml`. `/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export, or in `.warp/jira-map.json`. If Jira is connected it also searches the external id field and stores `WAR-1` when that field equals `WV-01` on exactly one issue. You do not run `/warp-jira-map` for those. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same external-id search before it will flag the ticket.
+**Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. Set `jiraProject: WAR` (or `jiraKeyPrefixes`) in `.warp/config.yaml`. `/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export, or in `.warp/jira-map.json`. If Jira is connected it looks up the plan id on `jiraExternalIdField` (a field name or `customfield_NNNNN`; also External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a label `warp:WV-01`, then a remote-link id, and stores `WAR-1` when exactly one issue matches. A summary match is only a proposal. You do not run `/warp-jira-map` for a single exact hit. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same lookup before it will flag the ticket. Two matches are reported and neither is stored. A key you set by hand is never replaced.
 
 `/warp-jira-map` is only for a ticket that is still unmapped or ambiguous, or when you want to override:
 
@@ -181,7 +181,7 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 
 `map` with no arguments lists `unmapped` tickets. A CSV, JSON object, or markdown table can be imported with `--import`. After a leftover is mapped, `catchup` prints the transition and comments the current status still owes. The agent calls `transitionJiraIssue` with issue key `WAR-1`, not `WV-01`, then `record`.
 
-**Jira did not move.** `/warp-jira-check`. If the line says `needs mapping`, the external-id search already ran and was not one exact match, so this ticket is a leftover: use `/warp-jira-map` for that id only. Check `jiraTransition` is not false, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow names. A failed move is in `.warp/outbox.md`. Re-run `/warp-init` if the config is missing keys.
+**Jira did not move.** `/warp-jira-check`. If the line says `needs mapping`, the external-id, label, and remote-link lookup already ran and was not one exact match, so this ticket is a leftover: use `/warp-jira-map` for that id only. `map --from-jira --dry-run` shows what Jira would match without writing it. Check `jiraTransition` is not false, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow names. A failed move is in `.warp/outbox.md`. Re-run `/warp-init` if the config is missing keys.
 
 **No Slack or Teams message.** Herald posts only from the agent session that ran the command. `notify: quiet` skips init and scan. An empty `slackChannel` or `teamsChannel` writes `.warp/outbox.md` instead. Warp does not create the channel. Slack names are lowercased. The payload is `.warp/notify-post.json`.
 
@@ -291,7 +291,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraProject` | empty | Jira project prefix, such as `WAR`. Plan ids are not issue keys unless the prefix matches. |
 | `jiraKeyPrefixes` | empty | More prefixes that confirm a Jira key. |
 | `jiraKeyMap` | empty | Plan id to issue key, for example `{"WV-01": "WAR-1"}`. |
-| `jiraExternalIdField` | `externalId` | Jira field matched to the plan id. One exact hit is stored on scan and claim. |
+| `jiraExternalIdField` | `externalId` | Field name or `customfield_NNNNN` matched to the plan id. One exact hit is stored on scan and claim. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
 | `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here when a person must review and merge. |

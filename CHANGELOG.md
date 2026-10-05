@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+- Jira auto-match checks the external-id field first (configured name or customfield id, then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a warp:<id> label and a remote link. One exact hit is stored with its source and confidence. A summary match waits for --yes. Two matches are reported and neither is stored. A manual key is never overwritten. map --from-jira and --auto apply a saved search; --dry-run writes nothing.
+
 ## 1.3.3
 
 - A plan id such as `WV-01` is not sent to Jira. A key is kept when its prefix matches `jiraProject` or `jiraKeyPrefixes`, or it was set on the plan, in a Jira export, in the map file, or by hand.
