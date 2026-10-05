@@ -643,6 +643,8 @@ def write_status(beam_path: Path) -> None:
     lines += [f"- **{t['id']}** {t['status']} {t['size']} — {t['summary']}" for t in left[:40]] or ["None."]
     if len(left) > 40:
         lines.append(f"- … {len(left) - 40} more in status.json")
+    if (beam_path.parent / "warp-complete.html").is_file():
+        lines += ["", f"Report: warp-complete.html generated {beam.get('reportGeneratedAt') or 'unknown'}"]
     lines.append("")
     atomic_write(beam_path.parent / "STATUS.md", "\n".join(lines))
     print(f"wrote {out} and {beam_path.parent / 'STATUS.md'}")
@@ -761,9 +763,21 @@ def set_run(beam_path: Path, state: str, reason: Optional[str]) -> None:
     beam["runState"] = state
     beam["paused"] = state != "running"
     beam["pauseReason"] = reason
+    if state == "running":
+        beam["runComplete"] = False
+        beam["stoppedAt"] = None
+    if state == "stopped":
+        beam["stoppedAt"] = utcnow()
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": state, "reason": reason})
     print(state)
+    if state == "stopped":
+        try:
+            import report
+
+            report.maybe_complete(beam_path, because_stopped=True)
+        except Exception as e:
+            print(f"report: skipped ({e})")
 
 
 SCAN_HELP = """

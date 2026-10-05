@@ -8,6 +8,7 @@ these scripts; they do not hand-edit the JSON.
   ready    tickets that may start now (deps, locks, gates, cap)
   set      transition a ticket and append the journal
   spend    add tokens / minutes
+  usage    record tokens in, out, cached, and cost for one ticket
   eta      remaining critical path and rough finish
   board    write BOARD.md and board.html
   check    validate beam invariants
@@ -77,6 +78,73 @@ def journal(beam_path: Path, event: dict) -> None:
     event = {"ts": utcnow(), **event}
     with path.open("a") as f:
         f.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+
+def append_ticket_event(beam_path: Path, ticket: dict, event: dict) -> None:
+    """Append one status, bugbot, ci, alarm, or usage event. Also writes .warp/events.jsonl."""
+    row = dict(event)
+    row.setdefault("at", utcnow())
+    events = ticket.get("events")
+    if not isinstance(events, list):
+        events = []
+        ticket["events"] = events
+    events.append(row)
+    line = {"id": ticket.get("id"), **row}
+    path = beam_path.parent / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(line, separators=(",", ":")) + "\n")
+
+
+def apply_usage(ticket: dict, args) -> tuple:
+    """Replace reported usage totals. Missing flags leave the previous value."""
+    usage = ticket.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+        ticket["usage"] = usage
+    changed = False
+    recorded = {"type": "usage"}
+    for arg, key, cast in (
+        ("tokens_in", "tokensIn", int),
+        ("tokens_out", "tokensOut", int),
+        ("tokens_cached", "tokensCached", int),
+        ("cost", "cost", float),
+    ):
+        val = getattr(args, arg, None)
+        if val is None:
+            continue
+        usage[key] = cast(val)
+        recorded[key] = usage[key]
+        changed = True
+    return changed, recorded
+
+
+def _record_set_events(beam_path: Path, data: dict, ticket: dict, before: dict, args) -> None:
+    at = utcnow()
+    pr = ticket.get("pr") or {}
+    if ticket.get("status") != before.get("status"):
+        append_ticket_event(
+            beam_path,
+            ticket,
+            {"at": at, "type": "status", "from": before.get("status"), "to": ticket.get("status")},
+        )
+        if not data.get("runStartedAt") and ticket.get("status") not in {"queued", "skipped"}:
+            data["runStartedAt"] = at
+    bug = pr.get("bugbot")
+    if bug and bug != before.get("bugbot"):
+        append_ticket_event(beam_path, ticket, {"at": at, "type": "bugbot", "value": bug})
+    ci = pr.get("ci")
+    if ci and ci != before.get("ci"):
+        if str(ci).strip().casefold() != "green":
+            pr["ciRetries"] = int(pr.get("ciRetries") or 0) + 1
+        append_ticket_event(beam_path, ticket, {"at": at, "type": "ci", "value": ci})
+    alarm = ticket.get("alarm")
+    if alarm and alarm != before.get("alarm"):
+        append_ticket_event(beam_path, ticket, {"at": at, "type": "alarm", "value": alarm})
+    changed, recorded = apply_usage(ticket, args)
+    if changed:
+        recorded["at"] = at
+        append_ticket_event(beam_path, ticket, recorded)
 
 
 def complexity(size: str, auto_sizes: set[str]) -> str:
@@ -151,6 +219,8 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
                 "mergedAt": None,
             },
             "jira": jira,
+            "events": [],
+            "usage": {},
             "updatedAt": None,
         }
     try:
@@ -434,6 +504,7 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
                 t["jiraMapping"] = "mapped"
     except Exception:
         jira_sync = None
+    _record_set_events(beam_path, beam, t, before, args)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
@@ -451,6 +522,12 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         jira_sync.on_set(beam_path, beam, t, before)
     except Exception as e:  # fail-soft: Jira sync never blocks a transition
         print(f"jira: skipped ({e})")
+    try:
+        import report
+
+        report.maybe_complete(beam_path)
+    except Exception as e:  # a report problem must not undo the transition
+        print(f"report: skipped ({e})")
 
 
 def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
@@ -465,6 +542,30 @@ def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": "spend", "id": args.id, "tokens": args.tokens, "minutes": args.minutes})
     print(f"{args.id} tokens={t['tokens']} minutes={t['minutes']}")
+
+
+def cmd_usage(beam_path: Path, args: argparse.Namespace) -> None:
+    beam = load_json(beam_path)
+    t = beam["tickets"].get(args.id)
+    if not t:
+        sys.exit(f"unknown ticket {args.id}")
+    changed, recorded = apply_usage(t, args)
+    if not changed:
+        sys.exit("pass --tokens-in, --tokens-out, --tokens-cached, or --cost")
+    recorded["at"] = utcnow()
+    append_ticket_event(beam_path, t, recorded)
+    t["updatedAt"] = utcnow()
+    beam["metrics"] = metrics(beam)
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    journal(beam_path, {"type": "usage", "id": args.id, **{k: recorded[k] for k in recorded if k not in {"type", "at"}}})
+    print(f"{args.id} usage recorded")
+    if beam.get("runComplete"):
+        try:
+            import report
+
+            report.maybe_complete(beam_path, announce=False)
+        except Exception as e:
+            print(f"report: skipped ({e})")
 
 
 def cmd_gate(beam_path: Path, args: argparse.Namespace) -> None:
@@ -699,6 +800,8 @@ def default_config() -> dict:
         "respectMergeWindows": False,
         "mergeWindows": ["08:30", "13:00", "17:00"],
         "pollSeconds": 300,
+        "reportOnComplete": True,
+        "reportPath": ".warp/warp-complete.html",
     }
 
 
@@ -709,10 +812,14 @@ examples:
   python3 scripts/beam.py set --beam .warp/beam.json --id T-9 --status claimed
   python3 scripts/beam.py board --beam .warp/beam.json
 
-Subcommands: ingest, ready, set, spend, gate, pause, resume, board, check, eta.
+Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
 --via local|connected, --approved-by, --proceeded-by, --merge-method,
---bugbot pass|fail, --ci green, --alarm, --attempts, --force.
+--bugbot pass|fail, --ci green, --alarm, --attempts, --force,
+--tokens-in, --tokens-out, --tokens-cached, --cost.
+usage records the same token and cost totals for one ticket, replacing the
+previous report. Pass the totals Cursor reported for this ticket. If the run
+did not report usage, do not call usage and do not invent numbers.
 awaiting_approval, merging, and merged wait for CI green and, when Bugbot
 applies, --bugbot pass. A new --sha while awaiting_approval returns the ticket
 to bugbot_running and does not move Jira backwards. Setting merged records
@@ -764,12 +871,24 @@ def main() -> None:
     ps.add_argument("--ci")
     ps.add_argument("--alarm")
     ps.add_argument("--attempts", type=int)
+    ps.add_argument("--tokens-in", type=int)
+    ps.add_argument("--tokens-out", type=int)
+    ps.add_argument("--tokens-cached", type=int)
+    ps.add_argument("--cost", type=float)
 
     psp = sub.add_parser("spend")
     psp.add_argument("--beam", required=True)
     psp.add_argument("--id", required=True)
     psp.add_argument("--tokens", type=int, default=0)
     psp.add_argument("--minutes", type=int, default=0)
+
+    pu = sub.add_parser("usage")
+    pu.add_argument("--beam", required=True)
+    pu.add_argument("--id", required=True)
+    pu.add_argument("--tokens-in", type=int)
+    pu.add_argument("--tokens-out", type=int)
+    pu.add_argument("--tokens-cached", type=int)
+    pu.add_argument("--cost", type=float)
 
     pg = sub.add_parser("gate")
     pg.add_argument("--beam", required=True)
@@ -817,6 +936,8 @@ def main() -> None:
         cmd_set(Path(args.beam), args)
     elif args.cmd == "spend":
         cmd_spend(Path(args.beam), args)
+    elif args.cmd == "usage":
+        cmd_usage(Path(args.beam), args)
     elif args.cmd == "gate":
         cmd_gate(Path(args.beam), args)
     elif args.cmd == "pause":

@@ -45,6 +45,8 @@ SWITCHES = {
     "--include-done",
     "--write-external-id",
     "--force-external-id",
+    "--open",
+    "--partial",
 }
 
 

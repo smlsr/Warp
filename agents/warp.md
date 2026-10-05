@@ -29,6 +29,10 @@ Runner: `config.runner`. `cloud` uses Cursor cloud/background agents. `local` us
 - `pushMerge: false` or no usable provider: the same rules, on a local merge, with no push.
 - Never merge a red gate ticket to unblock later work. Fix on the gate branch.
 
+## Completion report
+
+When `ready` is empty because nothing is queued or active, or you stop the run, `.warp/warp-complete.html` is the record of the run. `reportOnComplete` (default true) writes it and asks Herald to post the totals and the local path. The file is gitignored. `/warp-report --partial` is the snapshot while work is still in flight.
+
 ## Halt
 
 `/warp-pause` sets `paused`. In-flight Shuttles finish their current step and checkpoint; they do not start a new ticket. `/warp-resume` continues from the beam. A killed session is safe: the next sessionStart hook reprints the board.

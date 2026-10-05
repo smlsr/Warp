@@ -31,6 +31,8 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | respectMergeWindows | `false` | If true, new claims wait for a window. |
 | mergeWindows | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag above is true. |
 | pollSeconds | `300` | How often a running loop reconciles PRs. |
+| reportOnComplete | `true` | When every ticket is merged, done, skipped, blocked, or alarmed, or the run is stopped, write `.warp/warp-complete.html` and ask Herald to post the totals. `false` writes that file only when someone runs `/warp-report`. |
+| reportPath | `.warp/warp-complete.html` | Where the completion report is written, relative to the repo. The default is inside `.warp`, which `/warp-init` gitignores. A second copy is not made when this is already that path. |
 | jiraKeyPrefixes | empty | Extra project prefixes, comma-separated, that confirm a Jira key besides `jiraProject`. When a project is detected and this is empty, it is set to that project. |
 | jiraKeyMap | empty | Optional map of plan id to Jira issue key, for example `{"WV-01": "WAR-1"}`. `.warp/jira-map.json` is merged on top and wins. |
 | jiraExternalIdField | `externalId` | Field name or `customfield_NNNNN` compared to the plan id. Scan and claim try this first, then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID. A `warp:<id>` label and a remote-link id are next. One exact hit is stored. A summary match waits for confirmation. Two matches are reported. |

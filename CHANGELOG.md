@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.19
+
+- Write `.warp/warp-complete.html` when every ticket is merged, done, skipped, blocked, or alarmed, and when the run is stopped. `/warp-report` writes it on demand. `--partial` writes a snapshot while work is in progress. `reportOnComplete: false` skips the automatic write. Herald posts the totals and the local path. The file stays gitignored with `.warp`.
+- The report groups tickets into concurrency-run segments: the same set of active tickets is one wave, an empty gap is not a wave, and a handoff that keeps the count the same but changes who is running is two waves.
+- `beam.py set` appends status, Bugbot, CI, and alarm events on the ticket and in `.warp/events.jsonl`. `beam.py usage` (and the same flags on `set`) records tokens in, out, cached, and cost. Missing numbers stay n/a. `spend` stays a separate additive total.
+- Docs cover 1.3.11 through 1.3.18 again, including the version check that passes when the tree already matches `main`, plus the completion report.
+
 ## 1.3.18
 
 - A manual merge (`warp:proceed` or a provider approval) moves Jira to Done, posts the merged comments, records sha, mergedAt, via, merge method, and who approved, releases locks, and unblocks dependents. The set prints one post-merge MUST DO, including the Slack reply with the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready.
