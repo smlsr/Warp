@@ -22,6 +22,8 @@ TOOL_TRANSITION = "transitionJiraIssue"
 TOOL_COMMENT = "addOrEditJiraIssueComment"
 TOOL_COMMENT_ALT = "addCommentToJiraIssue"
 TOOL_SEARCH = "searchJiraIssuesUsingJql"
+TOOL_FIELDS = "getJiraProjectIssueTypesMetadata"
+TOOL_REMOTE_LINKS = "getJiraIssueRemoteIssueLinks"
 
 JIRA_TOOLS = (
     TOOL_RESOURCES,
@@ -32,6 +34,8 @@ JIRA_TOOLS = (
     TOOL_COMMENT,
     TOOL_COMMENT_ALT,
     TOOL_SEARCH,
+    TOOL_FIELDS,
+    TOOL_REMOTE_LINKS,
 )
 
 # GitHub pull-request comment. `gh pr comment` is a CLI fallback, not an MCP tool.

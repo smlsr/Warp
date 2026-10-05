@@ -32,9 +32,12 @@ jiraKeyMap: {}
 # Optional plan-id to issue-key map. .warp/jira-map.json is merged on top.
 # jiraKeyMap: {"WV-01": "WAR-1"}
 jiraExternalIdField: externalId
-# Field on the Jira issue matched to the plan id. Scan and claim store a key
-# when that field equals the plan id on exactly one issue.
-# jiraExternalIdField: "External issue ID"
+# Field name or customfield id matched to the plan id. Tried first, then
+# External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID.
+# A label warp:<id> and a remote-link id are next. One exact hit is stored.
+# A summary match waits for confirmation. Two matches are reported, not picked.
+# jiraExternalIdField: "External ID"
+# jiraExternalIdField: customfield_10050
 jiraTransition: true
 # On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
 # Needs the Jira MCP server; without it Warp logs a note and the claim goes on.

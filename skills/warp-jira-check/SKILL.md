@@ -16,7 +16,7 @@ Add `--id <id>` to look at one ticket. `verify` only prints. It lists every tick
 
 Read the report to the user. For each ticket it shows `jiraKey` or `unmapped`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, recorded comment ids, what should have happened, and what is missing.
 
-The plan id is not the Jira issue key. Scan and claim store `WAR-1` when the plan, the map file, or exactly one Jira issue's external id says so. `WV-01` stays unmapped only when that search is missing or ambiguous. `/warp-jira-map` is for that leftover, not a required step. After a key is mapped, `catchup` asks for the moves the current status still owes. An already-merged auto-merge ticket is asked for Done and a merged comment, not a move back to In Progress. Never pass the plan id to `transitionJiraIssue`.
+The plan id is not the Jira issue key. Scan and claim store `WAR-1` when the plan, the map file, or exactly one Jira issue matches the external-id field, a `warp:<id>` label, or a remote-link id. `WV-01` stays unmapped only when that search is missing or ambiguous. `/warp-jira-map` is for that leftover, not a required step. After a key is mapped, `catchup` asks for the moves the current status still owes. An already-merged auto-merge ticket is asked for Done and a merged comment, not a move back to In Progress. Never pass the plan id to `transitionJiraIssue`.
 
 If the user wants the gap closed, do every action in `.warp/jira-todo.json`:
 

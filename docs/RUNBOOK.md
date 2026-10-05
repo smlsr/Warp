@@ -22,7 +22,7 @@ Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready
 
 `/warp-jira-check` runs `jira_sync.py verify`. For each ticket it prints the key, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, the comment ids on file, and what is missing.
 
-A line that says `needs mapping` means the plan id is not a Jira issue key and the external-id search was not one exact match. `/warp-jira-map` is only for that leftover (`WV-01=WAR-1`), not for keys the scan already stored. Then `catchup`. An inferred key is stored only when its prefix matches. An already-merged auto-merge ticket is asked for Done, not for In Progress.
+A line that says `needs mapping` means the plan id is not a Jira issue key and the lookup (external-id field, then `warp:<id>` label, then remote link) was not one exact match. An ambiguous line names both Jira keys and stores neither. `/warp-jira-map` is only for that leftover (`WV-01=WAR-1`), not for keys the scan already stored. Then `catchup`. An inferred key is stored only when its prefix matches. An already-merged auto-merge ticket is asked for Done, not for In Progress.
 
 The move itself is not done by the script. The agent that sees `jira: MUST DO` has to call `getTransitionsForJiraIssue` and `transitionJiraIssue` on the `jiraMcp` server, then `record`. If that server is not connected, the same failure is in `.warp/outbox.md` and in the Herald payload.
 

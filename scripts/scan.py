@@ -157,7 +157,9 @@ def from_schedule(path: Path) -> dict | None:
             {
                 "id": tid,
                 "jiraKey": raw_key or None,
-                "jiraKeySource": t.get("jiraKeySource") if t.get("jiraKeySource") in {"plan", "export", "map", "manual", "external"} else ("plan" if raw_key else None),
+                "jiraKeySource": t.get("jiraKeySource") if t.get("jiraKeySource") in {"plan", "export", "map", "manual", "external", "label", "link", "summary"} else ("plan" if raw_key else None),
+                "jiraKeyConfidence": t.get("jiraKeyConfidence"),
+                "jiraKeyForced": bool(t.get("jiraKeyForced")),
                 "summary": t.get("summary") or t.get("title") or "",
                 "deps": t.get("deps") or t.get("blockedBy") or t.get("blockedByTempIds") or [],
                 "locks": t.get("locks") or [],
