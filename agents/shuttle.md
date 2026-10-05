@@ -27,7 +27,11 @@ After every status change, run `scripts/beam.py set`. If the session dies, the n
 
 ## If Cursor asks you to Allow or Run
 
-Do not edit permission files. Tell the user the tool name from the dialog and to run `/warp-allow-notify --check`, then `/warp-init` or `/warp-allow-notify`. A name that is not in `scripts/mcp_tools.py` goes in `notifyAllow` as `server:tool`.
+Do not edit permission files. Tell the user the tool name from the dialog and to run `/warp-allow-notify --check`, then `/warp-init` or `/warp-allow-notify`. A name that is not in `scripts/mcp_tools.py` goes in `notifyAllow` as `server:tool`. Before any other MCP tool, `scripts/mcp_allow.py --server SERVER --tool TOOL` must print `allow`. `ask` means do not call it.
+
+## When you finish
+
+Run `scripts/session_note.py --type subagent-stop --beam .warp/beam.json`. Plugin hooks do not run on cloud runners. The parent reconciles this ticket from the beam.
 
 ## Forbidden
 

@@ -52,6 +52,47 @@ class ConfigDocTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
 
+class CloudHookDocTests(unittest.TestCase):
+    def test_docs_do_not_require_hooks_on_cloud(self):
+        blobs = {rel: (ROOT / rel).read_text() for rel in DOC_FILES}
+        joined = "\n".join(blobs.values())
+        for name in ("resume_hint.py", "session_note.py", "mcp_allow.py"):
+            self.assertIn(name, joined, name)
+        for rel in (
+            "README.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIG.md",
+            "docs/STATE.md",
+            "docs/RUNBOOK.md",
+            "docs/CONNECTORS.md",
+            "docs/GUIDE.md",
+            "AGENTS.md",
+        ):
+            self.assertIn("do not run on cloud", blobs[rel], rel)
+        self.assertIn("Not every MCP tool", blobs["README.md"])
+        self.assertIn("does not approve shell", blobs["docs/CONFIG.md"])
+
+    def test_readme_install_lists_mcp_allow_globs(self):
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Install")
+        self.assertGreaterEqual(start, 0)
+        section, sep, _after = readme[start:].partition("\n## ")
+        self.assertTrue(sep, "install section has no following heading")
+        strings = (
+            "*slack*:slack_send_message",
+            "*atlassian*:transitionJiraIssue",
+            "*atlassian*:addOrEditJiraIssueComment",
+            "*teams*:send_channel_message",
+            "*teams*:teams_send_message",
+            "*teams*:teams_read_channel",
+            "*teams*:teams_read_thread",
+            "*teams*:teams_search_channels",
+            "*github*:add_issue_comment",
+        )
+        missing = [item for item in strings if "`%s`" % item not in section]
+        self.assertEqual(missing, [], "allowlist globs missing from the README install section")
+
+
 class HelpTokenTests(unittest.TestCase):
     def test_question_mark_is_always_help_and_help_can_be_a_value(self):
         self.assertEqual(usage.normalize_argv(["?"]), ["--help"])
@@ -116,6 +157,9 @@ class ScriptHelpTests(unittest.TestCase):
                 "--force-external-id",
                 "editJiraIssue",
             ),
+            "resume_hint.py": ("--root", "--beam", "Does not dispatch"),
+            "session_note.py": ("--type", "session-stop", "subagent-stop", "--beam"),
+            "mcp_allow.py": ("--server", "--tool", "--root", "--cursor-home", "ask"),
             "jira_external_id.py": (
                 "--apply",
                 "--yes",
@@ -154,6 +198,9 @@ class ScriptHelpTests(unittest.TestCase):
             "jira_view.py",
             "jira_match.py",
             "jira_external_id.py",
+            "resume_hint.py",
+            "session_note.py",
+            "mcp_allow.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

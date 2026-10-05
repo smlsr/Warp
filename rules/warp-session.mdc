@@ -1,0 +1,48 @@
+---
+description: Warp session resume, stop notes, and MCP allowlist. Replaces plugin hooks on cloud runners.
+alwaysApply: true
+---
+
+# Warp session (cloud and local)
+
+Plugin hooks do not run on cloud runners. Do not wait for `sessionStart`, `stop`, `subagentStop`, or `beforeMCPExecution`. The scripts below are the path. A local IDE hook only repeats the same script.
+
+`<plugin>` is the loaded plugin, often `.cursor/plugins/warp` after `/warp-init`. In this repo it is the repo root.
+
+## Before dispatch
+
+Run this and follow it. Do not dispatch from the hint.
+
+```bash
+python3 <plugin>/scripts/resume_hint.py --root .
+```
+
+If it says there is no beam, stop and tell the user to run `/warp-ingest`. If the beam is paused, do not dispatch. Read `.warp/BOARD.md` and run `/warp-status` before claiming tickets.
+
+## When a Warp turn ends
+
+`/warp-stop` and `/warp-pause` already append a `session-stop` journal line. At the end of a `/warp` tick, or when this Warp session is ending, run:
+
+```bash
+python3 <plugin>/scripts/session_note.py --type session-stop --root .
+```
+
+A second call is skipped while that line is still the last journal event.
+
+## When a Shuttle finishes
+
+You were started with `IMPLEMENT <id>`, or a Shuttle you spawned returned. Record it, then reconcile that ticket from the beam on the next tick. The journal line is a record. The beam is the source of truth.
+
+```bash
+python3 <plugin>/scripts/session_note.py --type subagent-stop --root .
+```
+
+## MCP tools
+
+Call only Warp's allowlisted tools: Slack, Teams, and Jira from `scripts/mcp_tools.py`, GitHub `add_issue_comment` when git comments are on, and `notifyAllow` pairs. Before any other MCP tool, run:
+
+```bash
+python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .
+```
+
+If it prints `ask`, do not call the tool. Do not widen the list. Do not pass a server wildcard. `--allow-server-tools` stays off unless the user set it. A missing hook is not permission to run every MCP tool or every shell command. This check does not approve shell commands. Local IDE prompts still follow `.cursor/permissions.json`.

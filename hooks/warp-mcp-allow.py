@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """beforeMCPExecution hook. Allow only pairs listed beside this script.
 
+Local IDE duplicate. Cloud runners do not execute this hook. They run
+scripts/mcp_allow.py, which uses the same pairs and prints allow or ask.
+
 Reads `warp-allow.json` in the same directory. Each pair is a server name and
 a tool name. A match prints `{"permission":"allow"}`. Anything else, including
 a missing file or bad input, prints `{"permission":"ask"}`.

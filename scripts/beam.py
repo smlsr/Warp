@@ -591,6 +591,10 @@ def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
     beam["runState"] = "paused" if paused else "running"
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": "pause" if paused else "resume", "reason": reason})
+    if paused:
+        import session_note
+
+        session_note.note(beam_path.parent, "session-stop")
     print("paused" if paused else "resumed")
 
 

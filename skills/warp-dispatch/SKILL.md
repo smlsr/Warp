@@ -7,6 +7,8 @@ description: "Compute the ready set and claim tickets under lock, gate, and agen
 
 `scripts/beam.py ready` is the only ready-set. Do not reimplement it in the chat.
 
+Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. When a Shuttle you spawned returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`, then reconcile that ticket from the beam before the next claim.
+
 ## Rules the script enforces
 
 - Paused beam returns nothing.

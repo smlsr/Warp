@@ -7,6 +7,8 @@ description: "Run the Warp master loop on any repo that has a plan. Use when the
 
 Scan builds the plan. Start dispatches. Stop and pause do not.
 
+Plugin hooks do not run on cloud runners. Before this tick, run `python3 <plugin>/scripts/resume_hint.py --root .` and follow it. Do not dispatch from the hint. If it says there is no beam, tell the user to run `/warp-ingest`. At the end of the tick, run `python3 <plugin>/scripts/session_note.py --type session-stop --root .`. When a Shuttle returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --root .`, then reconcile that ticket from the beam. Call an MCP tool only when it is in `scripts/mcp_tools.py` (plus `notifyAllow`). For any other tool, `python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .` must print `allow`. `ask` means do not call it.
+
 ## Control
 
 | Command | runState | Dispatch | In-flight |

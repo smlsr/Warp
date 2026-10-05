@@ -36,3 +36,7 @@ If status is already `coding` or `fix` and the branch exists, continue that bran
 Every acceptance-criterion comment names the id and the command that passed.
 
 If Cursor asks you to press Allow or Run on a Jira or Slack tool, stop editing permission files. Tell the user to run `/warp-allow-notify --check`. `/warp-init` writes the project allowlist. A tool name that is not in `scripts/mcp_tools.py` belongs in `notifyAllow`.
+
+Before an MCP tool that this skill does not name, run `python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .`. If it prints `ask`, do not call the tool. A missing hook is not permission to call it.
+
+When this Shuttle finishes, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`. That records the stop. The parent reconciles the ticket from the beam on the next tick.
