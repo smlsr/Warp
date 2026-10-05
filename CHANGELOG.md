@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.14
+
+- 1.3.14 version bump, no functional changes.
+
 ## 1.3.13
 
 - /warp-init writes the project MCP allowlist for Slack, Teams, and Jira. Entries include user-, plugin-, and *name* variants because the Run dialog often does not use the mcp.json key. server:* stays behind --allow-server-tools. --check and --list diagnose a prompt. autoAllowTools defaults to true. --no-allow skips one init. User-level files still need --user --yes.
