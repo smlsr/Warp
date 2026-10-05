@@ -770,6 +770,10 @@ def set_run(beam_path: Path, state: str, reason: Optional[str]) -> None:
         beam["stoppedAt"] = utcnow()
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": state, "reason": reason})
+    if state in {"paused", "stopped"}:
+        import session_note
+
+        session_note.note(beam_path.parent, "session-stop")
     print(state)
     if state == "stopped":
         try:
@@ -974,12 +978,21 @@ def main() -> None:
         journal(Path(args.beam), {"type": "import", "plan": args.plan, "tickets": len(beam["tickets"])})
         print(f"replaced plan tickets={len(beam['tickets'])} runState=stopped")
     elif args.cmd == "status":
+        import resume_hint
+
+        resume_hint.print_hint(Path(args.beam))
         write_status(Path(args.beam))
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
     elif args.cmd == "start":
+        import resume_hint
+
+        resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
     elif args.cmd == "resume":
+        import resume_hint
+
+        resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
     elif args.cmd == "pause":
         set_run(Path(args.beam), "paused", args.reason)

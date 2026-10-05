@@ -78,4 +78,4 @@ Coding steps use `config.model`, default `claude-sonnet-5-5-high` (Claude Sonnet
 
 ## 24/7 board
 
-`.warp/BOARD.md` and `.warp/board.html` regenerate every tick. Leave a cloud agent on `/warp` overnight, or run a tick from a scheduled Cursor automation. The beam is local to the repo, so a second machine resumes by pulling `.warp/` (commit the beam and journal; they contain no secrets).
+`.warp/BOARD.md` and `.warp/board.html` regenerate every tick. Leave a cloud agent on `/warp` overnight, or run a tick from a scheduled Cursor automation. Plugin hooks do not run on cloud runners. Each tick runs `scripts/resume_hint.py` before dispatch and `scripts/session_note.py --type session-stop` when the turn ends. A Shuttle runs `scripts/session_note.py --type subagent-stop` when it finishes. MCP calls go through `scripts/mcp_allow.py`, which allows only Warp's list. The beam is local to the repo, so a second machine resumes by pulling `.warp/` (commit the beam and journal; they contain no secrets).

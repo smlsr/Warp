@@ -28,7 +28,7 @@
 .warp/version              One line, the plugin version init recorded from .cursor/plugins/warp
 ```
 
-Session start, stop, and subagent stop hooks only print a resume hint. They do not dispatch. `/warp-allow-notify` adds a separate `beforeMCPExecution` hook that allows the tool list and asks for every other tool.
+Plugin hooks do not run on cloud runners, and they are not required there. `scripts/resume_hint.py` prints the resume hint (paused, done/total, ETA, alarms) and does not dispatch. `/warp-start`, `/warp-resume`, and `/warp-status` print it. `scripts/session_note.py` appends `session-stop` or `subagent-stop` to `.warp/journal.jsonl`. `/warp-stop` and `/warp-pause` append `session-stop`. A Shuttle appends `subagent-stop` when it finishes. A second note of the same type is skipped while it is still the last journal line. The beam stays the source of truth. Local hooks in `hooks/hooks.json` only repeat those scripts. `/warp-allow-notify` still installs a local `beforeMCPExecution` hook. Cloud agents run `scripts/mcp_allow.py` and call a tool only when it prints `allow`.
 
 ## Ticket status
 
@@ -54,7 +54,7 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 
 ## Restart
 
-1. Session start hook prints done/total and pause flag.
+1. `scripts/resume_hint.py` prints done/total and the pause flag. Cloud runners run this from the Warp commands. A local sessionStart hook only repeats it.
 2. Warp reconciles PRs before `ready()`.
 3. A Shuttle whose branch exists continues that branch.
 4. A claim with no branch and a dead agent goes back to `queued` on reconcile if `updatedAt` is older than `stuckAfterMinutes`.

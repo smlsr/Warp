@@ -35,7 +35,7 @@ When `ready` is empty because nothing is queued or active, or you stop the run, 
 
 ## Halt
 
-`/warp-pause` sets `paused`. In-flight Shuttles finish their current step and checkpoint; they do not start a new ticket. `/warp-resume` continues from the beam. A killed session is safe: the next sessionStart hook reprints the board.
+`/warp-pause` sets `paused`. In-flight Shuttles finish their current step and checkpoint; they do not start a new ticket. `/warp-resume` continues from the beam. A killed session is safe: the next Warp turn runs `scripts/resume_hint.py`, which reprints the board. Plugin hooks do not run on cloud runners, so do not wait for one.
 
 ## What you never do
 

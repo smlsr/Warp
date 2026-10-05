@@ -17,8 +17,8 @@ Tool names come from `scripts/mcp_tools.py`. Jira tools are included. Extra pair
 | IDE, all repos | `~/.cursor/permissions.json` `mcpAllowlist` | Same, only with `--user` after an explicit yes. |
 | CLI, this repo | `.cursor/cli.json` `permissions.allow` `Mcp(server:tool)` | Cursor CLI and headless runs. Does not change the IDE Run button. `agent -f` approves tools for that process. |
 | CLI, all repos | `~/.cursor/cli-config.json` | Same, only with `--user`. |
-| Hook | `.cursor/hooks.json` or `~/.cursor/hooks.json` `beforeMCPExecution` | Returns allow for this list and ask for every other tool. A hook allow does not currently skip the Run prompt. The permissions file does. |
-| Cloud agents and automations | nothing | They do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
+| Hook | `.cursor/hooks.json` or `~/.cursor/hooks.json` `beforeMCPExecution` | Local IDE only. Returns allow for this list and ask for every other tool. A hook allow does not currently skip the Run prompt. The permissions file does. Cloud runners do not execute this hook. |
+| Cloud agents and automations | `scripts/mcp_allow.py` | They do not use Run Modes and do not ask for approval. Plugin hooks do not run there. Call an MCP tool only when `mcp_allow.py` prints `allow`. `ask` means do not call it. The list is the same Slack, Teams, Jira, and optional GitHub pairs, not every tool. |
 
 Setting `mcpAllowlist` replaces the in-app MCP allowlist. Entries that exist only in Cursor Settings prompt again until they are in the file. The terminal allowlist and `autoRun` are left alone. Ask Every Time does not consult the file. A team admin Run Mode override ignores it.
 

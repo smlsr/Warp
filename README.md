@@ -175,10 +175,23 @@ What each Cursor surface actually does:
 |---|---|---|
 | IDE Run prompt | `.cursor/permissions.json` (`--user`: `~/.cursor/permissions.json`) `mcpAllowlist` | Skips the prompt for those pairs when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time does not consult the list. Setting the key replaces the in-app MCP allowlist, so a tool allowed only in Cursor Settings prompts again until it is in the file. Per-user and per-repo files are combined. A team admin Run Mode override ignores the file. |
 | CLI | `.cursor/cli.json` (`--user`: `~/.cursor/cli-config.json`) `permissions.allow` as `Mcp(server:tool)` | Cursor CLI and headless `agent` runs. It does not change the IDE Run button. `agent -f` (also `--force`) approves tools for that process. |
-| Hook | `.cursor/hooks.json` (`--user`: `~/.cursor/hooks.json`) `beforeMCPExecution` | Returns allow for this list and ask for every other call. `failClosed` is off. A hook allow does not currently skip the Run prompt. The permissions file does. |
-| Cloud agents and automations | none | They do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
+| Hook | `.cursor/hooks.json` (`--user`: `~/.cursor/hooks.json`) `beforeMCPExecution` | Local IDE only. Returns allow for this list and ask for every other call. `failClosed` is off. A hook allow does not currently skip the Run prompt. The permissions file does. Plugin hooks do not run on cloud runners. |
+| Cloud agents and automations | `scripts/mcp_allow.py` | They do not use Run Modes and do not ask for approval. Call a tool only when the script prints `allow`. `ask` means do not call it. Same Slack, Teams, Jira, and optional GitHub list. Not every MCP tool. |
 
 The command merges into JSON that is already there. Other hooks, other allow entries, the terminal allowlist, and `autoRun` are left in place. Before it changes an existing file it writes a sibling `.bak`. A second run with the same flags prints `Already set. Nothing changed.` and does not touch the backup. `--revoke` deletes an `mcpAllowlist` key that would otherwise be empty, so Cursor can fall back to the in-app list. `/warp-uninstall` removes the project hook and the project allow entries the manifest recorded. It does not remove `~/.cursor` files. Reload Cursor (Developer: Reload Window) or start a new agent chat afterwards.
+
+## Cloud runners
+
+Plugin hooks do not run on cloud runners. Warp does not depend on them there. The same behavior runs from commands the agent already follows.
+
+| What the hook did | Replacement | Where it runs |
+|---|---|---|
+| `sessionStart` prints paused, done/total, ETA, and alarms, and says to read the board before dispatch | `scripts/resume_hint.py` (`--root`, `--beam`) | `/warp`, `/warp-start`, `/warp-resume`, `/warp-status`, and the always-applied Warp session rule |
+| `stop` appends `session-stop` to `.warp/journal.jsonl` | `scripts/session_note.py --type session-stop` | `/warp-stop`, `/warp-pause`, and the end of a `/warp` tick |
+| `subagentStop` appends `subagent-stop` | `scripts/session_note.py --type subagent-stop` | When a Shuttle finishes. The next tick reconciles from the beam |
+| `beforeMCPExecution` returns allow for Warp's tool list and ask otherwise | `scripts/mcp_allow.py --server SERVER --tool TOOL` | Before an MCP call that a Warp skill does not already name. `ask` means do not call it |
+
+A local IDE may still run `hooks/hooks.json` and the `beforeMCPExecution` hook `/warp-allow-notify` installs. Those hooks call the same scripts. They are not a second behavior, and cloud runners do not need them. `mcp_allow.py` does not approve shell commands and does not allow every MCP tool.
 
 ## Version
 
@@ -206,7 +219,7 @@ A config that is only missing new keys does not need that delete. Re-run `/warp-
 
 ## Troubleshooting
 
-**agents stop and ask to Run/Allow.** The usual cause is a server id mismatch, or an allowlist that was never written. `/warp-allow-notify` used to write `slack:slack_send_message` and skipped Jira unless you passed `--with-jira`, and `/warp-init` did not run it. Cursor's dialog often shows `user-slack`, `plugin-slack-slack`, `project-0-<folder>-slack`, `atlassian-rovo`, or `claude_ai_Atlassian`, so `slack:tool` never matched. Re-run `/warp-init` (or `/warp-allow-notify`). Then set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time ignores the file. `/warp-allow-notify --check` prints what is covered and the entries that would fix a gap. `--list` prints detected servers. A different tool name goes in `notifyAllow`. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show it. The longer note is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
+**agents stop and ask to Run/Allow.** The usual cause is a server id mismatch, or an allowlist that was never written. `/warp-allow-notify` used to write `slack:slack_send_message` and skipped Jira unless you passed `--with-jira`, and `/warp-init` did not run it. Cursor's dialog often shows `user-slack`, `plugin-slack-slack`, `project-0-<folder>-slack`, `atlassian-rovo`, or `claude_ai_Atlassian`, so `slack:tool` never matched. Re-run `/warp-init` (or `/warp-allow-notify`). Then set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time ignores the file. `/warp-allow-notify --check` prints what is covered and the entries that would fix a gap. `--list` prints detected servers. A different tool name goes in `notifyAllow`. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show it. They use `scripts/mcp_allow.py` instead of a hook. The longer note is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 **Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. `/warp-init` and `/warp-scan` set `jiraProject` when the plan, a branch, a recent commit, or Jira itself shows one project. You do not have to edit it by hand in that case. If the line says `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`, pick one:
 

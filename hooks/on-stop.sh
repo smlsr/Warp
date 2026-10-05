@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Checkpoint note on agent stop. State is already in .warp/beam.json.
+# Local IDE duplicate of scripts/session_note.py. Cloud runners do not execute this hook.
 set -euo pipefail
-ROOT="${CURSOR_PROJECT_DIR:-$(pwd)}"
-if [[ -d "$ROOT/.warp" ]]; then
-  echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"type\":\"session-stop\"}" >> "$ROOT/.warp/journal.jsonl"
-fi
-exit 0
+PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
+export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$(pwd)}"
+exec python3 "$PLUGIN/scripts/session_note.py" --type session-stop

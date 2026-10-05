@@ -57,3 +57,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | autoAllowTools | `true` | `/warp-init` writes the project MCP allowlist (Slack, Teams, Jira, and the GitHub comment tool when that provider is in use). `false` skips it. `/warp-init --no-allow` skips one run. User-level files stay opt-in. Undo with `/warp-allow-notify --revoke`. |
 
 There is no person cap and no people list.
+
+## Cloud runners
+
+Plugin hooks do not run on cloud runners, and none of these keys turn them on. Resume, stop notes, and the MCP allow check are scripts the Warp commands already run: `scripts/resume_hint.py`, `scripts/session_note.py`, and `scripts/mcp_allow.py`. A local IDE may still run `hooks/hooks.json`. That is a duplicate of those scripts, not a separate cloud path. `mcp_allow.py` allows the same Slack, Teams, Jira, and optional GitHub tools as `/warp-allow-notify`. It does not allow every MCP tool, and it does not approve shell commands.

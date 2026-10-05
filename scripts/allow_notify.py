@@ -27,8 +27,11 @@ What each file actually does (Cursor docs, not a guess):
     explicit allowlist check. `failClosed` is not set.
 
   Cloud agents
-    They do not use Run Modes and do not ask for approval. `beforeMCPExecution`
-    does not run there. This command does not change cloud-agent prompting.
+    They do not use Run Modes and do not ask for approval. Plugin hooks and
+    `beforeMCPExecution` do not run on cloud runners. The agent runs
+    `scripts/mcp_allow.py` and calls a tool only when it prints allow. That
+    is this same list, not every MCP tool. This command does not change
+    cloud-agent prompting.
 
 Slack, Teams, Jira, and GitHub tool names come from `scripts/mcp_tools.py`.
 Jira tools are included by default. Extra `server:tool` pairs come from
@@ -579,7 +582,9 @@ def check_lines(root: Path, home: Path, pairs: list[tuple[str, str]], discovered
     )
     lines.append(
         "Cloud agents and automations do not use Run Modes and do not ask for approval. "
-        "beforeMCPExecution does not run there. A hook allow does not skip the IDE prompt."
+        "Plugin hooks and beforeMCPExecution do not run on cloud runners. "
+        "Cloud agents run scripts/mcp_allow.py and call a tool only when it prints allow. "
+        "A hook allow does not skip the IDE prompt."
     )
     lines.append("Undo a project write with /warp-allow-notify --revoke. User files need --user --yes --revoke.")
     return "\n".join(lines)
@@ -839,7 +844,7 @@ def surfaces(scope: Scope) -> str:
         f"IDE Run prompt: {perm} mcpAllowlist (server:tool). This is what skips the prompt when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time does not consult it. Setting mcpAllowlist replaces the in-app MCP allowlist; entries that exist only in Cursor Settings prompt again until they are in this file. Per-user and per-repo files are concatenated. A team admin Run Mode override ignores this file.",
         f"CLI: {cli} permissions.allow as Mcp(server:tool). This does not change the IDE Run button.",
         f"Hook: {hooks} beforeMCPExecution returns allow only for this list and ask for every other tool. It is not a blanket allow, and failClosed is off. Current Cursor behavior: a hook allow does not skip the MCP Run prompt (deny is what the hook enforces). The permissions file is what skips the IDE prompt.",
-        "Cloud agents do not use Run Modes and do not ask for approval. beforeMCPExecution does not run on cloud agents. This command does not change cloud-agent prompting.",
+        "Cloud agents do not use Run Modes and do not ask for approval. Plugin hooks and beforeMCPExecution do not run on cloud runners. Cloud agents run scripts/mcp_allow.py and call an MCP tool only when it prints allow. That is the same Slack, Teams, Jira, and optional GitHub list, not every tool. This command does not change cloud-agent prompting.",
         "Reload Cursor (Developer: Reload Window) or start a new agent chat. Cursor re-reads permissions.json when it changes; reload if the Run prompt is still there.",
     ])
 
@@ -1218,8 +1223,9 @@ What it writes (project is the default; --user writes the home-directory files):
          ~/.cursor/hooks.json and ./hooks/warp-mcp-allow.py with --user
          Returns allow for this list and ask for every other tool. A hook
          allow does not currently skip the Run prompt. failClosed is off.
-  Cloud  nothing. Cloud agents do not ask for approval, and beforeMCPExecution
-         does not run there.
+  Cloud  scripts/mcp_allow.py. Plugin hooks do not run on cloud runners.
+         Prints allow or ask for one server:tool. ask means do not call it.
+         Same Slack, Teams, Jira, and optional GitHub list. Not every tool.
 
 Jira tools are included by default. --with-jira is accepted and changes nothing.
 Default tools come from scripts/mcp_tools.py:

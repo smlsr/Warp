@@ -10,6 +10,8 @@ python3 <plugin>/scripts/scan.py status --beam .warp/beam.json
 python3 <plugin>/scripts/beam.py board --beam .warp/beam.json
 ```
 
+`scan.py status` prints the resume hint first (`scripts/resume_hint.py`). Follow it. Do not dispatch from this command. Plugin hooks do not run on cloud runners.
+
 `scan.py ?` and `beam.py ?` print the options. Quote `?` if the shell expands it.
 
 Hand the user these paths:
