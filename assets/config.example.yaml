@@ -42,9 +42,11 @@ jiraExternalIdField: externalId
 # jiraExternalIdField: "External ID"
 # jiraExternalIdField: customfield_10050
 jiraWriteExternalId: false
-# true: after a key is stored, scan and claim may write the plan id into the
-# Jira External ID field. false: they never do. /warp-jira-match --write-external-id
-# still can, and it asks for --yes before the edit. A different value already
+# true: /warp-scan and /warp-jira-check queue a write of the plan id into the
+# Jira External ID field for every mapped ticket that is not already confirmed.
+# The flag is the consent, so --yes is not required. A key found by the
+# external-id search is skipped. false: scan and catchup never queue that write.
+# /warp-jira-external-id --apply --yes still can. A different value already
 # in that field is left alone unless --force-external-id. No comment is posted.
 jiraTransition: true
 # On claim, move the Jira issue to In Progress. Only tickets with a Jira key.

@@ -1013,6 +1013,9 @@ def record_resolved(
     write_hint = jira_match.hint_for_resolve(cfg)
     if write_hint:
         lines.append(write_hint)
+    extra = jira_match.external_id_backfill(beam_path, mode="auto", only_ids={tid})
+    if extra:
+        lines.append(extra)
     return "\n".join(lines)
 
 
@@ -1306,6 +1309,15 @@ def key_report(ticket: dict, cfg: dict) -> str:
         lines.append(
             f"lastAttempt: {attempt.get('event')} {attempt.get('result')}" + (f" — {err}" if err else "")
         )
+    written = jira.get("externalIdWritten") or {}
+    if written.get("value"):
+        lines.append(f"externalIdWritten: {written.get('value')}")
+    ext = jira.get("externalIdAttempt") or {}
+    if ext:
+        err = ext.get("error") or ""
+        lines.append(
+            f"externalIdAttempt: {ext.get('result')}" + (f" — {err}" if err else "")
+        )
     return "\n".join(lines)
 
 
@@ -1524,7 +1536,13 @@ def catchup(beam_path: Path, tid: str | None, write: bool) -> str:
     _write_todo(beam_path, payloads)
     if not lines:
         lines.append("jira: nothing missing")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    import jira_match
+
+    extra = jira_match.external_id_backfill(beam_path, mode="auto", only_ids={tid} if tid else None)
+    if extra:
+        text += "\n" + extra
+    return text
 
 
 def list_mappings(beam: dict, cfg: dict) -> str:
@@ -1799,7 +1817,19 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None, write: b
     if not rows:
         if write and wanted is None and path.is_file():
             path.unlink()
-        return summary
+        text = summary
+    else:
+        text = _prepare_resolve_text(beam_path, cfg, rows, path, write, summary)
+    if write:
+        import jira_match
+
+        extra = jira_match.external_id_backfill(beam_path, mode="auto", only_ids=wanted)
+        if extra:
+            text += "\n" + extra
+    return text
+
+
+def _prepare_resolve_text(beam_path: Path, cfg: dict, rows: list[dict], path: Path, write: bool, summary: str) -> str:
     payload = {
         "server": cfg.get("jiraMcp") or "atlassian",
         "tool": TOOL_SEARCH,
@@ -2169,6 +2199,8 @@ examples:
   python3 scripts/jira_sync.py resolve --apply results.json
   python3 scripts/jira_sync.py resolve --ticket WV-01 --key WAR-1 --issue-id 10001 --cloud-id cloud-1
   python3 scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --yes
+  python3 scripts/jira_external_id.py --apply --yes
+  python3 scripts/jira_sync.py record-external-id --results edits.json
   python3 scripts/jira_match.py --results candidates.json --apply
   python3 scripts/jira_sync.py record --id WV-01 --event claim --result failed --error "transition rejected"
   python3 scripts/jira_sync.py project --list
@@ -2329,6 +2361,11 @@ def main() -> None:
     pe.add_argument("--results", help="edit transcript from editJiraIssue")
     pe.add_argument("--yes", action="store_true", help="confirm the write")
     pe.add_argument("--force-external-id", action="store_true", help="replace a different non-empty External ID")
+    px = sub.add_parser("record-external-id", help="record editJiraIssue results for External ID")
+    px.add_argument("--beam", default=".warp/beam.json")
+    px.add_argument("--results", required=True, help="transcript with edits, issues, fields, and editmeta")
+    px.add_argument("--force", action="store_true", help="record again when externalIdWritten is already set")
+    px.add_argument("--force-external-id", action="store_true", help="replace a different non-empty External ID")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -2428,6 +2465,18 @@ def main() -> None:
                 print(jira_project.record_probe(root, data if isinstance(data, dict) else {}))
             else:
                 print(jira_project.ensure(root, write=True, report_set=True))
+        elif args.cmd == "record-external-id":
+            import jira_match
+
+            data = json.loads(Path(args.results).read_text())
+            print(
+                jira_match.record_external_id(
+                    Path(args.beam),
+                    data if isinstance(data, dict) else {},
+                    force=bool(args.force),
+                    force_value=bool(args.force_external_id),
+                )
+            )
         elif args.cmd == "external-id":
             import jira_match
 

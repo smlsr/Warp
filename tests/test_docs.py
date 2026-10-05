@@ -109,6 +109,16 @@ class ScriptHelpTests(unittest.TestCase):
                 "--force-external-id",
                 "editJiraIssue",
             ),
+            "jira_external_id.py": (
+                "--apply",
+                "--yes",
+                "--ticket",
+                "--force",
+                "--force-external-id",
+                "--results",
+                "editJiraIssue",
+                "record-external-id",
+            ),
         }
         for script, needles in cases.items():
             text = self.help_text(script, "?")
@@ -132,6 +142,7 @@ class ScriptHelpTests(unittest.TestCase):
             "herald_fmt.py",
             "jira_view.py",
             "jira_match.py",
+            "jira_external_id.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

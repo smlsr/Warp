@@ -27,6 +27,8 @@ If any ticket is `status: unmapped`, link it before catch-up. Do this even when 
 
 Then run `catchup`. After a key is mapped, `catchup` asks for the moves the current status still owes. An already-merged auto-merge ticket is asked for Done and a merged comment, not a move back to In Progress.
 
+If `catchup` also prints `MUST DO write External ID`, do that block in this turn. `jiraWriteExternalId: true` is the consent. `--yes` is not required. Call `editJiraIssue` for each listed key, using the field id from `getJiraProjectIssueTypesMetadata` and `getJiraIssueEditmeta`. Skip a missing or read-only field, a key whose source is `external`, and a different non-empty value. Do not post a comment. Then `python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json`. A skip shows later as `externalIdAttempt: skipped — field missing` and does not replace `lastAttempt`. Read `externalIdWritten` when it is present. `/warp-jira-external-id` is the same write when the user asks for it directly.
+
 If the user wants the gap closed, do every action in `.warp/jira-todo.json`:
 
 1. `getAccessibleAtlassianResources` on the server named `jiraMcp` (default `atlassian`) for `cloudId`, unless `jiraSite` is set.

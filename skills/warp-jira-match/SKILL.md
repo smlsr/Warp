@@ -37,7 +37,7 @@ python3 <plugin>/scripts/jira_match.py --results candidates.json
 
 ## Write the External ID
 
-This is a write to Jira. It needs the connector permission from `/warp-allow-notify --with-jira` (`editJiraIssue` and `getJiraIssueEditmeta`). Do it only when the user passed `--write-external-id` or `--set-external-id`, or when `jiraWriteExternalId` is true during scan or claim. The explicit flags work even when that config key is false, and they still need `--yes`.
+This is a write to Jira. It needs the connector permission from `/warp-allow-notify --with-jira` (`editJiraIssue` and `getJiraIssueEditmeta`). Do it when the user passed `--write-external-id` or `--set-external-id`. Those flags still need `--yes`, and they work when `jiraWriteExternalId` is false. When that config key is true, `/warp-scan` and `/warp-jira-check` already print `MUST DO write External ID` for every mapped ticket that is not confirmed, without `--yes`. For a map that already exists, `/warp-jira-external-id` is the bulk command.
 
 1. `python3 <plugin>/scripts/jira_match.py --write-external-id` (or `--set-external-id WV-01=WAR-1`, or `jira_sync.py external-id`). Without `--yes` this is a dry-run: it shows before and after and writes nothing.
 2. Call `getJiraProjectIssueTypesMetadata` and `getJiraIssueEditmeta` for the issue. The field is `jiraExternalIdField`, or External ID when that name is what the catalog has.

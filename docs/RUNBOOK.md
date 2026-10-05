@@ -37,7 +37,7 @@ Walk the first line that matches. Stop when the ticket has a stored key and `cat
 
 `/warp-jira-view WAR-1` (or a plan id) prints the live fields when you need to see why a transition is absent. It does not write the beam.
 
-Scan and claim do not write the External ID field unless `jiraWriteExternalId` is true. To write it yourself: `/warp-jira-match --write-external-id --yes`, or `jira_sync.py external-id`. A missing or read-only field is skipped. A different non-empty value needs `--force-external-id`. No comment is added.
+**External ID not written.** `jiraWriteExternalId: true` makes `/warp-scan` and `/warp-jira-check` print `MUST DO write External ID` for mappings that already exist. The flag is the consent. `--yes` is not required. The agent calls `editJiraIssue` for each line, then `jira_sync.py record-external-id`. To do it without a scan: `/warp-jira-external-id`, then `/warp-jira-external-id --apply --yes`. A key whose source is `external` is skipped. A different non-empty value needs `--force-external-id`. A missing or read-only field is skipped and shows as `externalIdAttempt`. No comment is added. `jira.externalId` on the beam is not proof the Jira field was written. `jira.externalIdWritten` is.
 
 ## Nothing linked
 
