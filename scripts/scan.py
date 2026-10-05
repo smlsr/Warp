@@ -598,7 +598,7 @@ def main() -> None:
     ps.add_argument("--folder", help="limit the scan to this folder (path or name under root)")
     ps.add_argument("--out", default=".warp/beam.json")
     ps.add_argument("--max-agents", type=int, default=18)
-    ps.add_argument("--model", default="grok-4.7-high")
+    ps.add_argument("--model", default="claude-sonnet-5-5-high")
     pe = sub.add_parser("export")
     pe.add_argument("--beam", default=".warp/beam.json")
     pe.add_argument("--out", default=".warp/WARP_PLAN.json")

@@ -179,7 +179,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | Key | Default | Meaning |
 |---|---|---|
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
-| `model` | `grok-4.7-high` | Coding slug: Grok 4.7 High, not a fast variant. Must match the picker. |
+| `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
 | `maxAgents` | `18` | Concurrent Shuttles. The only cap. |
 | `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI. L and XL wait. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |

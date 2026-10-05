@@ -3,9 +3,9 @@
 # /Users/you/.warp/humanifyos
 stateDir: .warp
 
-model: grok-4.7-high
-# Cursor model slug for coding steps. Must match the picker.
-# Grok 4.7 High. Do not substitute a fast variant. Override the slug here.
+model: claude-sonnet-5-5-high
+# Cursor model slug for coding steps. Claude Sonnet 5.5 High.
+# The slug must match the Cursor model picker. Override it here.
 
 maxAgents: 18
 # Concurrent Shuttles. No per-person cap.
