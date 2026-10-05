@@ -16,6 +16,7 @@ import json
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Optional
 
 import jira_sync
 from mcp_tools import (
@@ -105,7 +106,7 @@ def similarity(left: str, right: str) -> float:
     return round(min(ratio, token), 4)
 
 
-def classify_pair(warp_summary: str, jira_summary: str, chars: int, min_score: float) -> tuple[str | None, float]:
+def classify_pair(warp_summary: str, jira_summary: str, chars: int, min_score: float) -> tuple[Optional[str], float]:
     """exact, then a shared prefix of `chars`, then fuzzy at or above min_score."""
     left = normalize_summary(warp_summary)
     right = normalize_summary(jira_summary)
@@ -144,7 +145,7 @@ def is_done(issue: dict) -> bool:
     return cat.casefold() == "done" or name.casefold() in DONE_NAMES
 
 
-def _issue_key(issue: dict) -> str | None:
+def _issue_key(issue: dict) -> Optional[str]:
     return jira_sync.normalize_key(issue.get("key") or issue.get("jiraKey"))
 
 
@@ -153,7 +154,7 @@ def _external_on_issue(issue: dict, field: str) -> str:
     return values[0] if values else ""
 
 
-def summary_jql(summary: str, project: str | None, chars: int) -> str:
+def summary_jql(summary: str, project: Optional[str], chars: int) -> str:
     text = normalize_summary(summary)[: max(1, int(chars))]
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
     body = f'summary ~ "{safe}"'
@@ -245,7 +246,7 @@ def rank_ticket(
     min_score: float,
     include_done: bool,
     taken: dict[str, str],
-    project: str | None,
+    project: Optional[str],
 ) -> dict:
     """One ticket against a candidate list. Does not write."""
     ranked = []
@@ -278,7 +279,7 @@ def rank_ticket(
     prefix = [row for row in ranked if row["type"] == "prefix"]
     fuzzy = [row for row in ranked if row["type"] == "fuzzy"]
 
-    def pack(outcome: str, chosen: dict | None, pool: list[dict]) -> dict:
+    def pack(outcome: str, chosen: Optional[dict], pool: list[dict]) -> dict:
         return {
             "id": tid,
             "summary": summary,
@@ -347,7 +348,7 @@ def rank_all(tickets: list[dict], issues: list[dict], **opts) -> list[dict]:
     return rows
 
 
-def _selectable(beam: dict, cfg: dict, only_id: str | None, include_all: bool) -> list[dict]:
+def _selectable(beam: dict, cfg: dict, only_id: Optional[str], include_all: bool) -> list[dict]:
     prefixes = jira_sync.prefixes_from(cfg)
     chosen = []
     for tid, ticket in (beam.get("tickets") or {}).items():
@@ -451,7 +452,7 @@ def apply_rows(beam_path: Path, rows: list[dict], *, do_apply: bool, yes: bool) 
     return lines
 
 
-def match_results(beam_path: Path, data: dict, *, only_id: str | None, include_all: bool, chars: int, min_score: float, include_done: bool, do_apply: bool, yes: bool) -> str:
+def match_results(beam_path: Path, data: dict, *, only_id: Optional[str], include_all: bool, chars: int, min_score: float, include_done: bool, do_apply: bool, yes: bool) -> str:
     beam_path = beam_path.resolve()
     beam = _load_beam(beam_path)
     cfg = jira_sync.settings(beam_path, beam)
@@ -473,7 +474,7 @@ def match_results(beam_path: Path, data: dict, *, only_id: str | None, include_a
     return "\n".join(lines)
 
 
-def prepare_match(beam_path: Path, *, only_id: str | None, include_all: bool, chars: int, min_score: float, include_done: bool) -> str:
+def prepare_match(beam_path: Path, *, only_id: Optional[str], include_all: bool, chars: int, min_score: float, include_done: bool) -> str:
     beam_path = beam_path.resolve()
     beam = _load_beam(beam_path)
     cfg = jira_sync.settings(beam_path, beam)
@@ -573,7 +574,7 @@ def writes_on_scan(cfg: dict) -> bool:
     return bool(cfg.get("jiraWriteExternalId"))
 
 
-def _pairs_from_beam(beam: dict, cfg: dict, only_id: str | None, explicit: list[tuple[str, str]]) -> list[dict]:
+def _pairs_from_beam(beam: dict, cfg: dict, only_id: Optional[str], explicit: list[tuple[str, str]]) -> list[dict]:
     if explicit:
         return [{"id": tid, "key": key} for tid, key in explicit]
     prefixes = jira_sync.prefixes_from(cfg)
@@ -587,7 +588,7 @@ def _pairs_from_beam(beam: dict, cfg: dict, only_id: str | None, explicit: list[
     return pairs
 
 
-def _parse_pair(raw: str) -> tuple[str, str] | None:
+def _parse_pair(raw: str) -> Optional[tuple[str, str]]:
     if "=" not in str(raw):
         return None
     tid, key = str(raw).split("=", 1)
@@ -663,7 +664,7 @@ def _edit_rows(data: dict) -> list[dict]:
     return []
 
 
-def _before_value(row: dict, issue: dict | None, field_id: str) -> str:
+def _before_value(row: dict, issue: Optional[dict], field_id: str) -> str:
     if "before" in row and row.get("before") is not None:
         return str(row.get("before") or "")
     if isinstance(issue, dict):
@@ -811,7 +812,7 @@ def hint_for_resolve(cfg: dict) -> str:
     )
 
 
-def _on_issue(ticket: dict) -> str | None:
+def _on_issue(ticket: dict) -> Optional[str]:
     """Last value seen on the Jira issue. None means this beam has not loaded it."""
     jira = ticket.get("jira") or {}
     if "externalIdOnIssue" not in jira:
@@ -819,7 +820,7 @@ def _on_issue(ticket: dict) -> str | None:
     return str(jira.get("externalIdOnIssue") or "")
 
 
-def _current_label(value: str | None, attempt: str = "") -> str:
+def _current_label(value: Optional[str], attempt: str = "") -> str:
     if attempt == "field missing" and value in (None, ""):
         return "field missing"
     if value is None:
@@ -1017,7 +1018,7 @@ def _field_command(row: dict, field: str) -> str:
     return f"jira: editJiraIssue {row['key']} field {field} = {row['value']}"
 
 
-def _backfill_rows(beam: dict, cfg: dict, *, only_ids: set[str] | None, force: bool, force_value: bool, method: str = "field"):
+def _backfill_rows(beam: dict, cfg: dict, *, only_ids: Optional[set[str]], force: bool, force_value: bool, method: str = "field"):
     """Mapped tickets that still need the plan id written."""
     prefixes = jira_sync.prefixes_from(cfg)
     queue = []
@@ -1140,7 +1141,7 @@ def external_id_backfill(
     beam_path: Path,
     *,
     mode: str = "auto",
-    only_ids: set[str] | None = None,
+    only_ids: Optional[set[str]] = None,
     force: bool = False,
     force_value: bool = False,
     create: bool = False,
@@ -1263,7 +1264,7 @@ def external_id_backfill(
     return "\n".join(lines)
 
 
-def _editmeta_for(data: dict, key: str) -> dict | None:
+def _editmeta_for(data: dict, key: str) -> Optional[dict]:
     raw = data.get("editmeta")
     if isinstance(raw, dict) and isinstance(raw.get(key), dict):
         return raw[key]
@@ -1275,7 +1276,7 @@ def _editmeta_for(data: dict, key: str) -> dict | None:
     return None
 
 
-def _issue_for(data: dict, key: str) -> dict | None:
+def _issue_for(data: dict, key: str) -> Optional[dict]:
     issues = data.get("issues")
     if isinstance(issues, dict):
         found = issues.get(key)
@@ -1287,7 +1288,7 @@ def _issue_for(data: dict, key: str) -> dict | None:
     return None
 
 
-def _live_value(issue: dict | None, field_id: str) -> str | None:
+def _live_value(issue: Optional[dict], field_id: str) -> Optional[str]:
     if not isinstance(issue, dict):
         return None
     values = jira_sync._external_values(issue, field_id)
@@ -1301,7 +1302,7 @@ def _live_value(issue: dict | None, field_id: str) -> str | None:
     return None
 
 
-def _issue_labels(issue: dict | None) -> list[str]:
+def _issue_labels(issue: Optional[dict]) -> list[str]:
     if not isinstance(issue, dict):
         return []
     fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
@@ -1489,7 +1490,7 @@ def record_external_id(beam_path: Path, data: dict, *, force: bool = False, forc
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     import usage
 
     parser = argparse.ArgumentParser(

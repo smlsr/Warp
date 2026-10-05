@@ -15,6 +15,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 import jira_lookup
 import jira_sync
@@ -233,7 +234,7 @@ def _is_user(value: dict) -> bool:
     }
 
 
-def format_user(value: dict, verbose: bool) -> str | None:
+def format_user(value: dict, verbose: bool) -> Optional[str]:
     name = str(value.get("displayName") or value.get("name") or "").strip()
     account = str(value.get("accountId") or "").strip()
     if not name and not account:
@@ -343,7 +344,7 @@ def catalog_names(raw) -> dict[str, str]:
         if fid and name and not isinstance(name, (dict, list)):
             found[str(fid)] = str(name)
 
-    def walk(node, parent_key: str | None = None) -> None:
+    def walk(node, parent_key: Optional[str] = None) -> None:
         if isinstance(node, list):
             for item in node:
                 walk(item, parent_key)
@@ -386,7 +387,7 @@ def _tickets(beam_path: Path) -> dict:
     return {}
 
 
-def _usable_key(tid: str, key, source: str | None, prefixes: list[str]) -> str | None:
+def _usable_key(tid: str, key, source: Optional[str], prefixes: list[str]) -> Optional[str]:
     norm = jira_sync.normalize_key(key)
     if not norm:
         return None
@@ -406,7 +407,7 @@ def local_resolve(query: str, beam_path: Path, cfg: dict) -> dict:
     qfold = str(query).strip().casefold()
     hits = []
 
-    def add(key, where: str, ticket: str, source: str | None) -> None:
+    def add(key, where: str, ticket: str, source: Optional[str]) -> None:
         norm = _usable_key(ticket, key, source, prefixes)
         if not norm:
             return
@@ -439,7 +440,7 @@ def local_resolve(query: str, beam_path: Path, cfg: dict) -> dict:
     return {"outcome": "miss", "matches": []}
 
 
-def _project_of_jql(jql: str) -> str | None:
+def _project_of_jql(jql: str) -> Optional[str]:
     match = re.search(r"project\s*=\s*([A-Z][A-Z0-9]+)", str(jql or ""), re.I)
     return match.group(1).upper() if match else None
 
@@ -516,7 +517,7 @@ def search_resolve(query: str, cfg: dict, data: dict) -> dict:
     return {"outcome": "miss", "matches": [], "notes": notes, "proposed": proposed}
 
 
-def _error_text(raw) -> str | None:
+def _error_text(raw) -> Optional[str]:
     if not raw:
         return None
     if isinstance(raw, str):
@@ -530,11 +531,11 @@ def _error_text(raw) -> str | None:
     return str(raw)
 
 
-def _issue_key(issue: dict) -> str | None:
+def _issue_key(issue: dict) -> Optional[str]:
     return jira_sync.normalize_key(issue.get("key") or issue.get("jiraKey"))
 
 
-def _direct_issue(query: str, data: dict) -> tuple[dict | None, str | None]:
+def _direct_issue(query: str, data: dict) -> tuple[Optional[dict], Optional[str]]:
     """Issue returned for this exact key, and an error if that call failed."""
     wanted = str(query).strip().upper()
     if not isinstance(data, dict):
@@ -554,7 +555,7 @@ def _direct_issue(query: str, data: dict) -> tuple[dict | None, str | None]:
     return None, None
 
 
-def _body_for(key: str, data: dict) -> dict | None:
+def _body_for(key: str, data: dict) -> Optional[dict]:
     wanted = key.upper()
     if not isinstance(data, dict):
         return None
@@ -587,7 +588,7 @@ def _body_for(key: str, data: dict) -> dict | None:
     return best
 
 
-def resolve_query(query: str, beam_path: Path, cfg: dict, data: dict | None) -> dict:
+def resolve_query(query: str, beam_path: Path, cfg: dict, data: Optional[dict]) -> dict:
     prefixes = jira_sync.prefixes_from(cfg)
     kind = classify(query, prefixes)
     data = data or {}
@@ -638,7 +639,7 @@ def _how(found: dict) -> str:
     return label
 
 
-def _names_for(issue: dict | None, data: dict) -> dict[str, str]:
+def _names_for(issue: Optional[dict], data: dict) -> dict[str, str]:
     names: dict[str, str] = {}
     names.update(catalog_names(data.get("fields")))
     names.update(catalog_names(data.get("fieldCatalog") or data.get("names")))
@@ -660,7 +661,7 @@ def _scalar_eq(value, query: str) -> bool:
     return False
 
 
-def discover_field(fields: dict, names: dict[str, str], query: str, configured: str) -> dict | None:
+def discover_field(fields: dict, names: dict[str, str], query: str, configured: str) -> Optional[dict]:
     ranked = []
     seen = set()
     for fid, name in names.items():
@@ -684,7 +685,7 @@ def discover_field(fields: dict, names: dict[str, str], query: str, configured: 
     return {"id": fid, "name": name, "value": format_value(value, False)}
 
 
-def stored_lines(query: str, key: str | None, beam_path: Path, cfg: dict) -> list[str]:
+def stored_lines(query: str, key: Optional[str], beam_path: Path, cfg: dict) -> list[str]:
     prefixes = jira_sync.prefixes_from(cfg)
     qfold = str(query).strip().casefold()
     beam_bits = []
@@ -728,7 +729,7 @@ def redact_issue(issue: dict, names: dict[str, str]) -> dict:
     return copied
 
 
-def _redact(value, name: str | None = None):
+def _redact(value, name: Optional[str] = None):
     if name and _secret(name):
         return "<redacted>"
     if isinstance(value, list):
@@ -738,7 +739,7 @@ def _redact(value, name: str | None = None):
     return value
 
 
-def transition_rows(data: dict) -> list | None:
+def transition_rows(data: dict) -> Optional[list]:
     if not isinstance(data, dict) or "transitions" not in data:
         return None
     raw = data.get("transitions")
@@ -769,7 +770,7 @@ def transition_lines(rows: list) -> list[str]:
     return lines
 
 
-def _comment_rows(issue: dict | None, data: dict) -> tuple[int | None, list]:
+def _comment_rows(issue: Optional[dict], data: dict) -> tuple[Optional[int], list]:
     raw = None
     if isinstance(data, dict) and data.get("comments") is not None:
         raw = data.get("comments")
@@ -785,7 +786,7 @@ def _comment_rows(issue: dict | None, data: dict) -> tuple[int | None, list]:
     return None, []
 
 
-def comment_lines(issue: dict | None, data: dict, verbose: bool, full: bool) -> list[str]:
+def comment_lines(issue: Optional[dict], data: dict, verbose: bool, full: bool) -> list[str]:
     total, rows = _comment_rows(issue, data)
     dated = []
     for row in rows:
@@ -809,7 +810,7 @@ def comment_lines(issue: dict | None, data: dict, verbose: bool, full: bool) -> 
     return lines
 
 
-def _link_rows(issue: dict | None, data: dict) -> tuple[list, list]:
+def _link_rows(issue: Optional[dict], data: dict) -> tuple[list, list]:
     fields = (issue or {}).get("fields") if isinstance((issue or {}).get("fields"), dict) else {}
     issue_links = fields.get("issuelinks") if isinstance(fields.get("issuelinks"), list) else []
     remote = []
@@ -825,7 +826,7 @@ def _link_rows(issue: dict | None, data: dict) -> tuple[list, list]:
     return issue_links, remote
 
 
-def link_lines(issue: dict | None, data: dict) -> list[str]:
+def link_lines(issue: Optional[dict], data: dict) -> list[str]:
     issue_links, remote = _link_rows(issue, data)
     lines = []
     for row in issue_links:
@@ -1124,7 +1125,7 @@ def render_view(beam_path: Path, query: str, data: dict, args) -> str:
     return render_found(query, found, beam_path, cfg, data if isinstance(data, dict) else {}, args)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     import usage
 
     parser = argparse.ArgumentParser(

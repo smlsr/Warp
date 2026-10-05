@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.16
+
+- The version check passes when the working tree already matches main, so a pull request that was just merged is not marked failed. Script annotations use Optional instead of X | None so the scripts parse on Python 3.9.
+
+## 1.3.15
+
+- Skipped. No separate change; rolled into 1.3.16.
+
 ## 1.3.14
 
 - 1.3.14 version bump, no functional changes.

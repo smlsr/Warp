@@ -136,3 +136,46 @@ class AgainstMainTests(unittest.TestCase):
         self.assertEqual(check_version.against(ROOT, "origin/main"), [])
         proc = run(CHECK, "--against", "origin/main", cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+class AgainstRefTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        _git(self.tmp, "init", "-q", "-b", "main")
+        _git(self.tmp, "config", "user.email", "warp-test@example.com")
+        _git(self.tmp, "config", "user.name", "Warp Test")
+        (self.tmp / "VERSION").write_text("1.3.14\n")
+        (self.tmp / "README.md").write_text("hello\n")
+        _git(self.tmp, "add", "VERSION", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "base")
+
+    def test_equal_version_on_the_same_tree_passes(self):
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+
+    def test_equal_version_with_a_tracked_change_fails(self):
+        (self.tmp / "README.md").write_text("changed\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.14 is not newer than main (1.3.14)"])
+
+    def test_committed_change_without_a_bump_fails(self):
+        _git(self.tmp, "checkout", "-q", "-b", "feature")
+        (self.tmp / "README.md").write_text("changed\n")
+        _git(self.tmp, "add", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "change")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.14 is not newer than main (1.3.14)"])
+
+    def test_newer_version_passes_when_the_tree_differs(self):
+        (self.tmp / "VERSION").write_text("1.3.16\n")
+        (self.tmp / "README.md").write_text("changed\n")
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+
+    def test_older_version_fails(self):
+        (self.tmp / "VERSION").write_text("1.3.13\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.13 is not newer than main (1.3.14)"])

@@ -51,6 +51,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -86,7 +87,7 @@ class ConfigError(Exception):
     pass
 
 
-def find_root(arg: str | None) -> Path:
+def find_root(arg: Optional[str]) -> Path:
     if arg:
         return Path(arg).resolve()
     try:
@@ -102,7 +103,7 @@ def find_root(arg: str | None) -> Path:
     return Path.cwd().resolve()
 
 
-def cursor_home(arg: str | None) -> Path:
+def cursor_home(arg: Optional[str]) -> Path:
     if arg:
         return Path(arg).expanduser().resolve()
     return (Path.home() / ".cursor").resolve()
@@ -330,7 +331,7 @@ def server_keys_in(doc: object) -> list[str]:
     return keys
 
 
-def name_variants(key: str, source: str, plugin: str | None) -> list[str]:
+def name_variants(key: str, source: str, plugin: Optional[str]) -> list[str]:
     names = [key]
     if source == "user":
         names.append(f"user-{key}")
@@ -347,7 +348,7 @@ def discover_servers(root: Path, home: Path) -> list[dict]:
 
     A bad file is skipped. This does not call the network.
     """
-    ordered: list[tuple[str, Path, str | None]] = []
+    ordered: list[tuple[str, Path, Optional[str]]] = []
     for source, path in (("user", home / "mcp.json"), ("project", root / ".cursor" / "mcp.json")):
         if path.is_file():
             ordered.append((source, path, None))
@@ -420,8 +421,8 @@ def build_pairs(
     with_git: bool,
     *,
     allow_server_tools: bool = False,
-    discovered: list[dict] | None = None,
-    extra_servers: list[str] | None = None,
+    discovered: Optional[list[dict]] = None,
+    extra_servers: Optional[list[str]] = None,
 ) -> list[tuple[str, str]]:
     groups = ["slack", "teams"]
     if with_jira:
@@ -467,7 +468,7 @@ def glob_match(pattern: str, value: str) -> bool:
     return re.fullmatch(pat, value.casefold()) is not None
 
 
-def split_allow_entry(entry: str) -> tuple[str, str] | None:
+def split_allow_entry(entry: str) -> Optional[tuple[str, str]]:
     text = entry.strip()
     if text.startswith("Mcp(") and text.endswith(")"):
         text = text[4:-1]
@@ -677,13 +678,13 @@ def user_scope(home: Path) -> Scope:
     return Scope("user", home, USER_REL)
 
 
-def read_text(path: Path) -> str | None:
+def read_text(path: Path) -> Optional[str]:
     if not path.is_file():
         return None
     return path.read_text()
 
 
-def load_doc(path: Path) -> tuple[dict, str | None, bool]:
+def load_doc(path: Path) -> tuple[dict, Optional[str], bool]:
     text = read_text(path)
     if text is None:
         return {}, None, False
@@ -691,7 +692,7 @@ def load_doc(path: Path) -> tuple[dict, str | None, bool]:
     return as_dict(doc, path), text, comments
 
 
-def load_manifest(scope: Scope) -> dict | None:
+def load_manifest(scope: Scope) -> Optional[dict]:
     path = scope.path("manifest")
     text = read_text(path)
     if text is None:
@@ -753,7 +754,7 @@ def empty_doc(doc: dict) -> bool:
     return not doc or set(doc) <= {"version"}
 
 
-def diff_text(path: Path, old: str | None, new: str | None) -> str:
+def diff_text(path: Path, old: Optional[str], new: Optional[str]) -> str:
     old_lines = [] if old is None else old.splitlines(True)
     new_lines = [] if new is None else new.splitlines(True)
     fromfile = "/dev/null" if old is None else str(path)
@@ -778,7 +779,7 @@ def rmdir_empty(path: Path) -> None:
 
 
 class Change:
-    def __init__(self, path: Path, old: str | None, new: str | None, executable: bool = False, keep_backup: bool = True):
+    def __init__(self, path: Path, old: Optional[str], new: Optional[str], executable: bool = False, keep_backup: bool = True):
         self.path = path
         self.old = old
         self.new = new
@@ -860,7 +861,7 @@ def pairs_doc(pairs: list[tuple[str, str]]) -> dict:
 
 def manifest_doc(
     scope: Scope,
-    prev: dict | None,
+    prev: Optional[dict],
     added_perm: list[str],
     added_cli: list[str],
     hook_added: bool,
@@ -883,7 +884,7 @@ def manifest_doc(
     return doc
 
 
-def remember_original(originals: dict, rel: str, old: str | None, new: str) -> None:
+def remember_original(originals: dict, rel: str, old: Optional[str], new: str) -> None:
     """Keep the first pre-existing body so revoke can put that file back."""
     if old is not None and rel not in originals and old != new:
         originals[rel] = old
@@ -970,7 +971,7 @@ def allow_changes(scope: Scope, pairs: list[tuple[str, str]]) -> tuple[list[Chan
     remember_original(originals, scope.rel["pairs"], pairs_old, pairs_new)
     manifest = manifest_doc(scope, prev, added_perm, added_cli, hook_added, created, originals)
 
-    def json_change(path: Path, doc: dict, old: str | None) -> Change | None:
+    def json_change(path: Path, doc: dict, old: Optional[str]) -> Optional[Change]:
         if not doc and old is None:
             return None
         new = dump(doc) if doc else None
@@ -1043,7 +1044,7 @@ def revoke_changes(scope: Scope) -> list[Change]:
     if manifest.get("hookCommandAdded") and isinstance(manifest.get("hookCommand"), str):
         remove_hook(hooks_doc, manifest["hookCommand"])
 
-    def file_change(key: str, doc: dict, old: str | None) -> Change | None:
+    def file_change(key: str, doc: dict, old: Optional[str]) -> Optional[Change]:
         rel = scope.rel[key]
         if old is None:
             return None
@@ -1068,7 +1069,7 @@ def revoke_changes(scope: Scope) -> list[Change]:
 
     originals = manifest.get("originals") if isinstance(manifest.get("originals"), dict) else {}
 
-    def owned(key: str, old: str | None) -> None:
+    def owned(key: str, old: Optional[str]) -> None:
         if old is None:
             return
         rel = scope.rel[key]
@@ -1094,7 +1095,7 @@ def revoke_project(root: Path) -> int:
         return 1
 
 
-def apply_project(root: Path, *, dry: bool, with_git: bool, home: Path | None = None) -> list[tuple[str, str]]:
+def apply_project(root: Path, *, dry: bool, with_git: bool, home: Optional[Path] = None) -> list[tuple[str, str]]:
     """Project allowlist used by /warp-init. Does not touch ~/.cursor files."""
     home_path = home or cursor_home(None)
     cfg = herald_fmt.read_config(root)
@@ -1268,7 +1269,7 @@ A bare help after an option that takes a value stays that value.
 """
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     import usage
 
     p = argparse.ArgumentParser(

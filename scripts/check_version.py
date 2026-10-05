@@ -3,6 +3,11 @@
 
   check_version.py                  this repo: VERSION, manifest, CHANGELOG
   check_version.py --against REF    also require this version to be newer than REF
+
+An equal version passes when the working tree matches REF. That is a pull
+request that is already merged: the check often starts after main has the
+same tree, and the version is no longer newer. A change that leaves the
+version equal to REF still fails.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import version  # noqa: E402
@@ -63,20 +69,33 @@ def version_at(ref: str, cwd: Path) -> str:
     raise ValueError(f"no version at {ref}")
 
 
+def trees_match(root: Path, ref: str) -> bool:
+    """True when no tracked path differs from ref. Untracked files do not count."""
+    out = subprocess.run(
+        ["git", "diff", "--quiet", ref, "--"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    return out.returncode == 0
+
+
 def against(root: Path, ref: str) -> list[str]:
     current = version.read_version_file(root) or version.read_manifest_version(root)
     if not current:
         return ["no current version to compare"]
     try:
         base = version_at(ref, root)
-        if parse(current) <= parse(base):
-            return [f"version {current} is not newer than {ref} ({base})"]
+        if parse(current) > parse(base):
+            return []
+        if parse(current) == parse(base) and trees_match(root, ref):
+            return []
     except ValueError as e:
         return [str(e)]
-    return []
+    return [f"version {current} is not newer than {ref} ({base})"]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Check Warp version files")
     p.add_argument("--root", default=str(version.PLUGIN_ROOT))
     p.add_argument("--against", help="git ref that this version must be newer than")

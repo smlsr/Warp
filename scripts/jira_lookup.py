@@ -12,6 +12,7 @@ An ambiguous result is reported and not narrowed. A missing field is skipped.
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 EXTERNAL_FIELD_NAMES = (
     "External ID",
@@ -45,7 +46,7 @@ def clause_for(token: str) -> str:
     return f'"{safe}"'
 
 
-def jql_equals(clause: str, value: str, project: str | None) -> str:
+def jql_equals(clause: str, value: str, project: Optional[str]) -> str:
     safe = str(value).replace("\\", "\\\\").replace('"', '\\"')
     body = f'{clause} = "{safe}"'
     if project:
@@ -53,7 +54,7 @@ def jql_equals(clause: str, value: str, project: str | None) -> str:
     return body
 
 
-def summary_jql(summary: str, project: str | None) -> str:
+def summary_jql(summary: str, project: Optional[str]) -> str:
     safe = str(summary).replace("\\", "\\\\").replace('"', '\\"')
     body = f'summary ~ "{safe}"'
     if project:
@@ -68,7 +69,7 @@ def _norm_name(name: str) -> str:
 _CANDIDATE_NORMS = {_norm_name(name) for name in EXTERNAL_FIELD_NAMES}
 
 
-def _issue_key(issue: dict, prefixes: list[str]) -> str | None:
+def _issue_key(issue: dict, prefixes: list[str]) -> Optional[str]:
     raw = issue.get("key") or issue.get("jiraKey") or ""
     key = str(raw).strip().upper()
     if not KEY_RE.match(key):
@@ -91,7 +92,7 @@ def field_clause(field: dict) -> str:
     return clause_for(str(field.get("name") or ""))
 
 
-def external_clauses(configured: str, fields: list[dict] | None) -> tuple[list[tuple[str, str]], list[str]]:
+def external_clauses(configured: str, fields: Optional[list[dict]]) -> tuple[list[tuple[str, str]], list[str]]:
     """Clauses to query, then field-not-found notes. Configured field is first."""
     catalog = list(fields or [])
     clauses: list[tuple[str, str]] = []
@@ -145,7 +146,7 @@ def external_clauses(configured: str, fields: list[dict] | None) -> tuple[list[t
     return clauses, notes
 
 
-def plan_queries(tid: str, summary: str, project: str | None, configured: str) -> list[dict]:
+def plan_queries(tid: str, summary: str, project: Optional[str], configured: str) -> list[dict]:
     """JQL the agent should run, in resolution order, before field discovery narrows it."""
     rows = []
     clauses, _notes = external_clauses(configured, None)
@@ -280,7 +281,7 @@ def _search(client, jql: str, notes: list[str], label: str):
         return None
 
 
-def resolve_ticket(tid: str, summary: str, project: str | None, configured: str, client, prefixes: list[str] | None = None) -> dict:
+def resolve_ticket(tid: str, summary: str, project: Optional[str], configured: str, client, prefixes: Optional[list[str]] = None) -> dict:
     """One ticket. Does not write. `client.search` raises FieldNotFound when Jira has no such field."""
     prefixes = prefixes or []
     notes: list[str] = []

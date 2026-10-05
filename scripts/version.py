@@ -18,13 +18,14 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 INSTALLED_REL = Path(".cursor/plugins/warp")
 RECORDED_REL = Path(".warp/version")
 
 
-def read_version_file(root: Path) -> str | None:
+def read_version_file(root: Path) -> Optional[str]:
     path = root / "VERSION"
     if not path.is_file():
         return None
@@ -32,7 +33,7 @@ def read_version_file(root: Path) -> str | None:
     return text or None
 
 
-def read_manifest_version(root: Path) -> str | None:
+def read_manifest_version(root: Path) -> Optional[str]:
     path = root / ".cursor-plugin" / "plugin.json"
     if not path.is_file():
         return None
@@ -43,12 +44,12 @@ def read_manifest_version(root: Path) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def version_of(root: Path) -> str | None:
+def version_of(root: Path) -> Optional[str]:
     """VERSION if that file is present, otherwise the manifest."""
     return read_version_file(root) or read_manifest_version(root)
 
 
-def recorded_version(root: Path) -> str | None:
+def recorded_version(root: Path) -> Optional[str]:
     path = root / RECORDED_REL
     if not path.is_file():
         return None
@@ -56,7 +57,7 @@ def recorded_version(root: Path) -> str | None:
     return text or None
 
 
-def label(version: str | None) -> str:
+def label(version: Optional[str]) -> str:
     return f"Warp v{version}" if version else "Warp"
 
 
@@ -81,7 +82,7 @@ def describe(root: Path) -> str:
     return "\n".join(lines)
 
 
-def find_root(arg: str | None) -> Path:
+def find_root(arg: Optional[str]) -> Path:
     if arg:
         return Path(arg).resolve()
     try:
@@ -95,7 +96,7 @@ def find_root(arg: str | None) -> Path:
     return Path.cwd().resolve()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Print the Warp plugin version",
         epilog="examples:\n  python3 scripts/version.py ?\n  python3 scripts/version.py --root .\n\n"

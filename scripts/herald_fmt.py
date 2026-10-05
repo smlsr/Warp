@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 GENERIC_FOLDERS = {"workspace"}
 SLACK_SECTION_MAX = 2900
@@ -81,7 +82,7 @@ def read_config(root: Path) -> dict:
     return cfg
 
 
-def repo_web(root: Path) -> tuple[str | None, str | None, str | None]:
+def repo_web(root: Path) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """(web url, branch, host kind) from the origin remote, or Nones."""
     remote = git(root, "remote", "get-url", "origin")
     branch = git(root, "symbolic-ref", "--short", "-q", "HEAD") or None
@@ -102,7 +103,7 @@ def repo_name(root: Path) -> str:
     return web.rstrip("/").rsplit("/", 1)[-1] if web else root.name
 
 
-def project_name(root: Path, cfg: dict) -> str | None:
+def project_name(root: Path, cfg: dict) -> Optional[str]:
     """projectName, else jiraProject, else the workspace folder. None if it adds nothing."""
     repo = repo_name(root)
     for cand in (cfg.get("projectName"), cfg.get("jiraProject"), root.name):
@@ -111,7 +112,7 @@ def project_name(root: Path, cfg: dict) -> str | None:
     return None
 
 
-def header(root: Path, cfg: dict | None = None) -> str:
+def header(root: Path, cfg: Optional[dict] = None) -> str:
     root = root.resolve()
     cfg = cfg or read_config(root)
     proj = project_name(root, cfg)
@@ -153,7 +154,7 @@ def _teams(v) -> str:
     return f"[{_md_esc(v[0])}]({v[1]})" if _link(v) else _md_esc(str(v))
 
 
-def render(head: str, title: str, intro: str | None = None, facts=(), bullets=(), links=(), footer: str | None = None) -> dict:
+def render(head: str, title: str, intro: Optional[str] = None, facts=(), bullets=(), links=(), footer: Optional[str] = None) -> dict:
     """facts: (key, value); a value may be (label, url). links: (label, url|None)."""
     link_vals = [(l, u) if u else l for l, u in links]
     plain = [head, title]

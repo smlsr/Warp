@@ -7,6 +7,7 @@ value of an option (`--folder help` stays a folder name). `?` is always help.
 from __future__ import annotations
 
 import sys
+from typing import Optional
 
 # Flags that do not take the next argument.
 SWITCHES = {
@@ -47,7 +48,7 @@ SWITCHES = {
 }
 
 
-def normalize_argv(argv: list[str] | None, extra_switches: set[str] | None = None) -> list[str]:
+def normalize_argv(argv: Optional[list[str]], extra_switches: Optional[set[str]] = None) -> list[str]:
     switches = SWITCHES | set(extra_switches or ())
     args = list(sys.argv[1:] if argv is None else argv)
     out: list[str] = []

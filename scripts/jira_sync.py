@@ -41,6 +41,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # Tool names live in mcp_tools.py. Re-exported so callers can keep using these.
 import jira_lookup
@@ -99,7 +100,7 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def settings(beam_path: Path, beam: dict | None = None) -> dict:
+def settings(beam_path: Path, beam: Optional[dict] = None) -> dict:
     """Defaults, then the beam's config copy, then .warp/config.yaml. A missing key keeps the default."""
     out = dict(DEFAULTS)
     sources = [(beam or {}).get("config") or {}]
@@ -130,14 +131,14 @@ def settings(beam_path: Path, beam: dict | None = None) -> dict:
     return out
 
 
-def normalize_key(value) -> str | None:
+def normalize_key(value) -> Optional[str]:
     if not isinstance(value, str):
         return None
     key = value.strip().upper()
     return key if KEY_RE.match(key) else None
 
 
-def prefixes_from(cfg: dict | None) -> list[str]:
+def prefixes_from(cfg: Optional[dict]) -> list[str]:
     """Project prefixes that confirm a Jira key: jiraProject, then jiraKeyPrefixes."""
     cfg = cfg or {}
     found: list[str] = []
@@ -171,7 +172,7 @@ def prefix_ok(key: str, prefixes: list[str]) -> bool:
     return key.split("-", 1)[0] in prefixes
 
 
-def jira_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
+def jira_key(ticket: dict, prefixes: Optional[list[str]] = None) -> Optional[str]:
     """Issue key safe to send to Jira.
 
     A value equal to the plan id is not sent unless the ticket id itself came from
@@ -200,7 +201,7 @@ def jira_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
     return key
 
 
-def infer_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
+def infer_key(ticket: dict, prefixes: Optional[list[str]] = None) -> Optional[str]:
     """Id, summary, or branch, and only when the project prefix is configured.
 
     With no jiraProject and no jiraKeyPrefixes this returns nothing. WV-01 is not
@@ -265,7 +266,7 @@ def read_map_file(beam_path: Path) -> dict[str, str]:
         return {}
 
 
-def all_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+def all_meta(beam_path: Optional[Path], cfg: dict) -> dict[str, dict]:
     """Plan id to key from jiraKeyMap and .warp/jira-map.json, including prefixes that will be rejected."""
     merged = parse_key_meta(cfg.get("jiraKeyMap"))
     if beam_path is not None:
@@ -278,7 +279,7 @@ def all_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
     return merged
 
 
-def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+def combined_meta(beam_path: Optional[Path], cfg: dict) -> dict[str, dict]:
     merged = all_meta(beam_path, cfg)
     prefixes = prefixes_from(cfg)
     if not prefixes:
@@ -290,11 +291,11 @@ def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
     }
 
 
-def combined_map(beam_path: Path | None, cfg: dict) -> dict[str, str]:
+def combined_map(beam_path: Optional[Path], cfg: dict) -> dict[str, str]:
     return {tid: row["key"] for tid, row in combined_meta(beam_path, cfg).items()}
 
 
-def remember_map(beam_path: Path, tid: str, key: str, source: str | None = None, confidence: str | None = None) -> None:
+def remember_map(beam_path: Path, tid: str, key: str, source: Optional[str] = None, confidence: Optional[str] = None) -> None:
     path = beam_path.parent / MAP_NAME
     current: dict = {}
     if path.is_file():
@@ -314,7 +315,7 @@ def remember_map(beam_path: Path, tid: str, key: str, source: str | None = None,
     path.write_text(json.dumps(current, indent=2) + "\n")
 
 
-def assign_keys(tickets, cfg: dict, beam_path: Path | None = None, previous: dict | None = None) -> list[str]:
+def assign_keys(tickets, cfg: dict, beam_path: Optional[Path] = None, previous: Optional[dict] = None) -> list[str]:
     """Set jiraKey, jiraKeySource, and jiraMapping. Manual keys on `previous` survive a rescan."""
     prefixes = prefixes_from(cfg)
     key_map = combined_meta(beam_path, cfg)
@@ -460,7 +461,7 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
     return out
 
 
-def pick(transitions: list[dict], target: str, current: dict | None = None, allow_category: bool = True, kind: str = "start") -> dict:
+def pick(transitions: list[dict], target: str, current: Optional[dict] = None, allow_category: bool = True, kind: str = "start") -> dict:
     """Choose one of the transitions Jira offers. Names are matched case-insensitively.
 
     kind: start (fall back to an in-progress category), qa (name only; a Done issue
@@ -590,7 +591,7 @@ def instruction(p: dict) -> str:
     )
 
 
-def _bodies(ticket: dict, root: Path, mode: str, prefixes: list[str] | None = None) -> dict[str, str]:
+def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] = None) -> dict[str, str]:
     key = jira_key(ticket, prefixes) or "unmapped"
     head = _header(root, str(key))
     pr = ticket.get("pr") or {}
@@ -618,13 +619,13 @@ def _bodies(ticket: dict, root: Path, mode: str, prefixes: list[str] | None = No
     }
 
 
-def _comment_action(ticket: dict, where: str, event: str, body: str) -> dict | None:
+def _comment_action(ticket: dict, where: str, event: str, body: str) -> Optional[dict]:
     if event in _comments(ticket, where):
         return None
     return {"type": "comment", "where": where, "event": event, "body": body}
 
 
-def event_for(ticket: dict, prev: str, new: str) -> str | None:
+def event_for(ticket: dict, prev: str, new: str) -> Optional[str]:
     if new == prev:
         return None
     if new == "claimed" and prev not in ACTIVE:
@@ -799,7 +800,7 @@ def _snapshot(prev, ticket: dict) -> dict:
     }
 
 
-def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: str | None = None) -> None:
+def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: Optional[str] = None) -> None:
     """Called by beam.py set. Prints what the agent must do. Never raises.
 
     `prev` is a snapshot dict from before the edit, or a status string.
@@ -880,10 +881,10 @@ def record(
     tid: str,
     event: str,
     result: str,
-    frm: str | None,
-    to: str | None,
-    detail: str | None,
-    error: str | None = None,
+    frm: Optional[str],
+    to: Optional[str],
+    detail: Optional[str],
+    error: Optional[str] = None,
 ) -> str:
     beam = _load(beam_path)
     t = beam["tickets"].get(tid)
@@ -939,11 +940,11 @@ def record_resolved(
     beam_path: Path,
     tid: str,
     key: str,
-    issue_id: str | None = None,
-    cloud_id: str | None = None,
-    status: str | None = None,
+    issue_id: Optional[str] = None,
+    cloud_id: Optional[str] = None,
+    status: Optional[str] = None,
     source: str = "external",
-    confidence: str | None = None,
+    confidence: Optional[str] = None,
 ) -> str:
     """Write a lookup hit onto the beam and the map file. Does not call Jira.
 
@@ -1022,7 +1023,7 @@ def record_resolved(
     return "\n".join(lines)
 
 
-def record_comment(beam_path: Path, tid: str, where: str, event: str, comment_id: str | None) -> str:
+def record_comment(beam_path: Path, tid: str, where: str, event: str, comment_id: Optional[str]) -> str:
     beam = _load(beam_path)
     t = beam["tickets"].get(tid)
     if not t:
@@ -1360,7 +1361,7 @@ def link_lines(ticket: dict, cfg: dict, beam_path: Path) -> str:
     return f"status: unmapped\nsource: {source}\nreason: {reason}\nfix: {fix}\n{hint}{report}"
 
 
-def why_nothing_linked(tickets: list[dict], cfg: dict, beam_path: Path) -> str | None:
+def why_nothing_linked(tickets: list[dict], cfg: dict, beam_path: Path) -> Optional[str]:
     """One line when every ticket in this report is unmapped. Omitted when any key is confirmed."""
     if not tickets:
         return None
@@ -1408,7 +1409,7 @@ def why_nothing_linked(tickets: list[dict], cfg: dict, beam_path: Path) -> str |
     return f"why nothing linked: see each ticket. {tail}"
 
 
-def apply_known_map(beam_path: Path, only_ids: list[str] | None = None, dry_run: bool = False) -> list[str]:
+def apply_known_map(beam_path: Path, only_ids: Optional[list[str]] = None, dry_run: bool = False) -> list[str]:
     """Copy map-file and jiraKeyMap keys onto tickets with no confirmed key.
 
     A manual or forced key is left alone. A stored key that is not confirmed is
@@ -1452,9 +1453,9 @@ def apply_known_map(beam_path: Path, only_ids: list[str] | None = None, dry_run:
 
 def verify(
     beam_path: Path,
-    tid: str | None = None,
+    tid: Optional[str] = None,
     link: bool = False,
-    results: Path | None = None,
+    results: Optional[Path] = None,
     dry_run: bool = False,
 ) -> str:
     """Print each ticket. With no flags this writes nothing.
@@ -1507,7 +1508,7 @@ def verify(
     return "\n\n".join(parts)
 
 
-def catchup(beam_path: Path, tid: str | None, write: bool) -> str:
+def catchup(beam_path: Path, tid: Optional[str], write: bool) -> str:
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
     mode = _mode(beam_path)
@@ -1584,7 +1585,7 @@ def list_mappings(beam: dict, cfg: dict) -> str:
     return "\n".join(lines)
 
 
-def _parse_set(raw: str) -> tuple[str, str] | None:
+def _parse_set(raw: str) -> Optional[tuple[str, str]]:
     if "=" not in raw:
         return None
     tid, key = raw.split("=", 1)
@@ -1716,7 +1717,7 @@ def _issue_summary(issue: dict) -> str:
     return str(issue.get("summary") or fields.get("summary") or "").strip()
 
 
-def _issue_key(issue: dict) -> str | None:
+def _issue_key(issue: dict) -> Optional[str]:
     return normalize_key(str(issue.get("key") or issue.get("jiraKey") or ""))
 
 
@@ -1779,7 +1780,7 @@ def match_search(beam_path: Path, results_path: Path, yes: bool) -> str:
     return "\n".join(lines)
 
 
-def key_summary(beam: dict, cfg: dict | None = None) -> str:
+def key_summary(beam: dict, cfg: Optional[dict] = None) -> str:
     """`12 tickets: 9 keyed, 3 need mapping`."""
     cfg = cfg or {}
     prefixes = prefixes_from(cfg)
@@ -1809,7 +1810,7 @@ def external_id_jql(tid: str, cfg: dict) -> str:
     return jql
 
 
-def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None, write: bool = True) -> str:
+def prepare_resolve(beam_path: Path, only_ids: Optional[list[str]] = None, write: bool = True) -> str:
     """Write JQL for an exact external-id lookup. Does not call Jira and does not flag a miss."""
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
@@ -1930,7 +1931,7 @@ def _same_id(a: str, b: str) -> bool:
     return str(a).strip().casefold() == str(b).strip().casefold()
 
 
-def match_external(tid: str, issues: list, field: str, prefixes: list[str]) -> tuple[str | None, str]:
+def match_external(tid: str, issues: list, field: str, prefixes: list[str]) -> tuple[Optional[str], str]:
     """Exact external-id match. One issue with no field is the JQL hit. Several keys are ambiguous."""
     exact: list[str] = []
     bare: list[str] = []
@@ -2040,7 +2041,7 @@ def apply_external(beam_path: Path, results_path: Path) -> str:
     )
 
 
-def _store_found(beam_path: Path, ticket: dict, tid: str, key: str, source: str, confidence: str | None) -> None:
+def _store_found(beam_path: Path, ticket: dict, tid: str, key: str, source: str, confidence: Optional[str]) -> None:
     ticket["jiraKey"] = key
     ticket["jiraKeySource"] = source
     ticket["jiraKeyConfidence"] = confidence

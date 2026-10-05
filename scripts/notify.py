@@ -30,6 +30,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,7 +41,7 @@ OUTBOX = "outbox.md"
 MAX_LINKS = 12
 
 
-def file_url(rel: str, web: str | None, branch: str | None, kind: str | None) -> str | None:
+def file_url(rel: str, web: Optional[str], branch: Optional[str], kind: Optional[str]) -> Optional[str]:
     """A browsable link when the host layout is known, else None (use the path)."""
     if not (web and branch and kind):
         return None
@@ -142,7 +143,7 @@ def outbox(root: Path, text: str) -> Path:
     return path
 
 
-def build(kind: str, root: Path, info: dict | None = None, msg: dict | None = None) -> dict:
+def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict] = None) -> dict:
     """Write the payload and return it. Never raises. `msg` is a prebuilt herald_fmt message."""
     root = root.resolve()
     payload = {"kind": kind, "text": "", "action": "skip", "targets": [], "notes": []}

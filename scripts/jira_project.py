@@ -17,6 +17,7 @@ import re
 import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Optional
 
 KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]+)-(\d+)\b")
 PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
@@ -83,7 +84,7 @@ def repo_name(root: Path) -> str:
     return root.name
 
 
-def _prefix(raw: str) -> str | None:
+def _prefix(raw: str) -> Optional[str]:
     match = KEY_RE.fullmatch(str(raw or "").strip().upper())
     if not match:
         found = KEY_RE.findall(str(raw or "").upper())
@@ -93,7 +94,7 @@ def _prefix(raw: str) -> str | None:
     return match.group(1)
 
 
-def _add(bucket: list, prefix: str | None, source: str) -> None:
+def _add(bucket: list, prefix: Optional[str], source: str) -> None:
     if prefix and PREFIX_RE.fullmatch(prefix):
         bucket.append((prefix, source))
 
@@ -183,7 +184,7 @@ def _from_markdown(path: Path, source: str, plan: list, link: list, mention: lis
                 _add(mention, extra.split("-", 1)[0], source)
 
 
-def plan_files(root: Path, folder: Path | None = None) -> list[Path]:
+def plan_files(root: Path, folder: Optional[Path] = None) -> list[Path]:
     base = folder or root
     found = []
     if not base.is_dir():
@@ -207,7 +208,7 @@ def plan_files(root: Path, folder: Path | None = None) -> list[Path]:
     return found
 
 
-def gather(root: Path, folder: Path | None = None, branches: list[str] | None = None, commits: list[str] | None = None) -> dict:
+def gather(root: Path, folder: Optional[Path] = None, branches: Optional[list[str]] = None, commits: Optional[list[str]] = None) -> dict:
     """Collect prefix hits. Pass branches/commits to skip git (tests)."""
     plan: list = []
     link: list = []
@@ -360,7 +361,7 @@ def _outbox(root: Path, text: str) -> None:
         handle.write(f"\n## jiraProject\n\n{text}\n")
 
 
-def ensure(root: Path, *, write: bool = True, folder: Path | None = None, report_set: bool = False, branches: list[str] | None = None, commits: list[str] | None = None) -> str:
+def ensure(root: Path, *, write: bool = True, folder: Optional[Path] = None, report_set: bool = False, branches: Optional[list[str]] = None, commits: Optional[list[str]] = None) -> str:
     """Offline detection. Writes jiraProject only when it is empty and one prefix wins."""
     root = root.resolve()
     text = config_text(root)
@@ -585,7 +586,7 @@ def probe_queries(projects: list[str], ids: list[str], field: str = "externalId"
     return rows
 
 
-def _project_of(row: dict) -> str | None:
+def _project_of(row: dict) -> Optional[str]:
     raw = row.get("project")
     if raw and PREFIX_RE.fullmatch(str(raw).strip().upper()):
         return str(raw).strip().upper()
@@ -733,7 +734,7 @@ def record_probe(root: Path, data: dict, *, write: bool = True) -> str:
     return "\n".join(lines)
 
 
-def run_probe(root: Path, client: ProbeClient, projects: list[str], ids: list[str] | None = None, *, write: bool = True) -> str:
+def run_probe(root: Path, client: ProbeClient, projects: list[str], ids: Optional[list[str]] = None, *, write: bool = True) -> str:
     """Ask a fake or saved client, then record. Field errors are skipped, not fatal."""
     ids = ids if ids is not None else collect_ids(root, 3)
     field = config_value(config_text(root), "jiraExternalIdField") or "externalId"
