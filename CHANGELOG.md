@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.21
+
+- The first claimed ticket of a run that cannot be resolved to a live Jira issue is released and the run stops. First ticket means no ticket has `jira.startedAt` yet: no earlier ticket was linked and moved to In Progress. `record --result not-found` (or a failed claim whose error says the issue was not found) and a lookup that cannot resolve a real issue key both take this path. The ticket returns to `queued`. `agent`, `branch`, `jira.startedAt`, and `jira.previousStatus` are cleared. Implementation does not start and no pull request is opened. The run ends the same way as `/warp-stop`, with reason `tickets are not linked to Jira (WV-01 / WAR-1)`.
+- Herald posts one message: `Run stopped because Jira issues are not linked (WV-01 / WAR-1). Fix jiraProject, /warp-jira-match, or /warp-jira-external-id, then /warp-resume.` It does not also post that the claim still stands.
+- A later miss, after one ticket has `jira.startedAt`, stays a per-ticket alarm and does not stop the run. `jiraTransition: false` does not stop the run.
+
 ## 1.3.20
 
 - Plugin hooks do not run on cloud runners. Resume, stop notes, and the MCP allow check now run from scripts the Warp commands already call: `resume_hint.py`, `session_note.py`, and `mcp_allow.py`. Local IDE hooks only repeat those scripts.

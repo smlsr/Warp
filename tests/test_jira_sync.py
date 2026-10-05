@@ -239,10 +239,16 @@ class BeamFlowTests(unittest.TestCase):
         results.write_text(json.dumps({"T-3": []}))
         missed = run("jira_sync.py", "resolve", "--beam", self.beam, "--apply", "results.json", cwd=self.repo)
         self.assertEqual(missed.returncode, 0, missed.stdout + missed.stderr)
-        self.assertIn("no Jira key", missed.stdout)
-        self.assertIn("needs mapping", missed.stdout)
+        self.assertIn("no external-id match", missed.stdout)
         self.assertNotIn("MUST DO", missed.stdout)
-        self.assertIn("needs mapping", (self.repo / ".warp/outbox.md").read_text())
+        self.assertIn("Run stopped because Jira issues are not linked (T-3 / unresolved)", missed.stdout)
+        self.assertNotIn("The claim was not affected", missed.stdout)
+        self.assertEqual(self.beam_json()["tickets"]["T-3"]["status"], "queued")
+        self.assertIsNone(self.beam_json()["tickets"]["T-3"]["agent"])
+        self.assertIn(
+            "Run stopped because Jira issues are not linked (T-3 / unresolved)",
+            (self.repo / ".warp/outbox.md").read_text(),
+        )
 
     def test_only_the_claim_triggers_it(self):
         self.set("HOS-1", "claimed", "--agent", "s1")

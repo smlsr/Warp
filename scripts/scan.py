@@ -758,7 +758,7 @@ def bundle(beam_path: Path, dest: Path) -> None:
     print(f"wrote {dest}")
 
 
-def set_run(beam_path: Path, state: str, reason: Optional[str]) -> None:
+def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report: bool = True) -> None:
     beam = load_json(beam_path)
     beam["runState"] = state
     beam["paused"] = state != "running"
@@ -779,7 +779,7 @@ def set_run(beam_path: Path, state: str, reason: Optional[str]) -> None:
         try:
             import report
 
-            report.maybe_complete(beam_path, because_stopped=True)
+            report.maybe_complete(beam_path, announce=announce_report, because_stopped=True)
         except Exception as e:
             print(f"report: skipped ({e})")
 

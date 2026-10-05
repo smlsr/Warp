@@ -6,7 +6,7 @@ Warp uses Cursor's native MCP connections. Names in `.warp/config.yaml` are hint
 
 Server name: `jiraMcp` (default `atlassian`). That name is the Cursor MCP server, not a tool. Project `jiraProject`, if you set one.
 
-`jiraMcp: atlassian` does not by itself call Jira. `beam.py set` writes `.warp/jira-todo.json` and prints `jira: MUST DO`. The Shuttle or Reed in that turn has to call the tools and then `jira_sync.py record` / `record-comment`. `/warp-jira-check` prints what is still missing. A missing tool or a failed call writes `.warp/outbox.md` and a Herald message. The ticket is not stopped.
+`jiraMcp: atlassian` does not by itself call Jira. `beam.py set` writes `.warp/jira-todo.json` and prints `jira: MUST DO`. The Shuttle or Reed in that turn has to call the tools and then `jira_sync.py record` / `record-comment`. `/warp-jira-check` prints what is still missing. A missing tool or a failed call writes `.warp/outbox.md` and a Herald message. The ticket is not stopped, except the first claimed ticket of a run when Jira says the issue was not found or no real key can be resolved: that claim is released and the run stops. A later miss does not. `jiraTransition: false` does not stop the run.
 
 Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. If `jiraSite` is set (a site URL such as `https://yoursite.atlassian.net`), pass that as `cloudId`.
 
