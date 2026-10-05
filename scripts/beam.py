@@ -85,7 +85,7 @@ def auto_merge(size: str, auto_sizes: set[str]) -> bool:
     return size in auto_sizes
 
 
-def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict) -> dict:
+def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict, previous: dict | None = None) -> dict:
     sched = load_json(schedule_path)
     auto_sizes = set(config.get("autoMergeSizes", ["S", "M"]))
     tickets = {}
@@ -94,6 +94,8 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict)
         tickets[t["id"]] = {
             "id": t["id"],
             "jiraKey": t.get("jiraKey") or None,
+            "jiraKeySource": t.get("jiraKeySource"),
+            "jiraKeyForced": bool(t.get("jiraKeyForced")),
             "summary": t.get("summary", ""),
             "module": t.get("module"),
             "layer": t.get("layer"),
@@ -137,9 +139,7 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict)
     try:
         import jira_sync
 
-        for row in tickets.values():
-            if not jira_sync.jira_key(row):
-                row["jiraKey"] = jira_sync.infer_key(row)
+        jira_sync.assign_keys(list(tickets.values()), config, out, previous)
     except Exception:
         pass
     gates = []
@@ -374,7 +374,22 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     if args.branch is not None:
         t["branch"] = args.branch
     if args.jira is not None:
-        t["jiraKey"] = args.jira
+        import jira_sync
+
+        cfg = jira_sync.settings(beam_path, beam)
+        prefixes = jira_sync.prefixes_from(cfg)
+        key = jira_sync.normalize_key(args.jira)
+        if not key:
+            sys.exit(f"jira: {args.jira!r} is not a Jira issue key (PROJECT-123)")
+        if prefixes and not jira_sync.prefix_ok(key, prefixes) and not args.force:
+            sys.exit(
+                f"jira: {key} does not match jiraProject/jiraKeyPrefixes ({', '.join(prefixes)}). Pass --force to store it."
+            )
+        t["jiraKey"] = key
+        t["jiraKeySource"] = "manual"
+        t["jiraKeyForced"] = bool(args.force and prefixes and not jira_sync.prefix_ok(key, prefixes))
+        t["jiraMapping"] = "mapped"
+        jira_sync.remember_map(beam_path, args.id, key)
     if args.pr is not None:
         t["pr"]["url"] = args.pr
     if getattr(args, "sha", None) is not None:
@@ -398,10 +413,18 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     try:
         import jira_sync
 
-        if not jira_sync.jira_key(t):
-            inferred = jira_sync.infer_key(t)
+        cfg = jira_sync.settings(beam_path, beam)
+        prefixes = jira_sync.prefixes_from(cfg)
+        if t.get("jiraKey") and not jira_sync.jira_key(t, prefixes) and not t.get("jiraKeyForced"):
+            t["jiraKey"] = None
+            t["jiraKeySource"] = None
+            t["jiraMapping"] = "needs mapping"
+        if not jira_sync.jira_key(t, prefixes):
+            inferred = jira_sync.infer_key(t, prefixes)
             if inferred:
                 t["jiraKey"] = inferred
+                t["jiraKeySource"] = "inferred"
+                t["jiraMapping"] = "mapped"
     except Exception:
         jira_sync = None
     t["updatedAt"] = utcnow()
@@ -613,6 +636,9 @@ def default_config() -> dict:
         "notify": "verbose",
         "runner": "cloud",
         "jiraProject": "",
+        "jiraKeyPrefixes": "",
+        "jiraKeyMap": {},
+        "jiraExternalIdField": "externalId",
         "jiraTransition": True,
         "jiraInProgressStatus": "In Progress",
         "jiraRestoreOnRelease": False,
@@ -638,7 +664,9 @@ examples:
 
 Subcommands: ingest, ready, set, spend, gate, pause, resume, board, check, eta.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
---via local|connected, --bugbot, --ci, --alarm, --attempts.
+--via local|connected, --bugbot, --ci, --alarm, --attempts, --force.
+--jira KEY is rejected when it does not match jiraProject or jiraKeyPrefixes,
+unless --force is set. A plan id is not a Jira key.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
@@ -672,6 +700,7 @@ def main() -> None:
     ps.add_argument("--agent")
     ps.add_argument("--branch")
     ps.add_argument("--jira")
+    ps.add_argument("--force", action="store_true", help="store a Jira key whose project prefix is not configured")
     ps.add_argument("--pr")
     ps.add_argument("--sha", help="merge commit sha, stored on pr.sha and included in the Jira comment")
     ps.add_argument("--via", choices=["local", "connected"], help="how this merge happened; local skips pull-request comments")

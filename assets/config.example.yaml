@@ -23,6 +23,18 @@ runner: cloud
 # runner: local
 
 jiraProject: ""
+# Jira project key, for example WAR. A plan id is a Jira issue only when its
+# prefix matches this or jiraKeyPrefixes. WV-01 is not WAR-1.
+jiraKeyPrefixes: ""
+# Extra project prefixes, comma-separated, that confirm a Jira key.
+# jiraKeyPrefixes: "WAR, HOS"
+jiraKeyMap: {}
+# Optional plan-id to issue-key map. .warp/jira-map.json is merged on top.
+# jiraKeyMap: {"WV-01": "WAR-1"}
+jiraExternalIdField: externalId
+# Field on the Jira issue matched to the plan id. Scan and claim store a key
+# when that field equals the plan id on exactly one issue.
+# jiraExternalIdField: "External issue ID"
 jiraTransition: true
 # On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
 # Needs the Jira MCP server; without it Warp logs a note and the claim goes on.

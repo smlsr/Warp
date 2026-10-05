@@ -138,10 +138,13 @@ class LifecycleTests(unittest.TestCase):
         git(repo, "init", "-q", "-b", "main")
         git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
         (repo / "CURSOR_PLAN.md").write_text(PLAN)
+        (repo / ".warp").mkdir(parents=True)
+        cfg = "jiraProject: ABC\n"
+        if mode == "local":
+            cfg += "pushMerge: false\n"
+        (repo / ".warp/config.yaml").write_text(cfg)
         r = run(repo, "scan.py", "scan")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        if mode == "local":
-            (repo / ".warp/config.yaml").write_text("pushMerge: false\n")
         return repo
 
     def beam(self, repo):

@@ -20,6 +20,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-export` | `scan.py export` |
 | `/warp-import` | `scan.py import` |
 | `/warp-jira-check` | `jira_sync.py verify` and `catchup` |
+| `/warp-jira-map` | `jira_sync.py map` |
 | `/warp-allow-notify` | `allow_notify.py` |
 | `/warp-version` | `version.py` |
 | `/warp-uninstall` | `install.py uninstall` |
@@ -81,6 +82,8 @@ With no folder, plans in more than one folder are reported and the richest plan 
 
 Looks for `WARP_PLAN.json`, `schedule.json`, `CURSOR_PLAN.md`, a Jira ticket JSON export, or a markdown table with `id` and `deps`. Writes `.warp/beam.json` and `.warp/scan.json`. `runState` is `stopped`. A successful scan writes `.warp/notify-post.json` with the header `Warp | <repo> / <project>` and a footer that starts with `Warp v<version>`. `notify: quiet` posts nothing. No channel, or no server: the text goes to `.warp/outbox.md`. A failed scan posts nothing.
 
+Jira keys already on the plan, in a Jira export, or in `.warp/jira-map.json` / `jiraKeyMap` are stored during the scan. The script then prints a line like `12 tickets: 9 keyed, 3 need mapping`. For the ones still open it writes `.warp/jira-resolve.json`. When Jira is connected, the agent searches `jiraExternalIdField` (default `externalId`) and `jira_sync.py resolve --apply` stores an exact single match. That is part of `/warp-scan`, not a separate command. `/warp-jira-map` is only for tickets that stay unmapped or ambiguous.
+
 Other `scan.py` subcommands: `export` (`--beam`, `--out`), `import` (`--plan`, `--beam`, `--keep-status`), `status` (`--beam`), `bundle` (`--beam`, `--out` default `.warp/warp-review.zip`), `start`, `stop`, `pause`, `resume` (`--beam`, `--reason`).
 
 ## /warp-uninstall
@@ -127,6 +130,7 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | `getTransitionsForJiraIssue` | transitions offered now. Some servers call this `listJiraIssueTransitions` |
 | `transitionJiraIssue` | the id `jira_sync.py pick` chose |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue` |
+| `searchJiraIssuesUsingJql` | Scan and claim: exact `externalId` match, stored with no confirm step. `/warp-jira-map --search` is the optional summary search, and those proposals wait for `--yes` |
 
 | When | Jira | Pull request |
 |---|---|---|
@@ -139,9 +143,39 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | Release to queued | no move, unless `jiraRestoreOnRelease` is true | none |
 | Pause / stop | no change | none |
 
-`/warp-jira-check` runs `jira_sync.py verify` (print only) and `catchup` (writes `.warp/jira-todo.json`). `catchup --write` stores a key inferred from the id, summary, or branch (`ABC-123`, not `T-3`). The script does not call Jira.
+A plan id is not a Jira issue key. `WV-01` is not sent as `WV-01`. A key is confirmed when it is on the plan or export, in the map file, its project prefix matches `jiraProject` or `jiraKeyPrefixes`, or Jira has exactly one issue whose external id equals the plan id. Otherwise `jiraKey` stays empty and the ticket is `needs mapping`. `/warp-scan` prints `N tickets: K keyed, U need mapping` and, when Jira is connected, resolves the external-id matches before that summary is final. A claim on an unmapped ticket tries that search first. Only a miss or an ambiguous result writes `.warp/outbox.md` and a Herald payload, and it does not call `transitionJiraIssue`.
+
+`/warp-jira-check` runs `jira_sync.py verify` (print only) and `catchup` (writes `.warp/jira-todo.json` for tickets that have a key). `catchup --write` stores an inferred key only when the prefix matches. The script does not call Jira. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards.
+
+## /warp-jira-map
+
+Not a required step. `/warp-scan` and the first claim already store a key that is on the plan, in the map file, or an exact single external-id match in Jira. Use this command to review the list, to set a leftover or an ambiguous ticket, or to override a key.
 
 ```bash
+python3 <plugin>/scripts/jira_sync.py map
+python3 <plugin>/scripts/jira_sync.py map --set WV-01=WAR-1
+python3 <plugin>/scripts/jira_sync.py map --import mappings.csv
+python3 <plugin>/scripts/jira_sync.py map --search
+python3 <plugin>/scripts/jira_sync.py map --match results.json --yes
+python3 <plugin>/scripts/beam.py set --beam .warp/beam.json --id WV-01 --jira WAR-1
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Print each ticket id and its key, or `unmapped`. |
+| `--set ID=KEY` | Store one pair on the ticket and in `.warp/jira-map.json`. Repeatable. |
+| `--import FILE` | CSV (`id,jiraKey`), JSON (`{"WV-01": "WAR-1"}`), or a markdown table with `id` and `jira key`. |
+| `--search` | Write `.warp/jira-search.json` with JQL for `searchJiraIssuesUsingJql`. Changes nothing. |
+| `--match FILE` | Propose pairs whose Jira summary equals the ticket summary. |
+| `--yes` | Store the proposals from `--match`. Without it, nothing is written. |
+| `--force` | Store a key whose prefix is not in `jiraProject` or `jiraKeyPrefixes`. |
+
+`beam.py set --jira KEY` is the same check. It rejects a prefix that is not configured unless `--force`. A rescan keeps a key set this way, and reapplies `.warp/jira-map.json` and `jiraKeyMap`.
+
+Plans can carry the real key: `schedule.json` field `jiraKey`, a markdown line `Jira: WAR-1`, a table column `Jira Key` or `jiraKey`, or `[WAR-1]` on the ticket heading.
+
+```bash
+python3 <plugin>/scripts/jira_sync.py resolve --apply results.json
 python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py catchup --write --id T-9

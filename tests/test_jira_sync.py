@@ -38,11 +38,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(jira_sync.jira_key({"jiraKey": "HOS-12"}), "HOS-12")
 
     def test_infer_key_from_id_summary_or_branch(self):
-        self.assertEqual(jira_sync.infer_key({"id": "ABC-123", "jiraKey": None}), "ABC-123")
-        self.assertEqual(jira_sync.infer_key({"id": "T-9", "summary": "Ship ABC-123"}), "ABC-123")
-        self.assertEqual(jira_sync.infer_key({"id": "T-8", "branch": "warp/T-8-ABC-123"}), "ABC-123")
-        self.assertIsNone(jira_sync.infer_key({"id": "T-3", "summary": "no key here"}))
+        abc = ["ABC"]
+        self.assertIsNone(jira_sync.infer_key({"id": "WV-01", "jiraKey": None}))
+        self.assertIsNone(jira_sync.infer_key({"id": "WV-01", "jiraKey": None}, ["WAR"]))
+        self.assertEqual(jira_sync.infer_key({"id": "ABC-123", "jiraKey": None}, abc), "ABC-123")
+        self.assertEqual(jira_sync.infer_key({"id": "T-9", "summary": "Ship ABC-123"}, abc), "ABC-123")
+        self.assertEqual(jira_sync.infer_key({"id": "T-8", "branch": "warp/T-8-ABC-123"}, abc), "ABC-123")
+        self.assertIsNone(jira_sync.infer_key({"id": "T-3", "summary": "no key here"}, abc))
         self.assertIsNone(jira_sync.jira_key({"id": "ABC-123", "jiraKey": None}))
+        self.assertIsNone(jira_sync.jira_key({"id": "WV-01", "jiraKey": "WV-01"}, ["WAR"]))
 
     def test_claim_transitions_to_configured_status(self):
         p = jira_sync.plan({"id": "A", "jiraKey": "HOS-1"}, "claim", {**CFG, "jiraInProgressStatus": "Doing"})
@@ -194,9 +198,9 @@ class BeamFlowTests(unittest.TestCase):
         shutil.copy(PLAN, md / "CURSOR_PLAN.md")
         run("scan.py", "scan", cwd=md)
         keys = {t["id"]: t["jiraKey"] for t in json.loads((md / ".warp/beam.json").read_text())["tickets"].values()}
-        self.assertEqual(keys["API-01"], "API-01")
-        self.assertEqual(keys["BILL-01"], "BILL-01")
-        self.assertTrue(all(keys.values()))
+        self.assertIsNone(keys["API-01"])
+        self.assertIsNone(keys["BILL-01"])
+        self.assertTrue(all(v is None for v in keys.values()))
 
     def test_claim_prints_jira_instruction_for_keyed_ticket(self):
         r = self.set("HOS-1", "claimed", "--agent", "s1")
@@ -210,11 +214,25 @@ class BeamFlowTests(unittest.TestCase):
         self.assertIn("getAccessibleAtlassianResources", r.stdout)
         self.assertEqual(self.beam_json()["tickets"]["HOS-1"]["status"], "claimed")
 
-    def test_claim_without_key_skips_but_succeeds(self):
+    def test_claim_without_key_tries_external_id_before_it_flags(self):
+        box = self.repo / ".warp/outbox.md"
+        if box.exists():
+            box.unlink()
         r = self.set("T-3", "claimed", "--agent", "s1")
         self.assertEqual(r.returncode, 0)
-        self.assertIn("no Jira key", r.stdout)
+        self.assertIn("RESOLVE", r.stdout)
+        self.assertIn("external id", r.stdout)
+        self.assertNotIn("MUST DO", r.stdout)
+        self.assertFalse((self.repo / ".warp/outbox.md").exists())
         self.assertEqual(self.beam_json()["tickets"]["T-3"]["status"], "claimed")
+        results = self.repo / "results.json"
+        results.write_text(json.dumps({"T-3": []}))
+        missed = run("jira_sync.py", "resolve", "--beam", self.beam, "--apply", "results.json", cwd=self.repo)
+        self.assertEqual(missed.returncode, 0, missed.stdout + missed.stderr)
+        self.assertIn("no Jira key", missed.stdout)
+        self.assertIn("needs mapping", missed.stdout)
+        self.assertNotIn("MUST DO", missed.stdout)
+        self.assertIn("needs mapping", (self.repo / ".warp/outbox.md").read_text())
 
     def test_only_the_claim_triggers_it(self):
         self.set("HOS-1", "claimed", "--agent", "s1")

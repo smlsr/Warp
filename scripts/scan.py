@@ -38,6 +38,8 @@ from beam import (  # noqa: E402
 SKIP = {".git", "node_modules", "vendor", "dist", ".warp", "coverage"}
 ID_RE = re.compile(r"\b([A-Z]{1,4}-\d{1,4})\b")
 AFTER_RE = re.compile(r"\bafter\s+([A-Z0-9][A-Z0-9,\s\-]{0,80})", re.I)
+BRACKET_RE = re.compile(r"\[([A-Z][A-Z0-9]+-\d+)\]")
+JIRA_FIELD_RE = re.compile(r"\bJira(?:\s*Key)?\s*[:=]\s*([A-Z][A-Z0-9]+-\d+)\b", re.I)
 
 
 def walk(base: Path):
@@ -126,14 +128,14 @@ def _size_from_label(text: str) -> str:
     return "M"
 
 
-def stamp_jira_keys(tickets: list[dict]) -> None:
-    """Fill jiraKey from the id, summary, or branch when the plan did not set one."""
-    import jira_sync
-
-    for t in tickets:
-        if jira_sync.jira_key(t):
-            continue
-        t["jiraKey"] = jira_sync.infer_key(t)
+def _note_jira(ticket: dict, raw: str | None) -> None:
+    if not raw or ticket.get("jiraKeySource") == "plan":
+        return
+    text = raw.strip()
+    if not text or text.lower() in {"-", "—", "none", "n/a"}:
+        return
+    ticket["jiraKey"] = text
+    ticket["jiraKeySource"] = "plan"
 
 
 def from_schedule(path: Path) -> dict | None:
@@ -150,10 +152,12 @@ def from_schedule(path: Path) -> dict | None:
         tid = t.get("id") or t.get("tempId")
         if not tid:
             continue
+        raw_key = t.get("jiraKey") or t.get("jira")
         tickets.append(
             {
                 "id": tid,
-                "jiraKey": t.get("jiraKey"),
+                "jiraKey": raw_key or None,
+                "jiraKeySource": t.get("jiraKeySource") if t.get("jiraKeySource") in {"plan", "export", "map", "manual", "external"} else ("plan" if raw_key else None),
                 "summary": t.get("summary") or t.get("title") or "",
                 "deps": t.get("deps") or t.get("blockedBy") or t.get("blockedByTempIds") or [],
                 "locks": t.get("locks") or [],
@@ -168,7 +172,6 @@ def from_schedule(path: Path) -> dict | None:
                 "acs": t.get("acs"),
             }
         )
-    stamp_jira_keys(tickets)
     return {
         "tickets": tickets,
         "gates": data.get("gates") or [],
@@ -208,10 +211,12 @@ def from_jira(path: Path) -> dict | None:
                     deps.append(inward)
         summary = t.get("summary") or fields.get("summary") or ""
         key = t.get("key") or fields.get("key")
+        explicit = key if isinstance(key, str) and re.fullmatch(r"[A-Z][A-Z0-9_]+-\d+", key.strip()) else None
         tickets.append(
             {
                 "id": str(tid),
-                "jiraKey": key if isinstance(key, str) and re.fullmatch(r"[A-Z][A-Z0-9_]+-\d+", key) else None,
+                "jiraKey": explicit,
+                "jiraKeySource": "export" if explicit else None,
                 "summary": summary,
                 "deps": deps,
                 "locks": t.get("locks") or [],
@@ -223,7 +228,6 @@ def from_jira(path: Path) -> dict | None:
         )
     if len(tickets) < 1:
         return None
-    stamp_jira_keys(tickets)
     return {"tickets": tickets, "gates": [], "criticalPath": [], "source": str(path), "format": "jira-json"}
 
 
@@ -256,16 +260,24 @@ def from_markdown(path: Path) -> dict | None:
             tickets[tid.strip()] = {
                 "id": tid.strip(),
                 "summary": row.get("summary") or row.get("title") or "",
+                "jiraKey": None,
                 "deps": deps,
                 "locks": [x.strip() for x in (row.get("locks") or "").split(",") if x.strip()],
                 "size": _size_from_label(row.get("size") or row.get("complexity") or "M"),
                 "critical": "yes" in (row.get("critical") or "").lower() or "★" in line,
                 "rankDays": 0,
             }
+            jraw = row.get("jira key") or row.get("jirakey") or row.get("jira") or ""
+            _note_jira(tickets[tid.strip()], jraw)
+            field = JIRA_FIELD_RE.search(line)
+            bracket = BRACKET_RE.search(line)
+            _note_jira(tickets[tid.strip()], field.group(1) if field else None)
+            _note_jira(tickets[tid.strip()], bracket.group(1) if bracket else None)
     # CURSOR_PLAN wave form: ticket ids and "after X"
     wave = 0
     gates = []
     current_gate = None
+    last_tid = None
     for line in lines:
         if re.match(r"^###\s+W\d+", line):
             wave += 1
@@ -277,9 +289,15 @@ def from_markdown(path: Path) -> dict | None:
         if gm and gates:
             gates[-1]["members"].append(gm.group(1))
             gates[-1]["checks"].append(gm.group(2).strip())
-        ids = ID_RE.findall(line)
+        if line.strip().startswith("|"):
+            continue
+        field = JIRA_FIELD_RE.search(line)
+        field_keys = {field.group(1).upper()} if field else set()
+        bracketed = {k.upper() for k in BRACKET_RE.findall(line)}
+        excluded = bracketed | field_keys
+        ids = [i for i in ID_RE.findall(line) if i.upper() not in excluded]
         after = AFTER_RE.search(line)
-        after_ids = ID_RE.findall(after.group(1)) if after else []
+        after_ids = [i for i in (ID_RE.findall(after.group(1)) if after else []) if i.upper() not in excluded]
         defined = [i for i in ids if i not in after_ids] or ids
         for tid in defined:
             if tid not in tickets:
@@ -293,15 +311,23 @@ def from_markdown(path: Path) -> dict | None:
                     "rankDays": max(0, 20 - wave),
                     "wave": wave,
                 }
+            last_tid = tid
+            field = JIRA_FIELD_RE.search(line)
+            _note_jira(tickets[tid], field.group(1) if field else None)
+            if len(bracketed) == 1:
+                _note_jira(tickets[tid], next(iter(bracketed)))
             for d in after_ids:
                 if d != tid and d not in tickets[tid]["deps"]:
                     tickets[tid]["deps"].append(d)
             if gates and tid in gates[-1]["members"]:
                 tickets[tid]["gate"] = gates[-1]["key"]
+        if not defined and last_tid and last_tid in tickets:
+            field = JIRA_FIELD_RE.search(line)
+            if field:
+                _note_jira(tickets[last_tid], field.group(1))
     if len(tickets) < 2:
         return None
     rows = list(tickets.values())
-    stamp_jira_keys(rows)
     return {
         "tickets": rows,
         "gates": gates,
@@ -407,6 +433,7 @@ def to_schedule(graph: dict) -> dict:
             {
                 "id": t["id"],
                 "jiraKey": t.get("jiraKey"),
+                "jiraKeySource": t.get("jiraKeySource"),
                 "summary": t.get("summary") or "",
                 "deps": t.get("deps") or [],
                 "unlocks": [],
@@ -547,6 +574,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
             {
                 "id": t["id"],
                 "jiraKey": t.get("jiraKey"),
+                "jiraKeySource": t.get("jiraKeySource"),
                 "summary": t.get("summary"),
                 "deps": t.get("deps"),
                 "locks": t.get("locks"),
@@ -712,7 +740,22 @@ def main() -> None:
         cfg = default_config()
         cfg["maxAgents"] = args.max_agents
         cfg["model"] = args.model
-        beam = ingest(sched_path, Path(graph["source"]), Path(args.out), cfg)
+        try:
+            import jira_sync
+
+            loaded = jira_sync.settings(warp / "beam.json", {"config": cfg})
+            for key in ("jiraProject", "jiraKeyPrefixes", "jiraKeyMap", "jiraTransition", "jiraMcp", "jiraSite"):
+                cfg[key] = loaded.get(key, cfg.get(key))
+        except Exception:
+            jira_sync = None
+        previous = {}
+        out_path = Path(args.out)
+        if out_path.is_file():
+            try:
+                previous = load_json(out_path).get("tickets") or {}
+            except Exception:
+                previous = {}
+        beam = ingest(sched_path, Path(graph["source"]), out_path, cfg, previous=previous)
         beam["runState"] = "stopped"
         beam["source"]["format"] = graph.get("format")
         beam["source"]["scan"] = found
@@ -730,6 +773,11 @@ def main() -> None:
         print(f"scan format={graph.get('format')} tickets={len(beam['tickets'])} source={graph.get('source')}")
         print(f"estimate agentHours={est['agentHours']} humanHours={est['humanHours']} elapsedHours={est['elapsedHours']}")
         print("runState=stopped — /warp-start to dispatch")
+        tickets = list(beam["tickets"].values())
+        unmapped = [t["id"] for t in tickets if t.get("jiraMapping") == "needs mapping"]
+        keyed = len(tickets) - len(unmapped)
+        if jira_sync is not None:
+            print(jira_sync.prepare_resolve(Path(args.out)))
         try:
             import notify
 
@@ -745,6 +793,8 @@ def main() -> None:
                         "source": graph.get("source"),
                         "found": found,
                         "folder": found.get("folder"),
+                        "unmapped": unmapped,
+                        "keyed": keyed,
                     },
                 )
             )
@@ -763,13 +813,19 @@ def main() -> None:
         sched_path = Path(args.beam).parent / "_imported_schedule.json"
         atomic_write(sched_path, json.dumps(to_schedule(graph), indent=2) + "\n")
         cfg = (old or {}).get("config") or default_config()
-        beam = ingest(sched_path, Path(args.plan), Path(args.beam), cfg)
+        beam = ingest(
+            sched_path,
+            Path(args.plan),
+            Path(args.beam),
+            cfg,
+            previous=(old or {}).get("tickets") or {},
+        )
         if old and args.keep_status:
             for tid, t in beam["tickets"].items():
                 prev = old["tickets"].get(tid)
                 if not prev:
                     continue
-                for k in ("status", "agent", "branch", "attempts", "tokens", "minutes", "alarm", "pr", "jira", "jiraKey"):
+                for k in ("status", "agent", "branch", "attempts", "tokens", "minutes", "alarm", "pr", "jira"):
                     t[k] = prev.get(k, t.get(k))
         beam["runState"] = "stopped"
         atomic_write(Path(args.beam), json.dumps(beam, indent=2) + "\n")
