@@ -1,6 +1,32 @@
 # Guide
 
-Commands, flags, and config keys are in [COMMANDS.md](COMMANDS.md) and [CONFIG.md](CONFIG.md). Install, upgrade, and troubleshooting are in the README.
+Commands, flags, and config keys are in [COMMANDS.md](COMMANDS.md) and [CONFIG.md](CONFIG.md). Install, upgrade, and the short troubleshooting tree are in the README. The decision tree for a stuck transition is in [RUNBOOK.md](RUNBOOK.md). What each version changed is [CHANGELOG.md](../CHANGELOG.md).
+
+## Jira, from import to merge
+
+Warp never calls Jira itself. A script prints the search or the transition. The agent calls the Atlassian server named `jiraMcp` (default `atlassian`) and then records the result. A plan id such as `WV-01` is not an issue key such as `WAR-1`.
+
+1. **Import or scan.** `/warp-scan` reads `WARP_PLAN.json`, `schedule.json`, `CURSOR_PLAN.md`, a Jira ticket export, or a markdown table with `id` and `deps`. A Jira JSON import uses `externalId` as the plan id. Sections `h2. Size`, `h2. Locks`, `h2. Blocked by`, and `h2. Acceptance`, and labels `size:S`, `auto-merge`, and `area:*`, describe the ticket. `externalId` is not stored as `jiraKey`. An export field named `key` is the issue key. So are `schedule.json` `jiraKey`, a markdown `Jira: WAR-1`, a `Jira Key` column, and `[WAR-1]` on the heading.
+2. **Project.** Leave `jiraProject` empty. `/warp-init` and `/warp-scan` write it when one prefix is clear from the plan, branches, or recent commits, ignoring plan-id prefixes such as `WV` that never appear as a Jira key. When Jira is connected, one visible project or one match is stored, and a single site is stored in `jiraSite`. Several candidates are not guessed: the warning is `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`. Then `project --list`, `project --set WAR`, or `project --probe` and `project --record`. An empty `jiraKeyPrefixes` becomes that project. `jiraKeyMap` and `.warp/jira-map.json` supply pairs you already know. The map file wins.
+3. **Resolve keys.** For each ticket that is still open, scan writes `.warp/jira-resolve.json`. The agent searches in this order and stops at the first single hit: `jiraExternalIdField` (a name or `customfield_NNNNN`), then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID, then a label `warp:<id>`, then a remote-link id. One hit is stored with `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>` (or `resolve --apply`). Source and confidence are recorded on the beam and in `.warp/jira-map.json`. Two hits are ambiguous and neither is stored. A summary match is not stored on this path. The scan line is `N tickets: K keyed, U need mapping`.
+4. **Summary, when that is all you have.** `/warp-jira-match` compares unmapped summaries locally after a bounded Jira search (`summary ~` is fuzzy, so the agent fetches at most 2 pages of 50). Exact, then a 60-character prefix (`--chars`), then a score at or above 0.9 (`--min-score`) as a proposal. `--apply` stores exact and prefix. `--apply --yes` also stores one fuzzy proposal. Ambiguous matches, Done issues, and issues already mapped to another ticket are not stored. A manual key is never overwritten.
+5. **Claim.** The first claim of an unmapped ticket runs the same lookup. It must record the key before `transitionJiraIssue`. The move is In Progress (`jiraInProgressStatus`) when `jiraTransition` is true, plus a comment. `jira_sync.py pick` chooses the transition id from the live list. `record` stores the move. `record --result failed --error "..."` stores `jira.lastAttempt` and does not set `jira.startedAt`.
+6. **Review and merge.** A pull request comment goes out in connected mode only. Bugbot and CI comments follow. L and XL (`autoMerge` false) move to QA Ready (`jiraQaReadyStatus`) and wait for a provider approval or `/warp-proceed`. S and M move to Done (`jiraDoneStatus`) after the merge, including a local merge. Pause and stop do not move Jira. Releasing a claim moves it back only when `jiraRestoreOnRelease` is true.
+7. **Write the plan id back.** Off by default (`jiraWriteExternalId: false`), so scan and claim never edit Jira's External ID field. Set the key to true to allow that after a key is stored, or run `/warp-jira-match --write-external-id --yes` (or `jira_sync.py external-id`) yourself. The field must be editable. A different non-empty value needs `--force-external-id`. No comment is added. `jira.externalIdWritten` makes a second run skip the edit.
+
+`/warp-jira-check` is the place to read this state. `/warp-jira-view` prints one issue and does not write the beam. `/warp-jira-map` is only for a ticket that stayed unmapped or ambiguous, or for an override.
+
+## When nothing is linked
+
+`/warp-jira-check` with no flags does not search Jira. `needs mapping` means the beam has no confirmed key. Read `why nothing linked`, then the `fix` line on the ticket.
+
+- Empty `jiraProject`: set it before any move.
+- Map file has keys the beam never copied: `verify --link`.
+- No key in the plan, the export, or the map: run the resolve search, then `/warp-jira-match` if a summary candidate exists, or `map --set`.
+- Ambiguous: do not guess. Set one pair.
+- The stored value equals the plan id: that lookup was not recorded. `resolve --ticket` with the issue key.
+
+The same steps, as a numbered tree, are in [RUNBOOK.md](RUNBOOK.md).
 
 ## What Warp replaces
 

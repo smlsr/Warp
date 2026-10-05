@@ -24,7 +24,9 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 | `getJiraIssueEditmeta` | Whether the External ID field is editable on that issue. A missing or read-only field is skipped. |
 | `editJiraIssue` | Write the plan id into the External ID field. `/warp-jira-match --write-external-id` and `jira_sync.py external-id`, after `--yes`. This is a write and needs the connector permission. Scan and claim call it only when `jiraWriteExternalId` is true. No comment is added. |
 
-Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify` reads that module. It does not invent a second list.
+Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify --with-jira` allows every name in that Jira list, including `editJiraIssue`. That tool writes the External ID field. Scan and claim call it only when `jiraWriteExternalId` is true. `/warp-allow-notify` reads the module. It does not invent a second list.
+
+Key resolution, in order: a key already on the plan or in `.warp/jira-map.json`, then `jiraExternalIdField` and the other external-id names, then label `warp:<id>`, then a remote link, then `/warp-jira-match` for the summary. `/warp-jira-view` reads one issue. `/warp-jira-check` prints what was recorded. Details are in [GUIDE.md](GUIDE.md).
 
 `pick` matches the transition name, then the target status name, then (for In Progress and Done only) the status category. QA Ready is name-only. Never send a fixed transition id. An issue already in progress is left alone, and a Done issue is not reopened.
 
