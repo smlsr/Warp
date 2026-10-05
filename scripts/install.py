@@ -297,14 +297,28 @@ def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
         if m and m.group(1).strip("\"'") not in {".warp", ".warp/"}:
             print(f"Note: config stateDir is {m.group(1)}; that location is NOT removed.")
     print("Not touched: product code, warp/<id> branches, pull requests, the user-level plugin (Cursor Settings).")
+    print("Not touched: user-level allow-notify files (~/.cursor/permissions.json, cli-config.json, hooks.json).")
 
-    if not targets and not block_found:
+    import allow_notify
+
+    allow_notes = allow_notify.uninstall_notes(root)
+    if allow_notes:
+        print("Will remove project allow-notify entries (not user-level files):")
+        for line in allow_notes:
+            print(f"  - {line}")
+
+    if not targets and not block_found and not allow_notes:
         print("\nNothing to remove. Run /warp-init to install.")
         return 0
 
     if not yes:
         print("\nNothing deleted. Show this list to the user, get an explicit yes, then re-run with --yes.")
         return 0
+
+    if allow_notes:
+        rc = allow_notify.revoke_project(root)
+        if rc != 0:
+            return rc
 
     for _, p in targets:
         if p.is_symlink() or p.is_file():

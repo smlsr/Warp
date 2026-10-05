@@ -37,7 +37,7 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
-Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, and `/warp-uninstall`. `/warp-jira-check` prints, per ticket, which Jira move and which comment should have happened and which of those the beam never recorded.
+Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-allow-notify`, and `/warp-uninstall`. `/warp-jira-check` prints, per ticket, which Jira move and which comment should have happened and which of those the beam never recorded. `/warp-allow-notify` writes the Cursor allowlist so Slack and Teams posts (and, if you ask, the Jira and GitHub tools Warp calls) are not stopped by a Run prompt.
 
 ## Slack and Teams messages
 
@@ -84,9 +84,27 @@ Links point at branch main; they work once it is pushed. Next: /warp-start. Stat
 - It follows `messenger` and `notify`. `notify: quiet` posts neither. Each message goes to `slackChannel` and `teamsChannel` for the messenger you chose.
 - Fail-soft: with no channel set, or no connected server, the text is saved to `.warp/outbox.md`, the command says so, and it still succeeds. The payload is in `.warp/notify-post.json`.
 
+Cursor still asks you to approve each Slack or Teams tool call until that call is on the MCP allowlist. `/warp-allow-notify` writes the entries. Tool names come from `scripts/mcp_tools.py` (Slack `slack_post_message` and `slack_send_message`, Teams `send_channel_message` and `teams_send_message`). A different name goes in `notifyAllow` as `server:tool`.
+
+What the command changes, and what it does not:
+
+| Surface | File | Effect |
+|---|---|---|
+| IDE Run prompt | `.cursor/permissions.json` (`--user`: `~/.cursor/permissions.json`) `mcpAllowlist` | Skips the prompt for those `server:tool` pairs when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time does not consult it. Setting the key replaces the in-app MCP allowlist. |
+| CLI | `.cursor/cli.json` (`--user`: `~/.cursor/cli-config.json`) `permissions.allow` `Mcp(server:tool)` | Cursor CLI only. It does not change the IDE Run button. |
+| Hook | `.cursor/hooks.json` `beforeMCPExecution` | Returns allow for the same pairs and ask for everything else. A hook allow does not currently skip the Run prompt. |
+| Cloud agents | none | Cloud agents do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
+
+Default is the project files. `--user` edits the home-directory files and waits for an explicit yes. `--dry-run` prints a diff and writes nothing. `--revoke` removes only the entries this command recorded. `/warp-uninstall` removes the project entries too, not the user-level files. Reload Cursor afterwards. Run:
+
+```bash
+python3 <plugin>/scripts/allow_notify.py --dry-run
+python3 <plugin>/scripts/allow_notify.py
+```
+
 ## Uninstall
 
-`/warp-uninstall` removes `.cursor/plugins/warp` and `.warp/`, and optionally the snippet `/warp-init` added to `.gitignore`, so a fresh `/warp-init` works. It first prints what it will remove and deletes nothing until you confirm. `.warp/` holds the beam, journal, and config, and it cannot be recovered. Stop a running beam first with `/warp-stop`. Product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, and a plugin installed through Cursor Settings are not touched. Reload Cursor afterwards.
+`/warp-uninstall` removes `.cursor/plugins/warp` and `.warp/`, and optionally the snippet `/warp-init` added to `.gitignore`, so a fresh `/warp-init` works. It also removes project allow-notify entries recorded by `/warp-allow-notify`. It first prints what it will remove and deletes nothing until you confirm. `.warp/` holds the beam, journal, and config, and it cannot be recovered. Stop a running beam first with `/warp-stop`. Product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, a plugin installed through Cursor Settings, and user-level allow-notify files are not touched. Reload Cursor afterwards.
 
 ## Where the files are
 

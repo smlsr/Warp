@@ -35,6 +35,18 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Tool names live in mcp_tools.py. Re-exported so callers can keep using these.
+from mcp_tools import (
+    GITHUB_COMMENT,
+    TOOL_COMMENT,
+    TOOL_COMMENT_ALT,
+    TOOL_ISSUE,
+    TOOL_RESOURCES,
+    TOOL_TRANSITION,
+    TOOL_TRANSITIONS,
+    TOOL_TRANSITIONS_ALT,
+)
+
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 # Inference requires a real project key (2+ characters before the hyphen) so
 # plan ids like T-3 are not treated as Jira keys. Explicit jiraKey still uses KEY_RE.
@@ -56,16 +68,6 @@ FALSE = {"false", "no", "off", "0"}
 RESULTS = {"moved", "already", "skipped", "unavailable", "no-transition", "failed"}
 OK_RESULTS = {"moved", "already", "skipped"}
 TODO_NAME = "jira-todo.json"
-
-# Tool names on the official Atlassian remote MCP server. `jiraMcp` (default
-# "atlassian") is the Cursor server name, not one of these.
-TOOL_RESOURCES = "getAccessibleAtlassianResources"
-TOOL_ISSUE = "getJiraIssue"
-TOOL_TRANSITIONS = "getTransitionsForJiraIssue"
-TOOL_TRANSITIONS_ALT = "listJiraIssueTransitions"
-TOOL_TRANSITION = "transitionJiraIssue"
-TOOL_COMMENT = "addOrEditJiraIssueComment"
-TOOL_COMMENT_ALT = "addCommentToJiraIssue"
 
 
 def now() -> str:
@@ -404,7 +406,7 @@ def _todo_payload(ticket: dict, actions: list[dict], cfg: dict, mode: str) -> di
             "commentArg": "commentBody",
         },
         "prComment": {
-            "github": "add_issue_comment on the pull request number, or `gh pr comment <url> --body`",
+            "github": f"{GITHUB_COMMENT} on the pull request number, or `gh pr comment <url> --body`",
             "bitbucket": "the pull request comment tool on bitbucketMcp",
         },
         "actions": actions,
@@ -441,7 +443,7 @@ def render(ticket: dict, actions: list[dict], cfg: dict) -> str:
             lines.append(a["body"])
             if a["where"] == "pr":
                 lines.append(
-                    "jira: pull-request comment, connected mode only. GitHub: add_issue_comment on the pull request number, "
+                    f"jira: pull-request comment, connected mode only. GitHub: {GITHUB_COMMENT} on the pull request number, "
                     "or `gh pr comment <url> --body`. Bitbucket: the pull request comment tool on bitbucketMcp. "
                     "Local mode posts no pull-request comment."
                 )

@@ -82,3 +82,8 @@ teamsChannel: "warp"
 projectName: ""
 # Shown in message headers after the repo: "Warp | repo / project".
 # Empty uses jiraProject, then the workspace folder name.
+notifyAllow: []
+# Extra MCP tools that may run without a Run prompt. Each entry is "server:tool".
+# No wildcards. Re-run /warp-allow-notify after changing this.
+# notifyAllow:
+#   - "slack:some_other_post_tool"
