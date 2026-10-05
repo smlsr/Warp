@@ -14,3 +14,4 @@ alwaysApply: false
 - The git provider is `gitProvider` in `.warp/config.yaml` (`auto`, `github`, or `bitbucket`). `pushMerge: false` means local branches and a local merge, no push and no pull request.
 - Coding model comes from `.warp/config.yaml`. Default `claude-sonnet-5-5-high` (Claude Sonnet 5.5 High). The slug must match the Cursor model picker.
 - Jira, GitHub, Bitbucket, Slack, and Teams go through Cursor's connected MCP servers, or `gh` for GitHub when `ghCli` is true. If none is usable, fall back to local-only.
+- When `beam.py set` prints `jira: MUST DO`, do every action in `.warp/jira-todo.json` in that turn, then `jira_sync.py record` and `record-comment`. A failure goes to `.warp/outbox.md` and Herald. It does not stop the ticket.

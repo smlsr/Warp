@@ -14,13 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 import jira_sync  # noqa: E402
 
 PLAN = ROOT / "examples" / "CURSOR_PLAN.sample.md"
-CFG = {
-    "jiraTransition": True,
-    "jiraInProgressStatus": "In Progress",
-    "jiraQaReadyStatus": "QA Ready",
-    "jiraDoneStatus": "Done",
-    "jiraRestoreOnRelease": False,
-}
+CFG = dict(jira_sync.DEFAULTS)
 
 T_START = {"id": "A", "name": "Start progress", "to": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}}
 T_REVIEW = {"id": "B", "name": "Send to review", "to": {"name": "In Review", "statusCategory": {"key": "indeterminate"}}}
@@ -42,6 +36,13 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(jira_sync.jira_key({"id": "HOS-1", "jiraKey": None}))
         self.assertIsNone(jira_sync.jira_key({"jiraKey": "not a key"}))
         self.assertEqual(jira_sync.jira_key({"jiraKey": "HOS-12"}), "HOS-12")
+
+    def test_infer_key_from_id_summary_or_branch(self):
+        self.assertEqual(jira_sync.infer_key({"id": "ABC-123", "jiraKey": None}), "ABC-123")
+        self.assertEqual(jira_sync.infer_key({"id": "T-9", "summary": "Ship ABC-123"}), "ABC-123")
+        self.assertEqual(jira_sync.infer_key({"id": "T-8", "branch": "warp/T-8-ABC-123"}), "ABC-123")
+        self.assertIsNone(jira_sync.infer_key({"id": "T-3", "summary": "no key here"}))
+        self.assertIsNone(jira_sync.jira_key({"id": "ABC-123", "jiraKey": None}))
 
     def test_claim_transitions_to_configured_status(self):
         p = jira_sync.plan({"id": "A", "jiraKey": "HOS-1"}, "claim", {**CFG, "jiraInProgressStatus": "Doing"})
@@ -151,6 +152,19 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(s["jiraRestoreOnRelease"])
         self.assertEqual(s["jiraQaReadyStatus"], "QA Ready")
         self.assertEqual(s["jiraDoneStatus"], "Done")
+        self.assertEqual(s["jiraMcp"], "atlassian")
+        import beam
+        import herald_fmt
+
+        for key, value in jira_sync.DEFAULTS.items():
+            self.assertEqual(beam.default_config()[key], value)
+        empty = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty, True)
+        heard = herald_fmt.read_config(empty)
+        self.assertEqual(heard["jiraInProgressStatus"], "In Progress")
+        self.assertEqual(heard["jiraQaReadyStatus"], "QA Ready")
+        self.assertEqual(heard["jiraDoneStatus"], "Done")
+        self.assertEqual(heard["jiraTransition"], "true")
 
 
 class BeamFlowTests(unittest.TestCase):
@@ -172,14 +186,17 @@ class BeamFlowTests(unittest.TestCase):
     def set(self, tid, status, *extra):
         return run("beam.py", "set", "--beam", self.beam, "--id", tid, "--status", status, *extra, cwd=self.repo)
 
-    def test_jira_export_gives_keys_and_markdown_does_not(self):
+    def test_jira_export_and_markdown_plan_both_get_keys(self):
         keys = {k: v["jiraKey"] for k, v in self.beam_json()["tickets"].items()}
         self.assertEqual(keys, {"HOS-1": "HOS-1", "HOS-2": "HOS-2", "T-3": None})
         md = self.tmp / "md"
         md.mkdir()
         shutil.copy(PLAN, md / "CURSOR_PLAN.md")
         run("scan.py", "scan", cwd=md)
-        self.assertTrue(all(t["jiraKey"] is None for t in json.loads((md / ".warp/beam.json").read_text())["tickets"].values()))
+        keys = {t["id"]: t["jiraKey"] for t in json.loads((md / ".warp/beam.json").read_text())["tickets"].values()}
+        self.assertEqual(keys["API-01"], "API-01")
+        self.assertEqual(keys["BILL-01"], "BILL-01")
+        self.assertTrue(all(keys.values()))
 
     def test_claim_prints_jira_instruction_for_keyed_ticket(self):
         r = self.set("HOS-1", "claimed", "--agent", "s1")
@@ -187,6 +204,10 @@ class BeamFlowTests(unittest.TestCase):
         self.assertIn('move to "In Progress"', r.stdout)
         self.assertIn("connected Jira MCP", r.stdout)
         self.assertIn("Nothing else is blocked", r.stdout)
+        self.assertIn("jira: MUST DO", r.stdout)
+        self.assertIn("getTransitionsForJiraIssue", r.stdout)
+        self.assertIn("addOrEditJiraIssueComment", r.stdout)
+        self.assertIn("getAccessibleAtlassianResources", r.stdout)
         self.assertEqual(self.beam_json()["tickets"]["HOS-1"]["status"], "claimed")
 
     def test_claim_without_key_skips_but_succeeds(self):

@@ -24,8 +24,8 @@ Runner: `config.runner`. `cloud` uses Cursor cloud/background agents. `local` us
 
 ## Merge policy
 
-- Size S or M (`autoMerge` true): after Bugbot green, CI green, and every AC has evidence, Reed may merge and Jira moves to Done.
-- Size L or XL (`autoMerge` false): do not merge. Move to `awaiting_approval` (Jira moves to QA Ready), notify, and poll the provider for an approval. Also accept `warp:proceed <id>` from Slack, Teams, or a PR comment. Then merge. Jira stays at QA Ready.
+- Size S or M (`autoMerge` true): after Bugbot green, CI green, and every AC has evidence, Reed may merge and Jira moves to Done. The move and the comment are the `jira: MUST DO` block from `beam.py set`, including after `provider.py merge-local`.
+- Size L or XL (`autoMerge` false): do not merge. Move to `awaiting_approval` (Jira moves to QA Ready, with a comment that says what the person must do), notify, and poll the provider for an approval. Also accept `warp:proceed <id>` from Slack, Teams, or a PR comment. Then merge. Jira stays at QA Ready. The merged comment is still posted.
 - `pushMerge: false` or no usable provider: the same rules, on a local merge, with no push.
 - Never merge a red gate ticket to unblock later work. Fix on the gate branch.
 

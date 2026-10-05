@@ -126,6 +126,16 @@ def _size_from_label(text: str) -> str:
     return "M"
 
 
+def stamp_jira_keys(tickets: list[dict]) -> None:
+    """Fill jiraKey from the id, summary, or branch when the plan did not set one."""
+    import jira_sync
+
+    for t in tickets:
+        if jira_sync.jira_key(t):
+            continue
+        t["jiraKey"] = jira_sync.infer_key(t)
+
+
 def from_schedule(path: Path) -> dict | None:
     try:
         data = json.loads(path.read_text())
@@ -158,6 +168,7 @@ def from_schedule(path: Path) -> dict | None:
                 "acs": t.get("acs"),
             }
         )
+    stamp_jira_keys(tickets)
     return {
         "tickets": tickets,
         "gates": data.get("gates") or [],
@@ -212,6 +223,7 @@ def from_jira(path: Path) -> dict | None:
         )
     if len(tickets) < 1:
         return None
+    stamp_jira_keys(tickets)
     return {"tickets": tickets, "gates": [], "criticalPath": [], "source": str(path), "format": "jira-json"}
 
 
@@ -288,8 +300,10 @@ def from_markdown(path: Path) -> dict | None:
                 tickets[tid]["gate"] = gates[-1]["key"]
     if len(tickets) < 2:
         return None
+    rows = list(tickets.values())
+    stamp_jira_keys(rows)
     return {
-        "tickets": list(tickets.values()),
+        "tickets": rows,
         "gates": gates,
         "criticalPath": [t["id"] for t in tickets.values() if t.get("critical")],
         "source": str(path),

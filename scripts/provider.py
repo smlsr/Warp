@@ -217,6 +217,43 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
         _run(["git", "checkout", "-q", original], root)
 
 
+def _mark_merged(beam_path: Path, tid: str, detail: str) -> None:
+    """Record the local merge on a full beam ticket so the Jira move is printed."""
+    if not beam_path.is_file():
+        return
+    try:
+        t = json.loads(beam_path.read_text())["tickets"][tid]
+    except Exception:
+        return
+    if not isinstance(t, dict) or "status" not in t or not isinstance(t.get("pr"), dict):
+        return
+    sha = detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else None
+    try:
+        import beam
+
+        beam.cmd_set(
+            beam_path,
+            argparse.Namespace(
+                id=tid,
+                status="merged",
+                sha=sha,
+                via="local",
+                agent=None,
+                branch=None,
+                jira=None,
+                pr=None,
+                bugbot=None,
+                ci=None,
+                alarm=None,
+                attempts=None,
+            ),
+        )
+    except SystemExit as e:
+        print(f"jira: could not mark {tid} merged ({e})")
+    except Exception as e:
+        print(f"jira: could not mark {tid} merged ({e})")
+
+
 def set_key(text: str, key: str, raw: str) -> str:
     pat = re.compile(rf"^{key}:[^\n]*$", re.M)
     if pat.search(text):
@@ -316,6 +353,7 @@ def main() -> None:
             if ok:
                 print(f"merged {args.branch} into {base} locally ({detail}). Not pushed.")
                 note(root, beam_path, args.id, f"merged {args.branch} into {base} locally ({detail})", what="a local merge")
+                _mark_merged(beam_path, args.id, detail)
             else:
                 print(f"local merge failed: {detail}")
                 print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")
