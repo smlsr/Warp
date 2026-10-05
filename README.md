@@ -9,7 +9,7 @@ There is no per-person cap. The only concurrency cap is `maxAgents`.
 ## Quick start
 
 1. `/add-plugin https://github.com/smlsr/Warp`, then `/warp-init` in the repo you want built. Reload Cursor.
-2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`. `/warp-allow-notify --with-jira` allows the Jira tools Warp calls, including the External ID write.
+2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`. Init writes the project allowlist for the Slack and Jira tools Warp calls. Set Run Mode to Auto-review, Allowlist, or Run Everything.
 3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
 
@@ -52,7 +52,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 
 | Command | What it does | Common flags |
 |---|---|---|
-| `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/` | `--channel`, `--dry-run` |
+| `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/`, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
 | `/warp-start` | Start dispatch | `--reason` |
 | `/warp-pause` | Stop new claims. In-flight work finishes its step | `--reason` |
@@ -69,7 +69,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--write-external-id` |
 | `/warp-jira-external-id` | Write existing mappings into External ID, or a label if that field is missing | `--apply`, `--yes`, `--force`, `--force-external-id`, `--ticket`, `--create-field`, `--recheck` |
 | `/warp-jira-map` | Review or set plan id to issue key | `--set`, `--import`, `--from-jira`, `--yes` |
-| `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--user`, `--yes`, `--revoke` |
+| `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--list`, `--check`, `--server`, `--allow-server-tools`, `--user`, `--yes`, `--revoke` |
 | `/warp-proceed` | Merge one green manual ticket | |
 | `/warp-version` | Installed copy, source copy, and `.warp/version` | |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `--yes`, `--remove-gitignore` |
@@ -121,13 +121,17 @@ Links point at branch main; they work once it is pushed. Warp v<version>. Next: 
 
 ## Allow notify
 
-Cursor asks you to approve each Slack or Teams tool call until that call is on the MCP allowlist. `/warp-allow-notify` writes a specific `server:tool` list. It never writes a wildcard. Options:
+`/warp-init` writes the project allowlist (same as `/warp-allow-notify`, including Jira). `autoAllowTools: false` or `/warp-init --no-allow` skips that. User-level files stay opt-in (`--user --yes`). Options:
 
 ```bash
 python3 <plugin>/scripts/allow_notify.py ?
 python3 <plugin>/scripts/allow_notify.py --dry-run
 python3 <plugin>/scripts/allow_notify.py
-python3 <plugin>/scripts/allow_notify.py --with-jira --with-git
+python3 <plugin>/scripts/allow_notify.py --list
+python3 <plugin>/scripts/allow_notify.py --check
+python3 <plugin>/scripts/allow_notify.py --server plugin-slack-slack
+python3 <plugin>/scripts/allow_notify.py --with-git
+python3 <plugin>/scripts/allow_notify.py --allow-server-tools
 python3 <plugin>/scripts/allow_notify.py --user --dry-run
 python3 <plugin>/scripts/allow_notify.py --user --yes
 python3 <plugin>/scripts/allow_notify.py --revoke
@@ -137,12 +141,16 @@ python3 <plugin>/scripts/allow_notify.py --revoke
 
 | Flag | Behavior |
 |---|---|
-| (none) | Project scope. Slack and Teams post tools only. This is the default. |
+| (none) | Project scope. Slack, Teams, and Jira tools. This is the default. |
 | `--dry-run` | Print a unified diff of every file that would change. Write nothing, and do not write a backup. |
-| `--user` | Edit the home-directory files instead of the repo. The script refuses to write unless `--yes` is also set. A dry run does not need `--yes`. The skill must get an explicit yes before `--user --yes`. |
+| `--user` | Edit the home-directory files instead of the repo. The script refuses to write unless `--yes` is also set. A dry run, `--list`, and `--check` do not need `--yes`. |
 | `--yes` | Confirm a user-level write. Project scope does not need it. |
-| `--with-jira` | Also allow the Atlassian tools Warp calls. |
+| `--with-jira` | Accepted. Jira tools are already included. |
 | `--with-git` | Also allow GitHub `add_issue_comment`. Warp does not name a Bitbucket comment tool. |
+| `--list` | Print MCP servers found in mcp.json files. Write nothing. |
+| `--check` | Print which Warp tools project and user permissions, CLI, and hook files cover, plus the Run Mode caveat and the entries that would fix a gap. Write nothing. |
+| `--server NAME` | Also allow the tools on this server id. Repeatable. |
+| `--allow-server-tools` | Also write `server:*`. That allows every tool on the server, including destructive ones. Off by default. |
 | `--revoke` | Remove only the entries this command recorded in the manifest. Pre-existing entries stay. |
 | `--root` | Repo root. Default is the git top level, else the current directory. |
 | `--cursor-home` | Directory to use instead of `~/.cursor`. For tests. |
@@ -151,10 +159,12 @@ Default tool names come from `scripts/mcp_tools.py`, on the servers `slackMcp` a
 
 | Server key | Tools |
 |---|---|
-| `slackMcp` (default `slack`) | `slack_post_message`, `slack_send_message` |
-| `teamsMcp` (default `teams`) | `send_channel_message`, `teams_send_message` |
-| `jiraMcp` with `--with-jira` | `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue`, `listJiraIssueTransitions`, `transitionJiraIssue`, `addOrEditJiraIssueComment`, `addCommentToJiraIssue`, `searchJiraIssuesUsingJql`, `getJiraProjectIssueTypesMetadata`, `getJiraIssueRemoteIssueLinks`, `getVisibleJiraProjects`, `editJiraIssue`, `getJiraIssueEditmeta`, `getJiraScreen`, `updateJiraScreen`, `createJiraIssueRemoteIssueLink`, `createJiraField`, `createCustomField`, `createJiraCustomField` |
+| `slackMcp` (default `slack`) | `slack_post_message`, `slack_send_message`, `slack_read_channel`, `slack_read_thread`, `slack_search_channels` |
+| `teamsMcp` (default `teams`) | `send_channel_message`, `teams_send_message`, `teams_read_channel`, `teams_read_thread`, `teams_search_channels` |
+| `jiraMcp` (included by default) | `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue`, `listJiraIssueTransitions`, `transitionJiraIssue`, `addOrEditJiraIssueComment`, `addCommentToJiraIssue`, `searchJiraIssuesUsingJql`, `getJiraProjectIssueTypesMetadata`, `getJiraIssueRemoteIssueLinks`, `getVisibleJiraProjects`, `editJiraIssue`, `getJiraIssueEditmeta`, `getJiraScreen`, `updateJiraScreen`, `createJiraIssueRemoteIssueLink`, `createJiraField`, `createCustomField`, `createJiraCustomField` |
 | `githubMcp` with `--with-git` | `add_issue_comment` |
+
+Each tool is written for the configured name and for the ids Cursor's Run dialog actually shows: `user-<name>`, `project-<name>`, `plugin-<name>-<name>`, and `*<name>*:<tool>`. `project-0-<folder>-<name>` changes per workspace and worktree, so the glob keeps the tool specific. `server:*` is only written with `--allow-server-tools`. `lookupJiraAccountId` is not called.
 
 `notifyAllow` in `.warp/config.yaml` adds extra `server:tool` pairs. No wildcards. If the Run prompt names a different tool, copy that server and tool into `notifyAllow` and run the command again. The prompt is where the connector's real tool name shows up.
 
@@ -163,9 +173,9 @@ What each Cursor surface actually does:
 | Surface | File | Effect |
 |---|---|---|
 | IDE Run prompt | `.cursor/permissions.json` (`--user`: `~/.cursor/permissions.json`) `mcpAllowlist` | Skips the prompt for those pairs when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time does not consult the list. Setting the key replaces the in-app MCP allowlist, so a tool allowed only in Cursor Settings prompts again until it is in the file. Per-user and per-repo files are combined. A team admin Run Mode override ignores the file. |
-| CLI | `.cursor/cli.json` (`--user`: `~/.cursor/cli-config.json`) `permissions.allow` as `Mcp(server:tool)` | Cursor CLI only. It does not change the IDE Run button. |
+| CLI | `.cursor/cli.json` (`--user`: `~/.cursor/cli-config.json`) `permissions.allow` as `Mcp(server:tool)` | Cursor CLI and headless `agent` runs. It does not change the IDE Run button. `agent -f` (also `--force`) approves tools for that process. |
 | Hook | `.cursor/hooks.json` (`--user`: `~/.cursor/hooks.json`) `beforeMCPExecution` | Returns allow for this list and ask for every other call. `failClosed` is off. A hook allow does not currently skip the Run prompt. The permissions file does. |
-| Cloud agents | none | Cloud agents do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
+| Cloud agents and automations | none | They do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
 
 The command merges into JSON that is already there. Other hooks, other allow entries, the terminal allowlist, and `autoRun` are left in place. Before it changes an existing file it writes a sibling `.bak`. A second run with the same flags prints `Already set. Nothing changed.` and does not touch the backup. `--revoke` deletes an `mcpAllowlist` key that would otherwise be empty, so Cursor can fall back to the in-app list. `/warp-uninstall` removes the project hook and the project allow entries the manifest recorded. It does not remove `~/.cursor` files. Reload Cursor (Developer: Reload Window) or start a new agent chat afterwards.
 
@@ -195,7 +205,7 @@ A config that is only missing new keys does not need that delete. Re-run `/warp-
 
 ## Troubleshooting
 
-**Run prompt on every Slack or Teams post.** Run `/warp-allow-notify` (start with `?` or `--dry-run`). Set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time never consults the allowlist. If the prompt's tool name is not in the default list, add `server:tool` to `notifyAllow` and run the command again. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show this prompt.
+**agents stop and ask to Run/Allow.** The usual cause is a server id mismatch, or an allowlist that was never written. `/warp-allow-notify` used to write `slack:slack_send_message` and skipped Jira unless you passed `--with-jira`, and `/warp-init` did not run it. Cursor's dialog often shows `user-slack`, `plugin-slack-slack`, `project-0-<folder>-slack`, `atlassian-rovo`, or `claude_ai_Atlassian`, so `slack:tool` never matched. Re-run `/warp-init` (or `/warp-allow-notify`). Then set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time ignores the file. `/warp-allow-notify --check` prints what is covered and the entries that would fix a gap. `--list` prints detected servers. A different tool name goes in `notifyAllow`. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show it. The longer note is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 **Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. `/warp-init` and `/warp-scan` set `jiraProject` when the plan, a branch, a recent commit, or Jira itself shows one project. You do not have to edit it by hand in that case. If the line says `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`, pick one:
 
@@ -393,6 +403,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `slackChannel` / `teamsChannel` | `warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
 | `projectName` | empty | Shown after the repo in message headers. Empty uses `jiraProject`, then the folder name. |
 | `notifyAllow` | empty | Extra `server:tool` pairs for `/warp-allow-notify`. No wildcards. |
+| `autoAllowTools` | `true` | `/warp-init` writes the project MCP allowlist. `false` or `--no-allow` skips it. |
 
 ## Merge policy
 

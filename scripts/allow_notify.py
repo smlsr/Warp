@@ -30,9 +30,16 @@ What each file actually does (Cursor docs, not a guess):
     They do not use Run Modes and do not ask for approval. `beforeMCPExecution`
     does not run there. This command does not change cloud-agent prompting.
 
-No entry uses a wildcard. Slack, Teams, Jira, and GitHub tool names come from
-`scripts/mcp_tools.py`. Extra `server:tool` pairs come from `notifyAllow` in
-`.warp/config.yaml`.
+Slack, Teams, Jira, and GitHub tool names come from `scripts/mcp_tools.py`.
+Jira tools are included by default. Extra `server:tool` pairs come from
+`notifyAllow` in `.warp/config.yaml` and still cannot contain a wildcard.
+
+The server id in the Run dialog is often not the mcp.json key. Warp writes
+the configured name plus `user-<name>`, `project-<name>`,
+`plugin-<name>-<name>`, and a tool-specific glob `*<name>*:<tool>`.
+`project-0-<folder>-<name>` changes per workspace; the glob is what matches
+it. `server:*` (every tool on that server, including destructive ones) is
+written only with `--allow-server-tools`.
 """
 
 from __future__ import annotations
@@ -219,33 +226,389 @@ def server_name(cfg: dict, key: str) -> str:
     return check_token(key, value)
 
 
-def build_pairs(cfg: dict, extras: list[str], with_jira: bool, with_git: bool) -> list[tuple[str, str]]:
-    groups: list[tuple[str, tuple[str, ...]]] = [
-        (server_name(cfg, "slackMcp"), mcp_tools.SLACK_TOOLS),
-        (server_name(cfg, "teamsMcp"), mcp_tools.TEAMS_TOOLS),
-    ]
+JIRA_ALIASES = ("atlassian-rovo", "claude_ai_Atlassian")
+GROUP_KEYS = {
+    "slack": "slackMcp",
+    "teams": "teamsMcp",
+    "jira": "jiraMcp",
+    "github": "githubMcp",
+}
+GROUP_TOOLS = {
+    "slack": mcp_tools.SLACK_TOOLS,
+    "teams": mcp_tools.TEAMS_TOOLS,
+    "jira": mcp_tools.JIRA_TOOLS,
+    "github": mcp_tools.GITHUB_TOOLS,
+}
+
+
+def uniq(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def configured_variants(name: str) -> list[str]:
+    """Ids Cursor has used for one mcp.json key.
+
+    Docs say the allowlist server is the mcp.json key. The Run dialog also
+    shows user-<key>, project-<key>, plugin-<plugin>-<key>, and
+    project-0-<folder>-<key>. The last one changes per workspace and worktree,
+    so *<name>* is written with the tool still named.
+    """
+    return uniq([
+        name,
+        f"user-{name}",
+        f"project-{name}",
+        f"plugin-{name}-{name}",
+        f"*{name}*",
+    ])
+
+
+def logical_groups(key: str, cfg: dict) -> set[str]:
+    folded = key.casefold()
+    groups: set[str] = set()
+    slack = str(cfg.get("slackMcp") or "slack").casefold()
+    teams = str(cfg.get("teamsMcp") or "teams").casefold()
+    jira = str(cfg.get("jiraMcp") or "atlassian").casefold()
+    github = str(cfg.get("githubMcp") or "github").casefold()
+    if folded == slack or "slack" in folded:
+        groups.add("slack")
+    if folded == teams or "teams" in folded:
+        groups.add("teams")
+    if folded == jira or any(tok in folded for tok in ("atlassian", "jira", "rovo")):
+        groups.add("jira")
+    if folded == github or "github" in folded:
+        groups.add("github")
+    return groups
+
+
+def plugin_label(path: Path) -> str:
+    for parent in [path.parent, *list(path.parents)[:8]]:
+        for rel in ("plugin.json", ".cursor-plugin/plugin.json", ".claude-plugin/plugin.json"):
+            manifest = parent / rel
+            if not manifest.is_file():
+                continue
+            try:
+                doc, _ = loads(manifest.read_text(), manifest)
+            except (OSError, ConfigError):
+                continue
+            if isinstance(doc, dict):
+                raw = doc.get("name") or doc.get("displayName") or ""
+                if isinstance(raw, str) and raw.strip():
+                    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw.strip()).strip("-")
+                    if slug:
+                        return slug
+        if parent.name in {"plugins", "cache", ".cursor"}:
+            break
+    for parent in path.parents:
+        if parent.name in {"plugins", "cache", ".cursor", "cursor-public", ".cursor-plugin", ".claude-plugin", ".github"}:
+            continue
+        if re.fullmatch(r"[0-9a-fA-F]{7,}", parent.name):
+            continue
+        return parent.name
+    return path.parent.name
+
+
+def server_keys_in(doc: object) -> list[str]:
+    if not isinstance(doc, dict):
+        return []
+    servers = doc.get("mcpServers")
+    if isinstance(servers, dict):
+        return [key for key in servers if isinstance(key, str) and key.strip()]
+    keys: list[str] = []
+    for key, value in doc.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        if any(field in value for field in ("url", "command", "type", "args", "headers")):
+            keys.append(key)
+    return keys
+
+
+def name_variants(key: str, source: str, plugin: str | None) -> list[str]:
+    names = [key]
+    if source == "user":
+        names.append(f"user-{key}")
+    elif source == "project":
+        names.append(f"project-{key}")
+    elif source == "plugin" and plugin:
+        names.append(f"plugin-{plugin}-{key}")
+    names.append(f"*{key}*")
+    return uniq(names)
+
+
+def discover_servers(root: Path, home: Path) -> list[dict]:
+    """MCP server keys from user, project, and plugin mcp.json files.
+
+    A bad file is skipped. This does not call the network.
+    """
+    ordered: list[tuple[str, Path, str | None]] = []
+    for source, path in (("user", home / "mcp.json"), ("project", root / ".cursor" / "mcp.json")):
+        if path.is_file():
+            ordered.append((source, path, None))
+    files: list[Path] = []
+    for base in (root / ".cursor" / "plugins", home / "plugins"):
+        if not base.is_dir():
+            continue
+        files.extend(path for path in base.rglob("*") if path.is_file() and path.name in {"mcp.json", ".mcp.json"})
+    for path in sorted(files):
+        ordered.append(("plugin", path, plugin_label(path)))
+    hits: list[dict] = []
+    seen: set[Path] = set()
+    for source, path, plugin in ordered:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            doc, _comments = loads(path.read_text(), path)
+        except (OSError, ConfigError):
+            continue
+        for key in server_keys_in(doc):
+            try:
+                check_token("server", key)
+            except ConfigError:
+                continue
+            hits.append({
+                "key": key,
+                "source": source,
+                "path": str(path),
+                "plugin": plugin,
+                "variants": name_variants(key, source, plugin),
+            })
+    return hits
+
+
+def check_server_override(value: str) -> str:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ConfigError(f"server {value!r} is empty or has surrounding space")
+    if any(ch in value for ch in ":\n\t ?"):
+        raise ConfigError(f"server {value!r} has a space or ':'")
+    return value
+
+
+def servers_for(group: str, cfg: dict, discovered: list[dict], extra_servers: list[str]) -> list[str]:
+    base = server_name(cfg, GROUP_KEYS[group])
+    names = configured_variants(base)
+    if group == "jira":
+        for alias in JIRA_ALIASES:
+            if alias.casefold() != base.casefold():
+                names.append(alias)
+    for hit in discovered:
+        if group in logical_groups(hit["key"], cfg):
+            names.extend(hit["variants"])
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for item in extra_servers:
+        if group in logical_groups(item, cfg):
+            matched.append(item)
+        elif not logical_groups(item, cfg):
+            unmatched.append(item)
+    names.extend(matched)
+    names.extend(unmatched)
+    return uniq(names)
+
+
+def build_pairs(
+    cfg: dict,
+    extras: list[str],
+    with_jira: bool,
+    with_git: bool,
+    *,
+    allow_server_tools: bool = False,
+    discovered: list[dict] | None = None,
+    extra_servers: list[str] | None = None,
+) -> list[tuple[str, str]]:
+    groups = ["slack", "teams"]
     if with_jira:
-        groups.append((server_name(cfg, "jiraMcp"), mcp_tools.JIRA_TOOLS))
+        groups.append("jira")
     if with_git:
-        groups.append((server_name(cfg, "githubMcp"), mcp_tools.GITHUB_TOOLS))
+        groups.append("github")
     pairs: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
     def add(server: str, tool: str) -> None:
-        check_token("tool", tool)
+        if "*" not in tool:
+            check_token("tool", tool)
+        elif tool != "*":
+            raise ConfigError(f"tool {tool!r} is not a specific name or *")
+        if "*" not in server:
+            check_token("server", server)
         key = (server.casefold(), tool.casefold())
         if key in seen:
             return
         seen.add(key)
         pairs.append((server, tool))
 
-    for server, tools in groups:
-        for tool in tools:
-            add(server, tool)
+    found = discovered or []
+    extras_in = extra_servers or []
+    for group in groups:
+        servers = servers_for(group, cfg, found, extras_in)
+        tools = GROUP_TOOLS[group]
+        for server in servers:
+            for tool in tools:
+                add(server, tool)
+            if allow_server_tools:
+                add(server, "*")
     for extra in extras:
         server, tool = split_entry(extra)
         add(server, tool)
     return pairs
+
+
+def glob_match(pattern: str, value: str) -> bool:
+    if not pattern or not value:
+        return False
+    pat = re.escape(pattern.casefold()).replace(r"\*", ".*")
+    return re.fullmatch(pat, value.casefold()) is not None
+
+
+def split_allow_entry(entry: str) -> tuple[str, str] | None:
+    text = entry.strip()
+    if text.startswith("Mcp(") and text.endswith(")"):
+        text = text[4:-1]
+    if ":" not in text:
+        return None
+    server, tool = text.split(":", 1)
+    if not server or not tool:
+        return None
+    return server, tool
+
+
+def entry_covers(entry: str, server: str, tool: str) -> bool:
+    parts = split_allow_entry(entry)
+    if parts is None:
+        return False
+    return glob_match(parts[0], server) and glob_match(parts[1], tool)
+
+
+def list_lines(cfg: dict, discovered: list[dict]) -> str:
+    lines = ["Detected MCP servers:"]
+    if not discovered:
+        lines.append("  none. Looked in ~/.cursor/mcp.json, .cursor/mcp.json, .cursor/plugins, and ~/.cursor/plugins.")
+    for hit in discovered:
+        where = hit["source"]
+        if hit.get("plugin"):
+            where += f" plugin={hit['plugin']}"
+        lines.append(f"  {hit['key']}  {where}  {hit['path']}")
+        lines.append("    variants: " + ", ".join(hit["variants"]))
+    lines.append(
+        "Configured: "
+        f"slackMcp={cfg.get('slackMcp') or 'slack'} "
+        f"teamsMcp={cfg.get('teamsMcp') or 'teams'} "
+        f"jiraMcp={cfg.get('jiraMcp') or 'atlassian'} "
+        f"githubMcp={cfg.get('githubMcp') or 'github'}"
+    )
+    lines.append(
+        "Runtime ids often differ from the mcp.json key: user-<key>, plugin-<plugin>-<key>, "
+        "project-0-<folder>-<key>, atlassian-rovo, claude_ai_Atlassian. "
+        "project-0-<folder> changes per workspace. Warp writes *<name>:<tool> so the tool stays specific."
+    )
+    return "\n".join(lines)
+
+
+def _surface_entries(scope: Scope) -> dict[str, list[str]]:
+    perm_doc, _, _ = load_doc(scope.path("permissions"))
+    cli_doc, _, _ = load_doc(scope.path("cli"))
+    perm = [item for item in (perm_doc.get("mcpAllowlist") or []) if isinstance(item, str)]
+    allow = []
+    perms = cli_doc.get("permissions")
+    if isinstance(perms, dict) and isinstance(perms.get("allow"), list):
+        allow = [item for item in perms["allow"] if isinstance(item, str)]
+    hook_pairs: list[str] = []
+    text = read_text(scope.path("pairs"))
+    if text:
+        try:
+            doc, _ = loads(text, scope.path("pairs"))
+        except ConfigError:
+            doc = {}
+        if isinstance(doc, dict):
+            for pair in doc.get("pairs") or []:
+                if isinstance(pair, dict) and pair.get("server") and pair.get("tool"):
+                    hook_pairs.append(f"{pair['server']}:{pair['tool']}")
+    return {"ide": perm, "cli": allow, "hook": hook_pairs}
+
+
+def check_lines(root: Path, home: Path, pairs: list[tuple[str, str]], discovered: list[dict], cfg: dict) -> str:
+    lines = [list_lines(cfg, discovered), ""]
+    surfaces_by_name = {
+        "project IDE .cursor/permissions.json": _surface_entries(project_scope(root))["ide"],
+        "user IDE ~/.cursor/permissions.json": _surface_entries(user_scope(home))["ide"],
+        "project CLI .cursor/cli.json": _surface_entries(project_scope(root))["cli"],
+        "user CLI ~/.cursor/cli-config.json": _surface_entries(user_scope(home))["cli"],
+        "project hook .cursor/hooks/warp-allow.json": _surface_entries(project_scope(root))["hook"],
+        "user hook ~/.cursor/hooks/warp-allow.json": _surface_entries(user_scope(home))["hook"],
+    }
+    ide_entries = surfaces_by_name["project IDE .cursor/permissions.json"] + surfaces_by_name["user IDE ~/.cursor/permissions.json"]
+    missing_ide: list[str] = []
+    for server, tool in pairs:
+        if tool == "*":
+            continue
+        if not any(entry_covers(entry, server, tool) for entry in ide_entries):
+            missing_ide.append(perm_entry(server, tool))
+    for label, entries in surfaces_by_name.items():
+        covered = 0
+        for server, tool in pairs:
+            if tool == "*":
+                continue
+            if any(entry_covers(entry, server, tool) for entry in entries):
+                covered += 1
+        total = sum(1 for _, tool in pairs if tool != "*")
+        lines.append(f"{label}: {covered}/{total} Warp entries covered ({len(entries)} lines in the file).")
+    lines.append("")
+    if missing_ide:
+        lines.append("Entries that would fix the IDE prompt (project and user files are combined):")
+        for entry in missing_ide:
+            lines.append(f"  {entry}")
+    else:
+        lines.append("IDE: covered. Project and user mcpAllowlist together match every Warp entry.")
+    lines.append("")
+    lines.append(
+        "Run Mode: permissions.json is consulted only when Run Mode is Auto-review, Allowlist, or Run Everything. "
+        "Ask Every Time ignores it. A team admin Run Mode override ignores the file. "
+        "Setting mcpAllowlist replaces the in-app MCP allowlist."
+    )
+    lines.append(
+        "CLI: headless agents read .cursor/cli.json or ~/.cursor/cli-config.json (Mcp(server:tool)), not the IDE button. "
+        "agent -f (also --force) approves tools for that process. It is not the same as the IDE allowlist."
+    )
+    lines.append(
+        "Cloud agents and automations do not use Run Modes and do not ask for approval. "
+        "beforeMCPExecution does not run there. A hook allow does not skip the IDE prompt."
+    )
+    lines.append("Undo a project write with /warp-allow-notify --revoke. User files need --user --yes --revoke.")
+    return "\n".join(lines)
+
+
+def git_comment_wanted(root: Path) -> tuple[bool, str]:
+    """Whether init should allow GitHub add_issue_comment, and a note when it cannot."""
+    cfg = herald_fmt.read_config(root)
+    provider = str(cfg.get("gitProvider") or "auto").strip().lower()
+    if provider == "github":
+        return True, ""
+    if provider == "bitbucket":
+        return False, "gitProvider is bitbucket. Warp does not name a Bitbucket comment tool. Add server:tool to notifyAllow."
+    kind = herald_fmt.repo_web(root)[2]
+    if kind == "github":
+        return True, ""
+    if kind == "bitbucket":
+        return False, "origin is Bitbucket. Warp does not name a Bitbucket comment tool. Add server:tool to notifyAllow."
+    return False, ""
+
+
+def auto_allow_enabled(text: str) -> bool:
+    """Missing autoAllowTools means on. false, no, off, and 0 turn it off."""
+    match = re.search(r"^autoAllowTools:[ \t]*(.*?)[ \t]*(#.*)?$", text, re.M)
+    if not match:
+        return True
+    value = match.group(1).strip().strip("\"'").lower()
+    if not value:
+        return True
+    return value not in {"false", "no", "off", "0"}
 
 
 def perm_entry(server: str, tool: str) -> str:
@@ -724,10 +1087,37 @@ def revoke_changes(scope: Scope) -> list[Change]:
 def revoke_project(root: Path) -> int:
     """Remove project allow-notify entries. Used by /warp-uninstall after --yes."""
     try:
-        return run(project_scope(root), [], dry=False, revoke=True, with_git=False)
+        code, _changed = run(project_scope(root), [], dry=False, revoke=True, with_git=False)
+        return code
     except ConfigError as e:
         print(str(e), file=sys.stderr)
         return 1
+
+
+def apply_project(root: Path, *, dry: bool, with_git: bool, home: Path | None = None) -> list[tuple[str, str]]:
+    """Project allowlist used by /warp-init. Does not touch ~/.cursor files."""
+    home_path = home or cursor_home(None)
+    cfg = herald_fmt.read_config(root)
+    discovered = discover_servers(root, home_path)
+    extras = parse_notify_allow(config_text(root))
+    pairs = build_pairs(
+        cfg,
+        extras,
+        True,
+        with_git,
+        discovered=discovered,
+        extra_servers=[],
+    )
+    groups = "slack, teams, jira" + (", github" if with_git else "")
+    code, changed = run(project_scope(root), pairs, dry, False, with_git)
+    if code != 0:
+        return [("warn", "MCP allowlist was not written")]
+    undo = "Undo: /warp-allow-notify --revoke"
+    mode = "Set Run Mode to Auto-review, Allowlist, or Run Everything."
+    if not changed:
+        return [("skip", f"MCP allowlist already set ({groups}). {undo}")]
+    verb = "would allow" if dry else "allowed"
+    return [("done", f"{verb} Warp MCP tools for {groups} in .cursor/permissions.json. {mode} {undo}")]
 
 
 def uninstall_notes(root: Path) -> list[str]:
@@ -759,19 +1149,20 @@ def cleanup_dirs(scope: Scope) -> None:
         rmdir_empty(scope.base / ".cursor")
 
 
-def run(scope: Scope, pairs: list[tuple[str, str]], dry: bool, revoke: bool, with_git: bool) -> int:
+def run(scope: Scope, pairs: list[tuple[str, str]], dry: bool, revoke: bool, with_git: bool) -> tuple[int, bool]:
+    """Apply or revoke. Returns (exit code, whether a write would change files)."""
     if revoke:
         changes = revoke_changes(scope)
         if not changes:
             print("No warp-allow-notify manifest. Nothing removed.")
-            return 0
+            return 0, False
     else:
         changes, _manifest = allow_changes(scope, pairs)
     real = [change for change in changes if not change.same]
     if not real:
         print("Already set. Nothing changed.")
         remind(scope, with_git and not revoke)
-        return 0
+        return 0, False
     if dry:
         print("Dry run. Nothing written.")
         print()
@@ -788,7 +1179,7 @@ def run(scope: Scope, pairs: list[tuple[str, str]], dry: bool, revoke: bool, wit
         else:
             print("Changed the files above.")
     remind(scope, with_git and not revoke)
-    return 0
+    return 0, True
 
 
 def config_text(root: Path) -> str:
@@ -804,6 +1195,10 @@ examples:
   python3 scripts/allow_notify.py --dry-run
   python3 scripts/allow_notify.py
   python3 scripts/allow_notify.py --with-jira --with-git
+  python3 scripts/allow_notify.py --list
+  python3 scripts/allow_notify.py --check
+  python3 scripts/allow_notify.py --server plugin-slack-slack
+  python3 scripts/allow_notify.py --allow-server-tools
   python3 scripts/allow_notify.py --user --dry-run
   python3 scripts/allow_notify.py --user --yes
   python3 scripts/allow_notify.py --revoke
@@ -825,22 +1220,38 @@ What it writes (project is the default; --user writes the home-directory files):
   Cloud  nothing. Cloud agents do not ask for approval, and beforeMCPExecution
          does not run there.
 
-Default tools, from scripts/mcp_tools.py, on slackMcp and teamsMcp:
-  slack_post_message, slack_send_message
-  send_channel_message, teams_send_message
---with-jira adds the Atlassian tools Warp calls (getAccessibleAtlassianResources,
-  getJiraIssue, getTransitionsForJiraIssue, listJiraIssueTransitions,
-  transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue,
-  searchJiraIssuesUsingJql, getJiraProjectIssueTypesMetadata,
-  getJiraIssueRemoteIssueLinks, getVisibleJiraProjects, editJiraIssue,
-  getJiraIssueEditmeta). editJiraIssue writes the External ID field.
-  Scan and claim do not call it unless jiraWriteExternalId is true.
+Jira tools are included by default. --with-jira is accepted and changes nothing.
+Default tools come from scripts/mcp_tools.py:
+  slack_post_message, slack_send_message, slack_read_channel,
+  slack_read_thread, slack_search_channels
+  send_channel_message, teams_send_message, teams_read_channel,
+  teams_read_thread, teams_search_channels
+  getAccessibleAtlassianResources, getJiraIssue, getTransitionsForJiraIssue,
+  listJiraIssueTransitions, transitionJiraIssue, addOrEditJiraIssueComment,
+  addCommentToJiraIssue, searchJiraIssuesUsingJql,
+  getJiraProjectIssueTypesMetadata, getJiraIssueRemoteIssueLinks,
+  getVisibleJiraProjects, editJiraIssue, getJiraIssueEditmeta, getJiraScreen,
+  updateJiraScreen, createJiraIssueRemoteIssueLink, createJiraField,
+  createCustomField, createJiraCustomField
 --with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
-  put that in notifyAllow.
+  put that in notifyAllow. lookupJiraAccountId is not called.
+
+Each tool is written for several server ids: the configured name (slack,
+atlassian), user-<name>, project-<name>, plugin-<name>-<name>, and the glob
+*<name>:<tool>. Cursor's Run dialog often shows user-slack, plugin-slack-slack,
+project-0-<folder>-slack, atlassian-rovo, or claude_ai_Atlassian. The
+project-0 prefix changes per workspace, so the glob keeps the tool specific.
+--list prints servers found in ~/.cursor/mcp.json, .cursor/mcp.json, and
+plugin mcp.json files. --server NAME adds that id (repeatable). --check
+prints what project and user permissions, CLI, and hook files already cover,
+the Run Mode caveat, and the entries that would fix a gap. Neither writes.
+
+--allow-server-tools also writes server:* and *name*:*. That allows every
+tool on that server, including destructive ones. The default does not.
 
 notifyAllow in .warp/config.yaml is a list of extra server:tool pairs. No
-wildcards. If the Run prompt shows a different tool, add that server:tool and
-run this again.
+wildcards there. If the Run prompt shows a different tool, add that
+server:tool and run this again.
 
 Merges into existing JSON. Other hooks, other allow entries, the terminal
 allowlist, and autoRun stay. A file that already exists is copied to a .bak
@@ -868,32 +1279,58 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--root", help="repo root (default: git toplevel or cwd)")
     p.add_argument("--user", action="store_true", help="edit ~/.cursor instead of the repo")
     p.add_argument("--yes", action="store_true", help="required with --user before anything is written")
-    p.add_argument("--with-jira", action="store_true", help="also allow the Jira tools Warp calls")
+    p.add_argument("--with-jira", action="store_true", help="allow the Jira tools Warp calls (already the default)")
     p.add_argument("--with-git", action="store_true", help="also allow GitHub add_issue_comment")
+    p.add_argument("--server", action="append", default=[], help="also allow these tools on this server id (repeatable)")
+    p.add_argument("--list", action="store_true", help="print detected MCP servers and write nothing")
+    p.add_argument("--check", action="store_true", help="show which Warp tools permissions and hooks already cover")
+    p.add_argument("--allow-server-tools", action="store_true", help="also write server:* (every tool on that server)")
     p.add_argument("--dry-run", action="store_true", help="print diffs and write nothing")
     p.add_argument("--revoke", action="store_true", help="remove only the entries this command recorded")
     p.add_argument("--cursor-home", help="directory standing in for ~/.cursor (tests)")
     args = p.parse_args(usage.normalize_argv(argv))
 
-    if args.user and not args.yes and not args.dry_run:
+    inspecting = bool(args.list or args.check)
+    if args.user and not args.yes and not args.dry_run and not inspecting:
         print("Refusing to edit user-level Cursor files without --yes.")
         print("Those files are ~/.cursor/permissions.json, ~/.cursor/cli-config.json, and ~/.cursor/hooks.json.")
         print("Get an explicit yes from the user, then re-run with --user --yes.")
         return 2
 
     root = find_root(args.root)
-    scope = user_scope(cursor_home(args.cursor_home)) if args.user else project_scope(root)
+    home = cursor_home(args.cursor_home)
+    scope = user_scope(home) if args.user else project_scope(root)
     try:
-        if args.revoke:
-            pairs: list[tuple[str, str]] = []
-        else:
-            cfg = herald_fmt.read_config(root)
-            extras = parse_notify_allow(config_text(root))
-            pairs = build_pairs(cfg, extras, args.with_jira, args.with_git)
+        if args.allow_server_tools and not args.revoke:
+            print(
+                "Warning: --allow-server-tools allows every tool on the matched servers, "
+                "including destructive ones. The default is a specific tool list."
+            )
+        cfg = herald_fmt.read_config(root)
+        discovered = discover_servers(root, home)
+        extra_servers = [check_server_override(item) for item in args.server]
+        extras = parse_notify_allow(config_text(root))
+        pairs = build_pairs(
+            cfg,
+            extras,
+            True,
+            args.with_git,
+            allow_server_tools=bool(args.allow_server_tools),
+            discovered=discovered,
+            extra_servers=extra_servers,
+        )
+        if args.list:
+            print(list_lines(cfg, discovered))
+        if args.check:
+            print(check_lines(root, home, pairs, discovered, cfg))
+        if inspecting:
+            return 0
+        if not args.revoke:
             print("Allowing these tools only:")
             for server, tool in pairs:
                 print(f"  {server}:{tool}")
-        return run(scope, pairs, args.dry_run, args.revoke, args.with_git)
+        code, _changed = run(scope, [] if args.revoke else pairs, args.dry_run, args.revoke, args.with_git)
+        return code
     except ConfigError as e:
         print(str(e), file=sys.stderr)
         return 1

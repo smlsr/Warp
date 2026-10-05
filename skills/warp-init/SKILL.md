@@ -1,6 +1,6 @@
 ---
 name: warp-init
-description: "Install Warp in the current repo: copy the plugin to .cursor/plugins/warp, create .warp/config.yaml with the shared Warp channel, and gitignore .warp/. Use on a fresh repo, or to repair a partial install. Safe to run again."
+description: "Install Warp in the current repo: copy the plugin, create .warp/config.yaml, gitignore .warp/, and write the project MCP allowlist. Use on a fresh repo, or to repair a partial install. Safe to run again."
 ---
 
 # Warp init
@@ -13,7 +13,7 @@ Automates the manual install. Each step checks first. A second run on a complete
 python3 <plugin>/scripts/install.py init
 ```
 
-`<plugin>` is wherever this plugin is loaded from. The script works from the repo root (the git top level, or the current directory outside git). Add `--dry-run` to preview, or `--channel NAME` to override the channel. `install.py ?` (and `init ?`, `help`, `-h`, `--help`) prints the options. Quote `?` if the shell expands it.
+`<plugin>` is wherever this plugin is loaded from. The script works from the repo root (the git top level, or the current directory outside git). Add `--dry-run` to preview, `--channel NAME` to override the channel, or `--no-allow` to skip the MCP allowlist. `install.py ?` (and `init ?`, `help`, `-h`, `--help`) prints the options. Quote `?` if the shell expands it.
 
 ## Steps
 
@@ -26,6 +26,7 @@ python3 <plugin>/scripts/install.py init
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 | Git provider | `gitProvider` is already `github` or `bitbucket` | read `origin` and write it. A custom value is left alone, with a warning if it disagrees with the remote. No remote sets `pushMerge: false`. |
 | Jira project | `jiraProject` is already set | detect it from plan files, branches, and recent commits. One clear prefix is written, and an empty `jiraKeyPrefixes` is set to the same key. Several prefixes, or none, are not guessed. The warning names the candidates. |
+| MCP allowlist | `.cursor/permissions.json` already has Warp's tools, or `autoAllowTools` is false, or `--no-allow` was passed | write the project allowlist (Slack, Teams, Jira, and GitHub `add_issue_comment` when the provider is GitHub). Say what changed. Undo is `/warp-allow-notify --revoke`. Do not write `~/.cursor` files. |
 | Version | `.warp/version` matches the project plugin copy | write that version. If `.cursor/plugins/warp` is older than the plugin this command ran from, print `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` and do not overwrite plugin files. |
 
 `warp` is one shared channel for every repo. A channel that already has a value is left alone. Other existing config values are left alone too; only keys that are absent are added. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.

@@ -27,3 +27,5 @@ You were started with `IMPLEMENT <id>` in this repo. Local and cloud are the sam
 If status is already `coding` or `fix` and the branch exists, continue that branch. Do not open a second pull request.
 
 Every acceptance-criterion comment names the id and the command that passed.
+
+If Cursor asks you to press Allow or Run on a Jira or Slack tool, stop editing permission files. Tell the user to run `/warp-allow-notify --check`. `/warp-init` writes the project allowlist. A tool name that is not in `scripts/mcp_tools.py` belongs in `notifyAllow`.

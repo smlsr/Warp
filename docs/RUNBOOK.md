@@ -67,6 +67,24 @@ Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-read
 
 `/warp-init` is idempotent. It never overwrites `.warp/config.yaml` values or existing plugin files, so it will not upgrade an installed copy. It does append config keys the file is missing, and it records the installed version in `.warp/version`. When that copy is older than the plugin you ran, it prints `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`. To start clean, copy `.warp/` aside if you want the journal, run `/warp-stop`, then `/warp-uninstall` and confirm, reload Cursor, and run `/warp-init`. See the README upgrade section.
 
+## agents stop and ask to Run/Allow
+
+`slack_send_message` and `addOrEditJiraIssueComment` prompt when the allowlist entry does not match the server id Cursor shows, or when the entry was never written.
+
+Before 1.3.13, `/warp-allow-notify` wrote `slack:<tool>` and `atlassian:<tool>` only, Jira tools required `--with-jira`, and `/warp-init` did not run it. The Run dialog often names `user-slack`, `plugin-slack-slack`, `project-0-<folder>-slack`, `atlassian-rovo`, or `claude_ai_Atlassian`. `project-0-<folder>` changes when you open another workspace or worktree. A literal `slack:slack_send_message` does not match those.
+
+`/warp-init` now writes the project list (specific tools, plus `user-`, `plugin-`, and `*<name>*:<tool>`). `autoAllowTools: false` or `/warp-init --no-allow` skips it. User-level `~/.cursor` files still need `/warp-allow-notify --user --yes`.
+
+Then:
+
+1. Set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time ignores `permissions.json`. A team admin override ignores it too.
+2. `/warp-allow-notify --check` prints detected servers, what project and user files cover, and the entries that would fix a gap. `--list` only prints servers.
+3. If the dialog's tool name is not in `scripts/mcp_tools.py`, add `server:tool` to `notifyAllow` and run `/warp-allow-notify` again.
+4. Reload Cursor (Developer: Reload Window) or start a new chat.
+5. Undo with `/warp-allow-notify --revoke`. That removes only the entries Warp recorded.
+
+IDE agents prompt until that matches. Cloud agents and automations do not prompt. The Cursor CLI uses `.cursor/cli.json` (`Mcp(server:tool)`), not the IDE button; `agent -f` approves tools for that process. A `beforeMCPExecution` allow does not skip the IDE prompt. `--allow-server-tools` writes `server:*`, which allows every tool on that server, including destructive ones. Leave it off unless you mean that.
+
 ## Scan one folder
 
 `/warp-scan <folder>` limits the search to that folder. If the name matches several folders the scan stops and lists them; re-run with the full path. The beam and `scan.json` record the folder.

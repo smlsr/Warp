@@ -49,6 +49,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | slackChannel | `warp` | One shared channel for every repo, to post into and to watch for `warp:status`. Lowercase: Slack channel names are lowercase, so uppercase letters here are lowercased when posting, and `/warp-init` warns. Warp does not create it. `/warp-init` sets an empty value (or the old `Warp` default) to `warp`; any other value you set is kept. |
 | teamsChannel | `warp` | Same, for Teams. Used as written. |
 | projectName | empty | Shown after the repo in message headers: `Warp \| repo / project`. Empty uses `jiraProject`, then the workspace folder name. Hidden if it equals the repo name. |
-| notifyAllow | empty | Extra `server:tool` pairs for `/warp-allow-notify`. No wildcards. Slack, Teams, Jira, and GitHub tool names Warp already uses come from `scripts/mcp_tools.py`; this list is only for a connector whose tool name is different. |
+| notifyAllow | empty | Extra `server:tool` pairs for `/warp-allow-notify`. No wildcards. Slack, Teams, Jira, and GitHub tool names Warp already uses come from `scripts/mcp_tools.py`; this list is only for a connector whose tool name is different. `lookupJiraAccountId` is not called. |
+| autoAllowTools | `true` | `/warp-init` writes the project MCP allowlist (Slack, Teams, Jira, and the GitHub comment tool when that provider is in use). `false` skips it. `/warp-init --no-allow` skips one run. User-level files stay opt-in. Undo with `/warp-allow-notify --revoke`. |
 
 There is no person cap and no people list.

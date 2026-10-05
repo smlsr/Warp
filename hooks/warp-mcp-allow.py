@@ -5,17 +5,29 @@ Reads `warp-allow.json` in the same directory. Each pair is a server name and
 a tool name. A match prints `{"permission":"allow"}`. Anything else, including
 a missing file or bad input, prints `{"permission":"ask"}`.
 
-This never returns deny, and it never allows every tool on a server. Cursor's
-own docs say a hook `allow` does not skip the MCP approval prompt; the IDE
-prompt is controlled by `permissions.json`. Invalid JSON on stdout blocks the
-call, so this prints one JSON object and exits 0.
+This never returns deny. A stored server pattern may contain `*` so
+`plugin-slack-slack` matches `*slack*`. A stored tool of `*` matches every
+tool on that server; `/warp-allow-notify` writes that only with
+`--allow-server-tools`. Cursor's own docs say a hook `allow` does not skip
+the MCP approval prompt; the IDE prompt is controlled by `permissions.json`.
+Invalid JSON on stdout blocks the call, so this prints one JSON object and
+exits 0.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
+
+
+def glob_match(pattern: str, value: str) -> bool:
+    """Cursor mcpAllowlist rule: * matches any sequence, case-insensitive."""
+    if not pattern or not value:
+        return False
+    pat = re.escape(pattern.casefold()).replace(r"\*", ".*")
+    return re.fullmatch(pat, value.casefold()) is not None
 
 
 def decide(server: str, tool: str) -> str:
@@ -27,13 +39,12 @@ def decide(server: str, tool: str) -> str:
     pairs = doc.get("pairs") if isinstance(doc, dict) else None
     if not isinstance(pairs, list):
         return "ask"
-    server_l, tool_l = server.casefold(), tool.casefold()
-    if not server_l or not tool_l or "*" in server_l or "*" in tool_l:
+    if not server or not tool or "*" in server or "*" in tool:
         return "ask"
     for pair in pairs:
         if not isinstance(pair, dict):
             continue
-        if str(pair.get("server") or "").casefold() == server_l and str(pair.get("tool") or "").casefold() == tool_l:
+        if glob_match(str(pair.get("server") or ""), server) and glob_match(str(pair.get("tool") or ""), tool):
             return "allow"
     return "ask"
 

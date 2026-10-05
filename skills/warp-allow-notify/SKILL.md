@@ -1,13 +1,13 @@
 ---
 name: warp-allow-notify
-description: "Write the Cursor allowlist so Herald can post to Slack and Teams without a Run approval prompt. Optional flags add the Jira and GitHub tools Warp calls. Use when the user wants those MCP writes to stop prompting."
+description: "Write the Cursor allowlist so Slack and Jira calls Warp makes do not stop for Allow or Run. Use when a prompt names slack_send_message or addOrEditJiraIssueComment, or after init if autoAllowTools was off."
 ---
 
 # Allow notify
 
-Cursor asks for a Run approval every time Herald posts, until those tools are on the MCP allowlist. This command writes that list. It never writes a wildcard.
+`/warp-init` writes this list for the project when `autoAllowTools` is true. Run this command to refresh it, to add `--with-git`, or to edit user-level files after an explicit yes.
 
-Tool names come from `scripts/mcp_tools.py` (the same names the Jira and Herald docs use). Extra pairs come from `notifyAllow` in `.warp/config.yaml`, each one `server:tool`.
+Tool names come from `scripts/mcp_tools.py`. Jira tools are included. Extra pairs come from `notifyAllow` in `.warp/config.yaml`, each one `server:tool`, with no wildcard. `server:*` is written only with `--allow-server-tools`, and that allows every tool on the server, including destructive ones.
 
 ## Which Cursor surface this changes
 
@@ -15,14 +15,14 @@ Tool names come from `scripts/mcp_tools.py` (the same names the Jira and Herald 
 |---|---|---|
 | IDE, this repo | `.cursor/permissions.json` `mcpAllowlist` | Skips the Run prompt for those tools when Run Mode is Auto-review, Allowlist, or Run Everything. |
 | IDE, all repos | `~/.cursor/permissions.json` `mcpAllowlist` | Same, only with `--user` after an explicit yes. |
-| CLI, this repo | `.cursor/cli.json` `permissions.allow` `Mcp(server:tool)` | Cursor CLI only. Does not change the IDE Run button. |
+| CLI, this repo | `.cursor/cli.json` `permissions.allow` `Mcp(server:tool)` | Cursor CLI and headless runs. Does not change the IDE Run button. `agent -f` approves tools for that process. |
 | CLI, all repos | `~/.cursor/cli-config.json` | Same, only with `--user`. |
 | Hook | `.cursor/hooks.json` or `~/.cursor/hooks.json` `beforeMCPExecution` | Returns allow for this list and ask for every other tool. A hook allow does not currently skip the Run prompt. The permissions file does. |
-| Cloud agents | nothing | Cloud agents do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
+| Cloud agents and automations | nothing | They do not use Run Modes and do not ask for approval. `beforeMCPExecution` does not run there. |
 
 Setting `mcpAllowlist` replaces the in-app MCP allowlist. Entries that exist only in Cursor Settings prompt again until they are in the file. The terminal allowlist and `autoRun` are left alone. Ask Every Time does not consult the file. A team admin Run Mode override ignores it.
 
-Default tools are the Slack post tools on `slackMcp` and the Teams post tools on `teamsMcp`. `--with-jira` adds the Atlassian tools Warp calls. `--with-git` adds GitHub `add_issue_comment` only. Warp does not name a Bitbucket comment tool; that belongs in `notifyAllow`.
+The default list is Slack (post and the `warp:status` reads), Teams, and Jira, on the configured name plus `user-<name>`, `project-<name>`, `plugin-<name>-<name>`, and `*<name>*:<tool>`. `--with-jira` changes nothing. `--with-git` adds GitHub `add_issue_comment` only. Warp does not name a Bitbucket comment tool; that belongs in `notifyAllow`. `--list` and `--check` write nothing. `--check` is the diagnostic when a prompt is still there.
 
 ## Run
 

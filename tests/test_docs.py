@@ -81,9 +81,14 @@ class ScriptHelpTests(unittest.TestCase):
                 "--revoke",
                 "--dry-run",
                 "--cursor-home",
+                "--list",
+                "--check",
+                "--server",
+                "--allow-server-tools",
                 "notifyAllow",
                 "mcpAllowlist",
                 "slack_post_message",
+                "addOrEditJiraIssueComment",
             ):
                 self.assertIn(needle, text)
 

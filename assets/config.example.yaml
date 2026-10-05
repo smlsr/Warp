@@ -126,3 +126,10 @@ notifyAllow: []
 # No wildcards. Re-run /warp-allow-notify after changing this.
 # notifyAllow:
 #   - "slack:some_other_post_tool"
+autoAllowTools: true
+# true: /warp-init writes .cursor/permissions.json so Slack and Jira calls Warp
+# makes do not prompt. The list is specific tools, on the configured server
+# name and the ids Cursor actually shows (user-, plugin-, and *name*).
+# false: init skips that write. /warp-allow-notify still can.
+# User-level ~/.cursor files are never written by init. Undo: /warp-allow-notify --revoke.
+# /warp-init --no-allow skips one run without changing this key.
