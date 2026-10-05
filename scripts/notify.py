@@ -80,7 +80,7 @@ def init_message(root: Path, cfg: dict) -> dict:
         "Initialized",
         intro=f"Cursor repo {fmt.repo_name(root)} was initialized with Warp.",
         facts=facts,
-        footer="Next: /warp-scan, then /warp-start.",
+        footer=fmt.version_label() + ". Next: /warp-scan, then /warp-start.",
     )
 
 
@@ -114,7 +114,7 @@ def scan_message(root: Path, info: dict) -> dict:
                 refs.append((label, rel))
     links = [(f"{label}: {rel}", file_url(rel, web, branch, kind)) for label, rel in refs[:MAX_LINKS]]
     bullets = [f"... {len(refs) - MAX_LINKS} more in .warp/scan.json"] if len(refs) > MAX_LINKS else []
-    footer = "Next: /warp-start. Status files are in .warp/ (not committed)."
+    footer = fmt.version_label() + ". Next: /warp-start. Status files are in .warp/ (not committed)."
     if any(u for _, u in links):
         footer = f"Links point at branch {branch}; they work once it is pushed. " + footer
     return fmt.message(root, "Scan finished", facts=facts, bullets=bullets, links=links, footer=footer)

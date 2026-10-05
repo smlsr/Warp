@@ -467,8 +467,16 @@ def write_status(beam_path: Path) -> None:
     }
     out = beam_path.parent / "status.json"
     atomic_write(out, json.dumps(payload, indent=2) + "\n")
+    try:
+        import version
+
+        ver = version.label(version.version_of(version.PLUGIN_ROOT))
+    except Exception:
+        ver = "Warp"
     lines = [
         "# Warp status",
+        "",
+        ver,
         "",
         f"Updated {payload['updatedAt']} · runState={payload['runState']}",
         "",
@@ -491,6 +499,12 @@ def write_status(beam_path: Path) -> None:
     lines.append("")
     atomic_write(beam_path.parent / "STATUS.md", "\n".join(lines))
     print(f"wrote {out} and {beam_path.parent / 'STATUS.md'}")
+    try:
+        import version
+
+        print(version.describe(beam_path.parent.parent))
+    except Exception as e:
+        print(f"version: {e}")
 
 
 def export_plan(beam_path: Path, dest: Path) -> None:

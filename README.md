@@ -37,7 +37,7 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
-Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-allow-notify`, and `/warp-uninstall`. `/warp-jira-check` prints, per ticket, which Jira move and which comment should have happened and which of those the beam never recorded. `/warp-allow-notify` writes the Cursor allowlist so Slack and Teams posts (and, if you ask, the Jira and GitHub tools Warp calls) are not stopped by a Run prompt.
+Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-allow-notify`, `/warp-version`, and `/warp-uninstall`. `/warp-jira-check` prints, per ticket, which Jira move and which comment should have happened and which of those the beam never recorded. `/warp-allow-notify` writes the Cursor allowlist so Slack and Teams posts (and, if you ask, the Jira and GitHub tools Warp calls) are not stopped by a Run prompt.
 
 ## Slack and Teams messages
 
@@ -61,7 +61,7 @@ Channel: warp
 Repo: Demo-App (https://github.com/acme/Demo-App)
 Branch: main
 Config: .warp/config.yaml
-Next: /warp-scan, then /warp-start.
+Warp v1.3.1. Next: /warp-scan, then /warp-start.
 ```
 
 Example, `/warp-scan`:
@@ -75,7 +75,7 @@ Gates: 2
 Run: stopped
 Estimate: agent 60.0h, human 2.5h, elapsed 43.5h
 - Plan used: spec/CURSOR_PLAN.md (https://github.com/acme/Demo-App/blob/main/spec/CURSOR_PLAN.md)
-Links point at branch main; they work once it is pushed. Next: /warp-start. Status files are in .warp/ (not committed).
+Links point at branch main; they work once it is pushed. Warp v1.3.1. Next: /warp-start. Status files are in .warp/ (not committed).
 ```
 
 - `/warp-init` posts only if it changed something. A second run posts nothing.
@@ -101,6 +101,16 @@ Default is the project files. `--user` edits the home-directory files and waits 
 python3 <plugin>/scripts/allow_notify.py --dry-run
 python3 <plugin>/scripts/allow_notify.py
 ```
+
+## Version
+
+The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is v1.3.0, repo copy is v1.3.1: run /warp-uninstall then /warp-init`.
+
+```bash
+python3 <plugin>/scripts/version.py
+```
+
+Every change bumps the patch version and adds a `CHANGELOG.md` entry. `python3 scripts/bump_version.py` does both (`--minor` or `--major` when those are intended). A pull request that does not move the version past `main` fails CI.
 
 ## Uninstall
 

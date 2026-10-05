@@ -1,0 +1,14 @@
+---
+description: Every Warp change bumps the patch version and adds a CHANGELOG entry.
+alwaysApply: true
+---
+
+# Version bump
+
+Every pull request in this repo bumps the patch version and adds a changelog entry.
+
+- `VERSION` is the source of truth. `.cursor-plugin/plugin.json` must use the same number.
+- Add a `## <version>` section to `CHANGELOG.md`.
+- Run `python3 scripts/bump_version.py` (patch). Use `--minor` or `--major` only when that is the intended bump. Replace the stub bullet.
+- The next patch after the current version is one higher. Do not reuse the current version.
+- `python3 scripts/check_version.py` must pass before you finish.

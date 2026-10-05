@@ -246,7 +246,32 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
             if not dry:
                 gi.write_text(text + sep + snippet)
             steps.append(("done", "appended Warp snippet to .gitignore"))
+
+    steps.append(record_version(root, dry))
     return steps
+
+
+def record_version(root: Path, dry: bool) -> tuple[str, str]:
+    """Write .warp/version from the installed copy, and warn when the source copy is newer."""
+    import version
+
+    source = version.version_of(version.PLUGIN_ROOT)
+    installed = version.version_of(root / PLUGIN_REL)
+    recorded = installed or source
+    path = root / ".warp" / "version"
+    wrote = False
+    if recorded and not dry:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = recorded + "\n"
+        if not path.is_file() or path.read_text() != text:
+            path.write_text(text)
+            wrote = True
+    if installed and source and installed != source:
+        return ("warn", version.upgrade_line(installed, source))
+    shown = version.label(source or installed)
+    if wrote:
+        return ("done", f"recorded {shown} in .warp/version")
+    return ("skip", shown)
 
 
 def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
