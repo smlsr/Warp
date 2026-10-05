@@ -6,27 +6,34 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 ## Quick map
 
-| Chat | Script |
-|---|---|
-| `/warp-init` | `install.py init` |
-| `/warp-scan` | `scan.py scan` |
-| `/warp-scan <folder>` | `scan.py scan --folder <folder>` |
-| `/warp-start` | `scan.py start` |
-| `/warp-pause` | `scan.py pause` |
-| `/warp-resume` | `scan.py resume` |
-| `/warp-stop` | `scan.py stop` |
-| `/warp-status` | `scan.py status` and `beam.py board` |
-| `/warp-status-post` | `status_post.py` |
-| `/warp-export` | `scan.py export` |
-| `/warp-import` | `scan.py import` |
-| `/warp-jira-check` | `jira_sync.py verify` and `catchup` |
-| `/warp-jira-view <key-or-id>` | `jira_view.py` |
-| `/warp-jira-match` | `jira_match.py` |
-| `/warp-jira-map` | `jira_sync.py map` |
-| `/warp-allow-notify` | `allow_notify.py` |
-| `/warp-version` | `version.py` |
-| `/warp-uninstall` | `install.py uninstall` |
-| `/warp-proceed <id>` | Reed merges a green manual ticket. Not a script flag. |
+| Chat | What it does | Script and common flags |
+|---|---|---|
+| `/warp-init` | Copy the plugin and backfill missing config keys | `install.py init` `--channel` `--dry-run` |
+| `/warp-scan` | Read a plan into the beam and resolve Jira keys | `scan.py scan` `--folder` |
+| `/warp-start` | Start dispatch | `scan.py start` `--reason` |
+| `/warp-pause` | Stop new claims | `scan.py pause` `--reason` |
+| `/warp-resume` | Resume a paused beam | `scan.py resume` `--reason` |
+| `/warp-stop` | Stay stopped until the next start | `scan.py stop` `--reason` |
+| `/warp` | One tick of the master loop | the `warp` skill. Not a script flag. |
+| `/warp-status` | Rewrite status and the board | `scan.py status`, `beam.py board` |
+| `/warp-status-post` | Post that digest | `status_post.py` `--beam` `--out` |
+| `/warp-export` | Write the plan files for an outside edit | `scan.py export` `--beam` `--out` |
+| `/warp-import` | Replace the plan. The run stays stopped | `scan.py import` `--plan` `--keep-status` |
+| `/warp-ingest` | Build the beam from a schedule you name | `beam.py ingest` |
+| `/warp-jira-check` | Keyed or unmapped, what is missing, one fix | `jira_sync.py verify`, `catchup` |
+| `/warp-jira-view <key-or-id>` | Every field on one issue | `jira_view.py` `--comments` `--links` `--all` `--full` `--verbose` `--json` |
+| `/warp-jira-match` | Match summaries. Optionally write External ID | `jira_match.py` `--apply` `--yes` `--write-external-id` |
+| `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
+| `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--with-jira` `--with-git` |
+| `/warp-proceed <id>` | Merge one green manual ticket | Reed. Not a script flag. |
+| `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
+| `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
+
+`jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `plan`, `pick`, `record`, `record-comment`.
+
+## Run control
+
+`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. `/warp-status-post` posts the digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one green manual ticket. Reed refuses a red pull request.
 
 ## /warp-init
 
@@ -323,7 +330,7 @@ python3 <plugin>/scripts/allow_notify.py --revoke
 | (default) | Project files. Slack and Teams post tools only. |
 | `--dry-run` | Unified diff. Writes nothing, including no backup. |
 | `--user` | `~/.cursor/permissions.json`, `cli-config.json`, and `hooks.json`. Refuses to write without `--yes`. `--dry-run` does not need `--yes`. |
-| `--with-jira` | Also the seven Atlassian tools above. |
+| `--with-jira` | Also every Atlassian tool in the Jira table above, including `editJiraIssue` and `getJiraIssueEditmeta`. |
 | `--with-git` | Also GitHub `add_issue_comment`. No Bitbucket name. |
 | `--revoke` | Remove only what `.cursor/warp-allow.json` recorded. |
 | `--root` | Repo root. |
@@ -350,7 +357,7 @@ python3 scripts/check_version.py --against origin/main
 
 ## Beam
 
-`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--bugbot`, `--ci`, `--alarm`, `--attempts`. Do not hand-edit `beam.json`.
+`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--bugbot`, `--ci`, `--alarm`, `--attempts`, `--force`. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
 
 ## Channel verbs
 

@@ -9,11 +9,11 @@ There is no per-person cap. The only concurrency cap is `maxAgents`.
 ## Quick start
 
 1. `/add-plugin https://github.com/smlsr/Warp`, then `/warp-init` in the repo you want built. Reload Cursor.
-2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`.
-3. `/warp-scan` (or `/warp-scan <folder>`). Keys in the plan, a Jira export, or `.warp/jira-map.json` are stored. If Jira is connected, a plan id that equals one issue's external id (then a `warp:<id>` label, then a remote link) is stored too. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-map` is only for ids that are still unmapped or ambiguous. Then `/warp-start`.
-4. `/warp-status` to read the board. `/warp-allow-notify` if the Run prompt blocks Slack or Teams posts. `/warp-version` to see which copy is installed.
+2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`. `/warp-allow-notify --with-jira` allows the Jira tools Warp calls, including the External ID write.
+3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
+4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
 
-The command reference is [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md).
+The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -46,7 +46,32 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
-Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-jira-view`, `/warp-jira-match`, `/warp-jira-map`, `/warp-allow-notify`, `/warp-version`, and `/warp-uninstall`. Flags and behavior are in [docs/COMMANDS.md](docs/COMMANDS.md). The scripts those commands run accept `?`, `help`, `-h`, and `--help`.
+## Commands
+
+Every chat command. Common flags only. The full list, including `jira_sync.py` subcommands, is in [docs/COMMANDS.md](docs/COMMANDS.md). Each script accepts `?`, `help`, `-h`, and `--help`.
+
+| Command | What it does | Common flags |
+|---|---|---|
+| `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/` | `--channel`, `--dry-run` |
+| `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
+| `/warp-start` | Start dispatch | `--reason` |
+| `/warp-pause` | Stop new claims. In-flight work finishes its step | `--reason` |
+| `/warp-resume` | Resume a paused beam | `--reason` |
+| `/warp-stop` | Stay stopped until the next start | `--reason` |
+| `/warp` | One tick of the master loop | |
+| `/warp-status` | Rewrite `.warp/STATUS.md` and the board | |
+| `/warp-status-post` | Post that digest to Slack or Teams | |
+| `/warp-export` | Write `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json` | |
+| `/warp-import` | Replace the plan from a file. The run stays stopped | `--keep-status` |
+| `/warp-ingest` | Build the beam from a schedule you name | |
+| `/warp-jira-check` | Per ticket: keyed or unmapped, what is missing, one fix | `verify --link`, `verify --apply` |
+| `/warp-jira-view` | Every field on one issue, by key or plan id | `--comments`, `--links`, `--all`, `--full`, `--verbose`, `--json` |
+| `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--write-external-id` |
+| `/warp-jira-map` | Review or set plan id to issue key | `--set`, `--import`, `--from-jira`, `--yes` |
+| `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--user`, `--yes`, `--revoke` |
+| `/warp-proceed` | Merge one green manual ticket | |
+| `/warp-version` | Installed copy, source copy, and `.warp/version` | |
+| `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `--yes`, `--remove-gitignore` |
 
 ## Slack and Teams messages
 
@@ -127,7 +152,7 @@ Default tool names come from `scripts/mcp_tools.py`, on the servers `slackMcp` a
 |---|---|
 | `slackMcp` (default `slack`) | `slack_post_message`, `slack_send_message` |
 | `teamsMcp` (default `teams`) | `send_channel_message`, `teams_send_message` |
-| `jiraMcp` with `--with-jira` | `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue`, `listJiraIssueTransitions`, `transitionJiraIssue`, `addOrEditJiraIssueComment`, `addCommentToJiraIssue`, `searchJiraIssuesUsingJql`, `editJiraIssue`, `getJiraIssueEditmeta` |
+| `jiraMcp` with `--with-jira` | `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue`, `listJiraIssueTransitions`, `transitionJiraIssue`, `addOrEditJiraIssueComment`, `addCommentToJiraIssue`, `searchJiraIssuesUsingJql`, `getJiraProjectIssueTypesMetadata`, `getJiraIssueRemoteIssueLinks`, `getVisibleJiraProjects`, `editJiraIssue`, `getJiraIssueEditmeta` |
 | `githubMcp` with `--with-git` | `add_issue_comment` |
 
 `notifyAllow` in `.warp/config.yaml` adds extra `server:tool` pairs. No wildcards. If the Run prompt names a different tool, copy that server and tool into `notifyAllow` and run the command again. The prompt is where the connector's real tool name shows up.
@@ -145,7 +170,7 @@ The command merges into JSON that is already there. Other hooks, other allow ent
 
 ## Version
 
-The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`.
+The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`.
 
 ```bash
 python3 <plugin>/scripts/version.py
@@ -161,10 +186,11 @@ When `/warp-version` or init says the project copy is older than the source copy
 
 1. `/warp-stop` if a beam is running.
 2. Copy `.warp/` aside if you need the journal. Uninstall deletes it.
-3. `/warp-uninstall`, read the list, then run it again with `--yes`.
-4. Reload Cursor. `/warp-init`.
+3. `/warp-uninstall`, read the list, then run it again with `--yes`. That deletes `.cursor/plugins/warp` and `.warp/`.
+4. Reload Cursor.
+5. `/warp-init`. It copies the current plugin into `.cursor/plugins/warp` and writes config.
 
-A config that is only missing new keys does not need an uninstall. Re-run `/warp-init` and it names the keys it added. Readers already use the same defaults when a key is absent.
+A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
 ## Troubleshooting
 
@@ -176,7 +202,9 @@ A config that is only missing new keys does not need an uninstall. Re-run `/warp
 python3 <plugin>/scripts/jira_sync.py project --set WAR
 ```
 
-An empty `jiraKeyPrefixes` is set to the same project. A value already in the config is left alone. `/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export, or in `.warp/jira-map.json`. If Jira is connected it looks up the plan id on `jiraExternalIdField` (a field name or `customfield_NNNNN`; also External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a label `warp:WV-01`, then a remote-link id, and stores `WAR-1` when exactly one issue matches. A summary match is only a proposal. You do not run `/warp-jira-map` for a single exact hit. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same lookup before it will flag the ticket. Two matches are reported and neither is stored. A key you set by hand is never replaced.
+An empty `jiraKeyPrefixes` is set to the same project. A value already in the config is left alone. Several candidates are not guessed. `project --list` prints them and writes nothing. `project --probe` writes the JQL that searches each visible project, and `project --record` stores the one project that contains the plan id. One Atlassian site is stored in `jiraSite`.
+
+`/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export `key`, or in `.warp/jira-map.json`. A Jira JSON import is different: `externalId` is the plan id, and `h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, plus labels `size:S`, `auto-merge`, and `area:*`, describe the ticket. That `externalId` is not stored as `jiraKey`. If Jira is connected, scan looks up the plan id on `jiraExternalIdField` (a field name or `customfield_NNNNN`; also External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a label `warp:WV-01`, then a remote-link id, and stores `WAR-1` when exactly one issue matches. A summary match is only a proposal. You do not run `/warp-jira-map` for a single exact hit. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same lookup before it will flag the ticket, and it must `resolve --ticket` before any transition. Two matches are reported and neither is stored. A key you set by hand is never replaced.
 
 `/warp-jira-map` is only for a ticket that is still unmapped or ambiguous, or when you want to override:
 
@@ -191,7 +219,16 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 
 **One Jira issue, every field.** `/warp-jira-view WAR-1` or `/warp-jira-view WV-01`. `WAR-1` is fetched with `getJiraIssue`. `WV-01` is resolved from the beam and `.warp/jira-map.json`, then from the external-id field (and each visible project when `jiraProject` is empty). The script prints `field: value`, the status, the external-id field id, and whether that key is stored. `--comments`, `--links`, `--all`, `--full`, `--verbose`, and `--json` are in [docs/COMMANDS.md](docs/COMMANDS.md). `getJiraIssue`, `getTransitionsForJiraIssue`, and `searchJiraIssuesUsingJql` are already on `/warp-allow-notify --with-jira`.
 
-**Jira did not move.** A claim can find the issue by external id and still never transition it, because the issue key stays in the agent's memory until `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>` writes the beam. `/warp-jira-check` prints `key stored: WAR-1 (from external id)` or `key missing: claim lookup result was not recorded`, plus `lastAttempt` when a transition failed (`record --result failed --error "..."`). `/warp-jira-check`. With no flags it only prints the beam. It does not call Jira, and `needs mapping` does not mean the external-id search already ran. Each unmapped ticket has `status: unmapped`, a `reason`, and one `fix` command. `why nothing linked:` says whether `jiraProject` is empty, the map file was never copied onto the beam, or no ticket has a key in the plan, map file, or external id. `verify --link` copies keys already in the map and writes the JQL. `verify --apply results.json` stores one exact match after that search. Check `jiraMcp` is the Atlassian server name Cursor shows, `jiraTransition` is not false, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow names. A failed move is in `.warp/outbox.md`. Re-run `/warp-init` if the config is missing keys.
+**Jira did not move.** Start with `/warp-jira-check`. With no flags it only prints the beam. It does not call Jira, and `needs mapping` does not mean the lookup already ran. The longer tree is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
+1. The first line is `jiraProject not set`. Run `project --list`. One candidate you recognize: `project --set WAR`. Jira is connected and several projects are visible: `project --probe`, then `project --record`.
+2. `why nothing linked: jiraProject is empty`. Same as the step above. Moves stay off until a project is set.
+3. `why nothing linked: the map file has keys the beam never stored`. `verify --link`, then `catchup`.
+4. `status: unmapped` and the `fix` is `verify --link`. That copies a map-file key and writes `.warp/jira-resolve.json`. The agent searches. `verify --apply results.json` stores one exact external-id, label, or remote-link hit. A summary hit is not stored here.
+5. The report has `summary candidate:`. `/warp-jira-match --apply` stores one exact or 60-character prefix. A fuzzy line waits for `--apply --yes`. An ambiguous line is not stored. Set it with `map --set WV-01=WAR-1`.
+6. `key missing: claim lookup result was not recorded`. The search may have worked. Record it before any transition: `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>`. Do not pass the plan id to `transitionJiraIssue`.
+7. `key stored` and `lastAttempt: claim failed`. Read the error from `record --result failed --error "..."`. `jira.startedAt` was not set. Fix the workflow name or the transition, then `record` again. The failure is also in `.warp/outbox.md`.
+8. `key stored` and nothing else is missing. Check `jiraTransition` is not false, `jiraMcp` is the server Cursor shows, and `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow. Re-run `/warp-init` if the config is missing keys.
 
 **No Slack or Teams message.** Herald posts only from the agent session that ran the command. `notify: quiet` skips init and scan. An empty `slackChannel` or `teamsChannel` writes `.warp/outbox.md` instead. Warp does not create the channel. Slack names are lowercased. The payload is `.warp/notify-post.json`.
 
@@ -234,6 +271,7 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 | Step | In the agent window | What you should see |
 |---|---|---|
 | Install | `/warp-init`. Reload. | `/warp-scan` and `/warp-start` appear. |
+| Tick | `/warp` | One pass: reconcile, ready, claim. |
 | Scan | `/warp-scan` or `/warp-scan <folder>` | Ticket count, format, run stopped. `beam.json` exists. |
 | Start | `/warp-start` | Herald posts. Shuttles claim up to `maxAgents`. |
 | Pause | `/warp-pause` | No new claims. In-flight finishes its step. |
@@ -302,6 +340,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraKeyPrefixes` | empty | More prefixes that confirm a Jira key. |
 | `jiraKeyMap` | empty | Plan id to issue key, for example `{"WV-01": "WAR-1"}`. |
 | `jiraExternalIdField` | `externalId` | Field name or `customfield_NNNNN` matched to the plan id. One exact hit is stored on scan and claim. |
+| `jiraWriteExternalId` | `false` | Scan and claim write that field only when this is true. `/warp-jira-match --write-external-id` still can, after `--yes`. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
 | `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here when a person must review and merge. |

@@ -21,6 +21,23 @@ def run(script, *args):
     )
 
 
+DOC_FILES = (
+    "README.md",
+    "docs/COMMANDS.md",
+    "docs/CONFIG.md",
+    "docs/RUNBOOK.md",
+    "docs/STATE.md",
+    "docs/CONNECTORS.md",
+    "docs/GUIDE.md",
+    "AGENTS.md",
+)
+
+
+def mentioned(name: str, text: str) -> bool:
+    """Match a command token without treating /warp as a prefix of /warp-init."""
+    return re.search(rf"(?<![\w/]){re.escape(name)}(?![\w-])", text) is not None
+
+
 class ConfigDocTests(unittest.TestCase):
     def test_every_example_key_is_in_config_doc(self):
         example = (ROOT / "assets/config.example.yaml").read_text()
@@ -128,3 +145,26 @@ class ScriptHelpTests(unittest.TestCase):
         documented |= set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", (ROOT / "README.md").read_text()))
         missing = sorted(flag for flag in documented if flag not in help_text)
         self.assertEqual(missing, [], "documented flags missing from --help")
+
+    def test_every_command_file_is_in_readme_and_commands(self):
+        readme = (ROOT / "README.md").read_text()
+        commands = (ROOT / "docs/COMMANDS.md").read_text()
+        names = sorted("/" + path.stem for path in (ROOT / "commands").glob("*.md"))
+        self.assertGreaterEqual(len(names), 15)
+        missing_readme = [name for name in names if not mentioned(name, readme)]
+        missing_commands = [name for name in names if not mentioned(name, commands)]
+        self.assertEqual(missing_readme, [], "command files missing from README")
+        self.assertEqual(missing_commands, [], "command files missing from COMMANDS.md")
+
+    def test_every_jira_sync_subcommand_is_documented(self):
+        source = (SCRIPTS / "jira_sync.py").read_text()
+        subs = re.findall(r'add_parser\("([^"]+)"', source)
+        self.assertGreaterEqual(len(subs), 8)
+        blobs = [(ROOT / rel).read_text() for rel in DOC_FILES]
+        docs = "\n".join(blobs)
+        missing = []
+        for name in subs:
+            pattern = rf"jira_sync\.py {re.escape(name)}\b|`{re.escape(name)}`"
+            if not re.search(pattern, docs):
+                missing.append(name)
+        self.assertEqual(missing, [], "jira_sync subcommands missing from docs")

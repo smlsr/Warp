@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.10
+
+- Docs now cover 1.3.3 through 1.3.9: plan id versus Jira key, external-id lookup, jiraProject detection, /warp-jira-check, /warp-jira-view, and /warp-jira-match. The README has a command table, upgrade steps, and a troubleshooting tree. GUIDE.md walks Jira from import to merge.
+
 ## 1.3.9
 
 - /warp-jira-match links unmapped tickets to Jira by summary. Exact and a 60-character prefix are stored with --apply. A fuzzy score at or above 0.9 is a proposal until --yes. Ambiguous matches are not stored. --write-external-id writes the plan id into the External ID field with editJiraIssue after --yes, skips a missing or read-only field, and does not add a comment. jiraWriteExternalId defaults to false, so scan and claim do not write that field.

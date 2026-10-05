@@ -20,13 +20,38 @@ Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready
 
 ## Jira status did not move
 
-`/warp-jira-check` runs `jira_sync.py verify`. For each ticket it prints `status: keyed` or `status: unmapped`, `source`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, the comment ids on file, and what is missing. An unmapped ticket also prints `reason` and one `fix` command. When every ticket is unmapped it prints `why nothing linked`.
+`/warp-jira-check` runs `jira_sync.py verify`, then `catchup`. `verify` with no flags only prints. It does not call Jira. For each ticket: `status: keyed` or `status: unmapped`, `source`, beam status, `startedAt`, `qaReadyAt`, `doneAt`, comment ids, `jira.id`, and `lastAttempt` when a move failed. An unmapped ticket also has `reason` and one `fix` command. When every ticket is unmapped the report ends with `why nothing linked`.
 
-`verify` with no flags does not call Jira. `needs mapping` on this report does not mean the external-id, label, or remote-link lookup already ran. That lookup runs when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent searches, or when you run `verify --link` (copies map-file keys and writes the JQL) and then `verify --apply results.json` (stores one exact match). An ambiguous result names both Jira keys and stores neither. `/warp-jira-map` is only for that leftover (`map --set WV-01=WAR-1`). Then `catchup`. An inferred key is stored only when its prefix matches. An already-merged auto-merge ticket is asked for Done, not for In Progress.
+Walk the first line that matches. Stop when the ticket has a stored key and `catchup` prints the move that is still owed.
 
-The move itself is not done by the script. After the external-id search, record the issue before any transition: `jira_sync.py resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>`. That writes the beam and the map file. The agent that then sees `jira: MUST DO` calls `getTransitionsForJiraIssue` and `transitionJiraIssue` with that stored key, then `record`. A failed call is `record --result failed --error "..."`, which sets `jira.lastAttempt` and does not set `jira.startedAt`. `/warp-jira-check` prints `key stored` or `key missing: claim lookup result was not recorded`. If that server is not connected, the same failure is in `.warp/outbox.md` and in the Herald payload.
+1. `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`. `project --list` prints candidates and writes nothing. One project you recognize: `project --set WAR`. That also fills an empty `jiraKeyPrefixes`. Jira is connected and more than one project is visible: `project --probe` writes the search, then `project --record` stores the single project that contains the plan id. Several hits are listed and nothing is guessed. One Atlassian site from `project --apply` is stored in `jiraSite`.
+2. `why nothing linked: jiraProject is empty`. Same as step 1. No transition runs until a project is set.
+3. `why nothing linked: the map file has keys the beam never stored`. `verify --link` copies `.warp/jira-map.json` or `jiraKeyMap` onto the beam and writes `.warp/jira-resolve.json`. Then `catchup`.
+4. `status: unmapped` and `fix` is `verify --link`. Run it. If tickets are still unmapped and Jira is connected, run that file's queries: external-id field, then label `warp:<id>`, then a remote link. `verify --apply results.json` stores one exact match. Two matches are named and neither is stored. A summary match is not stored on this path. A manual key is not overwritten.
+5. The check prints `summary candidate: WAR-1 (exact 1.00)`. `/warp-jira-match --apply --id WV-01` stores an exact or 60-character prefix hit. A fuzzy proposal stays unstored until `--apply --yes`. Ambiguous rows are listed and not stored. Done issues and issues already mapped to another ticket are skipped. The full flags are `--chars`, `--min-score`, `--include-done`, and `--all`.
+6. Still unmapped, and you know the key. `map --set WV-01=WAR-1`, or `beam.py set --jira`. `--force` is only for a prefix that is not configured. Then `catchup`.
+7. `key missing: claim lookup result was not recorded`. The search may already have found `WAR-1`. Record it before any transition: `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>`. That writes the beam and `.warp/jira-map.json` together. A plan id is refused. `transitionJiraIssue` uses only the stored key.
+8. `key stored` and `lastAttempt: claim failed — ...`. That line is `record --result failed --error "..."`. `jira.startedAt` was not set. Fix the error (workflow name, missing transition, connector), then `record` the success. The same text is in `.warp/outbox.md`.
+9. `key stored` and catch-up still lists a move. The agent calls `getTransitionsForJiraIssue`, `jira_sync.py pick`, then `transitionJiraIssue`, then `addOrEditJiraIssueComment`, then `record` and `record-comment`. An already-merged auto-merge ticket is asked for Done, not a move back to In Progress.
+10. `key stored` and nothing is missing, but Jira still did not move. `jiraTransition` is not false. `jiraMcp` is the server name Cursor shows. `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow. Re-run `/warp-init` if the config file is missing keys. The script cannot see whether the server is connected.
 
-An existing `.warp/config.yaml` is not rewritten when the plugin updates. Missing keys still default correctly. Re-run `/warp-init` to append them. Check that `jiraTransition` is not `false`, that `jiraMcp` is the server name you connected, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the names in your workflow.
+`/warp-jira-view WAR-1` (or a plan id) prints the live fields when you need to see why a transition is absent. It does not write the beam.
+
+Scan and claim do not write the External ID field unless `jiraWriteExternalId` is true. To write it yourself: `/warp-jira-match --write-external-id --yes`, or `jira_sync.py external-id`. A missing or read-only field is skipped. A different non-empty value needs `--force-external-id`. No comment is added.
+
+## Nothing linked
+
+`needs mapping` on `/warp-jira-check` does not mean the external-id search already ran. Read `why nothing linked` before running another search.
+
+| Line | What to do |
+|---|---|
+| `jiraProject is empty` | `project --list`, then `--set`, or `--probe` and `--record` |
+| `the map file has keys the beam never stored` | `verify --link` |
+| `no Jira key in the plan, export, or map file` | Connect Jira and let scan or `verify --link` search, or `/warp-jira-match` when the summaries correspond, or `map --set` |
+| `ambiguous matches` | Do not pick one. `map --set WV-01=WAR-1` |
+| `stored WV-01 is the plan id` | The lookup was never recorded. `resolve --ticket` with the issue key |
+
+A Jira JSON import stores `externalId` as the plan id. `h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels `size:S`, `auto-merge`, and `area:*` describe the ticket. None of those fields are the issue key. The issue `key` in an export is the only export field that becomes `jiraKey`.
 
 ## Stuck agent
 
