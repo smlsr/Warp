@@ -3,8 +3,10 @@
 
 Warp has no Jira credentials. This script builds the JQL, matches a saved
 candidate list locally, and records a confirmed pair the same way resolve
-does. editJiraIssue is only asked for when --write-external-id --yes is set.
-Scan and claim do not write that field unless jiraWriteExternalId is true.
+does. editJiraIssue is asked for by --write-external-id --yes, by
+/warp-jira-external-id --apply --yes, and by /warp-scan and /warp-jira-check
+when jiraWriteExternalId is true. That config flag is the consent, so scan
+does not also require --yes.
 """
 
 from __future__ import annotations
@@ -59,8 +61,12 @@ from /warp-allow-notify --with-jira. The field is discovered from
 getJiraProjectIssueTypesMetadata and getJiraIssueEditmeta. A missing or
 read-only field is skipped. A different non-empty value is left alone unless
 --force-external-id. --yes confirms the edit. Nothing posts a Jira comment.
-jiraWriteExternalId defaults to false, so scan and claim do not write the field.
-The explicit flags work even when that config key is false.
+jiraWriteExternalId defaults to false. When it is true, /warp-scan and
+/warp-jira-check queue a write for every mapped ticket whose External ID is
+not already the plan id, and --yes is not required. A key found by the
+external-id search is already equal and is skipped. These explicit flags
+still need --yes, and they work when that config key is false.
+/warp-jira-external-id is the bulk command for mappings that already exist.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 A bare help after an option that takes a value stays that value.
@@ -791,6 +797,303 @@ def hint_for_resolve(cfg: dict) -> str:
         "jira: jiraWriteExternalId is on. After a key is stored, "
         "jira_sync.py external-id may write the plan id with editJiraIssue. It does not post a comment."
     )
+
+
+def _on_issue(ticket: dict) -> str | None:
+    """Last value seen on the Jira issue. None means this beam has not loaded it."""
+    jira = ticket.get("jira") or {}
+    if "externalIdOnIssue" not in jira:
+        return None
+    return str(jira.get("externalIdOnIssue") or "")
+
+
+def _current_label(value: str | None, attempt: str = "") -> str:
+    if attempt == "field missing" and value in (None, ""):
+        return "field missing"
+    if value is None:
+        return "unknown"
+    if value == "":
+        return "empty"
+    return value
+
+
+def _backfill_rows(beam: dict, cfg: dict, *, only_ids: set[str] | None, force: bool, force_value: bool):
+    """Mapped tickets that still need the plan id written to External ID."""
+    prefixes = jira_sync.prefixes_from(cfg)
+    queue = []
+    equal = []
+    skipped = []
+    for tid, ticket in (beam.get("tickets") or {}).items():
+        if only_ids is not None and str(tid) not in only_ids:
+            continue
+        key = jira_sync.jira_key(ticket, prefixes)
+        if not key:
+            skipped.append({"id": str(tid), "key": "", "reason": "no key"})
+            continue
+        source = ticket.get("jiraKeySource") or ""
+        jira = ticket.get("jira") or {}
+        written = jira.get("externalIdWritten") or {}
+        current = _on_issue(ticket)
+        attempt = str((jira.get("externalIdAttempt") or {}).get("error") or "")
+        if source == "external" and not force:
+            equal.append({"id": str(tid), "key": key, "reason": "external id match", "current": str(tid)})
+            continue
+        if str(written.get("value") or "") == str(tid) and not force:
+            equal.append({"id": str(tid), "key": key, "reason": "already written", "current": str(tid)})
+            continue
+        if current not in (None, "") and current != str(tid) and not force_value:
+            skipped.append({"id": str(tid), "key": key, "reason": "different value", "current": current})
+            continue
+        queue.append({"id": str(tid), "key": key, "value": str(tid), "current": current, "attempt": attempt})
+    return queue, equal, skipped
+
+
+def _summary_line(verb: str, n_write: int, n_equal: int, skipped: list[dict]) -> str:
+    reasons = ", ".join(f"{row['id']} {row['reason']}" for row in skipped)
+    tail = f" ({reasons})" if reasons else ""
+    return f"jira: external id: {verb} {n_write}, already equal {n_equal}, skipped {len(skipped)}{tail}"
+
+
+def _write_backfill_file(beam_path: Path, cfg: dict, queue: list[dict], *, must: bool, force: bool, force_value: bool) -> None:
+    path = beam_path.parent / WRITE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "server": cfg.get("jiraMcp") or "atlassian",
+                "field": jira_sync.external_field(cfg),
+                "editTool": TOOL_EDIT,
+                "editmetaTool": TOOL_EDITMETA,
+                "fieldsTool": TOOL_FIELDS,
+                "issueTool": TOOL_ISSUE,
+                "mustDo": must,
+                "force": force,
+                "forceExternalId": force_value,
+                "note": "Call editJiraIssue for each pair, then jira_sync.py record-external-id. No comment.",
+                "pairs": [{"id": row["id"], "key": row["key"], "value": row["value"]} for row in queue],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def external_id_backfill(
+    beam_path: Path,
+    *,
+    mode: str = "auto",
+    only_ids: set[str] | None = None,
+    force: bool = False,
+    force_value: bool = False,
+) -> str:
+    """List or queue External ID writes for mapped tickets.
+
+    mode auto: queue a MUST DO block when jiraWriteExternalId is true, else say nothing.
+    mode dry: list the same tickets and write nothing onto the beam. The config flag is not required.
+    mode must: MUST DO block. Used by --apply --yes. The config flag is not required.
+    """
+    beam_path = beam_path.resolve()
+    beam = _load_beam(beam_path)
+    cfg = jira_sync.settings(beam_path, beam)
+    if mode == "auto" and not writes_on_scan(cfg):
+        return ""
+    must = mode in {"auto", "must"}
+    queue, equal, skipped = _backfill_rows(beam, cfg, only_ids=only_ids, force=force, force_value=force_value)
+    todo = beam_path.parent / WRITE_NAME
+    if must and queue:
+        _write_backfill_file(beam_path, cfg, queue, must=must, force=force, force_value=force_value)
+    elif must and todo.is_file():
+        todo.unlink()
+    me = Path(jira_sync.__file__).resolve()
+    field = jira_sync.external_field(cfg)
+    lines = []
+    for row in queue:
+        lines.append(
+            f"jira: {row['id']} -> {row['key']}: External ID currently {_current_label(row['current'], row.get('attempt') or '')} -> would set {row['value']}"
+        )
+    for row in equal:
+        lines.append(
+            f"jira: {row['id']} -> {row['key']}: External ID currently {row['current']} -> already equal ({row['reason']})"
+        )
+    for row in skipped:
+        if row["reason"] == "no key":
+            continue
+        if row["reason"] == "different value":
+            lines.append(
+                f"jira: {row['id']} -> {row['key']}: External ID currently {row['current']} -> would set {row['id']}. "
+                "Not written. Pass --force-external-id to replace it."
+            )
+        else:
+            lines.append(f"jira: {row['id']}: skipped ({row['reason']})")
+    lines.append(_summary_line("would write", len(queue), len(equal), skipped))
+    if not queue:
+        return "\n".join(lines)
+    if not must:
+        lines.append("jira: dry-run. External ID is not written. Pass --apply --yes to queue the edit.")
+        return "\n".join(lines)
+    server = cfg.get("jiraMcp") or "atlassian"
+    lines.append(
+        f"jira: MUST DO write External ID. {len(queue)} ticket(s). Server \"{server}\". "
+        f"Field {field}. Call {TOOL_FIELDS} once, then {TOOL_ISSUE} and {TOOL_EDITMETA} for each key in .warp/{WRITE_NAME}. "
+        f"Then {TOOL_EDIT} sets that field to the plan id. No comment is posted."
+    )
+    if mode == "auto":
+        lines.append("jira: jiraWriteExternalId is on. This config flag is the consent. --yes is not required.")
+    lines.append(
+        "jira: Skip a missing or read-only field. Skip a value that already equals the plan id. "
+        "Leave a different non-empty value unless --force-external-id."
+    )
+    for row in queue:
+        lines.append(f"jira: editJiraIssue {row['key']} field {field} = {row['value']}")
+    lines.append(f"jira: then python3 {me} record-external-id --beam {beam_path} --results <file>")
+    lines.append("jira: It does not post a comment.")
+    return "\n".join(lines)
+
+
+def _editmeta_for(data: dict, key: str) -> dict | None:
+    raw = data.get("editmeta")
+    if isinstance(raw, dict) and isinstance(raw.get(key), dict):
+        return raw[key]
+    per = data.get("editmetas")
+    if isinstance(per, dict) and isinstance(per.get(key), dict):
+        return per[key]
+    if isinstance(raw, dict) and isinstance(raw.get("fields"), dict):
+        return raw
+    return None
+
+
+def _issue_for(data: dict, key: str) -> dict | None:
+    issues = data.get("issues")
+    if isinstance(issues, dict):
+        found = issues.get(key)
+        if isinstance(found, dict):
+            return found
+    for item in candidate_issues(data):
+        if _issue_key(item) == key:
+            return item
+    return None
+
+
+def _live_value(issue: dict | None, field_id: str) -> str | None:
+    if not isinstance(issue, dict):
+        return None
+    values = jira_sync._external_values(issue, field_id)
+    if values:
+        return values[0]
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else None
+    if isinstance(fields, dict) and field_id and field_id not in fields:
+        return ""
+    if "fields" in issue:
+        return ""
+    return None
+
+
+def record_external_id(beam_path: Path, data: dict, *, force: bool = False, force_value: bool = False, save: bool = True) -> str:
+    """Record editJiraIssue results. A missing or read-only field is skipped and is not a failure."""
+    beam_path = beam_path.resolve()
+    beam = _load_beam(beam_path)
+    cfg = jira_sync.settings(beam_path, beam)
+    field = discover_editable_field(data, jira_sync.external_field(cfg))
+    queue, equal, skipped = _backfill_rows(beam, cfg, only_ids=None, force=force, force_value=force_value)
+    wanted = {row["id"]: row for row in queue}
+    written_n = 0
+    equal_n = len(equal)
+    lines = []
+    changed = False
+    if not field.get("found"):
+        for row in list(wanted.values()):
+            ticket = (beam.get("tickets") or {}).get(row["id"])
+            if not ticket:
+                skipped.append({"id": row["id"], "reason": "unknown ticket"})
+                continue
+            jira = ticket.setdefault("jira", {"status": None, "lastCommentAt": None})
+            jira["externalIdAttempt"] = {"at": jira_sync.now(), "result": "skipped", "error": "field missing", "event": "external-id"}
+            skipped.append({"id": row["id"], "reason": "field missing"})
+            changed = True
+        if changed and save:
+            jira_sync._save(beam_path, beam)
+        lines.append("jira: External ID field is missing. Skipped. Nothing was written.")
+        lines.append(_summary_line("written" if save else "would write", 0, equal_n, skipped))
+        return "\n".join(lines)
+    edits = {str(row.get("id") or ""): row for row in _edit_rows(data)}
+    for tid, row in wanted.items():
+        ticket = (beam.get("tickets") or {}).get(tid)
+        if not ticket:
+            skipped.append({"id": tid, "reason": "unknown ticket"})
+            continue
+        key = row["key"]
+        meta = _editmeta_for(data, key)
+        issue = _issue_for(data, key)
+        editable = field.get("editable")
+        if meta is not None:
+            one = discover_editable_field({"fields": data.get("fields") or data.get("fieldCatalog"), "editmeta": meta}, jira_sync.external_field(cfg))
+            editable = one.get("editable")
+            if not one.get("found"):
+                editable = False
+        edit = edits.get(tid) or {}
+        if edit.get("editable") is False or edit.get("error") in {"field missing", "read-only"}:
+            editable = False
+        before = _before_value(edit, issue, field.get("id") or "") if edit or issue else ""
+        if not edit and issue is None and "before" not in edit:
+            before = ""
+        if issue is not None or "before" in edit:
+            live = str(edit.get("before")) if "before" in edit and edit.get("before") is not None else _live_value(issue, field.get("id") or "")
+            if live is None:
+                live = before
+        else:
+            live = None
+        jira = ticket.setdefault("jira", {"status": None, "lastCommentAt": None})
+        if editable is False or (meta is None and field.get("editable") is not True and not edit):
+            reason = "not editable" if field.get("found") else "field missing"
+            if meta is None and not edit:
+                reason = "editmeta missing"
+            if edit.get("error") in {"field missing", "read-only"}:
+                reason = "field missing" if edit.get("error") == "field missing" else "not editable"
+            jira["externalIdAttempt"] = {"at": jira_sync.now(), "result": "skipped", "error": reason, "event": "external-id"}
+            skipped.append({"id": tid, "reason": reason})
+            changed = True
+            lines.append(f"jira: {tid} {key} skipped. {reason}. Nothing was written.")
+            continue
+        shown = live if live is not None else before
+        if shown and shown != tid and not force_value:
+            jira["externalIdOnIssue"] = shown
+            jira["externalIdAttempt"] = {"at": jira_sync.now(), "result": "skipped", "error": "different value", "event": "external-id"}
+            skipped.append({"id": tid, "reason": "different value"})
+            changed = True
+            lines.append(f"jira: {tid} {key} before {shown} after {tid}. Not written. Pass --force-external-id to replace it.")
+            continue
+        result = edit.get("result")
+        if shown == tid or result == "already":
+            jira["externalId"] = tid
+            jira["externalIdOnIssue"] = tid
+            jira["externalIdWritten"] = {"value": tid, "at": jira_sync.now()}
+            jira.pop("externalIdAttempt", None)
+            equal_n += 1
+            changed = True
+            lines.append(f"jira: {tid} {key} already equal. Recorded.")
+            continue
+        if result not in {"updated", "already"}:
+            jira["externalIdAttempt"] = {
+                "at": jira_sync.now(),
+                "result": result or "pending",
+                "error": edit.get("error") or "editJiraIssue did not return",
+                "event": "external-id",
+            }
+            skipped.append({"id": tid, "reason": result or "not recorded"})
+            changed = True
+            lines.append(f"jira: {tid} {key} before {_current_label(shown)} after {tid}. Not recorded until editJiraIssue returns.")
+            continue
+        jira["externalId"] = tid
+        jira["externalIdOnIssue"] = tid
+        jira["externalIdWritten"] = {"value": tid, "at": jira_sync.now()}
+        jira.pop("externalIdAttempt", None)
+        written_n += 1
+        changed = True
+        lines.append(f"jira: {tid} {key} before {_current_label(shown)} after {tid}. Recorded.")
+    if changed and save:
+        jira_sync._save(beam_path, beam)
+    lines.append(_summary_line("written" if save else "would write", written_n, equal_n, skipped))
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

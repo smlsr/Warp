@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.11
+
+- /warp-jira-external-id and scan/catchup write existing plan-id mappings into Jira External ID when jiraWriteExternalId is true. The config flag is the consent, so scan does not need --yes. Keys found by the external-id search are already equal and are skipped. record-external-id records each edit. A missing or read-only field is skipped. A different non-empty value needs --force-external-id. No comment is added.
+
 ## 1.3.10
 
 - Docs now cover 1.3.3 through 1.3.9: plan id versus Jira key, external-id lookup, jiraProject detection, /warp-jira-check, /warp-jira-view, and /warp-jira-match. The README has a command table, upgrade steps, and a troubleshooting tree. GUIDE.md walks Jira from import to merge.

@@ -23,13 +23,14 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-jira-check` | Keyed or unmapped, what is missing, one fix | `jira_sync.py verify`, `catchup` |
 | `/warp-jira-view <key-or-id>` | Every field on one issue | `jira_view.py` `--comments` `--links` `--all` `--full` `--verbose` `--json` |
 | `/warp-jira-match` | Match summaries. Optionally write External ID | `jira_match.py` `--apply` `--yes` `--write-external-id` |
+| `/warp-jira-external-id` | Write existing mappings into the External ID field | `jira_external_id.py` `--apply` `--yes` `--force` `--force-external-id` `--ticket` |
 | `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
 | `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--with-jira` `--with-git` |
 | `/warp-proceed <id>` | Merge one green manual ticket | Reed. Not a script flag. |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
-`jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `plan`, `pick`, `record`, `record-comment`.
+`jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
 
 ## Run control
 
@@ -143,7 +144,7 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | `searchJiraIssuesUsingJql` | Scan and claim: exact external-id match, then a `warp:<id>` label. One hit is stored. Summary search waits for `--yes` |
 | `getJiraProjectIssueTypesMetadata` | Field names and ids, so `jiraExternalIdField` or External ID can be queried as `cf[NNNNN]` |
 | `getJiraIssueRemoteIssueLinks` | Remote-link ids, checked after the external-id field and the label |
-| `editJiraIssue` | Write the plan id into the External ID field. Only `/warp-jira-match --write-external-id` or `jira_sync.py external-id`, and only after `--yes`. Not a comment. |
+| `editJiraIssue` | Write the plan id into the External ID field. `/warp-jira-external-id --apply --yes`, `/warp-jira-match --write-external-id --yes`, or `jira_sync.py external-id --yes`. Also `/warp-scan` and `/warp-jira-check` when `jiraWriteExternalId` is true (that flag is the consent, so `--yes` is not required). Not a comment. |
 | `getJiraIssueEditmeta` | Whether that field exists and is editable on the issue. A missing or read-only field is skipped. |
 
 | When | Jira | Pull request |
@@ -178,6 +179,8 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 | `--id ID` | One ticket. |
 
 `catchup` writes `.warp/jira-todo.json` for tickets that have a key, and refuses an active ticket that still has none. `catchup --write` stores an inferred key only when the prefix matches. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards. Linking itself happens when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent runs that search, or when this check is run with `--link` and then `--apply`.
+
+When `jiraWriteExternalId` is true, `catchup` also prints `MUST DO write External ID` for every mapped ticket whose External ID is not yet confirmed equal to the plan id. That config flag is the consent. `--yes` is not required. A key whose source is `external` is already equal and is skipped. A ticket with no confirmed key is skipped. The agent calls `editJiraIssue` for each line, then `jira_sync.py record-external-id --results`. A missing or read-only field sets `jira.externalIdAttempt` and `/warp-jira-check` prints `externalIdAttempt: skipped — field missing`. That line does not replace `lastAttempt`. `/warp-jira-external-id` is the same write when you want it without waiting for a scan.
 
 ## /warp-jira-view
 
@@ -241,7 +244,7 @@ python3 <plugin>/scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --y
 
 `--apply` uses the same recording as `resolve --ticket`: the beam and `.warp/jira-map.json` are written together. `/warp-jira-map --from-jira` still tries the external id first, then this same summary comparison, and still waits for `--yes` before storing a summary hit.
 
-`--write-external-id` is a write to Jira through `editJiraIssue`. It needs the connector permission from `/warp-allow-notify --with-jira` (`editJiraIssue` and `getJiraIssueEditmeta` are on that list). The field name comes from `jiraExternalIdField` and the field catalog. A missing or read-only field is skipped and the command still succeeds. Dry-run shows before and after. A different non-empty value is left alone unless `--force-external-id`. A second run sees `jira.externalIdWritten` and does not send the edit again. No Jira comment is added. `jiraWriteExternalId` defaults to false, so scan and claim never write the field. These flags work even when that key is false, once `--yes` is set.
+`--write-external-id` is a write to Jira through `editJiraIssue`. It needs the connector permission from `/warp-allow-notify --with-jira` (`editJiraIssue` and `getJiraIssueEditmeta` are on that list). The field name comes from `jiraExternalIdField` and the field catalog. A missing or read-only field is skipped and the command still succeeds. Dry-run shows before and after. A different non-empty value is left alone unless `--force-external-id`. A second run sees `jira.externalIdWritten` and does not send the edit again. No Jira comment is added. `jiraWriteExternalId` defaults to false. When it is true, `/warp-scan` and `/warp-jira-check` queue the write for mappings that already exist, and `--yes` is not required. These flags work even when that key is false, once `--yes` is set. The bulk command for an existing map is `/warp-jira-external-id`.
 
 ## /warp-jira-map
 
@@ -308,9 +311,38 @@ python3 <plugin>/scripts/jira_sync.py catchup --write --id T-9
 python3 <plugin>/scripts/jira_sync.py pick --target "In Progress" --transitions-file transitions.json
 python3 <plugin>/scripts/jira_sync.py record --id T-9 --event claim --result moved
 python3 <plugin>/scripts/jira_sync.py record-comment --id T-9 --where jira --event claim --comment-id 10001
+python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json
 ```
 
-`plan --event` is `claim`, `release`, `qa-ready`, or `done`. `record --result` is `moved`, `already`, `skipped`, `unavailable`, `no-transition`, or `failed`.
+`plan --event` is `claim`, `release`, `qa-ready`, or `done`. `record --result` is `moved`, `already`, `skipped`, `unavailable`, `no-transition`, or `failed`. `record-external-id` stores each `editJiraIssue` result. A success sets `jira.externalIdWritten`. A skip sets `jira.externalIdAttempt` and does not clear a transition `lastAttempt`.
+
+## /warp-jira-external-id
+
+Write the plan id into Jira's External ID field for tickets that already have a confirmed key. Dry-run is the default. The script does not call Jira. Use this when `.warp/jira-map.json` and the beam already hold `WV-01 -> WAR-1` and the Jira field was never updated.
+
+```bash
+python3 <plugin>/scripts/jira_external_id.py
+python3 <plugin>/scripts/jira_external_id.py --ticket WV-01
+python3 <plugin>/scripts/jira_external_id.py --apply --yes
+python3 <plugin>/scripts/jira_external_id.py --apply --yes --force --force-external-id
+python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | List `WV-01 -> WAR-1: External ID currently <value\|empty\|unknown\|field missing> -> would set WV-01`. Write nothing. |
+| `--apply --yes` | Print one `MUST DO write External ID` block. The agent calls `editJiraIssue` for each line. |
+| `--dry-run` | List pairs even when `--apply` is set. Write nothing. |
+| `--ticket ID` | One plan id. |
+| `--force` | Queue a ticket that already has `jira.externalIdWritten`, including a key whose source is `external`. An equal live value is not an error. |
+| `--force-external-id` | Replace a different non-empty External ID. The line shows before and after. |
+| `--results FILE` | Record a saved transcript. With `--apply --yes` the beam is updated. |
+
+The summary is `jira: external id: would write N, already equal N, skipped N (ID reason)`. After `record-external-id` the verb is `written`. Skips are `no key`, `not editable`, `field missing`, and `different value`.
+
+A key that came from the external-id search is already equal and is not queued. A ticket with no confirmed key is skipped. `jira.externalId` on the beam is the desired plan id, not a confirmation that Jira holds it. Idempotency is `jira.externalIdWritten`. The field is discovered with `getJiraProjectIssueTypesMetadata` and checked with `getJiraIssueEditmeta` on each issue. A missing or read-only field is skipped and the command still succeeds. No comment is added.
+
+`/warp-scan` and `/warp-jira-check` print the same MUST DO block when `jiraWriteExternalId` is true. That flag is the consent, so those paths do not need `--yes`. This command needs `--apply --yes`, and it works when the config flag is false. `editJiraIssue` and `getJiraIssueEditmeta` are already on `/warp-allow-notify --with-jira`.
 
 ## /warp-allow-notify
 
