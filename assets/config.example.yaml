@@ -24,7 +24,8 @@ runner: cloud
 
 jiraProject: ""
 # Jira project key, for example WAR. Leave this empty: /warp-init and /warp-scan
-# fill it when one prefix is clear, and Jira can confirm it when connected.
+# fill it when one prefix is clear, when Jira shows one project, or when every
+# stored issue key is in one project (even if the project-list tool is missing).
 # A plan id is a Jira issue only when its prefix matches this or jiraKeyPrefixes.
 # WV-01 is not WAR-1. Set it by hand only when the warning lists several candidates:
 # python3 scripts/jira_sync.py project --set WAR

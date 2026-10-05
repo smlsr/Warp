@@ -349,9 +349,152 @@ def project_lines(root: Path, decision: dict, server: str = "atlassian") -> str:
         '{"resources":[{"url":"https://yoursite.atlassian.net","id":"cloud-id"}],'
         '"projects":[{"key":"WAR","name":"Warp"}]} '
         "and run python3 scripts/jira_sync.py project --apply results.json. "
-        "One project, or one match to the repo or these candidates, is stored. Several are listed and not guessed.",
+        "One project, or one match to the repo or these candidates, is stored. Several are listed and not guessed. "
+        "If getVisibleJiraProjects is not on the connector, resolve the issue keys anyway. "
+        "When every stored key is in one project, that key is written. "
+        "Do not tell the user to run project --set after that write.",
     ]
     return "\n".join(lines)
+
+
+def projects_from_keys(keys) -> list[str]:
+    """Sorted unique project prefixes from issue keys such as WAR-17."""
+    found: list[str] = []
+    for raw in keys or []:
+        match = KEY_RE.fullmatch(str(raw or "").strip().upper())
+        if not match:
+            continue
+        prefix = match.group(1)
+        if prefix not in found:
+            found.append(prefix)
+    return sorted(found)
+
+
+def _add_issue_key(found: list[str], raw) -> None:
+    key = str(raw or "").strip().upper()
+    if KEY_RE.fullmatch(key) and key not in found:
+        found.append(key)
+
+
+def issue_keys_in(data) -> list[str]:
+    """Issue keys in a project or search transcript. Plan ids are not collected here."""
+    found: list[str] = []
+    if not isinstance(data, dict):
+        return found
+
+    def walk_issue(issue) -> None:
+        if isinstance(issue, str):
+            _add_issue_key(found, issue)
+        elif isinstance(issue, dict):
+            _add_issue_key(found, issue.get("key") or issue.get("jiraKey"))
+
+    for issue in data.get("issues") or []:
+        walk_issue(issue)
+    for raw in data.get("keys") or []:
+        _add_issue_key(found, raw)
+    for row in data.get("searches") or []:
+        if isinstance(row, dict):
+            for issue in row.get("issues") or []:
+                walk_issue(issue)
+    for row in data.get("remoteLinks") or []:
+        if isinstance(row, dict):
+            _add_issue_key(found, row.get("key") or row.get("jiraKey"))
+    return found
+
+
+def project_list_available(data) -> bool:
+    """False when the transcript says the project-list tool was missing or returned nothing."""
+    if not isinstance(data, dict):
+        return False
+    if any(name in data for name in ("projectsTool", "projectList", "projectsError")):
+        tool = str(data.get("projectsTool") or data.get("projectList") or "").strip().casefold()
+        if tool in {"", "unavailable", "missing", "absent", "none", "error"}:
+            return False
+    err = str(data.get("error") or data.get("projectsError") or "").casefold()
+    if "getvisiblejiraprojects" in err or "project-list" in err or "project list" in err:
+        return False
+    return "projects" in data or "values" in data or "visible" in data
+
+
+def stored_issue_keys(root: Path) -> list[str]:
+    """Jira issue keys already stored on the beam. A plan id stored as jiraKey does not count."""
+    path = root / ".warp" / "beam.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    tickets = data.get("tickets") or {}
+    rows = tickets.values() if isinstance(tickets, dict) else tickets
+    found: list[str] = []
+    for ticket in rows or []:
+        if not isinstance(ticket, dict):
+            continue
+        key = str(ticket.get("jiraKey") or "").strip().upper()
+        if not KEY_RE.fullmatch(key):
+            continue
+        tid = str(ticket.get("id") or "").strip().upper()
+        source = ticket.get("jiraKeySource")
+        if tid and key == tid and source not in {"export", "manual"}:
+            continue
+        if key not in found:
+            found.append(key)
+    return found
+
+
+def adopt_from_keys(root: Path, keys, *, project_list_available: bool = True) -> str:
+    """Write jiraProject when every issue key is in one project.
+
+    A missing project-list tool does not skip that write. Mixed projects are
+    named and left empty. A different existing value is not overwritten.
+    The same value is left as it is, with no project --set instruction.
+    """
+    # The flag is part of the call so a missing list cannot be treated as a skip.
+    _ = project_list_available
+    projects = projects_from_keys(keys)
+    if not projects:
+        return ""
+    current = config_value(config_text(root), "jiraProject").strip().upper()
+    shown = ", ".join(projects)
+    if len(projects) > 1:
+        if current:
+            return f"jira: jiraProject is {current}; matched issues are in {shown}. Left as is."
+        return f"jira: jiraProject left empty. Stored keys are in {shown}."
+    project = projects[0]
+    if current and current != project:
+        return f"jira: jiraProject is {current}; matched issues are in {project}. Left as is."
+    if current == project:
+        return f"jira: jiraProject is {current}; left as is"
+    return write_project(root, project, f"every stored key is in project {project}", force=False)
+
+
+def adopt_from_beam(root: Path) -> str:
+    """Write jiraProject from issue keys already stored on the beam."""
+    return adopt_from_keys(root, stored_issue_keys(root), project_list_available=False)
+
+
+def _adopt_matched(root: Path, keys, *, project_list_available: bool, write: bool) -> str:
+    """Same decision as adopt_from_keys. write=False prints the decision and does not touch config."""
+    if not keys:
+        return ""
+    if write:
+        return adopt_from_keys(root, keys, project_list_available=project_list_available)
+    projects = projects_from_keys(keys)
+    if not projects:
+        return ""
+    current = config_value(config_text(root), "jiraProject").strip().upper()
+    shown = ", ".join(projects)
+    if len(projects) > 1:
+        if current:
+            return f"jira: jiraProject is {current}; matched issues are in {shown}. Left as is."
+        return f"jira: jiraProject left empty. Stored keys are in {shown}."
+    project = projects[0]
+    if current and current != project:
+        return f"jira: jiraProject is {current}; matched issues are in {project}. Left as is."
+    if current == project:
+        return f"jira: jiraProject is {current}; left as is"
+    return f"jira: would set jiraProject to {project} (every stored key is in project {project})"
 
 
 def _outbox(root: Path, text: str) -> None:
@@ -455,7 +598,11 @@ class ReplayClient:
 
 
 def apply_remote(root: Path, client: ReplayClient, *, write: bool = True) -> str:
-    """Store one visible project and, when there is a single site, jiraSite. Never replaces a set project."""
+    """Store one visible project and, when there is a single site, jiraSite. Never replaces a set project.
+
+    Issue keys in the transcript or already on the beam count even when the
+    project-list tool is missing. One project is written. Several are not guessed.
+    """
     root = root.resolve()
     lines = []
     urls = client.sites()
@@ -466,6 +613,14 @@ def apply_remote(root: Path, client: ReplayClient, *, write: bool = True) -> str
             lines.append(f"jira: would set jiraSite to {urls[0]}")
     elif len(urls) > 1:
         lines.append("jira: several Atlassian sites; jiraSite left empty")
+    matched = issue_keys_in(client.data)
+    for key in stored_issue_keys(root):
+        if key not in matched:
+            matched.append(key)
+    adopted = _adopt_matched(root, matched, project_list_available=project_list_available(client.data), write=write)
+    if adopted:
+        lines.append(adopted)
+        return "\n".join(lines)
     current = config_value(config_text(root), "jiraProject")
     if current:
         lines.append(f"jira: jiraProject is {current}; left as is")

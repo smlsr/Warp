@@ -52,6 +52,15 @@ class ConfigDocTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
 
+class MatchedProjectDocTests(unittest.TestCase):
+    def test_docs_write_the_agreed_project_without_a_manual_set(self):
+        sentence = "set jiraProject to WAR (every stored key is in project WAR)"
+        for rel in ("README.md", "docs/COMMANDS.md", "docs/GUIDE.md", "docs/RUNBOOK.md"):
+            text = (ROOT / rel).read_text()
+            self.assertIn(sentence, text, rel)
+            self.assertIn("getVisibleJiraProjects", text, rel)
+
+
 class CloudHookDocTests(unittest.TestCase):
     def test_docs_do_not_require_hooks_on_cloud(self):
         blobs = {rel: (ROOT / rel).read_text() for rel in DOC_FILES}

@@ -325,9 +325,11 @@ python3 <plugin>/scripts/jira_sync.py project --apply results.json
 | (none) | Detect from plan files, branches, and recent commit subjects. Write `jiraProject` only when it is empty and one prefix wins. |
 | `--list` | Print candidates. Write nothing. |
 | `--set KEY` | Store that project key. Also fills an empty `jiraKeyPrefixes`. Replaces a previous value. |
-| `--apply FILE` | Transcript from `getAccessibleAtlassianResources` and `getVisibleJiraProjects`. One project, or one match, is stored. One site is stored in `jiraSite`. Several projects write a probe instead of guessing. |
+| `--apply FILE` | Transcript from `getAccessibleAtlassianResources` and `getVisibleJiraProjects`. One project, or one match, is stored. One site is stored in `jiraSite`. Several projects write a probe instead of guessing. Issue keys in the transcript or already on the beam are enough on their own: every key in one project is stored even when `getVisibleJiraProjects` is missing. The line is `jira: set jiraProject to WAR (every stored key is in project WAR)`. |
 | `--probe` | Write JQL that searches each visible project for the first plan ids (`externalId`, then `External ID`, then label `warp:<id>`). Writes nothing to `jiraProject`. |
 | `--record FILE` | Probe transcript. Exactly one project with a hit is stored, with how it was found. Several hits are listed with issue keys and `project --set`. None lists every project. |
+
+When every stored issue key is in one project, `/warp-scan` and `project --apply` write that key even if the project-list tool is missing. Do not run `project --set` after `jira: set jiraProject to WAR (every stored key is in project WAR)`. Keys in more than one project are named (`jira: jiraProject left empty. Stored keys are in ABC, WAR.`) and nothing is written. A different value already in the config is left in place, and the line says the matched issues differ. The same value is left in place. `project --set` remains the manual override when the keys do not agree.
 
 When it stays empty, init, scan, and `/warp-jira-check` print `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`.
 
