@@ -125,7 +125,8 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 
 | Tool | Use |
 |---|---|
-| `getAccessibleAtlassianResources` | `cloudId`, unless `jiraSite` is set |
+| `getAccessibleAtlassianResources` | `cloudId`, unless `jiraSite` is set. One site is stored in `jiraSite` |
+| `getVisibleJiraProjects` | Project list used to fill an empty `jiraProject` |
 | `getJiraIssue` | current status |
 | `getTransitionsForJiraIssue` | transitions offered now. Some servers call this `listJiraIssueTransitions` |
 | `transitionJiraIssue` | the id `jira_sync.py pick` chose |
@@ -180,6 +181,23 @@ python3 <plugin>/scripts/beam.py set --beam .warp/beam.json --id WV-01 --jira WA
 | `--match FILE` | Propose pairs whose Jira summary equals the ticket summary. |
 | `--yes` | Store the proposals from `--match`, or a unique summary hit from `--from-jira`. Without it, a summary match is not written. |
 | `--force` | Store a key whose prefix is not in `jiraProject` or `jiraKeyPrefixes`. |
+
+`jiraProject` does not have to be typed by hand. `/warp-init` and `/warp-scan` write it when one prefix is clear. Plan ids such as `WV` are ignored when they never appear as a Jira key. Several plausible prefixes are not guessed.
+
+```bash
+python3 <plugin>/scripts/jira_sync.py project --list
+python3 <plugin>/scripts/jira_sync.py project --set WAR
+python3 <plugin>/scripts/jira_sync.py project --apply results.json
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Detect from plan files, branches, and recent commit subjects. Write `jiraProject` only when it is empty and one prefix wins. |
+| `--list` | Print candidates. Write nothing. |
+| `--set KEY` | Store that project key. Also fills an empty `jiraKeyPrefixes`. Replaces a previous value. |
+| `--apply FILE` | Transcript from `getAccessibleAtlassianResources` and `getVisibleJiraProjects`. One project, or one match, is stored. One site is stored in `jiraSite`. |
+
+When it stays empty, init, scan, and `/warp-jira-check` print `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`.
 
 `beam.py set --jira KEY` is the same check. It rejects a prefix that is not configured unless `--force`. A rescan keeps a key set this way, and reapplies `.warp/jira-map.json` and `jiraKeyMap`.
 

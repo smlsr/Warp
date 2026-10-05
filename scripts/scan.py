@@ -743,6 +743,14 @@ def main() -> None:
         cfg["maxAgents"] = args.max_agents
         cfg["model"] = args.model
         try:
+            import jira_project
+
+            detected = jira_project.ensure(root, write=True, folder=folder)
+            if detected:
+                print(detected)
+        except Exception as e:
+            print(f"jira: project detection skipped ({e})")
+        try:
             import jira_sync
 
             loaded = jira_sync.settings(warp / "beam.json", {"config": cfg})

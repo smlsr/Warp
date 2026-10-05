@@ -231,6 +231,13 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
     except Exception as e:  # provider detection must never fail init
         steps.append(("warn", f"could not check the git provider: {e}"))
 
+    try:
+        import jira_project
+
+        steps += jira_project.init_steps(root, dry)
+    except Exception as e:  # project detection must never fail init
+        steps.append(("warn", f"could not detect jiraProject: {e}"))
+
     snippet = read_snippet(root)
     gi = root / ".gitignore"
     if snippet is None:

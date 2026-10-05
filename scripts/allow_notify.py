@@ -832,7 +832,7 @@ Default tools, from scripts/mcp_tools.py, on slackMcp and teamsMcp:
   getJiraIssue, getTransitionsForJiraIssue, listJiraIssueTransitions,
   transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue,
   searchJiraIssuesUsingJql, getJiraProjectIssueTypesMetadata,
-  getJiraIssueRemoteIssueLinks).
+  getJiraIssueRemoteIssueLinks, getVisibleJiraProjects).
 --with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
   put that in notifyAllow.
 

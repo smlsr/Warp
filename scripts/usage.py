@@ -30,6 +30,7 @@ SWITCHES = {
     "--search",
     "--from-jira",
     "--auto",
+    "--list",
 }
 
 
