@@ -913,6 +913,14 @@ def main() -> None:
             args.max_agents,
         )
         atomic_write(Path(args.out), json.dumps(beam, indent=2) + "\n")
+        try:
+            import jira_project
+
+            adopted = jira_project.adopt_from_beam(root)
+            if adopted:
+                print(adopted)
+        except Exception as e:
+            print(f"jira: project from stored keys skipped ({e})")
         est = beam["program"]["estimate"]
         if folder:
             print(f"scope folder={folder.relative_to(root)}")

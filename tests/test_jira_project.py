@@ -189,3 +189,126 @@ class DetectTests(unittest.TestCase):
         )
         self.assertIn("MUST DO", claimed.stdout)
         self.assertIn("WAR-4", claimed.stdout)
+
+
+class StoredKeyProjectTests(unittest.TestCase):
+    """Matched issue keys set jiraProject even when the project-list tool is missing."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = self.tmp / "repo"
+        (self.repo / ".warp").mkdir(parents=True)
+        self.cfg = self.repo / ".warp/config.yaml"
+        self.cfg.write_text('jiraProject: ""\njiraKeyPrefixes: ""\njiraSite: ""\n')
+
+    def text(self):
+        return self.cfg.read_text()
+
+    def test_one_project_and_no_project_list_writes_config(self):
+        note = jira_project.adopt_from_keys(
+            self.repo, ["WAR-17", "WAR-32"], project_list_available=False
+        )
+        self.assertIn("set jiraProject to WAR (every stored key is in project WAR)", note)
+        self.assertNotIn("project --set", note)
+        self.assertNotIn("Jira moves are disabled", note)
+        self.assertIn('jiraProject: "WAR"', self.text())
+        self.assertIn('jiraKeyPrefixes: "WAR"', self.text())
+        before = self.text()
+        again = jira_project.adopt_from_keys(
+            self.repo, ["WAR-17", "WAR-32"], project_list_available=False
+        )
+        self.assertIn("jiraProject is WAR; left as is", again)
+        self.assertNotIn("project --set", again)
+        self.assertEqual(self.text(), before)
+
+    def test_apply_without_project_list_writes_the_agreed_key(self):
+        payload = {
+            "projectsTool": "unavailable",
+            "resources": [{"url": "https://smldev.atlassian.net", "id": "cloud"}],
+            "searches": [
+                {"jql": 'externalId = "WV-01"', "issues": [{"key": "WAR-17"}]},
+                {"jql": 'externalId = "WV-16"', "issues": [{"key": "WAR-32"}]},
+            ],
+        }
+        (self.repo / "remote.json").write_text(json.dumps(payload))
+        applied = run("jira_sync.py", "project", "--root", ".", "--apply", "remote.json", cwd=self.repo)
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.assertIn("set jiraProject to WAR (every stored key is in project WAR)", applied.stdout)
+        self.assertNotIn("project --set", applied.stdout)
+        self.assertNotIn("Jira moves are disabled", applied.stdout)
+        self.assertIn('jiraProject: "WAR"', self.text())
+        self.assertIn("https://smldev.atlassian.net", self.text())
+        before = self.text()
+        again = run("jira_sync.py", "project", "--root", ".", "--apply", "remote.json", cwd=self.repo)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("jiraProject is WAR; left as is", again.stdout)
+        self.assertNotIn("project --set", again.stdout)
+        self.assertEqual(self.text(), before)
+
+    def test_mixed_projects_do_not_write(self):
+        note = jira_project.adopt_from_keys(
+            self.repo, ["WAR-17", "ABC-3"], project_list_available=False
+        )
+        self.assertIn("jiraProject left empty", note)
+        self.assertIn("ABC, WAR", note)
+        self.assertNotIn("project --set", note)
+        self.assertIn('jiraProject: ""', self.text())
+        payload = {
+            "projectsTool": "unavailable",
+            "searches": [
+                {"issues": [{"key": "WAR-17"}]},
+                {"issues": [{"key": "ABC-3"}]},
+            ],
+        }
+        (self.repo / "remote.json").write_text(json.dumps(payload))
+        applied = run("jira_sync.py", "project", "--root", ".", "--apply", "remote.json", cwd=self.repo)
+        self.assertIn("Stored keys are in ABC, WAR", applied.stdout)
+        self.assertNotIn("project --set", applied.stdout)
+        self.assertIn('jiraProject: ""', self.text())
+
+    def test_existing_different_value_is_not_overwritten(self):
+        self.cfg.write_text('jiraProject: "HOS"\njiraKeyPrefixes: "HOS"\n')
+        before = self.text()
+        note = jira_project.adopt_from_keys(
+            self.repo, ["WAR-17", "WAR-32"], project_list_available=False
+        )
+        self.assertIn("jiraProject is HOS; matched issues are in WAR. Left as is.", note)
+        self.assertNotIn("project --set", note)
+        self.assertEqual(self.text(), before)
+
+    def test_already_correct_value_is_unchanged(self):
+        self.cfg.write_text('jiraProject: "WAR"\n')
+        before = self.text()
+        note = jira_project.adopt_from_keys(self.repo, ["WAR-17"], project_list_available=False)
+        self.assertEqual(note, "jira: jiraProject is WAR; left as is")
+        self.assertNotIn("project --set", note)
+        self.assertEqual(self.text(), before)
+
+    def test_scan_resolve_writes_one_project_and_a_rescan_leaves_it(self):
+        (self.repo / "CURSOR_PLAN.md").write_text("- WV-01 Build the widget\n- WV-02 Next\n")
+        scanned = run("scan.py", "scan", cwd=self.repo)
+        self.assertEqual(scanned.returncode, 0, scanned.stdout + scanned.stderr)
+        self.assertIn('jiraProject: ""', self.text())
+        (self.repo / "hit.json").write_text(
+            json.dumps(
+                {
+                    "WV-01": [{"key": "WAR-17", "externalId": "WV-01"}],
+                    "WV-02": [{"key": "WAR-32", "externalId": "WV-02"}],
+                }
+            )
+        )
+        resolved = run(
+            "jira_sync.py", "resolve", "--beam", ".warp/beam.json", "--apply", "hit.json", cwd=self.repo
+        )
+        self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
+        self.assertIn("set jiraProject to WAR (every stored key is in project WAR)", resolved.stdout)
+        self.assertNotIn("project --set", resolved.stdout)
+        self.assertNotIn("Jira moves are disabled", resolved.stdout)
+        self.assertIn('jiraProject: "WAR"', self.text())
+        before = self.text()
+        again = run("scan.py", "scan", cwd=self.repo)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("jiraProject is WAR; left as is", again.stdout)
+        self.assertNotIn("project --set", again.stdout)
+        self.assertEqual(self.text(), before)

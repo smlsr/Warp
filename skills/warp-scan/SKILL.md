@@ -61,6 +61,9 @@ If the scan prints `jira: PROJECT`, or `jiraProject` in `.warp/config.yaml` is s
 1. Call `getAccessibleAtlassianResources` and `getVisibleJiraProjects` on `jiraMcp`.
 2. Save the transcript and run `python3 <plugin>/scripts/jira_sync.py project --apply results.json`.
 3. If several projects come back, run the JQL in `.warp/jira-project-probe.json` (`project --probe` reprints it). Save the searches and run `python3 <plugin>/scripts/jira_sync.py project --record probe.json`. Exactly one project with a hit is stored. If several projects match, or none do, the command lists them and the `project --set` lines. Do not guess. Do not pass a plan id to Jira.
+4. If `getVisibleJiraProjects` is not on the connector, do not stop and do not tell the user to run `project --set`. Continue the external-id lookup. Put the issue keys in the `project --apply` transcript (`searches`) or record them with `resolve --apply`. When every stored key is in one project, Warp writes `jiraProject` itself. Read that line to the user: `jira: set jiraProject to WAR (every stored key is in project WAR)`. Jira moves are not off. Do not add a `project --set` command.
+
+A missing project list is not a reason to leave `jiraProject` empty once the matched issues agree. If the keys span more than one project, the line names them (`jira: jiraProject left empty. Stored keys are in ABC, WAR.`) and nothing is written. Do not guess. If `jiraProject` is already a different key, the line says so and the value stays. If it is already the matched project, the line is `jira: jiraProject is WAR; left as is`. Do not tell the user to set it.
 
 A `jiraProject` that already has a value is left alone.
 

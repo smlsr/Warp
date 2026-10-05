@@ -1398,6 +1398,7 @@ def record_resolved(
         jira["status"] = status
     remember_map(beam_path, tid, norm, source=origin, confidence=confidence)
     _save(beam_path, beam)
+    adopted = _adopt_project(beam_path)
     cfg = settings(beam_path, beam)
     prefixes = prefixes_from(cfg)
     lines = [f"jira: {tid} -> {norm} ({origin}, {confidence}). Stored on the beam and in .warp/jira-map.json."]
@@ -1424,6 +1425,8 @@ def record_resolved(
     else:
         lines.append("jira: key stored. No transition is due while the ticket is queued.")
     lines.append(f"jira: transitionJiraIssue and comments must use {norm}. Do not pass {tid}.")
+    if adopted:
+        lines.append(adopted)
     import jira_match
 
     write_hint = jira_match.hint_for_resolve(cfg)
@@ -2498,6 +2501,7 @@ def _commit_mapping(
 ) -> str:
     if changed:
         _save(beam_path, beam)
+    adopted = _adopt_project(beam_path)
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
     prefixes = prefixes_from(cfg)
@@ -2530,6 +2534,8 @@ def _commit_mapping(
         if victim is not None:
             stored = victim.get("jiraKey")
             label = str(stored) if stored else "unresolved"
+            if adopted:
+                lines.append(adopted)
             lines.append(stop_unlinked_run(beam_path, str(victim["id"]), label))
             return "\n".join(lines)
         note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
@@ -2538,7 +2544,19 @@ def _commit_mapping(
         lines.append(note)
     if newly:
         lines.append("jira: saved .warp/jira-map.json. A rescan keeps these keys.")
+    if adopted:
+        lines.append(adopted)
     return "\n".join(lines)
+
+
+def _adopt_project(beam_path: Path) -> str:
+    """Write jiraProject when every stored issue key is in one project."""
+    try:
+        import jira_project
+
+        return jira_project.adopt_from_beam(_root(beam_path))
+    except Exception:
+        return ""
 
 
 def _transcript(data) -> bool:
@@ -2728,7 +2746,15 @@ and recent commit subjects, and does not guess when several prefixes fit.
 (and jiraKeyPrefixes when that is empty). --apply reads a saved
 getVisibleJiraProjects / getAccessibleAtlassianResources transcript. One
 visible project, or one that matches the repo or a candidate, is stored.
-Several projects are probed. --probe writes JQL for the first plan ids
+Issue keys in that transcript, or already stored on the beam, are enough
+on their own: if every key is in one project, that key is written even when
+getVisibleJiraProjects is missing. The line is:
+jira: set jiraProject to WAR (every stored key is in project WAR)
+Keys in more than one project are named and jiraProject stays empty.
+A different value already set is left alone, and the line says it differs.
+The same value is left alone, with no project --set instruction.
+Several projects from the project list, and no single agreed key, are probed.
+--probe writes JQL for the first plan ids
 (external id, then External ID, then label warp:<id>) in each project.
 --record stores jiraProject when exactly one project has a hit, and records
 how. Several hits are listed with issue keys and project --set. None lists

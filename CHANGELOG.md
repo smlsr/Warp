@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.22
+
+- Scan writes jiraProject when every stored issue key is in one project, even if getVisibleJiraProjects is missing. Mixed keys are named and left empty. A different existing value is not overwritten. The same value is left in place, with no project --set instruction.
+
 ## 1.3.21
 
 - The first claimed ticket of a run that cannot be resolved to a live Jira issue is released and the run stops. First ticket means no ticket has `jira.startedAt` yet: no earlier ticket was linked and moved to In Progress. `record --result not-found` (or a failed claim whose error says the issue was not found) and a lookup that cannot resolve a real issue key both take this path. The ticket returns to `queued`. `agent`, `branch`, `jira.startedAt`, and `jira.previousStatus` are cleared. Implementation does not start and no pull request is opened. The run ends the same way as `/warp-stop`, with reason `tickets are not linked to Jira (WV-01 / WAR-1)`.
