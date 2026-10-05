@@ -12,11 +12,11 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 
 `jira_sync.py ?` prints every subcommand and flag (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
 
-Add `--id <id>` to look at one ticket. `verify` only prints. `catchup` prints the moves still owed and writes `.warp/jira-todo.json`. `catchup --write` also stores a Jira key inferred from the id, summary, or branch. It does not call Jira.
+Add `--id <id>` to look at one ticket. `verify` only prints. It lists every ticket that `needs mapping`. `catchup` prints the moves still owed and writes `.warp/jira-todo.json` for tickets that have a confirmed key. It does not call Jira. A missing or invalid key is refused: the message goes to `.warp/outbox.md` and Herald, and `.warp/jira-todo.json` does not ask for a transition.
 
-Read the report to the user. For each ticket it shows `jiraKey`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, recorded comment ids, what should have happened, and what is missing.
+Read the report to the user. For each ticket it shows `jiraKey` or `unmapped`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, recorded comment ids, what should have happened, and what is missing.
 
-A ticket merged before this upgrade often has no `jiraKey` and no `startedAt`. If the id, summary, or branch contains a key like `ABC-123`, catch-up can infer it. An already-merged auto-merge ticket is asked for Done and a merged comment, not a move back to In Progress.
+The plan id is not the Jira issue key. Scan and claim store `WAR-1` when the plan, the map file, or exactly one Jira issue's external id says so. `WV-01` stays unmapped only when that search is missing or ambiguous. `/warp-jira-map` is for that leftover, not a required step. After a key is mapped, `catchup` asks for the moves the current status still owes. An already-merged auto-merge ticket is asked for Done and a merged comment, not a move back to In Progress. Never pass the plan id to `transitionJiraIssue`.
 
 If the user wants the gap closed, do every action in `.warp/jira-todo.json`:
 

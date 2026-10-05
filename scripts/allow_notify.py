@@ -830,7 +830,8 @@ Default tools, from scripts/mcp_tools.py, on slackMcp and teamsMcp:
   send_channel_message, teams_send_message
 --with-jira adds the Atlassian tools Warp calls (getAccessibleAtlassianResources,
   getJiraIssue, getTransitionsForJiraIssue, listJiraIssueTransitions,
-  transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue).
+  transitionJiraIssue, addOrEditJiraIssueComment, addCommentToJiraIssue,
+  searchJiraIssuesUsingJql).
 --with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
   put that in notifyAllow.
 

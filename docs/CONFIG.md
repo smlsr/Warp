@@ -17,7 +17,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | messenger | `both` | `slack`, `teams`, or `both`. |
 | notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms, approval waits, a red gate, and pause/stop. A `warp:status` request is always answered. |
 | runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |
-| jiraProject | empty | Jira project key, if you want it pinned. |
+| jiraProject | empty | Jira project key, for example `WAR`. A plan id is sent to Jira only when its prefix matches this or `jiraKeyPrefixes`. `WV-01` is not `WAR-1`. |
 | jiraTransition | `true` | On claim, move the Jira issue to `jiraInProgressStatus`. Only tickets with a Jira key. No Jira connector, or no matching transition: a note goes to `.warp/outbox.md` and the claim goes on. |
 | jiraInProgressStatus | `In Progress` | Target status name. Warp reads the transitions Jira offers and matches the transition name, then the target status name, then an in-progress status category. It never uses a fixed transition id. |
 | jiraQaReadyStatus | `QA Ready` | Manual path (ticket `autoMerge` false, L and XL by default): Jira moves here when the ticket is awaiting review. Warp does not move it to Done afterwards. |
@@ -29,7 +29,10 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | respectMergeWindows | `false` | If true, new claims wait for a window. |
 | mergeWindows | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag above is true. |
 | pollSeconds | `300` | How often a running loop reconciles PRs. |
-| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools in `scripts/mcp_tools.py` are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` (or `listJiraIssueTransitions`), `transitionJiraIssue`, and `addOrEditJiraIssueComment` (or `addCommentToJiraIssue`). |
+| jiraKeyPrefixes | empty | Extra project prefixes, comma-separated, that confirm a Jira key besides `jiraProject`. |
+| jiraKeyMap | empty | Optional map of plan id to Jira issue key, for example `{"WV-01": "WAR-1"}`. `.warp/jira-map.json` is merged on top and wins. |
+| jiraExternalIdField | `externalId` | Jira field compared to the plan id. Scan and claim store the issue key when exactly one issue has that field equal to the plan id. |
+| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools in `scripts/mcp_tools.py` are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` (or `listJiraIssueTransitions`), `transitionJiraIssue`, `addOrEditJiraIssueComment` (or `addCommentToJiraIssue`), and `searchJiraIssuesUsingJql`. |
 | jiraSite | empty | Site URL passed as `cloudId` when you have more than one Atlassian site. Empty: the agent calls `getAccessibleAtlassianResources`. |
 | gitProvider | `auto` | `auto`, `github`, or `bitbucket`. `auto` reads the `origin` host. `/warp-init` writes the one it finds and leaves a custom value alone. Other hosts run local-only. |
 | githubMcp | `github` | Connected GitHub server name. |

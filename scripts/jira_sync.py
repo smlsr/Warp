@@ -22,9 +22,13 @@ Settings (.warp/config.yaml, else the beam copy, else the defaults below):
   jiraMcp                 "atlassian"   Cursor server name, not a tool name
   jiraSite                ""            site URL used as cloudId when set
 
-Only a ticket with a Jira key is touched. The key is the jiraKey field, or a
-key inferred from the id, summary, or branch (two or more letters, then a
-number: ABC-123, not T-3). Pause and stop never move an issue.
+Only a ticket with a confirmed Jira issue key is touched. A plan id such as
+WV-01 is not that key. Inference accepts a key only when its project prefix
+matches jiraProject or jiraKeyPrefixes. A key on the plan, in the export, or
+in the map file is stored on scan. Tickets still open get an external-id
+lookup (.warp/jira-resolve.json); one exact match is stored on resolve --apply.
+/warp-jira-map is only for a leftover or an override. Pause and stop never
+move an issue. A missing or invalid key is not sent to Jira.
 """
 
 from __future__ import annotations
@@ -45,13 +49,18 @@ from mcp_tools import (
     TOOL_TRANSITION,
     TOOL_TRANSITIONS,
     TOOL_TRANSITIONS_ALT,
+    TOOL_SEARCH,
 )
 
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
-# Inference requires a real project key (2+ characters before the hyphen) so
-# plan ids like T-3 are not treated as Jira keys. Explicit jiraKey still uses KEY_RE.
+# A project prefix is at least two letters, so T-3 is never a Jira key.
 INFER_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
+PREFIX_RE = re.compile(r"[A-Z][A-Z0-9_]+")
 ACTIVE = {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
+MAP_NAME = "jira-map.json"
+SEARCH_NAME = "jira-search.json"
+RESOLVE_NAME = "jira-resolve.json"
+CONFIRMED_SOURCES = {"plan", "export", "map", "manual", "external"}
 DEFAULTS = {
     "jiraTransition": True,
     "jiraInProgressStatus": "In Progress",
@@ -60,6 +69,10 @@ DEFAULTS = {
     "jiraRestoreOnRelease": False,
     "jiraMcp": "atlassian",
     "jiraSite": "",
+    "jiraProject": "",
+    "jiraKeyPrefixes": "",
+    "jiraKeyMap": {},
+    "jiraExternalIdField": "externalId",
 }
 EVENTS = ["claim", "release", "qa-ready", "done"]
 COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "ci", "alarm", "blocked"]
@@ -92,41 +105,236 @@ def settings(beam_path: Path, beam: dict | None = None) -> dict:
             if key not in src or src[key] is None:
                 continue
             v = src[key]
-            if isinstance(default, bool):
+            if key == "jiraKeyMap":
+                out[key] = parse_key_map(v)
+            elif key == "jiraKeyPrefixes":
+                out[key] = v
+            elif key in {"jiraProject", "jiraExternalIdField"}:
+                out[key] = str(v).strip().strip("\"'")
+            elif isinstance(default, bool):
                 out[key] = v if isinstance(v, bool) else str(v).lower() not in FALSE
             elif str(v).strip():
                 out[key] = str(v).strip()
     return out
 
 
-def jira_key(ticket: dict) -> str | None:
-    """The explicit jiraKey field only. Does not look at the id or the summary."""
-    key = ticket.get("jiraKey")
-    return key if isinstance(key, str) and KEY_RE.match(key) else None
+def normalize_key(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    key = value.strip().upper()
+    return key if KEY_RE.match(key) else None
 
 
-def infer_key(ticket: dict) -> str | None:
-    """Explicit jiraKey, else the id, else the first key in the summary or branch."""
-    explicit = jira_key(ticket)
-    if explicit:
-        return explicit
+def prefixes_from(cfg: dict | None) -> list[str]:
+    """Project prefixes that confirm a Jira key: jiraProject, then jiraKeyPrefixes."""
+    cfg = cfg or {}
+    found: list[str] = []
+
+    def add(raw) -> None:
+        if raw is None or isinstance(raw, bool):
+            return
+        if isinstance(raw, (list, tuple)):
+            for item in raw:
+                add(item)
+            return
+        text = str(raw).strip().strip("\"'")
+        if not text or text in {"{}", "[]"}:
+            return
+        if text.startswith("[") and text.endswith("]"):
+            add(text[1:-1])
+            return
+        for part in re.split(r"[, ]+", text):
+            prefix = part.strip().strip("\"'").upper()
+            if prefix and PREFIX_RE.fullmatch(prefix) and prefix not in found:
+                found.append(prefix)
+
+    add(cfg.get("jiraProject"))
+    add(cfg.get("jiraKeyPrefixes"))
+    return found
+
+
+def prefix_ok(key: str, prefixes: list[str]) -> bool:
+    if not prefixes:
+        return True
+    return key.split("-", 1)[0] in prefixes
+
+
+def jira_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
+    """Confirmed issue key. A plan id is not one unless its prefix is configured or a person set it."""
+    key = normalize_key(ticket.get("jiraKey"))
+    if not key:
+        return None
+    if ticket.get("jiraKeyForced"):
+        return key
+    if prefixes:
+        return key if prefix_ok(key, prefixes) else None
+    tid = normalize_key(str(ticket.get("id") or ""))
+    if tid and key == tid and ticket.get("jiraKeySource") not in CONFIRMED_SOURCES:
+        return None
+    return key
+
+
+def infer_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
+    """Id, summary, or branch, and only when the project prefix is configured.
+
+    With no jiraProject and no jiraKeyPrefixes this returns nothing. WV-01 is not
+    accepted just because it looks like PROJECT-NUMBER.
+    """
+    if not prefixes:
+        return None
+    candidates = []
     tid = str(ticket.get("id") or "")
-    if re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d+", tid):
-        return tid
+    if tid:
+        candidates.append(tid)
     for field in ("summary", "branch"):
-        m = INFER_RE.search(str(ticket.get(field) or ""))
-        if m:
-            return m.group(1)
+        candidates.extend(INFER_RE.findall(str(ticket.get(field) or "")))
+    for raw in candidates:
+        key = normalize_key(raw)
+        if key and prefix_ok(key, prefixes):
+            return key
     return None
 
 
+def parse_key_map(value) -> dict[str, str]:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text in {"{}", "[]"}:
+            return {}
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    if isinstance(value.get("map"), dict):
+        value = value["map"]
+    out: dict[str, str] = {}
+    for tid, raw in value.items():
+        if str(tid) in {"map", "generatedAt"}:
+            continue
+        key = normalize_key(raw if isinstance(raw, str) else str(raw))
+        if key:
+            out[str(tid)] = key
+    return out
+
+
+def read_map_file(beam_path: Path) -> dict[str, str]:
+    path = beam_path.parent / MAP_NAME
+    if not path.is_file():
+        return {}
+    try:
+        return parse_key_map(json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def combined_map(beam_path: Path | None, cfg: dict) -> dict[str, str]:
+    merged = parse_key_map(cfg.get("jiraKeyMap"))
+    if beam_path is not None:
+        merged.update(read_map_file(beam_path))
+    prefixes = prefixes_from(cfg)
+    if not prefixes:
+        return merged
+    return {tid: key for tid, key in merged.items() if prefix_ok(key, prefixes)}
+
+
+def remember_map(beam_path: Path, tid: str, key: str) -> None:
+    path = beam_path.parent / MAP_NAME
+    current: dict = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict):
+                current = dict(data.get("map") if isinstance(data.get("map"), dict) else data)
+        except (OSError, json.JSONDecodeError):
+            current = {}
+    current.pop("map", None)
+    current.pop("generatedAt", None)
+    current[str(tid)] = key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, indent=2) + "\n")
+
+
+def assign_keys(tickets, cfg: dict, beam_path: Path | None = None, previous: dict | None = None) -> list[str]:
+    """Set jiraKey, jiraKeySource, and jiraMapping. Manual keys on `previous` survive a rescan."""
+    prefixes = prefixes_from(cfg)
+    key_map = combined_map(beam_path, cfg)
+    previous = previous or {}
+    unmapped: list[str] = []
+    for t in tickets:
+        tid = str(t.get("id") or "")
+        prev = previous.get(tid) or {}
+        if prev.get("jiraKeySource") == "manual" or prev.get("jiraKeyForced"):
+            kept = normalize_key(prev.get("jiraKey"))
+            if kept and (prev.get("jiraKeyForced") or not prefixes or prefix_ok(kept, prefixes)):
+                t["jiraKey"] = kept
+                t["jiraKeySource"] = prev.get("jiraKeySource") or "manual"
+                t["jiraKeyForced"] = bool(prev.get("jiraKeyForced"))
+                t["jiraMapping"] = "mapped"
+                continue
+        mapped = key_map.get(tid)
+        source_in = t.get("jiraKeySource")
+        explicit = normalize_key(t.get("jiraKey")) if source_in in CONFIRMED_SOURCES else None
+        chosen = None
+        source = None
+        forced = False
+        if mapped and (not prefixes or prefix_ok(mapped, prefixes)):
+            chosen, source = mapped, "map"
+        elif explicit and (not prefixes or prefix_ok(explicit, prefixes)):
+            chosen, source = explicit, source_in or "plan"
+        if not chosen:
+            inferred = infer_key(t, prefixes)
+            if inferred:
+                chosen, source = inferred, "inferred"
+        if chosen:
+            t["jiraKey"] = chosen
+            t["jiraKeySource"] = source
+            t["jiraKeyForced"] = forced
+            t["jiraMapping"] = "mapped"
+        else:
+            t["jiraKey"] = None
+            t["jiraKeySource"] = None
+            t["jiraKeyForced"] = False
+            t["jiraMapping"] = "needs mapping"
+            if tid:
+                unmapped.append(tid)
+    return unmapped
+
+
+def mapping_message(ticket: dict, cfg: dict) -> str:
+    tid = ticket.get("id")
+    prefixes = prefixes_from(cfg)
+    shown = ", ".join(prefixes) if prefixes else "not set"
+    example = f"{prefixes[0]}-1" if prefixes else "WAR-1"
+    stored = ticket.get("jiraKey")
+    extra = ""
+    if stored and not jira_key(ticket, prefixes):
+        extra = f" Stored {stored} does not match and will not be sent to Jira."
+    return (
+        f"jira: {tid} needs mapping. Refusing to call Jira (no Jira key).{extra} "
+        f"The plan id is not the issue key. External-id search did not find one exact match. "
+        f"jiraProject/jiraKeyPrefixes: {shown}. "
+        f"/warp-jira-map is only for this leftover: python3 {Path(__file__).resolve()} map --set {tid}={example}"
+    )
+
+
+def refuse_unmapped(beam_path: Path, ticket: dict, cfg: dict) -> str:
+    """Outbox and Herald. Does not write a Jira todo, so nothing calls the MCP with a bad key."""
+    note = mapping_message(ticket, cfg)
+    _outbox(beam_path, note)
+    _loud(beam_path, note, footer="Run /warp-jira-map, then /warp-jira-check. Nothing was sent to Jira.")
+    _write_todo(beam_path, [])
+    return note
+
+
 def plan(ticket: dict, event: str, cfg: dict) -> dict:
-    """What should happen to the Jira issue for this event. Uses the explicit key only."""
-    out = {"id": ticket.get("id"), "jiraKey": jira_key(ticket), "event": event, "action": "skip", "reason": ""}
+    """What should happen to the Jira issue for this event. Uses a confirmed key only."""
+    prefixes = prefixes_from(cfg)
+    out = {"id": ticket.get("id"), "jiraKey": jira_key(ticket, prefixes), "event": event, "action": "skip", "reason": ""}
     jira = ticket.get("jira") or {}
     auto = bool(ticket.get("autoMerge"))
     if not out["jiraKey"]:
-        out["reason"] = "no Jira key on this ticket"
+        out["reason"] = "needs mapping: no Jira key on this ticket"
     elif not cfg["jiraTransition"]:
         out["reason"] = "jiraTransition is false"
     elif event == "claim":
@@ -289,8 +497,8 @@ def instruction(p: dict) -> str:
     )
 
 
-def _bodies(ticket: dict, root: Path, mode: str) -> dict[str, str]:
-    key = jira_key(ticket) or infer_key(ticket) or ticket.get("id")
+def _bodies(ticket: dict, root: Path, mode: str, prefixes: list[str] | None = None) -> dict[str, str]:
+    key = jira_key(ticket, prefixes) or "unmapped"
     head = _header(root, str(key))
     pr = ticket.get("pr") or {}
     url = pr.get("url") or "none"
@@ -339,7 +547,8 @@ def event_for(ticket: dict, prev: str, new: str) -> str | None:
 
 def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) -> list[dict]:
     """Actions owed by this one beam update. Already-recorded comments are left out."""
-    if not cfg.get("jiraTransition", True) or not jira_key(ticket):
+    prefixes = prefixes_from(cfg)
+    if not cfg.get("jiraTransition", True) or not jira_key(ticket, prefixes):
         return []
     prev = before.get("status")
     new = ticket.get("status")
@@ -349,7 +558,7 @@ def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) ->
         p = plan(ticket, event, cfg)
         if p["action"] == "transition":
             actions.append({"type": "transition", "plan": p})
-    bodies = _bodies(ticket, root, mode)
+    bodies = _bodies(ticket, root, mode, prefixes)
     pr = ticket.get("pr") or {}
 
     def add(where: str, ev: str, body: str) -> None:
@@ -387,7 +596,7 @@ def _todo_payload(ticket: dict, actions: list[dict], cfg: dict, mode: str) -> di
     site = cfg.get("jiraSite") or ""
     return {
         "id": ticket.get("id"),
-        "jiraKey": jira_key(ticket),
+        "jiraKey": jira_key(ticket, prefixes_from(cfg)),
         "server": cfg.get("jiraMcp") or "atlassian",
         "jiraSite": site,
         "mode": mode,
@@ -421,7 +630,7 @@ def _write_todo(beam_path: Path, tickets: list[dict]) -> None:
 def render(ticket: dict, actions: list[dict], cfg: dict) -> str:
     if not actions:
         return ""
-    key = jira_key(ticket)
+    key = jira_key(ticket, prefixes_from(cfg))
     server = cfg.get("jiraMcp") or "atlassian"
     site = cfg.get("jiraSite") or ""
     site_bit = f" jiraSite is {site!r}; you may pass that URL as cloudId." if site else " jiraSite is empty; do not guess a site."
@@ -497,9 +706,10 @@ def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: str | None = No
             or ticket.get("alarm") != before.get("alarm")
             or new_status != prev_status
         )
-        if not jira_key(ticket):
-            if event or ((ticket.get("pr") or {}).get("url") and (ticket.get("pr") or {}).get("url") != before.get("pr_url")):
-                print(instruction(plan(ticket, event or "claim", cfg)))
+        prefixes = prefixes_from(cfg)
+        if not jira_key(ticket, prefixes):
+            if watched and cfg.get("jiraTransition", True):
+                print(prepare_resolve(beam_path, only_ids=[str(ticket.get("id") or "")]))
             _write_todo(beam_path, [])
             return
         if not cfg["jiraTransition"]:
@@ -519,7 +729,7 @@ def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: str | None = No
         print(f"jira: skipped ({e})")
 
 
-def _loud(beam_path: Path, note: str) -> None:
+def _loud(beam_path: Path, note: str, footer: str = "Run /warp-jira-check. The ticket was not stopped.") -> None:
     """Outbox is already written. Also ask Herald to post the same failure."""
     root = _root(beam_path)
     try:
@@ -530,7 +740,7 @@ def _loud(beam_path: Path, note: str) -> None:
             root,
             "Jira not updated",
             intro=note,
-            footer="Run /warp-jira-check. The ticket was not stopped.",
+            footer=footer,
         )
         notify.report(notify.build("jira-failed", root, msg=msg))
     except Exception as e:
@@ -612,9 +822,10 @@ def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]
     """What the current beam status should already have recorded. Not a history replay."""
     status = ticket.get("status") or "queued"
     auto = bool(ticket.get("autoMerge"))
-    key = jira_key(ticket) or infer_key(ticket)
+    prefixes = prefixes_from(cfg)
+    key = jira_key(ticket, prefixes) or infer_key(ticket, prefixes)
     if not key:
-        return [], "no Jira key, and none found in the id, summary, or branch"
+        return [], mapping_message(ticket, cfg)
     if not cfg["jiraTransition"]:
         return [], "jiraTransition is false; Warp will not move this issue"
     if status in {"queued", "skipped"}:
@@ -637,7 +848,7 @@ def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]
         return items, note
     items.append({"type": "transition", "event": "claim", "target": cfg["jiraInProgressStatus"]})
     items.append({"type": "comment", "where": "jira", "event": "claim"})
-    if url:
+    if pr.get("url"):
         items.append({"type": "comment", "where": "jira", "event": "pr-opened"})
         if _wants_pr(ticket, mode):
             items.append({"type": "comment", "where": "pr", "event": "pr-opened"})
@@ -671,12 +882,14 @@ def diagnose(ticket: dict, cfg: dict, mode: str) -> dict:
     pr = ticket.get("pr") or {}
     items, note = expected_items(ticket, cfg, mode)
     missing = [item for item in items if not _item_recorded(ticket, item)]
-    explicit = jira_key(ticket)
-    inferred = infer_key(ticket)
+    prefixes = prefixes_from(cfg)
+    explicit = jira_key(ticket, prefixes)
+    inferred = None if explicit else infer_key(ticket, prefixes)
     return {
         "id": ticket.get("id"),
         "jiraKey": explicit,
-        "inferredKey": None if explicit else inferred,
+        "inferredKey": inferred,
+        "needsMapping": not explicit,
         "status": ticket.get("status"),
         "autoMerge": bool(ticket.get("autoMerge")),
         "mode": mode,
@@ -698,7 +911,7 @@ def diagnose(ticket: dict, cfg: dict, mode: str) -> dict:
 
 def _actions_from_missing(ticket: dict, missing: list[dict], cfg: dict, mode: str, root: Path) -> list[dict]:
     """Turn diagnose gaps into the same actions on_set prints, without historical claim comments on a merged ticket."""
-    bodies = _bodies(ticket, root, mode)
+    bodies = _bodies(ticket, root, mode, prefixes_from(cfg))
     actions = []
     # plan() needs the explicit key. Catch-up may have just stamped it.
     for item in missing:
@@ -726,6 +939,7 @@ def format_diagnosis(row: dict) -> str:
     lines = [
         f"== {row['id']} ==",
         f"jiraKey: {key}{inferred}",
+        "jiraMapping: needs mapping" if row.get("needsMapping") else "jiraMapping: mapped",
         f"beam: {row['status']}  autoMerge: {row['autoMerge']}  mode: {row['mode']}",
         f"recorded: startedAt={rec['startedAt'] or '(none)'} qaReadyAt={rec['qaReadyAt'] or '(none)'} doneAt={rec['doneAt'] or '(none)'}",
         f"comments jira: {jira_comments}",
@@ -746,12 +960,18 @@ def verify(beam_path: Path, tid: str | None = None) -> str:
     mode = _mode(beam_path)
     ids = [tid] if tid else list(beam["tickets"])
     parts = []
+    unmapped: list[str] = []
     for i in ids:
         t = beam["tickets"].get(i)
         if not t:
             parts.append(f"jira: unknown ticket {i}")
             continue
-        parts.append(format_diagnosis(diagnose(t, cfg, mode)))
+        row = diagnose(t, cfg, mode)
+        if row["needsMapping"]:
+            unmapped.append(str(i))
+        parts.append(format_diagnosis(row))
+    if unmapped:
+        parts.append("jira: unmapped: " + ", ".join(unmapped))
     return "\n\n".join(parts)
 
 
@@ -761,25 +981,34 @@ def catchup(beam_path: Path, tid: str | None, write: bool) -> str:
     mode = _mode(beam_path)
     root = _root(beam_path)
     ids = [tid] if tid else list(beam["tickets"])
+    prefixes = prefixes_from(cfg)
     stamped = []
     if write:
         for i in ids:
             t = beam["tickets"].get(i)
-            if t and not jira_key(t):
-                k = infer_key(t)
+            if t and not jira_key(t, prefixes):
+                k = infer_key(t, prefixes)
                 if k:
                     t["jiraKey"] = k
+                    t["jiraKeySource"] = "inferred"
+                    t["jiraMapping"] = "mapped"
                     stamped.append(i)
         if stamped:
             _save(beam_path, beam)
     lines = []
     payloads = []
+    refused = []
     if stamped:
         lines.append("jira: stored inferred keys for " + ", ".join(stamped))
     for i in ids:
         t = beam["tickets"].get(i)
         if not t:
             lines.append(f"jira: unknown ticket {i}")
+            continue
+        if not jira_key(t, prefixes):
+            lines.append(mapping_message(t, cfg))
+            if (t.get("status") or "queued") not in {"queued", "skipped"}:
+                refused.append(t)
             continue
         row = diagnose(t, cfg, mode)
         missing = row["missingItems"]
@@ -792,9 +1021,472 @@ def catchup(beam_path: Path, tid: str | None, write: bool) -> str:
             continue
         payloads.append(_todo_payload(t, actions, cfg, mode))
         lines.append(render(t, actions, cfg))
+    if refused:
+        note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
+        _outbox(beam_path, note)
+        _loud(beam_path, note, footer="Run /warp-jira-map, then jira_sync.py catchup. Nothing was sent to Jira.")
     _write_todo(beam_path, payloads)
     if not lines:
         lines.append("jira: nothing missing")
+    return "\n".join(lines)
+
+
+def list_mappings(beam: dict, cfg: dict) -> str:
+    prefixes = prefixes_from(cfg)
+    lines = []
+    for tid in beam.get("tickets") or {}:
+        t = beam["tickets"][tid]
+        key = jira_key(t, prefixes)
+        lines.append(f"{tid}\t{key if key else 'unmapped'}")
+    if not lines:
+        return "jira: no tickets"
+    unmapped = [line.split("\t", 1)[0] for line in lines if line.endswith("\tunmapped")]
+    if unmapped:
+        lines.append(f"jira: {len(unmapped)} unmapped. A plan id is not a Jira key.")
+    return "\n".join(lines)
+
+
+def _parse_set(raw: str) -> tuple[str, str] | None:
+    if "=" not in raw:
+        return None
+    tid, key = raw.split("=", 1)
+    tid, key = tid.strip(), key.strip()
+    if not tid or not key:
+        return None
+    return tid, key
+
+
+def parse_mapping_file(path: Path) -> list[tuple[str, str]]:
+    text = path.read_text()
+    stripped = text.lstrip()
+    if path.suffix.lower() == ".json" or stripped.startswith(("{", "[")):
+        data = json.loads(text)
+        if isinstance(data, dict):
+            body = data.get("map") if isinstance(data.get("map"), dict) else data
+            return [(str(k), str(v)) for k, v in body.items() if str(k) not in {"map", "generatedAt"}]
+        rows = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            tid = row.get("id") or row.get("ticket")
+            key = row.get("jiraKey") or row.get("jira") or row.get("key")
+            if tid and key:
+                rows.append((str(tid), str(key)))
+        return rows
+    if "|" in text and re.search(r"jira", text, re.I):
+        rows = []
+        header = None
+        for line in text.splitlines():
+            if not line.strip().startswith("|"):
+                header = None
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if set(cells) <= {"", "-", "---"} or all(re.fullmatch(r":?-+:?", c.replace(" ", "")) for c in cells):
+                continue
+            low = [c.lower() for c in cells]
+            if header is None and any(h in {"id", "ticket"} for h in low):
+                header = low
+                continue
+            if header and len(cells) == len(header):
+                row = dict(zip(header, cells))
+                tid = row.get("id") or row.get("ticket")
+                key = row.get("jira key") or row.get("jirakey") or row.get("jira") or row.get("key")
+                if tid and key:
+                    rows.append((tid, key))
+        if rows:
+            return rows
+    rows = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in re.split(r"[,\t]", line)]
+        if len(parts) < 2:
+            continue
+        if parts[0].lower() in {"id", "ticket", "plan id"}:
+            continue
+        rows.append((parts[0], parts[1]))
+    return rows
+
+
+def apply_pairs(beam_path: Path, pairs: list[tuple[str, str]], force: bool) -> str:
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    lines = []
+    changed = False
+    for tid, raw in pairs:
+        t = beam["tickets"].get(tid)
+        if not t:
+            lines.append(f"jira: unknown ticket {tid}")
+            continue
+        key = normalize_key(raw)
+        if not key:
+            lines.append(f"jira: {raw!r} is not a Jira issue key (PROJECT-123)")
+            continue
+        if prefixes and not prefix_ok(key, prefixes) and not force:
+            lines.append(
+                f"jira: {key} does not match jiraProject/jiraKeyPrefixes ({', '.join(prefixes)}). Pass --force to store it."
+            )
+            continue
+        t["jiraKey"] = key
+        t["jiraKeySource"] = "map"
+        t["jiraKeyForced"] = bool(force and prefixes and not prefix_ok(key, prefixes))
+        t["jiraMapping"] = "mapped"
+        remember_map(beam_path, tid, key)
+        changed = True
+        lines.append(f"jira: {tid} -> {key}")
+    if changed:
+        _save(beam_path, beam)
+        lines.append("jira: saved .warp/jira-map.json. Already-claimed tickets: run catchup to post the pending transition and comments.")
+    elif not lines:
+        lines.append("jira: nothing to map")
+    return "\n".join(lines)
+
+
+def search_request(beam_path: Path) -> str:
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    project = prefixes[0] if prefixes else ""
+    rows = []
+    for tid, t in (beam.get("tickets") or {}).items():
+        if jira_key(t, prefixes):
+            continue
+        summary = (t.get("summary") or "").strip()
+        if not summary:
+            rows.append({"id": tid, "summary": "", "jql": None, "reason": "no summary to search"})
+            continue
+        safe = summary.replace("\\", "\\\\").replace('"', '\\"')
+        jql = f'summary ~ "{safe}"'
+        if project:
+            jql = f"project = {project} AND {jql}"
+        rows.append({"id": tid, "summary": summary, "jql": jql, "tool": TOOL_SEARCH})
+    payload = {"server": cfg.get("jiraMcp") or "atlassian", "tool": TOOL_SEARCH, "confirm": True, "tickets": rows}
+    path = beam_path.parent / SEARCH_NAME
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return (
+        f"jira: SEARCH. Do not change keys yet. Call {TOOL_SEARCH} on server {payload['server']} "
+        f"for each jql in .warp/{SEARCH_NAME}.\n"
+        "jira: Save the results, then run map --match results.json and read the proposals.\n"
+        "jira: Add --yes only after each pair is confirmed. Nothing is written until --yes."
+    )
+
+
+def _issue_summary(issue: dict) -> str:
+    fields = issue.get("fields") or {}
+    return str(issue.get("summary") or fields.get("summary") or "").strip()
+
+
+def _issue_key(issue: dict) -> str | None:
+    return normalize_key(str(issue.get("key") or issue.get("jiraKey") or ""))
+
+
+def _normalize_search_results(data) -> dict[str, list[dict]]:
+    if isinstance(data, dict) and isinstance(data.get("tickets"), list):
+        out = {}
+        for row in data["tickets"]:
+            if isinstance(row, dict) and row.get("id"):
+                issues = row.get("issues") or row.get("results") or []
+                out[str(row["id"])] = issues if isinstance(issues, list) else []
+        return out
+    if isinstance(data, dict):
+        out = {}
+        for tid, issues in data.items():
+            if tid in {"server", "tool", "confirm"}:
+                continue
+            if isinstance(issues, list):
+                out[str(tid)] = issues
+            elif isinstance(issues, dict):
+                out[str(tid)] = issues.get("issues") or []
+        return out
+    return {}
+
+
+def match_search(beam_path: Path, results_path: Path, yes: bool) -> str:
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    data = json.loads(results_path.read_text())
+    found = _normalize_search_results(data)
+    proposals = []
+    lines = []
+    for tid, t in (beam.get("tickets") or {}).items():
+        if jira_key(t, prefixes_from(cfg)):
+            continue
+        summary = (t.get("summary") or "").strip().casefold()
+        issues = found.get(tid) or []
+        hits = []
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            key = _issue_key(issue)
+            if not key:
+                continue
+            if summary and _issue_summary(issue).casefold() == summary:
+                hits.append(key)
+        if len(hits) == 1:
+            proposals.append((tid, hits[0]))
+            lines.append(f"jira: propose {tid}={hits[0]}")
+        elif len(hits) > 1:
+            lines.append(f"jira: {tid} ambiguous ({', '.join(hits)}); not applied")
+        else:
+            lines.append(f"jira: {tid} no summary match")
+    if not proposals:
+        lines.append("jira: no unique matches")
+        return "\n".join(lines)
+    if not yes:
+        lines.append("jira: not written. Re-run with --yes after you confirm these pairs.")
+        return "\n".join(lines)
+    lines.append(apply_pairs(beam_path, proposals, force=False))
+    return "\n".join(lines)
+
+
+def key_summary(beam: dict, cfg: dict | None = None) -> str:
+    """`12 tickets: 9 keyed, 3 need mapping`."""
+    cfg = cfg or {}
+    prefixes = prefixes_from(cfg)
+    tickets = list((beam.get("tickets") or {}).values())
+    keyed = sum(1 for t in tickets if jira_key(t, prefixes))
+    need = len(tickets) - keyed
+    noun = "ticket" if len(tickets) == 1 else "tickets"
+    return f"jira: {len(tickets)} {noun}: {keyed} keyed, {need} need mapping"
+
+
+def external_field(cfg: dict) -> str:
+    raw = str(cfg.get("jiraExternalIdField") or "externalId").strip().strip("\"'")
+    return raw or "externalId"
+
+
+def external_id_jql(tid: str, cfg: dict) -> str:
+    field = external_field(cfg)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", field):
+        shown = field
+    else:
+        shown = '"' + field.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    safe = str(tid).replace("\\", "\\\\").replace('"', '\\"')
+    jql = f'{shown} = "{safe}"'
+    prefixes = prefixes_from(cfg)
+    if prefixes:
+        jql = f"project = {prefixes[0]} AND {jql}"
+    return jql
+
+
+def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
+    """Write JQL for an exact external-id lookup. Does not call Jira and does not flag a miss."""
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    wanted = set(only_ids) if only_ids else None
+    rows = []
+    for tid, t in (beam.get("tickets") or {}).items():
+        if wanted is not None and tid not in wanted:
+            continue
+        if jira_key(t, prefixes):
+            continue
+        rows.append(
+            {
+                "id": tid,
+                "externalId": tid,
+                "field": external_field(cfg),
+                "jql": external_id_jql(tid, cfg),
+                "tool": TOOL_SEARCH,
+            }
+        )
+    path = beam_path.parent / RESOLVE_NAME
+    summary = key_summary(beam, cfg)
+    if not rows:
+        if wanted is None and path.is_file():
+            path.unlink()
+        return summary
+    payload = {
+        "server": cfg.get("jiraMcp") or "atlassian",
+        "tool": TOOL_SEARCH,
+        "match": "external-id",
+        "confirm": False,
+        "tickets": rows,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    shown = ", ".join(row["id"] for row in rows[:30])
+    extra = f" (+{len(rows) - 30} more)" if len(rows) > 30 else ""
+    me = Path(__file__).resolve()
+    return (
+        f"{summary}\n"
+        f"jira: RESOLVE {shown}{extra} by external id (exact single match). "
+        f"Call {TOOL_SEARCH} on server {payload['server']} for each jql in .warp/{RESOLVE_NAME}.\n"
+        f"jira: Then python3 {me} resolve --apply <results.json>. "
+        "One exact match is stored. Zero or several stay unmapped.\n"
+        "jira: /warp-jira-map is only for tickets that stay unmapped or ambiguous."
+    )
+
+
+def _external_values(issue: dict, field: str) -> list[str]:
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    raws = [
+        issue.get("externalId"),
+        issue.get("external_id"),
+        issue.get("externalIssueId"),
+        fields.get(field) if fields else None,
+        fields.get("externalId") if fields else None,
+        fields.get("external_id") if fields else None,
+        fields.get("externalIssueId") if fields else None,
+        fields.get("External issue ID") if fields else None,
+    ]
+    out: list[str] = []
+
+    def add(raw) -> None:
+        if raw is None or isinstance(raw, bool):
+            return
+        if isinstance(raw, dict):
+            add(raw.get("value") or raw.get("name") or raw.get("id"))
+            return
+        if isinstance(raw, list):
+            for item in raw:
+                add(item)
+            return
+        text = str(raw).strip()
+        if text:
+            out.append(text)
+
+    for raw in raws:
+        add(raw)
+    return out
+
+
+def _same_id(a: str, b: str) -> bool:
+    return str(a).strip().casefold() == str(b).strip().casefold()
+
+
+def match_external(tid: str, issues: list, field: str, prefixes: list[str]) -> tuple[str | None, str]:
+    """Exact external-id match. One issue with no field is the JQL hit. Several keys are ambiguous."""
+    exact: list[str] = []
+    bare: list[str] = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        key = _issue_key(issue)
+        if not key or (prefixes and not prefix_ok(key, prefixes)):
+            continue
+        values = _external_values(issue, field)
+        if values:
+            if any(_same_id(v, tid) for v in values):
+                exact.append(key)
+        else:
+            bare.append(key)
+    chosen = list(dict.fromkeys(exact))
+    if len(chosen) == 1:
+        return chosen[0], "matched"
+    if len(chosen) > 1:
+        return None, "ambiguous:" + ",".join(chosen)
+    bare_keys = list(dict.fromkeys(bare))
+    if len(issues or []) == 1 and len(bare_keys) == 1:
+        return bare_keys[0], "matched"
+    if len(bare_keys) > 1 or (exact and len(chosen) > 1):
+        return None, "ambiguous:" + ",".join(bare_keys or chosen)
+    return None, "none"
+
+
+def _results_by_ticket(data, requested: list[str]) -> dict[str, list]:
+    found = _normalize_search_results(data)
+    if found:
+        return found
+    issues = None
+    if isinstance(data, dict) and isinstance(data.get("issues"), list):
+        issues = data["issues"]
+    elif isinstance(data, list):
+        issues = data
+    if issues is not None and len(requested) == 1:
+        return {requested[0]: issues}
+    return {}
+
+
+def _requested_ids(beam_path: Path, results) -> list[str]:
+    path = beam_path.parent / RESOLVE_NAME
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text())
+            ids = [str(row["id"]) for row in payload.get("tickets") or [] if isinstance(row, dict) and row.get("id")]
+            if ids:
+                return ids
+        except (OSError, json.JSONDecodeError):
+            pass
+    if isinstance(results, dict):
+        return [str(k) for k in results if k not in {"server", "tool", "confirm", "match", "issues"}]
+    return []
+
+
+def apply_external(beam_path: Path, results_path: Path) -> str:
+    """Store an exact single external-id match. Flag an active ticket only after this attempt."""
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    field = external_field(cfg)
+    data = json.loads(results_path.read_text())
+    requested = _requested_ids(beam_path, data)
+    found = _results_by_ticket(data, requested)
+    if not requested:
+        requested = list(found)
+    lines = []
+    changed = False
+    tried_miss: list[str] = []
+    newly: list[str] = []
+    for tid in requested:
+        t = beam["tickets"].get(tid)
+        if not t:
+            lines.append(f"jira: unknown ticket {tid}")
+            continue
+        if jira_key(t, prefixes):
+            continue
+        key, how = match_external(tid, found.get(tid) or [], field, prefixes)
+        if how == "matched" and key:
+            t["jiraKey"] = key
+            t["jiraKeySource"] = "external"
+            t["jiraKeyForced"] = False
+            t["jiraMapping"] = "mapped"
+            remember_map(beam_path, tid, key)
+            changed = True
+            newly.append(tid)
+            lines.append(f"jira: {tid} -> {key} (external id)")
+        elif how.startswith("ambiguous"):
+            keys = how.split(":", 1)[1]
+            lines.append(f"jira: {tid} ambiguous ({keys}); still needs mapping")
+            tried_miss.append(tid)
+        else:
+            lines.append(f"jira: {tid} no external-id match")
+            tried_miss.append(tid)
+    if changed:
+        _save(beam_path, beam)
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    lines.insert(0, key_summary(beam, cfg))
+    mode = _mode(beam_path)
+    root = _root(beam_path)
+    payloads = []
+    refused = []
+    for tid in newly:
+        t = beam["tickets"].get(tid) or {}
+        if (t.get("status") or "queued") in {"queued", "skipped"}:
+            continue
+        row = diagnose(t, cfg, mode)
+        actions = _actions_from_missing(t, row["missingItems"], cfg, mode, root)
+        if actions:
+            payloads.append(_todo_payload(t, actions, cfg, mode))
+            lines.append(render(t, actions, cfg))
+    for tid in tried_miss:
+        t = beam["tickets"].get(tid)
+        if not t or jira_key(t, prefixes):
+            continue
+        if (t.get("status") or "queued") in {"queued", "skipped"}:
+            continue
+        refused.append(t)
+    if payloads or refused:
+        _write_todo(beam_path, payloads)
+    if refused:
+        note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
+        _outbox(beam_path, note)
+        _loud(beam_path, note, footer="External-id search did not find one match. /warp-jira-map is only for this leftover.")
+        lines.append(note)
+    if newly:
+        lines.append("jira: saved .warp/jira-map.json. A rescan keeps these keys.")
     return "\n".join(lines)
 
 
@@ -804,14 +1496,34 @@ examples:
   python3 scripts/jira_sync.py verify --beam .warp/beam.json
   python3 scripts/jira_sync.py catchup --beam .warp/beam.json
   python3 scripts/jira_sync.py catchup --write --id T-9
+  python3 scripts/jira_sync.py map
+  python3 scripts/jira_sync.py map --set WV-01=WAR-1
+  python3 scripts/jira_sync.py map --import jira-map.csv
+  python3 scripts/jira_sync.py map --search
+  python3 scripts/jira_sync.py map --match results.json --yes
+  python3 scripts/jira_sync.py resolve --apply results.json
   python3 scripts/jira_sync.py plan --id T-9 --event claim
   python3 scripts/jira_sync.py pick --target "In Progress" --transitions-file transitions.json
   python3 scripts/jira_sync.py record --id T-9 --event claim --result moved
   python3 scripts/jira_sync.py record-comment --id T-9 --where jira --event claim --comment-id 10001
 
-verify only prints. catchup writes .warp/jira-todo.json. catchup --write
-stores a jiraKey inferred from the id, summary, or branch. This script does
-not call Jira.
+verify only prints. It lists unmapped tickets. catchup writes .warp/jira-todo.json
+for tickets that have a confirmed key, and refuses (outbox + Herald, no MCP call)
+when the key is missing or the prefix does not match. catchup --write stores a
+key inferred from the id, summary, or branch only when that prefix matches
+jiraProject or jiraKeyPrefixes. This script does not call Jira.
+
+Scan and claim write .warp/jira-resolve.json. resolve --apply stores a key when
+the Jira external-id field equals the plan id on exactly one issue. That is not
+a separate user step. /warp-jira-map is only for tickets still unmapped or
+ambiguous, or for a review.
+
+map lists id and key, or unmapped. --set ID=KEY writes the beam and
+.warp/jira-map.json. --import reads CSV, JSON, or a markdown table.
+--search writes JQL for searchJiraIssuesUsingJql and does not change keys.
+--match proposes summary matches; --yes stores them.
+
+A plan id is not a Jira key unless its project prefix is configured.
 
 plan/record --event: claim, release, qa-ready, done.
 record --result: moved, already, skipped, unavailable, no-transition, failed.
@@ -864,6 +1576,17 @@ def main() -> None:
     pu.add_argument("--beam", default=".warp/beam.json")
     pu.add_argument("--id")
     pu.add_argument("--write", action="store_true", help="store an inferred jiraKey on the ticket")
+    pm = sub.add_parser("map", help="list or set plan-id to Jira-key mappings")
+    pm.add_argument("--beam", default=".warp/beam.json")
+    pm.add_argument("--set", action="append", default=[], help="ID=KEY, repeatable")
+    pm.add_argument("--import", dest="import_path", help="CSV, JSON, or markdown table")
+    pm.add_argument("--search", action="store_true", help="write JQL for searchJiraIssuesUsingJql; changes nothing")
+    pm.add_argument("--match", help="search results JSON; prints proposals unless --yes")
+    pm.add_argument("--yes", action="store_true", help="store proposals from --match")
+    pm.add_argument("--force", action="store_true", help="store a key whose prefix is not configured")
+    pv2 = sub.add_parser("resolve", help="match plan ids to Jira by external id")
+    pv2.add_argument("--beam", default=".warp/beam.json")
+    pv2.add_argument("--apply", help="search results JSON; an exact single external-id match is stored")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -886,6 +1609,31 @@ def main() -> None:
             print(record_comment(Path(args.beam), args.id, args.where, args.event, args.comment_id))
         elif args.cmd == "verify":
             print(verify(Path(args.beam), args.id))
+        elif args.cmd == "map":
+            beam_path = Path(args.beam)
+            if args.search:
+                print(search_request(beam_path))
+            elif args.match:
+                print(match_search(beam_path, Path(args.match), args.yes))
+            elif args.set or args.import_path:
+                pairs = []
+                for raw in args.set:
+                    parsed = _parse_set(raw)
+                    if not parsed:
+                        print(f"jira: --set {raw!r} must be ID=KEY")
+                        continue
+                    pairs.append(parsed)
+                if args.import_path:
+                    pairs.extend(parse_mapping_file(Path(args.import_path)))
+                print(apply_pairs(beam_path, pairs, args.force))
+            else:
+                print(list_mappings(_load(beam_path), settings(beam_path, _load(beam_path))))
+        elif args.cmd == "resolve":
+            beam_path = Path(args.beam)
+            if args.apply:
+                print(apply_external(beam_path, Path(args.apply)))
+            else:
+                print(prepare_resolve(beam_path))
         else:
             print(catchup(Path(args.beam), args.id, args.write))
     except Exception as e:  # fail-soft: report, do not fail the caller

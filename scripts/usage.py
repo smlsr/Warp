@@ -26,6 +26,8 @@ SWITCHES = {
     "--patch",
     "--minor",
     "--major",
+    "--force",
+    "--search",
 }
 
 

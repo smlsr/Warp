@@ -99,6 +99,18 @@ def scan_message(root: Path, info: dict) -> dict:
     est = info.get("estimate") or {}
     if est:
         facts.append(("Estimate", f"agent {est.get('agentHours')}h, human {est.get('humanHours')}h, elapsed {est.get('elapsedHours')}h"))
+    bullets: list[str] = []
+    if "unmapped" in info:
+        unmapped = info.get("unmapped") or []
+        total = int(info.get("tickets") or 0)
+        keyed = info.get("keyed")
+        if keyed is None:
+            keyed = total - len(unmapped)
+        facts.append(("Jira", f"{keyed} keyed, {len(unmapped)} need mapping"))
+        if unmapped:
+            shown = ", ".join(unmapped[:12])
+            more = "" if len(unmapped) <= 12 else f" (+{len(unmapped) - 12} more)"
+            bullets.append(f"Needs a Jira key: {shown}{more}")
     refs: list[tuple[str, str]] = []
     used = info.get("source")
     if used:
@@ -113,7 +125,8 @@ def scan_message(root: Path, info: dict) -> dict:
             if not refs or rel != refs[0][1]:
                 refs.append((label, rel))
     links = [(f"{label}: {rel}", file_url(rel, web, branch, kind)) for label, rel in refs[:MAX_LINKS]]
-    bullets = [f"... {len(refs) - MAX_LINKS} more in .warp/scan.json"] if len(refs) > MAX_LINKS else []
+    if len(refs) > MAX_LINKS:
+        bullets.append(f"... {len(refs) - MAX_LINKS} more in .warp/scan.json")
     footer = fmt.version_label() + ". Next: /warp-start. Status files are in .warp/ (not committed)."
     if any(u for _, u in links):
         footer = f"Links point at branch {branch}; they work once it is pushed. " + footer

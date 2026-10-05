@@ -54,6 +54,19 @@ A connected Jira plugin is the live source after the scan. If the repo has no pl
 
 A successful scan writes `.warp/notify-post.json`, headed `Warp | <repo> / <project>` (the channel is shared across repos), with format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
 
+## Jira keys
+
+The scan stores a key that is already on the plan, in a Jira export, or in `.warp/jira-map.json`. It prints `N tickets: K keyed, U need mapping`.
+
+If `.warp/jira-resolve.json` lists tickets, and the Atlassian MCP is connected, resolve them before you tell the user the summary and before you post Herald:
+
+1. Call `searchJiraIssuesUsingJql` on `jiraMcp` for each `jql`. The query matches `jiraExternalIdField` (default `externalId`) to the plan id.
+2. Save results keyed by plan id: `{"WV-01": [{"key": "WAR-1", "externalId": "WV-01"}]}`. One issue and no external-id field is still a hit, because the JQL was exact. Two issues are ambiguous.
+3. `python3 <plugin>/scripts/jira_sync.py resolve --apply results.json`. An exact single match is stored. Nothing asks the user to confirm.
+4. If the tool errors, save `{"WV-01": []}` and run the same `--apply`. Do not pass the plan id to `transitionJiraIssue`.
+
+Read the `N tickets: K keyed, U need mapping` line from that command to the user. Mention `/warp-jira-map` only for ids that are still unmapped or ambiguous. Do not post the scan Herald payload until this step has finished, so the message includes the resolved counts. `notify: quiet` posts nothing.
+
 ## After the scan
 
-Tell the user the format, ticket count, gate count, and that the plan is stopped. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.
+Tell the user the format, ticket count, gate count, the Jira line `N tickets: K keyed, U need mapping`, and that the plan is stopped. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.
