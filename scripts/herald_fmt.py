@@ -118,6 +118,17 @@ def header(root: Path, cfg: dict | None = None) -> str:
     return f"Warp | {repo_name(root)}" + (f" / {proj}" if proj else "")
 
 
+def version_label() -> str:
+    """`Warp v1.3.1` from the plugin VERSION file. Used on init and scan footers."""
+    try:
+        import version
+
+        found = version.version_of(version.PLUGIN_ROOT)
+    except Exception:
+        found = None
+    return f"Warp v{found}" if found else "Warp"
+
+
 def _link(v):
     return v if isinstance(v, tuple) else None
 

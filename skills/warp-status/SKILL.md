@@ -19,4 +19,6 @@ Hand the user these paths:
 
 Lead the reply with the three counts and the working ids. Do not paste the whole left list if it is long; point at the file.
 
+The status script prints the plugin version (`Warp v<version>`, the installed copy, and the source copy). If it says the project copy is older, tell the user to run `/warp-uninstall` then `/warp-init`. Do not uninstall unless they ask.
+
 Reconcile live PR and Jira state first if the user asked for current status rather than the last checkpoint.

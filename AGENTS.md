@@ -1,0 +1,9 @@
+# Warp agents
+
+Every pull request bumps the patch version and adds a changelog entry.
+
+- The version lives in `VERSION`. `.cursor-plugin/plugin.json` must carry the same number.
+- `CHANGELOG.md` needs a `## <version>` heading for that number.
+- `python3 scripts/bump_version.py` bumps the patch and inserts a changelog stub. Use `--minor` or `--major` only when the change calls for it. Replace the stub with what changed.
+- Do not ship a change on the current version. The next patch after 1.3.1 is 1.3.2, then 1.3.3.
+- `python3 scripts/check_version.py` fails when the files disagree or the changelog has no entry. CI fails when the pull request version is not newer than `main`.

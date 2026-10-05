@@ -25,6 +25,7 @@ python3 <plugin>/scripts/install.py init
 | Channel | `slackChannel` and `teamsChannel` are set | set each empty one (or the old `Warp` default) to `warp` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 | Git provider | `gitProvider` is already `github` or `bitbucket` | read `origin` and write it. A custom value is left alone, with a warning if it disagrees with the remote. No remote sets `pushMerge: false`. |
+| Version | `.warp/version` matches the project plugin copy | write that version. If `.cursor/plugins/warp` is older than the plugin this command ran from, print `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` and do not overwrite plugin files. |
 
 `warp` is one shared channel for every repo. A channel that already has a value is left alone. Other existing config values are left alone too; only keys that are absent are added. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
 
@@ -34,7 +35,7 @@ Re-run `/warp-init` to pick up new keys after a plugin upgrade. Init still does 
 
 ## Message to Slack or Teams
 
-If init changed anything, the script also writes `.warp/notify-post.json`: a message headed `Warp | <repo> / <project>` that says "Cursor repo <name> was initialized with Warp", with the channel used and the repo link. Follow the `herald:` line it prints. `post` means Herald posts that text to the listed channels through the connected Slack or Teams MCP server. No message is built when init changed nothing or ran with `--dry-run`. Respect `notify` and `messenger` in the config. Post the `slack` view to Slack and the `teams` view to Teams. Never create the channel. If Slack or Teams is not connected, or no channel is set, the text goes to `.warp/outbox.md`. Report that to the user and carry on; it is not an error. Warp stores no webhook or token.
+If init changed anything, the script also writes `.warp/notify-post.json`: a message headed `Warp | <repo> / <project>` that says "Cursor repo <name> was initialized with Warp", with the channel used and the repo link. The footer starts with `Warp v<version>`. Follow the `herald:` line it prints. `post` means Herald posts that text to the listed channels through the connected Slack or Teams MCP server. No message is built when init changed nothing or ran with `--dry-run`. Respect `notify` and `messenger` in the config. Post the `slack` view to Slack and the `teams` view to Teams. Never create the channel. If Slack or Teams is not connected, or no channel is set, the text goes to `.warp/outbox.md`. Report that to the user and carry on; it is not an error. Warp stores no webhook or token.
 
 ## After
 

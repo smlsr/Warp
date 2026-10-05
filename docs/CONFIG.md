@@ -6,6 +6,8 @@ An old file that never got the new keys still behaves as the defaults. `jira_syn
 
 Agents re-read the yaml. The beam keeps a copy taken at scan time; change the yaml, then restart, so the next tick picks it up.
 
+`/warp-init` also writes `.warp/version`, one line, the version of the project plugin copy. That file is state, not a config key, so it is not in the example and init does not treat it as one. `/warp-version` prints it next to the source copy.
+
 | Key | Default | Meaning |
 |---|---|---|
 | stateDir | `.warp` | Where beam, status, and exports are written. Gitignore this. Absolute path keeps it outside the repo. |
