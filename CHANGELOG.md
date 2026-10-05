@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.9
+
+- /warp-jira-match links unmapped tickets to Jira by summary. Exact and a 60-character prefix are stored with --apply. A fuzzy score at or above 0.9 is a proposal until --yes. Ambiguous matches are not stored. --write-external-id writes the plan id into the External ID field with editJiraIssue after --yes, skips a missing or read-only field, and does not add a comment. jiraWriteExternalId defaults to false, so scan and claim do not write that field.
+
 ## 1.3.8
 
 - /warp-jira-view prints every field on a Jira issue. An issue key such as WAR-1 is fetched with getJiraIssue. An external id such as WV-01 is resolved from the beam and the map, then from the external-id field, and from each visible project when jiraProject is empty. Two matches are listed and neither issue is printed. --comments, --links, --all, --full, --verbose, and --json control the report.

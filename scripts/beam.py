@@ -654,6 +654,7 @@ def default_config() -> dict:
         "jiraKeyPrefixes": "",
         "jiraKeyMap": {},
         "jiraExternalIdField": "externalId",
+        "jiraWriteExternalId": False,
         "jiraTransition": True,
         "jiraInProgressStatus": "In Progress",
         "jiraRestoreOnRelease": False,

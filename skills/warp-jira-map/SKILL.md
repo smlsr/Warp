@@ -53,7 +53,7 @@ python3 <plugin>/scripts/jira_sync.py map --from-jira --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py map --from-jira --results results.json --dry-run
 ```
 
-`--dry-run` prints `WV-01 -> WAR-1 (external, high)` and writes nothing. Drop `--dry-run` to store the key, the source, and the confidence on the ticket and in `.warp/jira-map.json`. Add `--yes` only to store a unique summary proposal. Without `--yes` a summary match is printed and not written.
+`--dry-run` prints `WV-01 -> WAR-1 (external, high)` and writes nothing. Drop `--dry-run` to store the key, the source, and the confidence on the ticket and in `.warp/jira-map.json`. Add `--yes` only to store a unique summary proposal. Without `--yes` a summary match is printed and not written. That summary step uses the same normalization as `/warp-jira-match` (case, punctuation, and whitespace) and still only accepts an exact summary. Prefix and fuzzy matches belong to `/warp-jira-match`.
 
 ## Search, then confirm
 

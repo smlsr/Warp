@@ -18,9 +18,11 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 | `getTransitionsForJiraIssue` | transitions offered right now. Some servers list this as `listJiraIssueTransitions`. |
 | `transitionJiraIssue` | apply the id `jira_sync.py pick` chose. Pass `transition.id`, or `transitionId` if that is the field in the tool schema. |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue`. |
-| `searchJiraIssuesUsingJql` | Scan and claim look up `jiraExternalIdField` (name or `customfield_NNNNN`), then the other external-id names, then a label `warp:<id>`. One exact match is stored. Summary search waits for `--yes`. |
-| `getJiraProjectIssueTypesMetadata` | Field catalog. Used to turn `jiraExternalIdField` or `External ID` into a `cf[NNNNN]` clause. |
+| `searchJiraIssuesUsingJql` | Scan and claim look up `jiraExternalIdField` (name or `customfield_NNNNN`), then the other external-id names, then a label `warp:<id>`. One exact match is stored. Summary search waits for `--yes`. `/warp-jira-match` fetches a bounded candidate list (`summary ~` is fuzzy in Jira) and matches locally. |
+| `getJiraProjectIssueTypesMetadata` | Field catalog. Used to turn `jiraExternalIdField` or `External ID` into a `cf[NNNNN]` clause, and to find the External ID field before a write. |
 | `getJiraIssueRemoteIssueLinks` | Remote-link ids, after the external-id field and the label. |
+| `getJiraIssueEditmeta` | Whether the External ID field is editable on that issue. A missing or read-only field is skipped. |
+| `editJiraIssue` | Write the plan id into the External ID field. `/warp-jira-match --write-external-id` and `jira_sync.py external-id`, after `--yes`. This is a write and needs the connector permission. Scan and claim call it only when `jiraWriteExternalId` is true. No comment is added. |
 
 Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify` reads that module. It does not invent a second list.
 

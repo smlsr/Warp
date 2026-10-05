@@ -41,6 +41,11 @@ jiraExternalIdField: externalId
 # A summary match waits for confirmation. Two matches are reported, not picked.
 # jiraExternalIdField: "External ID"
 # jiraExternalIdField: customfield_10050
+jiraWriteExternalId: false
+# true: after a key is stored, scan and claim may write the plan id into the
+# Jira External ID field. false: they never do. /warp-jira-match --write-external-id
+# still can, and it asks for --yes before the edit. A different value already
+# in that field is left alone unless --force-external-id. No comment is posted.
 jiraTransition: true
 # On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
 # Needs the Jira MCP server; without it Warp logs a note and the claim goes on.

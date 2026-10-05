@@ -25,6 +25,8 @@ TOOL_SEARCH = "searchJiraIssuesUsingJql"
 TOOL_FIELDS = "getJiraProjectIssueTypesMetadata"
 TOOL_REMOTE_LINKS = "getJiraIssueRemoteIssueLinks"
 TOOL_PROJECTS = "getVisibleJiraProjects"
+TOOL_EDIT = "editJiraIssue"
+TOOL_EDITMETA = "getJiraIssueEditmeta"
 
 JIRA_TOOLS = (
     TOOL_RESOURCES,
@@ -38,6 +40,8 @@ JIRA_TOOLS = (
     TOOL_FIELDS,
     TOOL_REMOTE_LINKS,
     TOOL_PROJECTS,
+    TOOL_EDIT,
+    TOOL_EDITMETA,
 )
 
 # GitHub pull-request comment. `gh pr comment` is a CLI fallback, not an MCP tool.

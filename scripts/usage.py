@@ -38,10 +38,14 @@ SWITCHES = {
     "--verbose",
     "--comments",
     "--links",
+    "--include-done",
+    "--write-external-id",
+    "--force-external-id",
 }
 
 
-def normalize_argv(argv: list[str] | None) -> list[str]:
+def normalize_argv(argv: list[str] | None, extra_switches: set[str] | None = None) -> list[str]:
+    switches = SWITCHES | set(extra_switches or ())
     args = list(sys.argv[1:] if argv is None else argv)
     out: list[str] = []
     take_value = False
@@ -59,6 +63,6 @@ def normalize_argv(argv: list[str] | None) -> list[str]:
             out.append("--help")
             continue
         out.append(arg)
-        if arg.startswith("-") and arg not in SWITCHES and "=" not in arg:
+        if arg.startswith("-") and arg not in switches and "=" not in arg:
             take_value = True
     return out
