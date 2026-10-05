@@ -18,6 +18,8 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 | `transitionJiraIssue` | apply the id `jira_sync.py pick` chose. Pass `transition.id`, or `transitionId` if that is the field in the tool schema. |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue`. |
 
+Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify` reads that module. It does not invent a second list.
+
 `pick` matches the transition name, then the target status name, then (for In Progress and Done only) the status category. QA Ready is name-only. Never send a fixed transition id. An issue already in progress is left alone, and a Done issue is not reopened.
 
 Who moves the issue:
@@ -69,6 +71,10 @@ Local-only: stay on the ticket branch. Reed squash-merges it into `baseBranch` w
 There is no webhook or token in Warp. Herald posts through these connected servers only. `/warp-init` and `/warp-scan` write `.warp/notify-post.json` and tell Herald to post it; with no channel or no server the text goes to `.warp/outbox.md`. `notify: quiet` skips both. Warp does not create channels. The shared `warp` channel must exist, and the connected app must be able to post to it.
 
 Every message starts with the header `Warp | <repo> / <project>` because one channel serves many repos. Build messages with `scripts/herald_fmt.py` so the format stays the same; see `agents/herald.md`.
+
+Cursor asks for a Run approval each time Herald calls a Slack or Teams tool, until that tool is on the MCP allowlist. `/warp-allow-notify` writes the allowlist. It allows `slack_post_message` and `slack_send_message` on `slackMcp`, and `send_channel_message` and `teams_send_message` on `teamsMcp`. Those are specific tools from `scripts/mcp_tools.py`, not a wildcard. If the prompt names a different tool, add `server:tool` to `notifyAllow` and run the command again.
+
+The file that skips the IDE prompt is `.cursor/permissions.json` (`mcpAllowlist`), and it applies when Run Mode is Auto-review, Allowlist, or Run Everything. The CLI uses a different file (`.cursor/cli.json`, entries `Mcp(server:tool)`). A `beforeMCPExecution` hook is also installed; a hook `allow` does not currently skip the prompt. Cloud agents do not ask for approval, and this command does not change them. See the `warp-allow-notify` skill.
 
 Post alarms, approval requests, gate flips, pause/resume, and digests. Command loopback is a message the next tick reads:
 

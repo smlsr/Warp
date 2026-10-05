@@ -32,8 +32,9 @@ python3 <plugin>/scripts/install.py uninstall --remove-gitignore --yes
 | `.cursor/plugins/warp` | The project copy. Empty `.cursor/plugins` and `.cursor` are removed too. |
 | `.warp` | Beam, config, exports, journal. |
 | `.gitignore` snippet | Only with `--remove-gitignore`, and only the exact block `/warp-init` added. Other lines are kept. A hand-written `.warp/` entry is left alone. |
+| Project allow-notify entries | The hook command, `mcpAllowlist` entries, and CLI allow entries recorded by `/warp-allow-notify` in this repo (`.cursor/warp-allow.json`). Other hooks and other allow entries stay. |
 
-It does not touch product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, or a plugin installed for the user through Cursor Settings.
+It does not touch product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, a plugin installed for the user through Cursor Settings, or user-level allow-notify files (`~/.cursor/permissions.json`, `~/.cursor/cli-config.json`, `~/.cursor/hooks.json`).
 
 ## After
 
