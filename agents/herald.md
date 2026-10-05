@@ -18,7 +18,7 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - A ticket ran local-only, or was merged locally: post the message `scripts/provider.py note` wrote. Nothing was pushed.
 - PR opened: id and url.
 - Bugbot pass or fail: id and one line of evidence.
-- Awaiting approval: id, url, `warp:proceed <id>`.
+- Awaiting approval: id, url, Bugbot clean, `warp:proceed <id>`. Manual tickets reach this only after Bugbot and CI.
 - Merged: id and sha. Jira moved to Done.
 - Alarm: id, reason, `warp:retry <id>`.
 - Gate green or red.

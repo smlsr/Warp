@@ -383,11 +383,12 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraExternalIdFallback` | `label` | `label`, `remote-link`, or `none` when the External ID field is missing. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
-| `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here when a person must review and merge. |
+| `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here after Bugbot is clean and CI is green. |
 | `jiraDoneStatus` | `Done` | Auto-merge path (S and M): Jira moves here after the merge. |
 | `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
-| `bugbotRequired` | `true` | No merge without a Bugbot pass. |
-| `maxFixAttempts` | `3` | Then the ticket alarms. |
+| `bugbotRequired` | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. |
+| `bugbotManual` | `true` | Manual tickets only. `false` skips Bugbot before QA Ready. Auto-merge still uses `bugbotRequired`. |
+| `maxFixAttempts` | `3` | Shared fix loop, then the ticket alarms. |
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. |
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
@@ -407,7 +408,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 
 ## Merge policy
 
-S and M (`autoMerge` true) auto-merge after Bugbot and CI are green and every acceptance criterion is on the pull request and the Jira issue, then Jira moves to Done. L and XL wait for an approval on the provider (a GitHub review or a Bitbucket APPROVED) or for `warp:proceed <id>`, and Jira moves to QA Ready when they are waiting. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed reviews raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded.
+S and M (`autoMerge` true) and L and XL (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. S and M then auto-merge and Jira moves to Done. L and XL then move to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>`, and Reed merges. Jira stays at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is.
 
 ## Estimate
 

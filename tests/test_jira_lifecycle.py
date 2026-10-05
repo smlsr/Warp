@@ -232,7 +232,7 @@ class LifecycleTests(unittest.TestCase):
         git(repo, "commit", "-q", "-m", "ticket")
         self.set(repo, "ABC-123", "--status", "claimed", "--agent", "s1", "--branch", "warp/ABC-123")
         FakeClient(repo).follow()
-        self.set(repo, "ABC-123", "--status", "review")
+        self.set(repo, "ABC-123", "--status", "review", "--bugbot", "pass", "--ci", "green")
         r = run(
             repo,
             "provider.py",
@@ -331,6 +331,8 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(fake.status["ABC-456"]["name"], "In Progress")
         self.set(repo, "T-9", "--status", "review", "--pr", "https://github.com/acme/app/pull/9")
         fake.follow()
+        self.set(repo, "T-9", "--bugbot", "fail")
+        self.set(repo, "T-9", "--bugbot", "pass", "--ci", "green")
         self.set(repo, "T-9", "--status", "awaiting_approval")
         todo = fake.follow()
         trans = [a for t in todo["tickets"] for a in t["actions"] if a["type"] == "transition"]
@@ -339,7 +341,8 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(fake.status["ABC-456"]["name"], "QA Ready")
         qa = [body for event, body in fake.jira_comments if event == "qa-ready"][-1]
         self.assertIn("warp:proceed T-9", qa)
-        self.assertIn("Waiting for a person", qa)
+        self.assertIn("Bugbot clean, ready for manual review", qa)
+        self.assertIn("Findings fixed: 1", qa)
         if expect_pr:
             self.assertIn("qa-ready", [e for e, _ in fake.pr_comments])
         self.set(repo, "T-9", "--status", "merged", "--sha", "fff9999")

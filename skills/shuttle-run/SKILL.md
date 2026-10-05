@@ -22,7 +22,7 @@ You were started with `IMPLEMENT <id>` in this repo. Local and cloud are the sam
 3. Set `coding`. Branch `warp/<id>-<jiraKey>` off `baseBranch` from `python3 <plugin>/scripts/provider.py resolve`. Use `config.model` (default `claude-sonnet-5-5-high`, Claude Sonnet 5.5 High; the slug must match the Cursor model picker).
 4. Implement. Prove each acceptance criterion. Checkpoint spend with `scripts/beam.py spend`.
 5. If resolve says connected, push and open the pull request with the first method in `methods` (the named MCP server, or `gh` for GitHub). If it says local, or every method fails, do not push and do not error: `python3 <plugin>/scripts/provider.py note --id <id> --reason "<why>"` and hand Reed the branch name. Set `review` and, in connected mode, `--pr <url>`. That prints the Jira comment and the pull-request comment. Do both, then `record-comment`. Local mode comments on Jira only.
-6. If Reed returns fixes and attempts remain, set `fix` and push only in connected mode. Past `maxFixAttempts`, set `alarm`.
+6. If Reed returns fixes and attempts remain, set `fix` and push only in connected mode. Past `maxFixAttempts`, the ticket is `alarm`. Manual tickets use this same loop before `awaiting_approval`.
 
 If status is already `coding` or `fix` and the branch exists, continue that branch. Do not open a second pull request.
 

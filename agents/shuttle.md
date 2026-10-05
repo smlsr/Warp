@@ -19,7 +19,7 @@ Ticket id, Jira key, lock paths, size, autoMerge flag, model slug, preamble path
 4. Branch `warp/<id>-<jiraKey>` from `baseBranch` (see `scripts/provider.py resolve`; default `main`). The branch can use the plan id. Jira calls use `jiraKey` only. If `jiraMapping` is still `needs mapping` after the external-id, label, and remote-link lookup, do not call Jira. `/warp-jira-map` is only for that leftover. Set status `coding`. Use the model in `.warp/config.yaml` (default `claude-sonnet-5-5-high`, Claude Sonnet 5.5 High; the slug must match the Cursor model picker).
 5. Implement. Tests must cover every AC, not a summary of them. Record token and minute spend with `scripts/beam.py spend` at each checkpoint.
 6. If `provider.py resolve` says connected, push and open the pull request through the first method that works. Title `[<id>] <summary>`. Body lists ACs and lock paths. If it says local, or every method fails, do not push: run `provider.py note` and hand Reed the local branch. Set status `review` and, when you have a URL, `beam.py set --pr <url>`. Do the Jira comment and, in connected mode, the pull-request comment that `jira-todo.json` prints. Local mode comments on Jira only. Hand to Reed.
-7. If Reed returns fix notes and attempts < `maxFixAttempts`, set status `fix`, apply notes, push only if resolve said connected, and return to Reed. If attempts are exhausted, set status `alarm` and stop.
+7. If Reed returns fix notes and attempts < `maxFixAttempts`, set status `fix`, apply notes, push only if resolve said connected, and return to Reed. This is the same loop for auto-merge and manual tickets. If attempts are exhausted, the beam is `alarm` / `bugbot-failed`. Stop. Do not ask for QA Ready while Bugbot is red.
 
 ## Checkpoint
 

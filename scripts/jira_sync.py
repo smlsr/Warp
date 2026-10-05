@@ -63,7 +63,7 @@ KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 # A project prefix is at least two letters, so T-3 is never a Jira key.
 INFER_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
 PREFIX_RE = re.compile(r"[A-Z][A-Z0-9_]+")
-ACTIVE = {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
+ACTIVE = {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
 MAP_NAME = "jira-map.json"
 SEARCH_NAME = "jira-search.json"
 RESOLVE_NAME = "jira-resolve.json"
@@ -86,9 +86,13 @@ DEFAULTS = {
     "jiraWriteExternalId": False,
     "jiraCreateExternalIdField": False,
     "jiraExternalIdFallback": "label",
+    "bugbotRequired": True,
+    "bugbotManual": True,
+    "maxFixAttempts": 3,
 }
 EVENTS = ["claim", "release", "qa-ready", "done"]
-COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "ci", "alarm", "blocked"]
+COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "bugbot-rerun", "ci", "alarm", "blocked"]
+GATED_STATUSES = {"awaiting_approval", "merging", "merged"}
 DONE = {"merged", "done"}
 FALSE = {"false", "no", "off", "0"}
 RESULTS = {"moved", "already", "skipped", "unavailable", "no-transition", "failed"}
@@ -98,6 +102,146 @@ TODO_NAME = "jira-todo.json"
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _flag(value, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in FALSE
+
+
+def bugbot_applies(ticket: dict, cfg: Optional[dict]) -> bool:
+    """True when this ticket must have a Bugbot pass before QA Ready or merge.
+
+    bugbotRequired covers both paths. bugbotManual false turns it off for
+    autoMerge false tickets only.
+    """
+    cfg = cfg or {}
+    if not _flag(cfg.get("bugbotRequired", True), True):
+        return False
+    if ticket.get("autoMerge"):
+        return True
+    return _flag(cfg.get("bugbotManual", True), True)
+
+
+def _bugbot_pass(ticket: dict) -> bool:
+    return str((ticket.get("pr") or {}).get("bugbot") or "").strip().casefold() == "pass"
+
+
+def _ci_green(ticket: dict) -> bool:
+    return str((ticket.get("pr") or {}).get("ci") or "").strip().casefold() == "green"
+
+
+def review_block(ticket: dict, cfg: Optional[dict]) -> Optional[str]:
+    """Why awaiting_approval, merging, or merged must be refused. None when the gates are open."""
+    pr = ticket.get("pr") or {}
+    reasons = []
+    if bugbot_applies(ticket, cfg) and not _bugbot_pass(ticket):
+        reasons.append(f"bugbot is {pr.get('bugbot') or 'not run'}; need pass")
+    if not _ci_green(ticket):
+        reasons.append(f"ci is {pr.get('ci') or 'not run'}; need green")
+    return "; ".join(reasons) if reasons else None
+
+
+def _drop_comments(ticket: dict, events: tuple[str, ...]) -> None:
+    for where in ("jira", "pr"):
+        bucket = ticket.get(where)
+        if not isinstance(bucket, dict):
+            continue
+        comments = bucket.get("comments")
+        if isinstance(comments, dict):
+            for event in events:
+                comments.pop(event, None)
+
+
+def invalidate_head(ticket: dict) -> None:
+    """New commits after QA Ready. Jira stays where it is. Bugbot and CI must run again."""
+    pr = ticket.setdefault("pr", {})
+    ticket["status"] = "bugbot_running"
+    pr["bugbot"] = None
+    pr["ci"] = None
+    pr["approvedAt"] = None
+    pr["reviewedAt"] = None
+    pr["reviewedSha"] = None
+    pr["rerun"] = "new-commits"
+    _drop_comments(ticket, ("qa-ready", "bugbot", "ci"))
+
+
+def mark_bugbot_pass(ticket: dict) -> None:
+    pr = ticket.setdefault("pr", {})
+    pr["bugbotFixed"] = int(pr.get("bugbotFindings") or 0)
+
+
+def mark_bugbot_fail(ticket: dict, cfg: Optional[dict], count_attempt: bool) -> str:
+    cfg = cfg or {}
+    cap = int(cfg.get("maxFixAttempts") or 3)
+    pr = ticket.setdefault("pr", {})
+    if count_attempt:
+        ticket["attempts"] = int(ticket.get("attempts") or 0) + 1
+    pr["bugbotFindings"] = int(pr.get("bugbotFindings") or 0) + 1
+    attempt = int(ticket.get("attempts") or 0)
+    if attempt >= cap:
+        ticket["status"] = "alarm"
+        ticket["alarm"] = "bugbot-failed"
+        return f"bugbot fail; attempt {attempt}/{cap}; status alarm"
+    ticket["status"] = "fix"
+    return f"bugbot fail; attempt {attempt}/{cap}; status fix"
+
+
+def apply_review(ticket: dict, cfg: Optional[dict], args) -> Optional[str]:
+    """Record Bugbot, CI, and a new sha, then accept or refuse a final status.
+
+    A return value that starts with 'refusing ' means the beam must not be written.
+    Any other string is a note for the status line. None means a quiet update.
+    """
+    cfg = cfg or {}
+    pr = ticket.setdefault("pr", {})
+    prev = ticket.get("status")
+    old_sha = pr.get("sha")
+    new_sha = getattr(args, "sha", None)
+    requested = getattr(args, "status", None)
+    bug = getattr(args, "bugbot", None)
+    failed = str(bug or "").strip().casefold() == "fail"
+    invalidated = bool(
+        new_sha
+        and prev == "awaiting_approval"
+        and new_sha != old_sha
+        and requested not in {"merged", "done", "merging"}
+    )
+    if invalidated:
+        invalidate_head(ticket)
+    if new_sha:
+        pr["sha"] = new_sha
+    if getattr(args, "attempts", None) is not None:
+        ticket["attempts"] = args.attempts
+    note = "new commits, re-running Bugbot" if invalidated else None
+    if bug is not None:
+        pr["bugbot"] = bug
+        if str(bug).strip().casefold() == "pass":
+            mark_bugbot_pass(ticket)
+        elif failed:
+            fail_note = mark_bugbot_fail(ticket, cfg, count_attempt=getattr(args, "attempts", None) is None)
+            note = f"{note}; {fail_note}" if note else fail_note
+            if requested in GATED_STATUSES:
+                note = f"{note}; refusing {requested}"
+    if getattr(args, "ci", None) is not None:
+        pr["ci"] = args.ci
+    if requested and not failed:
+        if requested in GATED_STATUSES:
+            block = review_block(ticket, cfg)
+            if block:
+                return f"refusing {requested}: {block}"
+        ticket["status"] = requested
+    if ticket.get("status") == "awaiting_approval":
+        pr.pop("rerun", None)
+        pr["reviewedAt"] = pr.get("reviewedAt") or now()
+        if pr.get("sha") and not pr.get("reviewedSha"):
+            pr["reviewedSha"] = pr.get("sha")
+    if ticket.get("status") == "merged":
+        pr["mergedAt"] = pr.get("mergedAt") or now()
+    return note
 
 
 def settings(beam_path: Path, beam: Optional[dict] = None) -> dict:
@@ -591,7 +735,7 @@ def instruction(p: dict) -> str:
     )
 
 
-def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] = None) -> dict[str, str]:
+def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] = None, cfg: Optional[dict] = None) -> dict[str, str]:
     key = jira_key(ticket, prefixes) or "unmapped"
     head = _header(root, str(key))
     pr = ticket.get("pr") or {}
@@ -606,13 +750,19 @@ def _bodies(ticket: dict, root: Path, mode: str, prefixes: Optional[list[str]] =
     bug_line = f"Bugbot: {bug}." + (f" {evidence}" if evidence else "")
     alarm = ticket.get("alarm") or ticket.get("status") or "blocked"
     tid = ticket.get("id")
+    fixed = int(pr.get("bugbotFixed") or 0)
+    if bugbot_applies(ticket, cfg):
+        ready = f"Bugbot clean, ready for manual review. Findings fixed: {fixed}."
+    else:
+        ready = "Ready for manual review. Bugbot was not required."
     return {
         "claim": f"{head}\nStarted. Shuttle {agent}. Branch {branch}.",
         "pr-opened-jira": f"{head}\nPull request: {url}",
         "pr-opened-pr": f"{head}\nTicket {tid}. Jira {key}.",
-        "qa-ready": f"{head}\nWaiting for a person. Review and merge, or reply warp:proceed {tid}.",
+        "qa-ready": f"{head}\n{ready}\nReview and merge, or reply warp:proceed {tid}.",
         "merged": f"{head}\nMerged ({where}). PR {url}. sha {sha}.",
         "bugbot": f"{head}\n{bug_line}",
+        "bugbot-rerun": f"{head}\nnew commits, re-running Bugbot.",
         "ci": f"{head}\nCI: {pr.get('ci')}.",
         "alarm": f"{head}\nBlocked ({alarm}). Needs a person. warp:retry {tid}.",
         "blocked": f"{head}\nBlocked ({alarm}). Needs a person. warp:retry {tid}.",
@@ -652,7 +802,7 @@ def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) ->
         p = plan(ticket, event, cfg)
         if p["action"] == "transition":
             actions.append({"type": "transition", "plan": p})
-    bodies = _bodies(ticket, root, mode, prefixes)
+    bodies = _bodies(ticket, root, mode, prefixes, cfg)
     pr = ticket.get("pr") or {}
 
     def add(where: str, ev: str, body: str) -> None:
@@ -670,6 +820,9 @@ def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) ->
     if event == "qa-ready":
         add("jira", "qa-ready", bodies["qa-ready"])
         add("pr", "qa-ready", bodies["qa-ready"])
+    if pr.get("rerun") == "new-commits":
+        add("jira", "bugbot-rerun", bodies["bugbot-rerun"])
+        add("pr", "bugbot-rerun", bodies["bugbot-rerun"])
     if event == "done":
         add("jira", "merged", bodies["merged"])
         add("pr", "merged", bodies["merged"])
@@ -1092,6 +1245,10 @@ def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]
         items.append({"type": "comment", "where": "jira", "event": "qa-ready"})
         if _wants_pr(ticket, mode):
             items.append({"type": "comment", "where": "pr", "event": "qa-ready"})
+    if pr.get("rerun") == "new-commits":
+        items.append({"type": "comment", "where": "jira", "event": "bugbot-rerun"})
+        if _wants_pr(ticket, mode):
+            items.append({"type": "comment", "where": "pr", "event": "bugbot-rerun"})
     if pr.get("bugbot"):
         items.append({"type": "comment", "where": "jira", "event": "bugbot"})
         if _wants_pr(ticket, mode):
@@ -1136,6 +1293,9 @@ def diagnose(ticket: dict, cfg: dict, mode: str) -> dict:
             "lastSync": jira.get("lastSync"),
             "jiraComments": {k: v.get("id") for k, v in (jira.get("comments") or {}).items()},
             "prComments": {k: v.get("id") for k, v in (pr.get("comments") or {}).items()},
+            "bugbot": pr.get("bugbot"),
+            "ci": pr.get("ci"),
+            "bugbotFixed": pr.get("bugbotFixed") or 0,
         },
         "should": [_label(i) for i in items],
         "missing": [_label(i) for i in missing],
@@ -1146,7 +1306,7 @@ def diagnose(ticket: dict, cfg: dict, mode: str) -> dict:
 
 def _actions_from_missing(ticket: dict, missing: list[dict], cfg: dict, mode: str, root: Path) -> list[dict]:
     """Turn diagnose gaps into the same actions on_set prints, without historical claim comments on a merged ticket."""
-    bodies = _bodies(ticket, root, mode, prefixes_from(cfg))
+    bodies = _bodies(ticket, root, mode, prefixes_from(cfg), cfg)
     actions = []
     # plan() needs the explicit key. Catch-up may have just stamped it.
     for item in missing:
@@ -1176,6 +1336,7 @@ def format_diagnosis(row: dict) -> str:
         f"jiraKey: {key}{inferred}",
         "jiraMapping: needs mapping" if row.get("needsMapping") else "jiraMapping: mapped",
         f"beam: {row['status']}  autoMerge: {row['autoMerge']}  mode: {row['mode']}",
+        f"bugbot: {rec.get('bugbot') or '(none)'}  ci: {rec.get('ci') or '(none)'}  findings fixed: {rec.get('bugbotFixed') or 0}",
         f"recorded: startedAt={rec['startedAt'] or '(none)'} qaReadyAt={rec['qaReadyAt'] or '(none)'} doneAt={rec['doneAt'] or '(none)'}",
         f"comments jira: {jira_comments}",
         f"comments pr: {pr_comments}",
@@ -2298,7 +2459,7 @@ jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, 
 plan/record --event: claim, release, qa-ready, done.
 record --result: moved, already, skipped, unavailable, no-transition, failed.
 record-comment --where: jira or pr.
-record-comment --event: claim, pr-opened, qa-ready, merged, bugbot, ci, alarm, blocked.
+record-comment --event: claim, pr-opened, qa-ready, merged, bugbot, bugbot-rerun, ci, alarm, blocked.
 pick --kind: start, qa, done, restore. --no-category skips the status-category match.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.

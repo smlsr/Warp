@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.17
+
+- Manual tickets run Bugbot and the fix loop before QA Ready. awaiting_approval and merge wait for a Bugbot pass and green CI. bugbotManual false skips Bugbot on the manual path only. New commits after QA Ready re-run Bugbot and leave the Jira status in place.
+
 ## 1.3.16
 
 - The version check passes when the working tree already matches main, so a pull request that was just merged is not marked failed. Script annotations use Optional instead of X | None so the scripts parse on Python 3.9.

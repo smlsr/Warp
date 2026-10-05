@@ -44,7 +44,7 @@ Until a key exists, branch names use the tempId only.
 
 - `check` prints `ok 366 tickets`.
 - First `ready` list is the no-dep set (the W0 parallel tickets), critical path first (`L-01` before unlocked work).
-- S and M are `autoMerge: true`. L and XL are false.
+- S and M are `autoMerge: true`. L and XL are false. Both still wait for Bugbot and CI; only the last step differs.
 - Gates are `pending`. Nothing is green without evidence.
 
 Re-ingest only on a regenerated graph. It overwrites ticket fields and keeps no live status. To refresh a live beam, do not re-ingest; patch with `set`.

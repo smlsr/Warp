@@ -80,6 +80,11 @@ jiraSite: ""
 # Atlassian site URL, for example https://yoursite.atlassian.net. Passed as cloudId
 # when you have more than one site. Empty: look the site up with getAccessibleAtlassianResources.
 bugbotRequired: true
+# Both paths. false: Bugbot is not required before auto-merge or before QA Ready.
+bugbotManual: true
+# Manual tickets (autoMerge false) only. true: Bugbot must pass before QA Ready,
+# the same gate as auto-merge. false: skip Bugbot on that path. bugbotRequired
+# still covers auto-merge.
 maxFixAttempts: 3
 stuckAfterMinutes: 90
 respectMergeWindows: false

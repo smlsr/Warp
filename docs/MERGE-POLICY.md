@@ -2,11 +2,11 @@
 
 MEDIUM and below auto-merge. Above MEDIUM waits.
 
-| Size | Class | Auto | Required before merge |
+| Size | Class | Auto | Required before the last step |
 |---|---|---|---|
-| S | LOW | yes | Bugbot pass, CI green, every AC evidenced on PR and Jira |
+| S | LOW | yes | Bugbot pass, CI green, every AC evidenced on PR and Jira, then merge |
 | M | MEDIUM | yes | same |
-| L | HIGH | no | same, plus a provider approval (GitHub review or Bitbucket APPROVED) or `warp:proceed`. Jira moves to QA Ready while it waits. |
+| L | HIGH | no | same Bugbot and CI gate, then `awaiting_approval` and QA Ready, then a provider approval (GitHub review or Bitbucket APPROVED) or `warp:proceed` |
 | XL | CRITICAL | no | same as L |
 
 `autoMergeSizes` in config changes the cut. Default `[S, M]`.
@@ -35,7 +35,7 @@ Decision: auto-merge (size M)
 Which status depends on the ticket's `autoMerge` flag, set at ingest from its size and `autoMergeSizes`. Warp does not decide the path again later.
 
 - Auto-merge (S and M by default): after the merge sha is known, connected or local, move the issue to `jiraDoneStatus` (default Done). Comment the sha, the PR link, and whether the merge was local or connected. If the transition fails, leave the beam at `merged` and retry next tick.
-- Manual (L and XL by default): when the ticket moves to `awaiting_approval`, move the issue to `jiraQaReadyStatus` (default QA Ready) and comment what the person has to do. After the person merges it, leave Jira there and still post the merged comment. QA moves it on. Warp does not set Done for these.
+- Manual (L and XL by default): Bugbot and CI run first, including the fix loop. Only then does `awaiting_approval` move the issue to `jiraQaReadyStatus` (default QA Ready) and comment "Bugbot clean, ready for manual review" plus the findings-fixed count. `bugbotManual: false` skips Bugbot on this path and still requires CI. After the person merges it, leave Jira there and still post the merged comment. QA moves it on. Warp does not set Done for these. A new commit while waiting sets `bugbot_running`, comments "new commits, re-running Bugbot", and does not change the Jira status. A later failure does not move Jira backwards.
 
 `beam.py set` writes the transition and the comment into `.warp/jira-todo.json`. Reed does that file, then `jira_sync.py record` and `record-comment`. `provider.py merge-local` sets the beam to `merged` itself, so the Done request is printed on a local merge too. Connected mode also comments on the pull request. Local mode does not.
 

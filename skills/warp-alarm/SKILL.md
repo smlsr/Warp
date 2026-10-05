@@ -28,6 +28,6 @@ Herald posts id, reason, PR url, last Bugbot line, and `warp:retry <id>`.
 
 ## Clear
 
-`warp:retry <id>` sets status `queued`, clears `alarm`, leaves `attempts` as history. `warp:proceed <id>` is only for a green L/XL PR, not for a red one.
+`warp:retry <id>` sets status `queued`, clears `alarm`, leaves `attempts` as history. `warp:proceed <id>` is only for an L/XL PR whose Bugbot pass and green CI are already on the beam, not for a red one.
 
 Do not auto-retry an alarm on the next tick. The human signal is the gate.

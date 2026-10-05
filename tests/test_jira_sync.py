@@ -299,10 +299,16 @@ class BeamFlowTests(unittest.TestCase):
         beam["tickets"][tid]["size"] = "S" if auto else "L"
         (self.repo / ".warp/beam.json").write_text(json.dumps(beam))
 
+    def _green(self, tid):
+        r = run("beam.py", "set", "--beam", self.beam, "--id", tid, "--bugbot", "pass", "--ci", "green", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_awaiting_approval_moves_manual_ticket_to_qa_ready(self):
         self._auto("HOS-1", False)
+        self._green("HOS-1")
         r = self.set("HOS-1", "awaiting_approval")
         self.assertIn('ready for manual review and merge, so move to "QA Ready"', r.stdout)
+        self.assertIn("Bugbot clean, ready for manual review", r.stdout)
         self.assertIn("--kind qa", r.stdout)
         self.set("HOS-1", "merged")
         r = self.set("HOS-1", "done")
@@ -310,6 +316,7 @@ class BeamFlowTests(unittest.TestCase):
 
     def test_merge_moves_auto_ticket_to_done(self):
         self._auto("HOS-1", True)
+        self._green("HOS-1")
         r = self.set("HOS-1", "awaiting_approval")
         self.assertNotIn("jira:", r.stdout)
         r = self.set("HOS-1", "merged")

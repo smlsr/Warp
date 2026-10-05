@@ -572,12 +572,17 @@ def write_status(beam_path: Path) -> None:
     beam["metrics"] = metrics(beam)
     done, left, working = [], [], []
     for t in sorted(beam["tickets"].values(), key=lambda x: x["id"]):
+        pr = t.get("pr") or {}
         row = {
             "id": t["id"],
             "status": t["status"],
             "summary": t.get("summary"),
             "size": t.get("size"),
-            "pr": (t.get("pr") or {}).get("url"),
+            "autoMerge": bool(t.get("autoMerge")),
+            "pr": pr.get("url"),
+            "bugbot": pr.get("bugbot"),
+            "ci": pr.get("ci"),
+            "bugbotFixed": pr.get("bugbotFixed") or 0,
             "agent": t.get("agent"),
             "tokens": t.get("tokens") or 0,
             "minutes": t.get("minutes") or 0,
@@ -620,7 +625,10 @@ def write_status(beam_path: Path) -> None:
         "## Working now",
         "",
     ]
-    lines += [f"- **{t['id']}** {t['status']} agent={t['agent']} pr={t['pr'] or '—'} — {t['summary']}" for t in working] or ["None."]
+    lines += [
+        f"- **{t['id']}** {t['status']} bugbot={t.get('bugbot') or 'none'} ci={t.get('ci') or 'none'} fixed={t.get('bugbotFixed') or 0} agent={t['agent']} pr={t['pr'] or '—'} — {t['summary']}"
+        for t in working
+    ] or ["None."]
     lines += ["", "## Done", ""]
     lines += [f"- **{t['id']}** {t['status']} — {t['summary']}" for t in done[:40]] or ["None."]
     if len(done) > 40:

@@ -28,13 +28,14 @@ from typing import Optional
 SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 AUTO_AT_OR_BELOW = {"S", "M"}  # <= MEDIUM
 TERMINAL = {"merged", "done", "skipped"}
-ACTIVE = {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
+ACTIVE = {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
 STATUSES = [
     "queued",
     "claimed",
     "planning",
     "coding",
     "review",
+    "bugbot_running",
     "fix",
     "awaiting_approval",
     "merging",
@@ -383,8 +384,6 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         "sha": pr.get("sha"),
     }
     prev = t["status"]
-    if args.status:
-        t["status"] = args.status
     if args.agent is not None:
         t["agent"] = args.agent
     if args.branch is not None:
@@ -408,28 +407,20 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         jira_sync.remember_map(beam_path, args.id, key)
     if args.pr is not None:
         t["pr"]["url"] = args.pr
-    if getattr(args, "sha", None) is not None:
-        t["pr"]["sha"] = args.sha
     if getattr(args, "via", None) is not None:
         t["pr"]["via"] = args.via
-    if args.bugbot is not None:
-        t["pr"]["bugbot"] = args.bugbot
-    if args.ci is not None:
-        t["pr"]["ci"] = args.ci
+    import jira_sync
+
+    cfg = jira_sync.settings(beam_path, beam)
+    note = jira_sync.apply_review(t, cfg, args)
+    if note and note.startswith("refusing "):
+        print(f"{args.id}: {note}")
+        sys.exit(1)
     if args.alarm is not None:
         t["alarm"] = None if args.alarm == "-" else args.alarm
-    if args.attempts is not None:
-        t["attempts"] = args.attempts
-    if args.status == "merged":
-        t["pr"]["mergedAt"] = t["pr"]["mergedAt"] or utcnow()
-    if args.status == "awaiting_approval":
-        t["pr"]["reviewedAt"] = t["pr"]["reviewedAt"] or utcnow()
     if args.status in {"coding", "claimed"} and not t["pr"]["openedAt"] and args.pr:
         t["pr"]["openedAt"] = utcnow()
     try:
-        import jira_sync
-
-        cfg = jira_sync.settings(beam_path, beam)
         prefixes = jira_sync.prefixes_from(cfg)
         if t.get("jiraKey") and not jira_sync.jira_key(t, prefixes) and not t.get("jiraKeyForced"):
             t["jiraKey"] = None
@@ -450,7 +441,8 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         beam_path,
         {"type": "set", "id": args.id, "from": prev, "to": t["status"], "agent": t.get("agent")},
     )
-    print(f"{args.id} {prev} -> {t['status']}")
+    extra = f" ({note})" if note else ""
+    print(f"{args.id} {prev} -> {t['status']}{extra}")
     try:
         if jira_sync is None:
             import jira_sync as jira_sync  # noqa: F811
@@ -536,7 +528,9 @@ def render_board(beam: dict) -> str:
         lines.append("None.")
     else:
         for t in waiting:
-            lines.append(f"- **{t['id']}** ({t['size']}) {t['pr'].get('url') or 'no PR'} — {t['summary']}")
+            bug = t["pr"].get("bugbot") or "none"
+            ci = t["pr"].get("ci") or "none"
+            lines.append(f"- **{t['id']}** ({t['size']}) bugbot={bug} ci={ci} {t['pr'].get('url') or 'no PR'} — {t['summary']}")
     active = [t for t in beam["tickets"].values() if t["status"] in ACTIVE]
     lines += ["", "## In flight", ""]
     if not active:
@@ -561,7 +555,7 @@ def render_html(beam: dict) -> str:
     m = beam.get("metrics") or metrics(beam)
     by = m.get("byStatus") or {}
     rows = []
-    order = {"alarm": 0, "awaiting_approval": 1, "fix": 2, "review": 3, "coding": 4, "claimed": 5}
+    order = {"alarm": 0, "awaiting_approval": 1, "fix": 2, "bugbot_running": 3, "review": 4, "coding": 5, "claimed": 6}
     shown = [t for t in beam["tickets"].values() if t["status"] != "queued"]
     shown.sort(key=lambda t: (order.get(t["status"], 9), t["id"]))
     for t in shown[:80]:
@@ -667,6 +661,7 @@ def default_config() -> dict:
         "jiraMcp": "atlassian",
         "jiraSite": "",
         "bugbotRequired": True,
+        "bugbotManual": True,
         "maxFixAttempts": 3,
         "stuckAfterMinutes": 90,
         "respectMergeWindows": False,
@@ -684,7 +679,10 @@ examples:
 
 Subcommands: ingest, ready, set, spend, gate, pause, resume, board, check, eta.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
---via local|connected, --bugbot, --ci, --alarm, --attempts, --force.
+--via local|connected, --bugbot pass|fail, --ci green, --alarm, --attempts, --force.
+awaiting_approval, merging, and merged wait for CI green and, when Bugbot
+applies, --bugbot pass. A new --sha while awaiting_approval returns the ticket
+to bugbot_running and does not move Jira backwards.
 --jira KEY is rejected when it does not match jiraProject or jiraKeyPrefixes,
 unless --force is set. A plan id is not a Jira key.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
