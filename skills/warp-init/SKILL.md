@@ -25,6 +25,7 @@ python3 <plugin>/scripts/install.py init
 | Channel | `slackChannel` and `teamsChannel` are set | set each empty one (or the old `Warp` default) to `warp` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 | Git provider | `gitProvider` is already `github` or `bitbucket` | read `origin` and write it. A custom value is left alone, with a warning if it disagrees with the remote. No remote sets `pushMerge: false`. |
+| Jira project | `jiraProject` is already set | detect it from plan files, branches, and recent commits. One clear prefix is written, and an empty `jiraKeyPrefixes` is set to the same key. Several prefixes, or none, are not guessed. The warning names the candidates. |
 | Version | `.warp/version` matches the project plugin copy | write that version. If `.cursor/plugins/warp` is older than the plugin this command ran from, print `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` and do not overwrite plugin files. |
 
 `warp` is one shared channel for every repo. A channel that already has a value is left alone. Other existing config values are left alone too; only keys that are absent are added. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
@@ -32,6 +33,10 @@ python3 <plugin>/scripts/install.py init
 The example includes commented lines such as `# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, and `# ghCli: false`. They are hints. Uncommenting one does not by itself turn the active line off; comment out the active line too. Init treats a line that starts with `#` as a comment, not as the key, so those hints never block adding the real key.
 
 Re-run `/warp-init` to pick up new keys after a plugin upgrade. Init still does not overwrite plugin files or replace a value you already set. A missing key in an old config still behaves as the default until you re-run: the scripts fill it in when they read.
+
+## Jira project
+
+If init prints `jira: PROJECT`, or `.warp/jira-project.json` is present and `jiraProject` is still empty, call `getAccessibleAtlassianResources` and `getVisibleJiraProjects` on `jiraMcp` before you tell the user init is finished. Save `{"resources":[{"url":"https://yoursite.atlassian.net","id":"..."}],"projects":[{"key":"WAR","name":"Warp"}]}` and run `jira_sync.py project --apply results.json`. One site is stored in `jiraSite`. One project, or one that matches the repo or a candidate, is stored. If several projects come back, read the warning to the user and do not pick one. The command is `python3 <plugin>/scripts/jira_sync.py project --set WAR`.
 
 ## Message to Slack or Teams
 

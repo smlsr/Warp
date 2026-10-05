@@ -54,6 +54,16 @@ A connected Jira plugin is the live source after the scan. If the repo has no pl
 
 A successful scan writes `.warp/notify-post.json`, headed `Warp | <repo> / <project>` (the channel is shared across repos), with format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
 
+## Jira project
+
+If the scan prints `jira: PROJECT`, or `jiraProject` in `.warp/config.yaml` is still empty, resolve the project before the external-id lookup:
+
+1. Call `getAccessibleAtlassianResources` and `getVisibleJiraProjects` on `jiraMcp`.
+2. Save the transcript and run `python3 <plugin>/scripts/jira_sync.py project --apply results.json`.
+3. If it prints `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`, ask the user to pick one with `project --set`. Do not guess. Do not pass a plan id to Jira.
+
+A `jiraProject` that already has a value is left alone.
+
 ## Jira keys
 
 The scan stores a key that is already on the plan, in a Jira export, or in `.warp/jira-map.json`. It prints `N tickets: K keyed, U need mapping`.

@@ -23,8 +23,11 @@ runner: cloud
 # runner: local
 
 jiraProject: ""
-# Jira project key, for example WAR. A plan id is a Jira issue only when its
-# prefix matches this or jiraKeyPrefixes. WV-01 is not WAR-1.
+# Jira project key, for example WAR. Leave this empty: /warp-init and /warp-scan
+# fill it when one prefix is clear, and Jira can confirm it when connected.
+# A plan id is a Jira issue only when its prefix matches this or jiraKeyPrefixes.
+# WV-01 is not WAR-1. Set it by hand only when the warning lists several candidates:
+# python3 scripts/jira_sync.py project --set WAR
 jiraKeyPrefixes: ""
 # Extra project prefixes, comma-separated, that confirm a Jira key.
 # jiraKeyPrefixes: "WAR, HOS"

@@ -726,6 +726,16 @@ def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: str | None = No
     """
     try:
         before = _snapshot(prev, ticket)
+        root = _root(beam_path)
+        try:
+            import jira_project
+
+            if not str((settings(beam_path, beam).get("jiraProject") or "")).strip():
+                note = jira_project.ensure(root, write=True)
+                if note:
+                    print(note)
+        except Exception:
+            pass
         cfg = settings(beam_path, beam)
         mode = _mode(beam_path)
         root = _root(beam_path)
@@ -998,6 +1008,14 @@ def verify(beam_path: Path, tid: str | None = None) -> str:
     mode = _mode(beam_path)
     ids = [tid] if tid else list(beam["tickets"])
     parts = []
+    if not str(cfg.get("jiraProject") or "").strip():
+        try:
+            import jira_project
+
+            decision = jira_project.choose(jira_project.gather(_root(beam_path)))
+            parts.append(jira_project.warning(decision["candidates"]))
+        except Exception:
+            parts.append("jiraProject not set: Jira moves are disabled until you set it (candidates: none)")
     unmapped: list[str] = []
     for i in ids:
         t = beam["tickets"].get(i)
@@ -1677,6 +1695,9 @@ examples:
   python3 scripts/jira_sync.py map --auto --results results.json --dry-run
   python3 scripts/jira_sync.py map --from-jira --results results.json --yes
   python3 scripts/jira_sync.py resolve --apply results.json
+  python3 scripts/jira_sync.py project --list
+  python3 scripts/jira_sync.py project --set WAR
+  python3 scripts/jira_sync.py project --apply results.json
   python3 scripts/jira_sync.py plan --id T-9 --event claim
   python3 scripts/jira_sync.py pick --target "In Progress" --transitions-file transitions.json
   python3 scripts/jira_sync.py record --id T-9 --event claim --result moved
@@ -1706,6 +1727,16 @@ summary proposal. A manual key is never overwritten. Two matches are reported
 and neither is stored. The map file records the key, source, and confidence.
 
 A plan id is not a Jira key unless its project prefix is configured.
+
+project fills an empty jiraProject. With no flags it uses plan files, branches,
+and recent commit subjects, and does not guess when several prefixes fit.
+--list prints candidates and writes nothing. --set WAR stores that key
+(and jiraKeyPrefixes when that is empty). --apply reads a saved
+getVisibleJiraProjects / getAccessibleAtlassianResources transcript. One
+visible project, or one that matches the repo or a candidate, is stored.
+jiraSite is stored when there is a single site. A value you already set
+is left alone. When nothing is chosen the warning is:
+jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)
 
 plan/record --event: claim, release, qa-ready, done.
 record --result: moved, already, skipped, unavailable, no-transition, failed.
@@ -1773,6 +1804,11 @@ def main() -> None:
     pv2 = sub.add_parser("resolve", help="match plan ids to Jira by external id, label, or remote link")
     pv2.add_argument("--beam", default=".warp/beam.json")
     pv2.add_argument("--apply", help="search results JSON; an exact single match is stored")
+    pj = sub.add_parser("project", help="detect or set jiraProject")
+    pj.add_argument("--root", default=".")
+    pj.add_argument("--list", action="store_true", help="print candidate project keys and write nothing")
+    pj.add_argument("--set", dest="project_key", help="store this project key")
+    pj.add_argument("--apply", dest="project_apply", help="JSON from getVisibleJiraProjects and getAccessibleAtlassianResources")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -1830,6 +1866,26 @@ def main() -> None:
                 print(apply_pairs(beam_path, pairs, args.force))
             else:
                 print(list_mappings(_load(beam_path), settings(beam_path, _load(beam_path))))
+        elif args.cmd == "project":
+            import jira_project
+
+            root = Path(args.root).resolve()
+            if args.list:
+                decision = jira_project.choose(jira_project.gather(root))
+                current = jira_project.config_value(jira_project.config_text(root), "jiraProject")
+                if current:
+                    print(f"jira: jiraProject is {current}")
+                shown = ", ".join(decision["candidates"]) if decision["candidates"] else "none"
+                print(f"jira: candidates: {shown}")
+                if decision["prefix"]:
+                    print(f"jira: would set {decision['prefix']} ({decision['how']})")
+            elif args.project_key:
+                print(jira_project.write_project(root, args.project_key, "set with project --set", force=True))
+            elif args.project_apply:
+                data = json.loads(Path(args.project_apply).read_text())
+                print(jira_project.apply_remote(root, jira_project.ReplayClient(data if isinstance(data, dict) else {})))
+            else:
+                print(jira_project.ensure(root, write=True, report_set=True))
         elif args.cmd == "resolve":
             beam_path = Path(args.beam)
             if args.apply:

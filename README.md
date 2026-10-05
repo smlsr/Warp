@@ -170,7 +170,13 @@ A config that is only missing new keys does not need an uninstall. Re-run `/warp
 
 **Run prompt on every Slack or Teams post.** Run `/warp-allow-notify` (start with `?` or `--dry-run`). Set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time never consults the allowlist. If the prompt's tool name is not in the default list, add `server:tool` to `notifyAllow` and run the command again. Reload Cursor. A hook allow does not skip the prompt. Cloud agents do not show this prompt.
 
-**Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. Set `jiraProject: WAR` (or `jiraKeyPrefixes`) in `.warp/config.yaml`. `/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export, or in `.warp/jira-map.json`. If Jira is connected it looks up the plan id on `jiraExternalIdField` (a field name or `customfield_NNNNN`; also External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a label `warp:WV-01`, then a remote-link id, and stores `WAR-1` when exactly one issue matches. A summary match is only a proposal. You do not run `/warp-jira-map` for a single exact hit. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same lookup before it will flag the ticket. Two matches are reported and neither is stored. A key you set by hand is never replaced.
+**Jira transitions failing: ticket needs a real key.** Plan ids such as `WV-01` are not Jira issue keys. `/warp-init` and `/warp-scan` set `jiraProject` when the plan, a branch, a recent commit, or Jira itself shows one project. You do not have to edit it by hand in that case. If the line says `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`, pick one:
+
+```bash
+python3 <plugin>/scripts/jira_sync.py project --set WAR
+```
+
+An empty `jiraKeyPrefixes` is set to the same project. A value already in the config is left alone. `/warp-scan` stores a key that is already in the plan (`Jira: WAR-1`, a `Jira Key` column, `[WAR-1]` in the heading, or `schedule.json` `jiraKey`), in a Jira export, or in `.warp/jira-map.json`. If Jira is connected it looks up the plan id on `jiraExternalIdField` (a field name or `customfield_NNNNN`; also External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID), then a label `warp:WV-01`, then a remote-link id, and stores `WAR-1` when exactly one issue matches. A summary match is only a proposal. You do not run `/warp-jira-map` for a single exact hit. The scan line is `12 tickets: 9 keyed, 3 need mapping`. A claim tries the same lookup before it will flag the ticket. Two matches are reported and neither is stored. A key you set by hand is never replaced.
 
 `/warp-jira-map` is only for a ticket that is still unmapped or ambiguous, or when you want to override:
 
