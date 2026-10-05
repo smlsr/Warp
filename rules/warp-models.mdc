@@ -1,5 +1,5 @@
 ---
-description: Model pin for Warp workers. Default coding model is grok-4.7-high and is overridden only by .warp/config.yaml.
+description: Model pin for Warp workers. Default coding model is claude-sonnet-5-5-high and is overridden only by .warp/config.yaml.
 alwaysApply: false
 ---
 
@@ -7,4 +7,4 @@ alwaysApply: false
 
 When Warp, Shuttle, or Reed is running a coding step, use the model in `.warp/config.yaml`.
 
-Default: `grok-4.7-high` (Grok 4.7 High). Use that slug exactly. Do not substitute a fast variant, and do not fall back to another family if the slug is missing: stop and ask. A value in `.warp/config.yaml` overrides this default. Judgment and notification steps may use a cheaper model; coding and Bugbot-fix loops may not.
+Default: `claude-sonnet-5-5-high` (Claude Sonnet 5.5 High). The slug must match the Cursor model picker. If it is missing from the picker, stop and ask. Do not fall back to another slug. A value in `.warp/config.yaml` overrides this default. Judgment and notification steps may use a cheaper model; coding and Bugbot-fix loops may not.

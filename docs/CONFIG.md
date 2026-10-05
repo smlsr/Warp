@@ -5,7 +5,7 @@ One file: `.warp/config.yaml`, copied from `assets/config.example.yaml` by `/war
 | Key | Default | Meaning |
 |---|---|---|
 | stateDir | `.warp` | Where beam, status, and exports are written. Gitignore this. Absolute path keeps it outside the repo. |
-| model | `grok-4.7-high` | Coding slug (Grok 4.7 High, not a fast variant). Must match the Cursor picker. Overridden by this file. |
+| model | `claude-sonnet-5-5-high` | Coding slug (Claude Sonnet 5.5 High). Must match the Cursor model picker. Overridden by this file. |
 | maxAgents | `18` | Concurrent Shuttles. Only cap. |
 | autoMergeSizes | `S, M` | Sizes that merge without a human approval. |
 | messenger | `both` | `slack`, `teams`, or `both`. |
