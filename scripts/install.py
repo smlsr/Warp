@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -42,14 +43,14 @@ def git(root: Path, *args: str) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
-def find_root(arg: str | None) -> Path:
+def find_root(arg: Optional[str]) -> Path:
     if arg:
         return Path(arg).resolve()
     top = git(Path.cwd(), "rev-parse", "--show-toplevel")
     return Path(top).resolve() if top else Path.cwd().resolve()
 
 
-def read_snippet(root: Path) -> str | None:
+def read_snippet(root: Path) -> Optional[str]:
     for base in (root / PLUGIN_REL, PLUGIN_ROOT):
         f = base / "assets" / "gitignore-snippet.txt"
         if f.is_file():
@@ -57,7 +58,7 @@ def read_snippet(root: Path) -> str | None:
     return None
 
 
-def example_config(root: Path) -> Path | None:
+def example_config(root: Path) -> Optional[Path]:
     for base in (root / PLUGIN_REL, PLUGIN_ROOT):
         f = base / "assets" / "config.example.yaml"
         if f.is_file():
@@ -166,7 +167,7 @@ def has_ignore_entry(text: str) -> bool:
     return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
 
 
-def init(root: Path, channel: str | None, dry: bool, allow: bool = True) -> list[tuple[str, str]]:
+def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = []
     channel = channel or DEFAULT_CHANNEL
     plugin = root / PLUGIN_REL

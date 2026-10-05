@@ -16,6 +16,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_version  # noqa: E402
@@ -39,7 +40,7 @@ def write_manifest(path: Path, new: str) -> None:
     path.write_text(updated)
 
 
-def write_changelog(path: Path, new: str, note: str | None) -> None:
+def write_changelog(path: Path, new: str, note: Optional[str]) -> None:
     bullet = note.strip() if note else ""
     if not bullet:
         bullet = "Describe this change."
@@ -58,7 +59,7 @@ def write_changelog(path: Path, new: str, note: str | None) -> None:
     path.write_text(block + "\n" + text)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Bump the Warp patch, minor, or major version",
         epilog="examples:\n  python3 scripts/bump_version.py ?\n  python3 scripts/bump_version.py\n"

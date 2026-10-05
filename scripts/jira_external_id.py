@@ -13,6 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 import jira_match
 
@@ -56,7 +57,7 @@ replaces a different non-empty field value. Nothing posts a Jira comment.
 """
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     import usage
 
     parser = argparse.ArgumentParser(

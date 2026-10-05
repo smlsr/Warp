@@ -20,6 +20,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from beam import (  # noqa: E402
@@ -50,7 +51,7 @@ def walk(base: Path):
             yield p
 
 
-def resolve_folder(root: Path, arg: str) -> tuple[Path | None, list[Path], str | None]:
+def resolve_folder(root: Path, arg: str) -> tuple[Optional[Path], list[Path], Optional[str]]:
     """Resolve a folder argument to a directory inside root.
 
     An existing path under root wins. Otherwise the argument is matched as a
@@ -95,7 +96,7 @@ def plan_folders(found: dict) -> list[str]:
     return sorted(out)
 
 
-def scan(root: Path, folder: Path | None = None) -> dict:
+def scan(root: Path, folder: Optional[Path] = None) -> dict:
     found = {"plans": [], "schedules": [], "jira": [], "warp": [], "maps": []}
     for p in walk(folder or root):
         name = p.name.lower()
@@ -128,7 +129,7 @@ def _size_from_label(text: str) -> str:
     return "M"
 
 
-def _note_jira(ticket: dict, raw: str | None) -> None:
+def _note_jira(ticket: dict, raw: Optional[str]) -> None:
     if not raw or ticket.get("jiraKeySource") == "plan":
         return
     text = raw.strip()
@@ -138,7 +139,7 @@ def _note_jira(ticket: dict, raw: str | None) -> None:
     ticket["jiraKeySource"] = "plan"
 
 
-def from_schedule(path: Path) -> dict | None:
+def from_schedule(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -187,7 +188,7 @@ _ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 _H2_RE = re.compile(r"(?im)^(?:h[1-6]\.\s*|#{1,6}\s+)(.+?)\s*$")
 
 
-def _issue_key(raw) -> str | None:
+def _issue_key(raw) -> Optional[str]:
     if not isinstance(raw, str):
         return None
     text = raw.strip().upper()
@@ -275,7 +276,7 @@ def _from_import_issue(row: dict, fields: dict, external: str) -> dict:
     return ticket
 
 
-def from_jira(path: Path) -> dict | None:
+def from_jira(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -333,7 +334,7 @@ def from_jira(path: Path) -> dict | None:
     return {"tickets": tickets, "gates": [], "criticalPath": [], "source": str(path), "format": "jira-json"}
 
 
-def from_markdown(path: Path) -> dict | None:
+def from_markdown(path: Path) -> Optional[dict]:
     text = path.read_text(errors="ignore")
     if "ticket" not in text.lower() and not ID_RE.search(text):
         return None
@@ -439,7 +440,7 @@ def from_markdown(path: Path) -> dict | None:
     }
 
 
-def pick(root: Path, found: dict) -> dict | None:
+def pick(root: Path, found: dict) -> Optional[dict]:
     for rel in found["warp"]:
         got = from_schedule(root / rel)
         if got:
@@ -741,7 +742,7 @@ def bundle(beam_path: Path, dest: Path) -> None:
     print(f"wrote {dest}")
 
 
-def set_run(beam_path: Path, state: str, reason: str | None) -> None:
+def set_run(beam_path: Path, state: str, reason: Optional[str]) -> None:
     beam = load_json(beam_path)
     beam["runState"] = state
     beam["paused"] = state != "running"

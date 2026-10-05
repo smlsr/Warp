@@ -36,6 +36,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import herald_fmt as fmt  # noqa: E402
@@ -44,7 +45,7 @@ SUPPORTED = ("github", "bitbucket")
 FALSE = {"false", "no", "off", "0"}
 
 
-def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 20) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], cwd: Optional[Path] = None, timeout: int = 20) -> subprocess.CompletedProcess:
     if cmd and cmd[0] == "git":
         cmd = ["git", "-c", "maintenance.auto=false", *cmd[1:]]
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
@@ -54,7 +55,7 @@ def truthy(v: str) -> bool:
     return str(v).strip().lower() not in FALSE
 
 
-def remote_host(remote: str) -> str | None:
+def remote_host(remote: str) -> Optional[str]:
     if not remote:
         return None
     m = re.match(r"^https?://(?:[^@/]+@)?([^/:]+)", remote) or re.match(r"^(?:ssh://)?(?:[\w.-]+@)?([\w.-]+)[:/]", remote)
@@ -62,7 +63,7 @@ def remote_host(remote: str) -> str | None:
     return host if host and "." in host else None
 
 
-def detect_provider(remote: str) -> str | None:
+def detect_provider(remote: str) -> Optional[str]:
     """github, bitbucket, another host name for unsupported hosts, or None with no usable remote."""
     host = remote_host(remote)
     if not host:
@@ -97,7 +98,7 @@ def default_base(root: Path, cfg: dict) -> str:
     return fmt.git(root, "symbolic-ref", "--short", "-q", "HEAD") or "main"
 
 
-def resolve(root: Path, cfg: dict | None = None, gh: dict | None = None) -> dict:
+def resolve(root: Path, cfg: Optional[dict] = None, gh: Optional[dict] = None) -> dict:
     root = root.resolve()
     cfg = cfg or fmt.read_config(root)
     remote = fmt.git(root, "remote", "get-url", "origin")
@@ -160,7 +161,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def note(root: Path, beam_path: Path | None, tid: str | None, reason: str, what: str = "local-only") -> str:
+def note(root: Path, beam_path: Optional[Path], tid: Optional[str], reason: str, what: str = "local-only") -> str:
     """Outbox line, journal entry, and a Herald message that a ticket ran local-only."""
     root = root.resolve()
     text = f"{tid or 'Warp'} ran {what}: {reason}. Nothing was pushed and no pull request was opened."
@@ -261,7 +262,7 @@ def set_key(text: str, key: str, raw: str) -> str:
     return text.rstrip("\n") + f"\n{key}: {raw}\n"
 
 
-def init_steps(root: Path, dry: bool = False, gh: dict | None = None) -> list[tuple[str, str]]:
+def init_steps(root: Path, dry: bool = False, gh: Optional[dict] = None) -> list[tuple[str, str]]:
     """For /warp-init: detect the provider, write it, and say what is missing."""
     root = root.resolve()
     steps: list[tuple[str, str]] = []

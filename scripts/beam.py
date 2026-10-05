@@ -23,6 +23,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 AUTO_AT_OR_BELOW = {"S", "M"}  # <= MEDIUM
@@ -85,7 +86,7 @@ def auto_merge(size: str, auto_sizes: set[str]) -> bool:
     return size in auto_sizes
 
 
-def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict, previous: dict | None = None) -> dict:
+def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: dict, previous: Optional[dict] = None) -> dict:
     sched = load_json(schedule_path)
     auto_sizes = set(config.get("autoMergeSizes", ["S", "M"]))
     tickets = {}
@@ -221,7 +222,7 @@ def member_gate(beam: dict) -> dict[str, list[str]]:
     return m
 
 
-def ancestors(tickets: dict, tid: str, cache: dict, stack: set | None = None) -> set[str]:
+def ancestors(tickets: dict, tid: str, cache: dict, stack: Optional[set] = None) -> set[str]:
     if tid in cache:
         return cache[tid]
     stack = stack or set()
@@ -259,7 +260,7 @@ def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
     return held
 
 
-def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> str | None:
+def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
     """A blocking gate that is not green blocks non-members that depend on a member."""
     anc = ancestors(beam["tickets"], tid, anc_cache)
     for g in beam["gates"]:
@@ -272,7 +273,7 @@ def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> str | None:
     return None
 
 
-def ready(beam: dict, limit: int | None = None) -> list[dict]:
+def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     # People are not a scheduling axis. A human roster belonged to the manual
     # plan. The only cap is maxAgents (concurrent Shuttles).
     state = beam.get("runState") or ("paused" if beam.get("paused") else "running")
@@ -488,7 +489,7 @@ def cmd_gate(beam_path: Path, args: argparse.Namespace) -> None:
     print(f"{args.key} -> {args.status}")
 
 
-def cmd_pause(beam_path: Path, paused: bool, reason: str | None) -> None:
+def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
     beam = load_json(beam_path)
     beam["paused"] = paused
     beam["pauseReason"] = reason
