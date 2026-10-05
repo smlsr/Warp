@@ -1,15 +1,15 @@
 # Merge policy
 
-MEDIUM and below auto-merge. Above MEDIUM waits.
+A size in `autoMergeSizes` auto-merges. A size not in `autoMergeSizes` waits. L and XL are not special.
 
 | Size | Class | Auto | Required before the last step |
 |---|---|---|---|
-| S | LOW | yes | Bugbot pass, CI green, every AC evidenced on PR and Jira, then merge |
-| M | MEDIUM | yes | same |
-| L | HIGH | no | same Bugbot and CI gate, then `awaiting_approval` and QA Ready, then a provider approval (GitHub review or Bitbucket APPROVED) or `warp:proceed` |
-| XL | CRITICAL | no | same as L |
+| S | LOW | when listed | Bugbot pass, CI green, every AC evidenced on PR and Jira, then merge |
+| M | MEDIUM | when listed | same |
+| L | HIGH | when listed | same Bugbot and CI gate when listed; otherwise `awaiting_approval` and QA Ready, then a provider approval (GitHub review or Bitbucket APPROVED) or `warp:proceed` |
+| XL | CRITICAL | when listed | same as L |
 
-`autoMergeSizes` in config changes the cut. Default `[S, M]`.
+`autoMergeSizes` is the cut. `beam.auto_merge` checks that list. Default `[S, M]`, so L and XL wait unless you add them.
 
 ## Evidence comment
 
@@ -32,10 +32,10 @@ Decision: auto-merge (size M)
 
 ## Jira
 
-Which status depends on the ticket's `autoMerge` flag, set at ingest from its size and `autoMergeSizes`. Warp does not decide the path again later.
+Which status depends on the ticket's `autoMerge` flag. `beam.auto_merge` sets it from the normalized size and `autoMergeSizes` (`.warp/config.yaml`, then the beam copy, then the default S, M). Scan and each `beam.py set` refresh it. Labels such as `L`, `size:L`, and `L — …` all match `L`. A schedule `autoMerge` flag does not override the list.
 
-- Auto-merge (S and M by default): after the merge sha is known, connected or local, move the issue to `jiraDoneStatus` (default Done). Comment the sha, the PR link, and whether the merge was local or connected. If the transition fails, leave the beam at `merged` and retry next tick.
-- Manual (L and XL by default): Bugbot and CI run first, including the fix loop. Only then does `awaiting_approval` move the issue to `jiraQaReadyStatus` (default QA Ready) and comment "Bugbot clean, ready for manual review" plus the findings-fixed count. `bugbotManual: false` skips Bugbot on this path and still requires CI. After the person merges it (`warp:proceed` or a provider approval), move the issue to `jiraDoneStatus` and post the merged comment. `jiraDoneOnManualMerge: false` keeps the old behavior: leave Jira at QA Ready and let QA set Done. A new commit while waiting sets `bugbot_running`, comments "new commits, re-running Bugbot", and does not change the Jira status. A later failure does not move Jira backwards.
+- Auto-merge (sizes in `autoMergeSizes`; S and M by default): after the merge sha is known, connected or local, move the issue to `jiraDoneStatus` (default Done). Comment the sha, the PR link, and whether the merge was local or connected. If the transition fails, leave the beam at `merged` and retry next tick. Do not move Jira to QA Ready and do not wait for `warp:proceed`.
+- Manual (sizes not in `autoMergeSizes`): Bugbot and CI run first, including the fix loop. Only then does `awaiting_approval` move the issue to `jiraQaReadyStatus` (default QA Ready) and comment "Bugbot clean, ready for manual review" plus the findings-fixed count. `bugbotManual: false` skips Bugbot on this path and still requires CI. After the person merges it (`warp:proceed` or a provider approval), move the issue to `jiraDoneStatus` and post the merged comment. `jiraDoneOnManualMerge: false` keeps the old behavior: leave Jira at QA Ready and let QA set Done. A new commit while waiting sets `bugbot_running`, comments "new commits, re-running Bugbot", and does not change the Jira status. A later failure does not move Jira backwards.
 
 `beam.py set` writes the transition and the comment into `.warp/jira-todo.json`. Reed does that file, then `jira_sync.py record` and `record-comment`. `provider.py merge-local` sets the beam to `merged` itself, so the Done request is printed on a local merge too. Connected mode also comments on the pull request. Local mode does not.
 

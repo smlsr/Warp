@@ -11,7 +11,7 @@ maxAgents: 18
 # Concurrent Shuttles. No per-person cap.
 
 autoMergeSizes: [S, M]
-# S and M auto-merge after Bugbot and CI. L and XL wait.
+# Sizes in this list auto-merge after Bugbot and CI. Sizes not in autoMergeSizes wait.
 
 messenger: both
 # slack | teams | both
@@ -72,7 +72,7 @@ jiraRestoreOnRelease: false
 # true: when a claim is released back to queued, move the issue back to the status
 # it had before. false: leave it. Pause and stop never move an issue.
 jiraQaReadyStatus: "QA Ready"
-# Manual path (L and XL by default, any ticket with autoMerge false): the issue moves
+# Manual path (sizes not in autoMergeSizes, any ticket with autoMerge false): the issue moves
 # here when it is ready for a person to review and merge. It stays here until the
 # merge. warp:proceed or a provider approval is what moves it on.
 jiraDoneStatus: "Done"

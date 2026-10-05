@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from collections import defaultdict
@@ -27,7 +28,8 @@ from pathlib import Path
 from typing import Optional
 
 SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
-AUTO_AT_OR_BELOW = {"S", "M"}  # <= MEDIUM
+DEFAULT_AUTO_MERGE_SIZES = ["S", "M"]
+_SIZE_TOKEN = re.compile(r"^(XL|S|M|L)\b", re.I)
 TERMINAL = {"merged", "done", "skipped"}
 ACTIVE = {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
 STATUSES = [
@@ -148,25 +150,150 @@ def _record_set_events(beam_path: Path, data: dict, ticket: dict, before: dict, 
 
 
 def complexity(size: str, auto_sizes: set[str]) -> str:
-    return SIZE_CLASS.get(size, "HIGH")
+    return SIZE_CLASS.get(normalize_size(size) or "", "HIGH")
 
 
-def auto_merge(size: str, auto_sizes: set[str]) -> bool:
-    return size in auto_sizes
+def normalize_size(text) -> Optional[str]:
+    """Map a size label to S, M, L, or XL.
+
+    Accepts "L", "size:L", "L — …", and the class words LOW, MEDIUM, HIGH,
+    and CRITICAL. Returns None when the text has no size.
+    """
+    raw = "" if text is None else str(text).strip()
+    if not raw:
+        return None
+    body = raw
+    prefixed = re.match(r"(?i)^size\s*:\s*(.+)$", body)
+    if prefixed:
+        body = prefixed.group(1).strip()
+    upper = body.upper()
+    token = _SIZE_TOKEN.match(upper)
+    if token:
+        return token.group(1).upper()
+    if "XL" in upper or "CRITICAL" in upper:
+        return "XL"
+    if re.search(r"\bL\b", upper) or "HIGH" in upper:
+        return "L"
+    if re.search(r"\bS\b", upper) or re.search(r"\bLOW\b", upper):
+        return "S"
+    if re.search(r"\bM\b", upper) or "MEDIUM" in upper:
+        return "M"
+    return None
+
+
+def parse_size_list(value) -> list[str]:
+    """Normalize autoMergeSizes from a list, a set, or a yaml inline list."""
+    if value is None:
+        return []
+    parts: list = []
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        parts = [p.strip().strip("\"'") for p in text.split(",") if p.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, str) and ("," in item or item.strip().startswith("[")):
+                parts.extend(parse_size_list(item))
+            else:
+                parts.append(item)
+    else:
+        parts = [value]
+    out: list[str] = []
+    for part in parts:
+        size = part if isinstance(part, str) and part.strip().upper() in {"S", "M", "L", "XL"} else normalize_size(part)
+        if isinstance(size, str):
+            size = size.upper()
+        if size in {"S", "M", "L", "XL"} and size not in out:
+            out.append(size)
+    return out
+
+
+def yaml_size_list(text: str, key: str) -> Optional[list]:
+    """A top-level yaml list, or None when the key is absent.
+
+    An empty list means the key is set and nothing is in it.
+    """
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        match = re.match(rf"^{re.escape(key)}:[ \t]*(.*)$", line)
+        if not match:
+            continue
+        inline = match.group(1).split("#", 1)[0].strip()
+        if inline:
+            return [inline]
+        items = []
+        for nxt in lines[i + 1 :]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            item = re.match(r"^[ \t]+-[ \t]*(.*?)\s*$", nxt)
+            if not item:
+                break
+            val = item.group(1).split("#", 1)[0].strip().strip("\"'")
+            if val:
+                items.append(val)
+        return items
+    return None
+
+
+def config_yaml_path(beam_path: Path) -> Path:
+    parent = Path(beam_path).parent
+    if parent.name == ".warp":
+        return parent / "config.yaml"
+    return parent / ".warp" / "config.yaml"
+
+
+def resolve_auto_merge_sizes(config: Optional[dict] = None, yaml_path: Optional[Path] = None) -> list[str]:
+    """autoMergeSizes from the beam copy, then .warp/config.yaml.
+
+    The yaml key wins when it is present, including when the list is empty.
+    A missing key keeps the beam copy, then the default S, M.
+    """
+    sizes = None
+    if isinstance(config, dict) and "autoMergeSizes" in config and config.get("autoMergeSizes") is not None:
+        sizes = parse_size_list(config.get("autoMergeSizes"))
+    if yaml_path is not None and Path(yaml_path).is_file():
+        found = yaml_size_list(Path(yaml_path).read_text(), "autoMergeSizes")
+        if found is not None:
+            sizes = parse_size_list(found)
+    if sizes is None:
+        return list(DEFAULT_AUTO_MERGE_SIZES)
+    return sizes
+
+
+def auto_merge(size: str, auto_sizes) -> bool:
+    """True when this size is in autoMergeSizes. L and XL are not special."""
+    norm = normalize_size(size)
+    if not norm:
+        return False
+    return norm in set(parse_size_list(auto_sizes))
+
+
+def assign_auto_merge(ticket: dict, auto_sizes) -> bool:
+    """Store the normalized size and the flag the list decides. The list wins."""
+    sizes = parse_size_list(auto_sizes)
+    norm = normalize_size(ticket.get("size"))
+    if norm:
+        ticket["size"] = norm
+    elif not ticket.get("size"):
+        ticket["size"] = "M"
+        norm = "M"
+    merged = bool(norm) and norm in set(sizes)
+    ticket["autoMerge"] = merged
+    return merged
 
 
 def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: dict, previous: Optional[dict] = None) -> dict:
     sched = load_json(schedule_path)
-    auto_sizes = set(config.get("autoMergeSizes", ["S", "M"]))
+    auto_sizes = resolve_auto_merge_sizes(config, config_yaml_path(out))
+    config = dict(config)
+    config["autoMergeSizes"] = auto_sizes
     tickets = {}
     for t in sched["tickets"]:
-        size = t.get("size") or "M"
-        if t.get("autoMerge") is True:
-            merged = True
-        elif t.get("autoMerge") is False:
-            merged = False
-        else:
-            merged = auto_merge(size, auto_sizes)
+        size = normalize_size(t.get("size")) or "M"
+        # The config list is the source of truth. A size in it auto-merges.
+        # A schedule autoMerge flag does not override that.
+        merged = auto_merge(size, auto_sizes)
         jira = {"status": t.get("jiraStatus") or None, "lastCommentAt": None}
         if t.get("externalId"):
             jira["externalId"] = t.get("externalId")
@@ -482,6 +609,13 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     import jira_sync
 
     cfg = jira_sync.settings(beam_path, beam)
+    sizes = resolve_auto_merge_sizes(beam.get("config"), config_yaml_path(beam_path))
+    beam.setdefault("config", {})["autoMergeSizes"] = sizes
+    assign_auto_merge(t, sizes)
+    # A size in the list does not wait. Record Bugbot and CI, then refuse the hold.
+    refused_manual = args.status == "awaiting_approval" and bool(t.get("autoMerge"))
+    if refused_manual:
+        args.status = None
     note = jira_sync.apply_review(t, cfg, args)
     if note and note.startswith("refusing "):
         print(f"{args.id}: {note}")
@@ -528,6 +662,12 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         report.maybe_complete(beam_path)
     except Exception as e:  # a report problem must not undo the transition
         print(f"report: skipped ({e})")
+    if refused_manual:
+        print(
+            f"{args.id}: refusing awaiting_approval: size {t.get('size')} is in autoMergeSizes; "
+            "Bugbot and CI clean means merge and move Jira to Done"
+        )
+        sys.exit(1)
 
 
 def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
@@ -783,7 +923,7 @@ def default_config() -> dict:
     return {
         "model": "claude-sonnet-5-5-high",
         "maxAgents": 18,
-        "autoMergeSizes": ["S", "M"],
+        "autoMergeSizes": list(DEFAULT_AUTO_MERGE_SIZES),
         "messenger": "both",
         "notify": "verbose",
         "runner": "cloud",
@@ -933,7 +1073,10 @@ def main() -> None:
             cfg["maxAgents"] = args.max_agents
         if args.model:
             cfg["model"] = args.model
-        beam = ingest(Path(args.schedule), Path(args.plan) if args.plan else None, Path(args.out), cfg)
+        out = Path(args.out)
+        sizes = resolve_auto_merge_sizes(cfg, config_yaml_path(out))
+        cfg["autoMergeSizes"] = sizes
+        beam = ingest(Path(args.schedule), Path(args.plan) if args.plan else None, out, cfg)
         print(f"wrote {args.out} tickets={len(beam['tickets'])} gates={len(beam['gates'])}")
     elif args.cmd == "ready":
         beam = load_json(Path(args.beam))

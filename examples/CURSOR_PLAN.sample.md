@@ -40,4 +40,4 @@ Synthetic plan for a third-party repo that has no Warp files yet. Ticket ids, bl
 | UI-03 | S | apps/web/settings | UI-01, API-02 | Settings page |
 | REL-01 | XL | . | BILL-01, UI-02, UI-03 | Release checklist |
 
-Size S or M auto-merges after review. L and XL wait for approval. Locks that overlap do not run together.
+A size in autoMergeSizes auto-merges after review. A size not in autoMergeSizes waits for approval. The default list is S, M. Locks that overlap do not run together.

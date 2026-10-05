@@ -627,8 +627,8 @@ def totals_plain(summary: dict) -> str:
         "Tickets: {} total, {} done, {} blocked, {} failed, {} skipped".format(
             t["total"], t["done"], t["blocked"], t["failed"], t["skipped"]
         ),
-        "Auto-merged (S/M): {}".format(t["autoMerged"]),
-        "Manual merged (L/XL): {}".format(t["manualMerged"]),
+        "Auto-merged (sizes in autoMergeSizes): {}".format(t["autoMerged"]),
+        "Manual merged (sizes not in autoMergeSizes): {}".format(t["manualMerged"]),
         "Agent hours (estimate): {}".format(t["agentHours"]),
         "Elapsed (wall): {}".format(t["elapsed"]),
         "Human time (estimate): {}".format(t["humanEstimate"]),

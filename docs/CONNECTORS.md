@@ -42,7 +42,7 @@ Who moves the issue:
 | Claim | dispatch or the Shuttle, from the `jira:` lines `beam.py set` prints | In Progress, plus a Jira comment (started, shuttle, branch). |
 | PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. |
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
-| Waiting (L/XL, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
+| Waiting (sizes not in `autoMergeSizes`, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
 | Merge, auto (`autoMerge` true) | Reed. Connected: `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected). |
 | Merge, manual | Reed, after `warp:proceed` or a provider approval. Connected: squash-merge, then `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment, unless `jiraDoneOnManualMerge` is false. The set prints one post-merge MUST DO. |
 | Release back to queued | dispatch | No move, unless `jiraRestoreOnRelease` is true. |
@@ -68,7 +68,7 @@ Do not create tickets.
 Connected mode, in order:
 
 - Open the pull request from `warp/<id>-<jiraKey>` into `baseBranch` (empty detects origin's default, then `main` or `master`).
-- Read CI and approvals. A GitHub approving review, or a Bitbucket participant status APPROVED, is the L/XL merge signal, along with `warp:proceed <id>`.
+- Read CI and approvals. A GitHub approving review, or a Bitbucket participant status APPROVED, is the merge signal for a size not in `autoMergeSizes`, along with `warp:proceed <id>`.
 - Comment Bugbot evidence and acceptance-criterion ids.
 - Squash-merge only from Reed, only on the policy in MERGE-POLICY.md.
 

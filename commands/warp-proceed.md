@@ -1,6 +1,6 @@
 ---
 name: warp-proceed
-description: Approve a held L/XL PR for merge
+description: Approve a held PR whose size is not in autoMergeSizes
 ---
 
 Run `proceed.py` with the token the person wrote. It accepts a plan id (`WV-01`), a Jira key (`WAR-1`), or a `#` number (`#01`).
