@@ -704,6 +704,14 @@ def stored_lines(query: str, key: str | None, beam_path: Path, cfg: dict) -> lis
     lines = []
     lines.append("beam: " + ("; ".join(beam_bits) if beam_bits else "not stored"))
     lines.append("map: " + ("; ".join(map_bits) if map_bits else "not stored"))
+    stored = []
+    for tid, ticket in _tickets(beam_path).items():
+        stored_key = _usable_key(tid, ticket.get("jiraKey"), ticket.get("jiraKeySource"), prefixes)
+        external = str((ticket.get("jira") or {}).get("externalId") or "")
+        related = tid.casefold() == qfold or external.casefold() == qfold or (key and stored_key == key)
+        if related:
+            stored.append(f"{tid}: {jira_sync.mapping_stored(ticket)}")
+    lines.append("stored in Jira: " + ("; ".join(stored) if stored else "none"))
     return lines
 
 

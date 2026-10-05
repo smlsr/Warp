@@ -21,8 +21,12 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 | `searchJiraIssuesUsingJql` | Scan and claim look up `jiraExternalIdField` (name or `customfield_NNNNN`), then the other external-id names, then a label `warp:<id>`. One exact match is stored. Summary search waits for `--yes`. `/warp-jira-match` fetches a bounded candidate list (`summary ~` is fuzzy in Jira) and matches locally. |
 | `getJiraProjectIssueTypesMetadata` | Field catalog. Used to turn `jiraExternalIdField` or `External ID` into a `cf[NNNNN]` clause, and to find the External ID field before a write. |
 | `getJiraIssueRemoteIssueLinks` | Remote-link ids, after the external-id field and the label. |
-| `getJiraIssueEditmeta` | Whether the External ID field is editable on that issue. A missing or read-only field is skipped. |
-| `editJiraIssue` | Write the plan id into the External ID field. `/warp-jira-external-id --apply --yes`, `/warp-jira-match --write-external-id --yes`, and `jira_sync.py external-id --yes`. `/warp-scan` and `/warp-jira-check` queue the same write when `jiraWriteExternalId` is true, without `--yes`. This is a write and needs the connector permission. No comment is added. |
+| `getJiraIssueEditmeta` | Whether the External ID field is editable on that issue. A missing field is remembered and the fallback runs. A read-only field is skipped. |
+| `getJiraScreen` | Read a company-managed screen. Does not create a field. |
+| `updateJiraScreen` | Add an existing field to a screen. Does not create a field. |
+| `createJiraIssueRemoteIssueLink` | Add a remote link with globalId `warp:<id>` when the fallback is `remote-link`. |
+| `createJiraField` | Probe only. Not in the Rovo catalog. Also `createCustomField` and `createJiraCustomField`. |
+| `editJiraIssue` | Write the plan id into the External ID field, or add `warp:<id>` with `update.labels` add. `/warp-jira-external-id --apply --yes`, `/warp-jira-match --write-external-id --yes`, and `jira_sync.py external-id --yes`. `/warp-scan` and `/warp-jira-check` queue the same write when `jiraWriteExternalId` is true, without `--yes`. This is a write and needs the connector permission. No comment is added. Do not pass `fields.labels`. |
 
 Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify --with-jira` allows every name in that Jira list, including `editJiraIssue`. That tool writes the External ID field. Scan and claim call it only when `jiraWriteExternalId` is true. `/warp-allow-notify` reads the module. It does not invent a second list.
 

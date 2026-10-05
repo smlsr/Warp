@@ -162,12 +162,18 @@ class BackfillTests(unittest.TestCase):
         )
         self.assertIn("field is missing", missing)
         self.assertIn("written 0", missing)
-        self.assertIn("WV-01 field missing", missing)
+        self.assertIn("--create-field --yes", missing)
+        self.assertNotIn("WV-01 field missing", missing)
         self.assertNotIn("externalIdWritten", self.load()["tickets"]["WV-01"]["jira"])
+        state = json.loads((self.warp / "jira-field.json").read_text())
+        self.assertEqual(state["status"], "missing")
         listed = jira_match.external_id_backfill(self.beam, mode="dry")
-        self.assertIn("currently field missing", listed)
+        self.assertIn("method label", listed)
+        self.assertIn("warp:WV-01", listed)
+        self.assertNotIn("WV-01 field missing", listed)
         report = jira_sync.key_report(self.load()["tickets"]["WV-01"], jira_sync.settings(self.beam, self.load()))
-        self.assertIn("externalIdAttempt: skipped — field missing", report)
+        self.assertIn("jira mapping: none", report)
+        self.assertNotIn("externalIdAttempt", report)
 
         self.write(
             [ticket("WV-01", "Build", jiraKey="WAR-1", jiraKeySource="map", jiraKeyConfidence="high", jiraMapping="mapped")]

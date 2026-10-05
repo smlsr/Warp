@@ -81,7 +81,10 @@ DEFAULTS = {
     "jiraKeyPrefixes": "",
     "jiraKeyMap": {},
     "jiraExternalIdField": "externalId",
+    "jiraExternalIdFieldName": "External ID",
     "jiraWriteExternalId": False,
+    "jiraCreateExternalIdField": False,
+    "jiraExternalIdFallback": "label",
 }
 EVENTS = ["claim", "release", "qa-ready", "done"]
 COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "ci", "alarm", "blocked"]
@@ -1282,6 +1285,26 @@ _SOURCE_LABEL = {
 }
 
 
+def mapping_stored(ticket: dict) -> str:
+    """How this plan id is stored on the Jira issue: field, label, remote link, or none."""
+    jira = ticket.get("jira") or {}
+    written = jira.get("externalIdWritten") or {}
+    method = str(written.get("method") or "")
+    value = str(written.get("value") or ticket.get("id") or "")
+    if method == "label":
+        return f"label warp:{value}"
+    if method in {"remote-link", "remote_link", "link"}:
+        return f"remote link warp:{value}"
+    if method == "field":
+        return f"field {value}"
+    if written.get("value"):
+        return f"field {written.get('value')}"
+    on_issue = jira.get("externalIdOnIssue")
+    if on_issue and str(on_issue) == str(ticket.get("id") or ""):
+        return f"field {on_issue}"
+    return "none"
+
+
 def key_report(ticket: dict, cfg: dict) -> str:
     prefixes = prefixes_from(cfg)
     key = jira_key(ticket, prefixes)
@@ -1312,6 +1335,7 @@ def key_report(ticket: dict, cfg: dict) -> str:
     written = jira.get("externalIdWritten") or {}
     if written.get("value"):
         lines.append(f"externalIdWritten: {written.get('value')}")
+    lines.append(f"jira mapping: {mapping_stored(ticket)}")
     ext = jira.get("externalIdAttempt") or {}
     if ext:
         err = ext.get("error") or ""

@@ -115,6 +115,8 @@ class ScriptHelpTests(unittest.TestCase):
                 "--ticket",
                 "--force",
                 "--force-external-id",
+                "--create-field",
+                "--recheck",
                 "--results",
                 "editJiraIssue",
                 "record-external-id",
