@@ -82,6 +82,7 @@ class ScriptHelpTests(unittest.TestCase):
             "notify.py": ("outbox", "quiet"),
             "status_post.py": ("--beam", "--out"),
             "check_version.py": ("--against",),
+            "jira_view.py": ("--results", "--comments", "--links", "--all", "--full", "--verbose", "getJiraIssue"),
         }
         for script, needles in cases.items():
             text = self.help_text(script, "?")
@@ -103,6 +104,7 @@ class ScriptHelpTests(unittest.TestCase):
             "status_post.py",
             "check_version.py",
             "herald_fmt.py",
+            "jira_view.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

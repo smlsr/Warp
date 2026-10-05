@@ -46,7 +46,7 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
-Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-jira-map`, `/warp-allow-notify`, `/warp-version`, and `/warp-uninstall`. Flags and behavior are in [docs/COMMANDS.md](docs/COMMANDS.md). The scripts those commands run accept `?`, `help`, `-h`, and `--help`.
+Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, `/warp-jira-view`, `/warp-jira-map`, `/warp-allow-notify`, `/warp-version`, and `/warp-uninstall`. Flags and behavior are in [docs/COMMANDS.md](docs/COMMANDS.md). The scripts those commands run accept `?`, `help`, `-h`, and `--help`.
 
 ## Slack and Teams messages
 
@@ -186,6 +186,8 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 ```
 
 `map` with no arguments lists `unmapped` tickets. A CSV, JSON object, or markdown table can be imported with `--import`. After a leftover is mapped, `catchup` prints the transition and comments the current status still owes. The agent calls `transitionJiraIssue` with issue key `WAR-1`, not `WV-01`, then `record`.
+
+**One Jira issue, every field.** `/warp-jira-view WAR-1` or `/warp-jira-view WV-01`. `WAR-1` is fetched with `getJiraIssue`. `WV-01` is resolved from the beam and `.warp/jira-map.json`, then from the external-id field (and each visible project when `jiraProject` is empty). The script prints `field: value`, the status, the external-id field id, and whether that key is stored. `--comments`, `--links`, `--all`, `--full`, `--verbose`, and `--json` are in [docs/COMMANDS.md](docs/COMMANDS.md). `getJiraIssue`, `getTransitionsForJiraIssue`, and `searchJiraIssuesUsingJql` are already on `/warp-allow-notify --with-jira`.
 
 **Jira did not move.** A claim can find the issue by external id and still never transition it, because the issue key stays in the agent's memory until `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>` writes the beam. `/warp-jira-check` prints `key stored: WAR-1 (from external id)` or `key missing: claim lookup result was not recorded`, plus `lastAttempt` when a transition failed (`record --result failed --error "..."`). `/warp-jira-check`. With no flags it only prints the beam. It does not call Jira, and `needs mapping` does not mean the external-id search already ran. Each unmapped ticket has `status: unmapped`, a `reason`, and one `fix` command. `why nothing linked:` says whether `jiraProject` is empty, the map file was never copied onto the beam, or no ticket has a key in the plan, map file, or external id. `verify --link` copies keys already in the map and writes the JQL. `verify --apply results.json` stores one exact match after that search. Check `jiraMcp` is the Atlassian server name Cursor shows, `jiraTransition` is not false, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow names. A failed move is in `.warp/outbox.md`. Re-run `/warp-init` if the config is missing keys.
 

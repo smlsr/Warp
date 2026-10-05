@@ -14,7 +14,7 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 |---|---|
 | `getAccessibleAtlassianResources` | cloudId for this user. One site is stored in `jiraSite`. |
 | `getVisibleJiraProjects` | Project keys. One project, or one match to the repo or an offline candidate, is stored in `jiraProject`. |
-| `getJiraIssue` | current status name and status category |
+| `getJiraIssue` | current status name and status category. `/warp-jira-view` asks for every field and the names map. |
 | `getTransitionsForJiraIssue` | transitions offered right now. Some servers list this as `listJiraIssueTransitions`. |
 | `transitionJiraIssue` | apply the id `jira_sync.py pick` chose. Pass `transition.id`, or `transitionId` if that is the field in the tool schema. |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue`. |
