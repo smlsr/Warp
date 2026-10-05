@@ -84,13 +84,13 @@ There is no webhook or token in Warp. Herald posts through these connected serve
 
 Every message starts with the header `Warp | <repo> / <project>` because one channel serves many repos. Build messages with `scripts/herald_fmt.py` so the format stays the same; see `agents/herald.md`.
 
-Herald posts with `slack_send_message` or `slack_post_message`, and reads the channel for `warp:status` with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. Teams uses `send_channel_message` or `teams_send_message`, and `teams_read_channel`, `teams_read_thread`, `teams_search_channels`. Those names are `scripts/mcp_tools.py`. `/warp-init` writes them into the project allowlist, including the Jira tools. If the prompt names a different tool, add `server:tool` to `notifyAllow` and run `/warp-allow-notify` again.
+Herald posts with `slack_send_message` or `slack_post_message`. The one `warp-listen` listener reads the channel with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. Teams uses `send_channel_message` or `teams_send_message`, and `teams_read_channel`, `teams_read_thread`, `teams_search_channels`. Those names are `scripts/mcp_tools.py`. `/warp-init` writes them into the project allowlist, including the Jira tools. If the prompt names a different tool, add `server:tool` to `notifyAllow` and run `/warp-allow-notify` again. Do not start a second reader.
 
 The file that skips the IDE prompt is `.cursor/permissions.json` (`mcpAllowlist`), and it applies when Run Mode is Auto-review, Allowlist, or Run Everything. The server id in the dialog is often `user-slack` or `plugin-slack-slack`, not the mcp.json key `slack`. The CLI uses a different file (`.cursor/cli.json`, entries `Mcp(server:tool)`). A local `beforeMCPExecution` hook is also installed; a hook `allow` does not currently skip the prompt, and plugin hooks do not run on cloud runners. Cloud agents do not ask for approval. They run `scripts/mcp_allow.py` and call a tool only when it prints `allow`. See the `warp-allow-notify` skill.
 
-Post alarms, approval requests, gate flips, pause/resume, and digests. Command loopback is a message the next tick reads:
+Post alarms, approval requests, gate flips, pause/resume, and digests. Inbound commands are read by one listener for the beam (`listener.state`, `listener.agentId`, optional `listener.pid`), launched by `/warp-start` and `/warp-resume` and stopped by `/warp-pause` and `/warp-stop`. It must not keep reading while paused or stopped. Cursor cannot deliver a Slack message into an ended turn. There is no webhook, and plugin hooks do not run on cloud runners. Each recognized command is acknowledged in the channel before it runs:
 
-- `warp:proceed HOS-14` or `warp:proceed L-01`
+- `warp:proceed HOS-14` or `warp:proceed L-01` (plan id or Jira key). Ack, then merge that one waiting ticket. A bad id merges nothing else.
 - `warp:retry L-01`
 - `warp:pause`
 - `warp:resume`
@@ -98,7 +98,7 @@ Post alarms, approval requests, gate flips, pause/resume, and digests. Command l
 - `warp:start`
 - `warp:status`
 
-A PR comment with the same verb counts. Record the source.
+The proceed ack looks like `Received warp:proceed XV-01. Merging and moving Jira to Done.` Unknown `warp:` lines ack the accepted forms. A PR comment with the same verb counts. Record the source.
 
 ## Bugbot
 

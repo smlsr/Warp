@@ -595,6 +595,12 @@ def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
         import session_note
 
         session_note.note(beam_path.parent, "session-stop")
+        try:
+            import inbound
+
+            print(inbound.release(beam_path))
+        except Exception as e:
+            print("listener: not stopped (%s)" % e)
     print("paused" if paused else "resumed")
 
 

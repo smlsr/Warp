@@ -30,6 +30,10 @@ python3 <plugin>/scripts/scan.py stop --beam .warp/beam.json --reason "end of da
 
 `ready` returns nothing unless `runState` is `running`. A tick on a stopped or paused beam only reconciles and writes status.
 
+## Listener
+
+One `warp-listen` sub-agent for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. `/warp-start` and `/warp-resume` launch it when `inbound.py claim` prints `listener: started`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. This tick does not read Slack and does not launch another listener. Plugin hooks do not run on cloud runners.
+
 ## One running tick
 
 1. `beam.py check`

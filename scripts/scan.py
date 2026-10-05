@@ -774,6 +774,12 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         import session_note
 
         session_note.note(beam_path.parent, "session-stop")
+        try:
+            import inbound
+
+            print(inbound.release(beam_path))
+        except Exception as e:
+            print("listener: not stopped (%s)" % e)
     print(state)
     if state == "stopped":
         try:

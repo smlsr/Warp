@@ -10,10 +10,10 @@ One reference for the chat commands and the scripts they run. Config keys and de
 |---|---|---|
 | `/warp-init` | Copy the plugin, backfill config, and allow Warp's MCP tools | `install.py init` `--channel` `--dry-run` `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `scan.py scan` `--folder` |
-| `/warp-start` | Start dispatch | `scan.py start` `--reason` |
-| `/warp-pause` | Stop new claims | `scan.py pause` `--reason` |
-| `/warp-resume` | Resume a paused beam | `scan.py resume` `--reason` |
-| `/warp-stop` | Stay stopped until the next start | `scan.py stop` `--reason` |
+| `/warp-start` | Start dispatch and the one channel listener | `scan.py start` `--reason`, then `inbound.py claim` `--beam` `--agent-id` |
+| `/warp-pause` | Stop new claims and the listener | `scan.py pause` or `beam.py pause` `--reason`, then `inbound.py release` |
+| `/warp-resume` | Resume a paused beam and the listener if it is not running | `scan.py resume` `--reason`, then `inbound.py claim` `--beam` `--agent-id` |
+| `/warp-stop` | Stay stopped until the next start. The listener stops | `scan.py stop` `--reason`, then `inbound.py release` |
 | `/warp` | One tick of the master loop | the `warp` skill. Not a script flag. |
 | `/warp-status` | Rewrite status and the board | `scan.py status`, `beam.py board` |
 | `/warp-status-post` | Post that digest | `status_post.py` `--beam` `--out` |
@@ -37,7 +37,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 Plugin hooks do not run on cloud runners. `/warp-start`, `/warp-resume`, and `/warp-status` print the resume hint from `scripts/resume_hint.py` (`--root`, `--beam`). Follow it. It does not dispatch. `/warp-stop` (`scan.py stop`) and `/warp-pause` (`scan.py pause` or `beam.py pause`) append a `session-stop` line through `scripts/session_note.py --type session-stop`. A Shuttle finishes with `scripts/session_note.py --type subagent-stop`. A second note of the same type is skipped while it is still the last journal line. Local hooks in `hooks/hooks.json` only repeat those scripts.
 
-`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. When `.warp/warp-complete.html` exists, the status footer names it. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket that is already `awaiting_approval`, with Bugbot pass and green CI on the beam. The token may be the plan id (`WV-01`), the Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused: the reply names the current status and nothing is merged. There is no `--force`. After the merge, Jira moves to Done unless `jiraDoneOnManualMerge` is false.
+`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp-start` and `/warp-resume` launch one `warp-listen` sub-agent when `inbound.py claim` prints `listener: started`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. It is one listener for the beam, not one per awaiting_approval ticket. The beam field is `listener`: `state` (`running` or `stopped`), `agentId`, and optional `pid`. Cursor cannot start it from a Slack message. There is no webhook. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. When `.warp/warp-complete.html` exists, the status footer names it. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket that is already `awaiting_approval`, with Bugbot pass and green CI on the beam. The token may be the plan id (`WV-01`), the Jira key (`WAR-1`), or a `#` number (`#01`). A ticket that is not awaiting approval is refused: the reply names the current status and nothing is merged. There is no `--force`. After the merge, Jira moves to Done unless `jiraDoneOnManualMerge` is false.
 
 ## /warp-report
 
@@ -461,4 +461,39 @@ The token is a plan id, a Jira key, or a `#` number (`01` and `#01` match a tick
 
 ## Channel verbs
 
-`warp:proceed <id>`, `warp:retry <id>`, `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:status`. There is no `warp:hold`.
+One `warp-listen` listener reads these. Herald posts an acknowledgement in the same channel before the command runs. There is no `warp:hold`.
+
+`warp:proceed <id>`, `warp:retry <id>`, `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:status`.
+
+| Command | Ack, then the action |
+|---|---|
+| `warp:proceed <id>` | `Received warp:proceed XV-01. Merging and moving Jira to Done.` Plan id or Jira key. Only that awaiting_approval ticket. A bad id acks and merges nothing else. |
+| `warp:retry <id>` | `Received warp:retry XV-01. Requeueing XV-01.` Status `queued`, alarm cleared, attempts kept. |
+| `warp:pause` | `Received warp:pause. Pausing the run and stopping the listener.` |
+| `warp:resume` | `Received warp:resume. Resuming the run.` Does not launch a second listener. |
+| `warp:stop` | `Received warp:stop. Stopping the run and the listener.` |
+| `warp:start` | `Received warp:start. Starting the run.` |
+| `warp:status` | `Received warp:status. Posting the digest.` |
+| anything else starting with `warp:` | `Not understood: warp:hold. Accepted forms: warp:pause, warp:resume, warp:stop, warp:start, warp:proceed <id>, warp:retry <id>, warp:status.` |
+
+```bash
+python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <id> --pid <pid>
+python3 <plugin>/scripts/inbound.py release --beam .warp/beam.json
+python3 <plugin>/scripts/inbound.py status --beam .warp/beam.json
+python3 <plugin>/scripts/inbound.py handle --beam .warp/beam.json --text "warp:proceed XV-01" --by <who> --source slack
+python3 <plugin>/scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --by <who> --message-id <ts> --source slack
+python3 <plugin>/scripts/inbound.py drain --beam .warp/beam.json
+python3 <plugin>/scripts/inbound.py ?
+```
+
+| Flag | Effect |
+|---|---|
+| `--beam` | Beam file. Default `.warp/beam.json`. |
+| `--agent-id` | Sub-agent id stored on `listener.agentId`. Claim refuses a second id while `listener.state` is `running`. |
+| `--pid` | Optional process id stored on `listener.pid`. |
+| `--text` | The channel line to parse or apply. |
+| `--by` | Who sent it. Stored on the ack journal and, for proceed, on `pr.proceededBy`. |
+| `--message-id` | Dedupe key for `enqueue`. A repeat is not applied twice. |
+| `--source` | `slack` or `teams`. Recorded on the ack. |
+
+`handle` writes `.warp/inbound-ack.json` before it changes the beam. `drain` applies `.warp/pending-commands.jsonl` in order, each ack first. `jiraDoneOnManualMerge: false` changes the proceed ack to say Jira stays at QA Ready. Pause and stop set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.

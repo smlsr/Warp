@@ -30,7 +30,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | stuckAfterMinutes | `90` | No beam update in this window, and not waiting on approval, raises stuck. |
 | respectMergeWindows | `false` | If true, new claims wait for a window. |
 | mergeWindows | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag above is true. |
-| pollSeconds | `300` | How often a running loop reconciles PRs. |
+| pollSeconds | `300` | How often a running loop reconciles PRs. The one channel listener also waits this long between Slack and Teams reads. |
 | reportOnComplete | `true` | When every ticket is merged, done, skipped, blocked, or alarmed, or the run is stopped, write `.warp/warp-complete.html` and ask Herald to post the totals. `false` writes that file only when someone runs `/warp-report`. |
 | reportPath | `.warp/warp-complete.html` | Where the completion report is written, relative to the repo. The default is inside `.warp`, which `/warp-init` gitignores. A second copy is not made when this is already that path. |
 | jiraKeyPrefixes | empty | Extra project prefixes, comma-separated, that confirm a Jira key besides `jiraProject`. When a project is detected and this is empty, it is set to that project. |
@@ -50,7 +50,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | baseBranch | empty | Branch tickets start from and merge into. Empty uses origin's default, then `main` or `master`. |
 | slackMcp | `slack` | Connected Slack server name. |
 | teamsMcp | `teams` | Connected Teams server name. |
-| slackChannel | `warp` | One shared channel for every repo, to post into and to watch for `warp:status`. Lowercase: Slack channel names are lowercase, so uppercase letters here are lowercased when posting, and `/warp-init` warns. Warp does not create it. `/warp-init` sets an empty value (or the old `Warp` default) to `warp`; any other value you set is kept. |
+| slackChannel | `warp` | One shared channel for every repo. Herald posts here. The one listener reads `warp:` commands here and acks in channel. Lowercase: Slack channel names are lowercase, so uppercase letters here are lowercased when posting, and `/warp-init` warns. Warp does not create it. `/warp-init` sets an empty value (or the old `Warp` default) to `warp`; any other value you set is kept. |
 | teamsChannel | `warp` | Same, for Teams. Used as written. |
 | projectName | empty | Shown after the repo in message headers: `Warp \| repo / project`. Empty uses `jiraProject`, then the workspace folder name. Hidden if it equals the repo name. |
 | notifyAllow | empty | Extra `server:tool` pairs for `/warp-allow-notify`. No wildcards. Slack, Teams, Jira, and GitHub tool names Warp already uses come from `scripts/mcp_tools.py`; this list is only for a connector whose tool name is different. `lookupJiraAccountId` is not called. |
