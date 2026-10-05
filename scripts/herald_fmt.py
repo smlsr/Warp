@@ -42,6 +42,12 @@ CONFIG_DEFAULTS = {
     "teamsMcp": "teams",
     "projectName": "",
     "jiraProject": "",
+    "gitProvider": "auto",
+    "githubMcp": "github",
+    "bitbucketMcp": "bitbucket",
+    "ghCli": "true",
+    "pushMerge": "true",
+    "baseBranch": "",
 }
 
 

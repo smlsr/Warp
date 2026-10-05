@@ -4,7 +4,7 @@ Synthetic plan for a third-party repo that has no Warp files yet. Ticket ids, bl
 
 ## 0. Day 0 (human)
 
-1. Protect `main`. Import tickets. Connect Jira and Bitbucket in Cursor.
+1. Protect `main`. Import tickets. Connect Jira, and GitHub or Bitbucket, in Cursor.
 2. Agents read this file, then the ticket, then the spec link on the ticket.
 
 ## 1. Waves

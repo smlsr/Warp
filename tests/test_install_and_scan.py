@@ -96,7 +96,10 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertIn("[warn] slackChannel 'Eng-Team' has uppercase", r.stdout)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(cfg.read_text(), 'slackChannel: "Eng-Team"\nteamsChannel: "Eng Team"\n')
+        self.assertEqual(
+            cfg.read_text(),
+            'slackChannel: "Eng-Team"\nteamsChannel: "Eng Team"\npushMerge: false\n',
+        )
 
     def test_dry_run_writes_nothing(self):
         run(INSTALL, "init", "--root", ".", "--dry-run", cwd=self.repo)

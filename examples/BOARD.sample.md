@@ -5,7 +5,7 @@ Updated 2026-10-03T16:43:24Z · paused=False
 - Tickets: **3/366** (0.8%)
 - Tokens: **0** · agent minutes: **0**
 - Remaining agent-hours: **3419** · critical path left: **176h** · ETA ~**427.4h** at current cap
-- Cap: 18 agents · model `claude-sonnet-5.5`
+- Cap: 18 agents · model `grok-4.7-high`
 
 ## Status
 

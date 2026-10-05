@@ -129,13 +129,14 @@ def outbox(root: Path, text: str) -> Path:
     return path
 
 
-def build(kind: str, root: Path, info: dict | None = None) -> dict:
-    """Write the payload and return it. Never raises."""
+def build(kind: str, root: Path, info: dict | None = None, msg: dict | None = None) -> dict:
+    """Write the payload and return it. Never raises. `msg` is a prebuilt herald_fmt message."""
     root = root.resolve()
     payload = {"kind": kind, "text": "", "action": "skip", "targets": [], "notes": []}
     try:
         cfg = fmt.read_config(root)
-        msg = init_message(root, cfg) if kind == "init" else scan_message(root, info or {})
+        if msg is None:
+            msg = init_message(root, cfg) if kind == "init" else scan_message(root, info or {})
         payload.update(msg)
         payload["header"] = fmt.header(root, cfg)
         tg, notes = targets(cfg)

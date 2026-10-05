@@ -10,6 +10,7 @@ alwaysApply: false
 - Do not start a ticket until every dep is merged and every blocking upstream gate is green.
 - Do not run two active tickets whose lock paths overlap.
 - There is no per-person cap. The only concurrency cap is `maxAgents`.
-- S and M auto-merge only after Bugbot and CI are green. L and XL wait for Bitbucket APPROVED or `warp:proceed <id>`.
-- Coding model comes from `.warp/config.yaml`. Default `claude-sonnet-5.5`.
-- Jira, Bitbucket, Slack, and Teams go through Cursor's connected MCP servers.
+- S and M auto-merge only after Bugbot and CI are green. L and XL wait for a provider approval or `warp:proceed <id>`.
+- The git provider is `gitProvider` in `.warp/config.yaml` (`auto`, `github`, or `bitbucket`). `pushMerge: false` means local branches and a local merge, no push and no pull request.
+- Coding model comes from `.warp/config.yaml`. Default `grok-4.7-high` (Grok 4.7 High, not a fast variant).
+- Jira, GitHub, Bitbucket, Slack, and Teams go through Cursor's connected MCP servers, or `gh` for GitHub when `ghCli` is true. If none is usable, fall back to local-only.

@@ -35,6 +35,8 @@ python3 <plugin>/scripts/beam.py set --beam .warp/beam.json \
 
 If the spawn fails, set status back to `queued` and clear `agent` before claiming another id that shares locks. The Jira issue is left in In Progress unless `jiraRestoreOnRelease` is true, in which case `beam.py set` prints a `move back to` instruction.
 
+Run `scripts/provider.py resolve` before the first claim in a tick and pass its mode to the Shuttles. Local mode means they do not push.
+
 ## Windows
 
 `respectMergeWindows` defaults false so dispatch runs all day and night. Merge windows `08:30`, `13:00`, `17:00` are digest times unless the yaml sets `respectMergeWindows: true`. Auto-merge does not wait for a window.

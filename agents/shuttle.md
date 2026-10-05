@@ -16,10 +16,10 @@ Ticket id, Jira key, lock paths, size, autoMerge flag, model slug, preamble path
 1. Claim is already recorded. If `jira.startedAt` is not set on your ticket and it has a Jira key, move the issue to In Progress as `scripts/jira_sync.py plan --event claim` says (the claim normally already printed this). Then set status `planning`. If Jira is not connected or no transition fits, record that with `jira_sync.py record` and carry on; never stop the ticket for it.
 2. Fetch the Jira issue with the connected Jira MCP. Read What, every AC, technical details, and links. Read the module preamble, then `/HOS/spec/CURSOR_PREAMBLE.md` if present.
 3. Plan the diff inside the lock paths only. If the fix requires a path outside the locks, stop with status `alarm` and reason `lock-escape`. Do not widen the lock.
-4. Branch `warp/<id>-<jiraKey>` from fresh `main`. Set status `coding`. Use the model in `.warp/config.yaml` (default `claude-sonnet-5.5`).
+4. Branch `warp/<id>-<jiraKey>` from `baseBranch` (see `scripts/provider.py resolve`; default `main`). Set status `coding`. Use the model in `.warp/config.yaml` (default `grok-4.7-high`, Grok 4.7 High, not a fast variant).
 5. Implement. Tests must cover every AC, not a summary of them. Record token and minute spend with `scripts/beam.py spend` at each checkpoint.
-6. Open the PR. Title `[<id>] <summary>`. Body lists ACs and lock paths. Comment the same on the Jira issue. Set status `review` and hand to Reed.
-7. If Reed returns fix notes and attempts < `maxFixAttempts`, set status `fix`, apply notes, push, return to Reed. If attempts are exhausted, set status `alarm` and stop.
+6. If `provider.py resolve` says connected, push and open the pull request through the first method that works. Title `[<id>] <summary>`. Body lists ACs and lock paths. If it says local, or every method fails, do not push: run `provider.py note` and hand Reed the local branch. Comment the pull request URL, or the branch name, on the Jira issue. Set status `review` and hand to Reed.
+7. If Reed returns fix notes and attempts < `maxFixAttempts`, set status `fix`, apply notes, push only if resolve said connected, and return to Reed. If attempts are exhausted, set status `alarm` and stop.
 
 ## Checkpoint
 
@@ -28,7 +28,7 @@ After every status change, run `scripts/beam.py set`. If the session dies, the n
 ## Forbidden
 
 - Merging.
-- Transitioning Jira to Done (Reed does that). In Progress is the only move you make.
+- Transitioning Jira except to In Progress on claim. QA Ready and Done are Reed's moves.
 - Touching files outside the ticket locks.
 - Starting another ticket.
 - Skipping a failing AC.

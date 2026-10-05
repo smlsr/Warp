@@ -35,7 +35,7 @@ cp -R warp .cursor/plugins/warp
 cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 ```
 
-Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, Bitbucket, and Slack or Teams in Cursor Settings.
+Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
 Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, and `/warp-uninstall`.
 
@@ -179,7 +179,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | Key | Default | Meaning |
 |---|---|---|
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
-| `model` | `claude-sonnet-5.5` | Coding slug. Must match the picker. |
+| `model` | `grok-4.7-high` | Coding slug: Grok 4.7 High, not a fast variant. Must match the picker. |
 | `maxAgents` | `18` | Concurrent Shuttles. The only cap. |
 | `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI. L and XL wait. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |
@@ -188,6 +188,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraProject` | empty | Pin a Jira key, or leave blank. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
+| `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here when a person must review and merge. |
+| `jiraDoneStatus` | `Done` | Auto-merge path (S and M): Jira moves here after the merge. |
 | `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
 | `bugbotRequired` | `true` | No merge without a Bugbot pass. |
 | `maxFixAttempts` | `3` | Then the ticket alarms. |
@@ -196,14 +198,18 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
 | `pollSeconds` | `300` | How often pull requests and channel commands are read. |
 | `jiraMcp` | `atlassian` | Connected Jira server name. |
-| `bitbucketMcp` | `bitbucket` | Connected Bitbucket server name. |
+| `gitProvider` | `auto` | `github`, `bitbucket`, or `auto` (from the `origin` host). |
+| `githubMcp` / `bitbucketMcp` | `github` / `bitbucket` | Connected git server names. |
+| `ghCli` | `true` | GitHub may use an already-authenticated `gh`. Warp does not install it. |
+| `pushMerge` | `true` | `false` is local-only: no push, no pull request, local merge. |
+| `baseBranch` | empty | Integration branch. Empty detects it. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
 | `slackChannel` / `teamsChannel` | `warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
 | `projectName` | empty | Shown after the repo in message headers. Empty uses `jiraProject`, then the folder name. |
 
 ## Merge policy
 
-S and M auto-merge after Bugbot and CI are green and every acceptance criterion is on the pull request and the Jira issue. L and XL wait for a Bitbucket APPROVED, or for `warp:proceed <id>`. Three failed reviews raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded.
+S and M (`autoMerge` true) auto-merge after Bugbot and CI are green and every acceptance criterion is on the pull request and the Jira issue, then Jira moves to Done. L and XL wait for an approval on the provider (a GitHub review or a Bitbucket APPROVED) or for `warp:proceed <id>`, and Jira moves to QA Ready when they are waiting. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed reviews raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded.
 
 ## Estimate
 

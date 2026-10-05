@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Move a Jira issue to In Progress when a ticket is claimed. Fail-soft.
+"""Keep a Jira issue's status in step with the ticket. Fail-soft.
+
+  claim       issue -> In Progress
+  qa-ready    manual path (autoMerge false: L and XL by default) is ready for a
+              person to review and merge: issue -> QA Ready
+  done        auto-merge path (autoMerge true: S and M by default) merged:
+              issue -> Done
+  release     claim released back to queued: optionally back to the old status
+
+The merge rule is the beam's existing one: `autoMerge` on the ticket, set at
+ingest from its size and `autoMergeSizes`. Nothing here decides it again. A
+manual-path ticket stays at QA Ready after its merge; QA moves it on. Local-only
+mode makes no difference: the same events fire on the same beam statuses.
 
 Warp has no Jira credentials. Like Herald's Slack posts, the Jira call is made
 by an agent through the connected Jira MCP server. This script decides whether
@@ -14,6 +26,8 @@ happened. It never blocks a claim.
 Settings (.warp/config.yaml, else the beam copy, else defaults):
   jiraTransition          true   move to In Progress on claim
   jiraInProgressStatus    "In Progress"
+  jiraQaReadyStatus       "QA Ready"
+  jiraDoneStatus          "Done"
   jiraRestoreOnRelease    false  on release (back to queued), move back to the
                                  status the issue had before the claim
 
@@ -31,7 +45,15 @@ from pathlib import Path
 
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 ACTIVE = {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
-DEFAULTS = {"jiraTransition": True, "jiraInProgressStatus": "In Progress", "jiraRestoreOnRelease": False}
+DEFAULTS = {
+    "jiraTransition": True,
+    "jiraInProgressStatus": "In Progress",
+    "jiraQaReadyStatus": "QA Ready",
+    "jiraDoneStatus": "Done",
+    "jiraRestoreOnRelease": False,
+}
+EVENTS = ["claim", "release", "qa-ready", "done"]
+DONE = {"merged", "done"}
 FALSE = {"false", "no", "off", "0"}
 RESULTS = {"moved", "already", "skipped", "unavailable", "no-transition", "failed"}
 OK_RESULTS = {"moved", "already", "skipped"}
@@ -75,6 +97,7 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
     """What should happen to the Jira issue for this event."""
     out = {"id": ticket.get("id"), "jiraKey": jira_key(ticket), "event": event, "action": "skip", "reason": ""}
     jira = ticket.get("jira") or {}
+    auto = bool(ticket.get("autoMerge"))
     if not out["jiraKey"]:
         out["reason"] = "no Jira key on this ticket"
     elif not cfg["jiraTransition"]:
@@ -83,7 +106,7 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
         if jira.get("startedAt"):
             out["reason"] = "already moved by Warp"
         else:
-            out.update(action="transition", target=cfg["jiraInProgressStatus"], allowCategory=True)
+            out.update(action="transition", target=cfg["jiraInProgressStatus"], kind="start")
     elif event == "release":
         prev = jira.get("previousStatus")
         if not cfg["jiraRestoreOnRelease"]:
@@ -91,26 +114,49 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
         elif not jira.get("startedAt") or not prev:
             out["reason"] = "Warp did not move this issue, nothing to restore"
         else:
-            out.update(action="transition", target=prev, allowCategory=False)
+            out.update(action="transition", target=prev, kind="restore")
+    elif event == "qa-ready":
+        if auto:
+            out["reason"] = "auto-merge ticket; it goes to Done after the merge, not QA Ready"
+        elif jira.get("qaReadyAt"):
+            out["reason"] = "already moved to QA Ready"
+        else:
+            out.update(action="transition", target=cfg["jiraQaReadyStatus"], kind="qa")
+    elif event == "done":
+        if not auto:
+            out["reason"] = f"manual-path ticket; it stays at {cfg['jiraQaReadyStatus']} for QA, Warp does not move it to Done"
+        elif jira.get("doneAt"):
+            out["reason"] = "already moved to Done"
+        else:
+            out.update(action="transition", target=cfg["jiraDoneStatus"], kind="done")
     return out
 
 
-def pick(transitions: list[dict], target: str, current: dict | None = None, allow_category: bool = True) -> dict:
+def pick(transitions: list[dict], target: str, current: dict | None = None, allow_category: bool = True, kind: str = "start") -> dict:
     """Choose one of the transitions Jira offers. Names are matched case-insensitively.
 
+    kind: start (fall back to an in-progress category), qa (name only; a Done issue
+    is never pulled back), done (fall back to the done category), restore (name only).
     Accepts Jira's shape ({id, name, to: {name, statusCategory: {key}}}) or a flat
     one ({id, name, toName, category}). `current` is {name, category}.
     """
     want = target.casefold()
+    if not allow_category and kind == "start":
+        kind = "restore"
+    fallback = {"start": "indeterminate", "done": "done"}.get(kind)
     if current:
         cname = (current.get("name") or "").casefold()
         ccat = (current.get("category") or "").casefold()
         if cname == want:
             return {"transition": None, "result": "already", "reason": f"already {target}"}
-        if allow_category and ccat == "indeterminate":
+        if kind == "start" and ccat == "indeterminate":
             return {"transition": None, "result": "already", "reason": f"already in progress ({current.get('name')})"}
-        if allow_category and ccat == "done":
+        if kind == "start" and ccat == "done":
             return {"transition": None, "result": "skipped", "reason": f"issue is {current.get('name')}; not reopened"}
+        if kind == "done" and ccat == "done":
+            return {"transition": None, "result": "already", "reason": f"already {current.get('name')}"}
+        if kind == "qa" and ccat == "done":
+            return {"transition": None, "result": "skipped", "reason": f"issue is {current.get('name')}; not moved back to {target}"}
 
     def to_name(t):
         return ((t.get("to") or {}).get("name") or t.get("toName") or "").casefold()
@@ -122,15 +168,16 @@ def pick(transitions: list[dict], target: str, current: dict | None = None, allo
         hits = [t for t in transitions if ok(t)]
         if hits:
             return {"transition": hits[0], "result": "pick", "how": how}
-    if allow_category:
-        cats = [t for t in transitions if to_cat(t) == "indeterminate"]
+    if fallback:
+        cats = [t for t in transitions if to_cat(t) == fallback]
         if len(cats) == 1:
             return {"transition": cats[0], "result": "pick", "how": "category"}
         if cats:
-            prog = [t for t in cats if "progress" in to_name(t) or "progress" in (t.get("name") or "").casefold()]
-            if prog:
-                return {"transition": prog[0], "result": "pick", "how": "category"}
-            return {"transition": None, "result": "no-transition", "reason": f"several in-progress-like transitions; none is named {target}"}
+            word = "progress" if kind == "start" else "done"
+            named = [t for t in cats if word in to_name(t) or word in (t.get("name") or "").casefold()]
+            if named:
+                return {"transition": named[0], "result": "pick", "how": "category"}
+            return {"transition": None, "result": "no-transition", "reason": f"several {fallback} transitions; none is named {target}"}
     names = ", ".join(sorted({t.get("name") or to_name(t) for t in transitions})) or "none"
     return {"transition": None, "result": "no-transition", "reason": f"no transition to {target} is available (offered: {names})"}
 
@@ -155,39 +202,54 @@ def _outbox(beam_path: Path, text: str) -> None:
         f.write(f"\n## {now()}\n\n{text}\n")
 
 
+VERB = {
+    "claim": "move to",
+    "release": "move back to",
+    "qa-ready": "ready for manual review and merge, so move to",
+    "done": "merged, so move to",
+}
+
+
 def instruction(p: dict) -> str:
     me = Path(__file__).resolve()
     if p["action"] == "skip":
         return f"jira: {p['id']}: no Jira move ({p['reason']})."
-    verb = "move to" if p["event"] == "claim" else "move back to"
-    cat = "" if p["allowCategory"] else " --no-category"
     return (
-        f"jira: {p['id']} ({p['jiraKey']}): {verb} \"{p['target']}\" through the connected Jira MCP server. "
-        f"Read the issue status and its available transitions, then run: python3 {me} pick --target \"{p['target']}\"{cat} "
+        f"jira: {p['id']} ({p['jiraKey']}): {VERB[p['event']]} \"{p['target']}\" through the connected Jira MCP server. "
+        f"Read the issue status and its available transitions, then run: python3 {me} pick --kind {p['kind']} --target \"{p['target']}\" "
         f"--current '<{{\"name\":..., \"category\":...}}>' --transitions '<json>'. Run the transition it picks. "
         f"Then record: python3 {me} record --beam <beam> --id {p['id']} --event {p['event']} "
         f"--result moved|already|skipped|unavailable|no-transition|failed --from '<old status>' --to '<new status>'. "
-        "If Jira is not connected or nothing fits, record that and carry on. The claim stands."
+        "If Jira is not connected or nothing fits, record that and carry on. Nothing else is blocked."
     )
+
+
+def event_for(ticket: dict, prev: str, new: str) -> str | None:
+    if new == prev:
+        return None
+    if new == "claimed" and prev not in ACTIVE:
+        return "claim"
+    if new == "queued" and prev in ACTIVE:
+        return "release"
+    if new == "awaiting_approval" and not ticket.get("autoMerge"):
+        return "qa-ready"
+    if new in DONE and prev not in DONE:
+        return "done"
+    return None
 
 
 def on_set(beam_path: Path, beam: dict, ticket: dict, prev: str, new: str) -> None:
     """Called by beam.py set. Prints what the agent should do. Never raises."""
     try:
-        if new == prev:
-            return
-        if new == "claimed" and prev not in ACTIVE:
-            event = "claim"
-        elif new == "queued" and prev in ACTIVE:
-            event = "release"
-        else:
+        event = event_for(ticket, prev, new)
+        if not event:
             return
         p = plan(ticket, event, settings(beam_path, beam))
         if p["action"] == "skip" and event == "release" and p["reason"].startswith("jiraRestoreOnRelease"):
             return
         print(instruction(p))
         _journal(beam_path, {"type": "jira-intent", "id": p["id"], "event": event, "action": p["action"], "reason": p["reason"]})
-    except Exception as e:  # a Jira problem must not break a claim
+    except Exception as e:  # a Jira problem must not break a status change
         print(f"jira: skipped ({e})")
 
 
@@ -198,16 +260,19 @@ def record(beam_path: Path, tid: str, event: str, result: str, frm: str | None, 
         return f"jira: unknown ticket {tid}; nothing recorded"
     jira = t.setdefault("jira", {"status": None, "lastCommentAt": None})
     jira["lastSync"] = {"event": event, "result": result, "at": now(), "detail": detail}
+    marker = {"qa-ready": "qaReadyAt", "done": "doneAt"}.get(event)
     if result == "moved":
         if event == "claim":
             jira["startedAt"] = now()
             jira["previousStatus"] = frm
-        else:
+        elif event == "release":
             jira.pop("startedAt", None)
             jira.pop("previousStatus", None)
         jira["status"] = to
     elif result in {"already", "skipped"} and to:
         jira["status"] = to
+    if marker and result in {"moved", "already", "skipped"}:
+        jira[marker] = now()
     _save(beam_path, beam)
     _journal(beam_path, {"type": "jira", "id": tid, "event": event, "result": result, "from": frm, "to": to, "detail": detail})
     if result in OK_RESULTS:
@@ -219,8 +284,11 @@ def record(beam_path: Path, tid: str, event: str, result: str, frm: str | None, 
         "failed": "the Jira call failed",
     }.get(result, result)
     note = f"Jira status not updated for {tid} ({key}): {why}." + (f" {detail}" if detail else "")
-    if event == "claim":
-        note += f" Move {key} to \"{to or 'In Progress'}\" by hand if you want it to match."
+    if event != "release":
+        default = {"claim": "In Progress", "qa-ready": "QA Ready", "done": "Done"}[event]
+        note += f" Move {key} to \"{to or default}\" by hand if you want it to match."
+        if event == "done":
+            note += " The merge stands; Warp retries on the next tick."
     _outbox(beam_path, note)
     return f"jira: {note} Saved to .warp/outbox.md. The claim was not affected."
 
@@ -231,17 +299,18 @@ def main() -> None:
     pp = sub.add_parser("plan")
     pp.add_argument("--beam", default=".warp/beam.json")
     pp.add_argument("--id", required=True)
-    pp.add_argument("--event", choices=["claim", "release"], required=True)
+    pp.add_argument("--event", choices=EVENTS, required=True)
     pk = sub.add_parser("pick")
     pk.add_argument("--target", required=True)
     pk.add_argument("--transitions", help='JSON list, or {"transitions": [...]}')
     pk.add_argument("--transitions-file")
     pk.add_argument("--current", help='JSON {"name":..., "category":...}')
+    pk.add_argument("--kind", choices=["start", "qa", "done", "restore"], default="start")
     pk.add_argument("--no-category", action="store_true")
     pr = sub.add_parser("record")
     pr.add_argument("--beam", default=".warp/beam.json")
     pr.add_argument("--id", required=True)
-    pr.add_argument("--event", choices=["claim", "release"], required=True)
+    pr.add_argument("--event", choices=EVENTS, required=True)
     pr.add_argument("--result", choices=sorted(RESULTS), required=True)
     pr.add_argument("--from", dest="frm")
     pr.add_argument("--to")
@@ -261,7 +330,7 @@ def main() -> None:
             data = json.loads(raw)
             transitions = data.get("transitions", []) if isinstance(data, dict) else data
             current = json.loads(args.current) if args.current else None
-            print(json.dumps(pick(transitions, args.target, current, not args.no_category), indent=2))
+            print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind), indent=2))
         else:
             print(record(Path(args.beam), args.id, args.event, args.result, args.frm, args.to, args.detail))
     except Exception as e:  # fail-soft: report, do not fail the caller
