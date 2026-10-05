@@ -17,7 +17,9 @@ Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. 
 | `getTransitionsForJiraIssue` | transitions offered right now. Some servers list this as `listJiraIssueTransitions`. |
 | `transitionJiraIssue` | apply the id `jira_sync.py pick` chose. Pass `transition.id`, or `transitionId` if that is the field in the tool schema. |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue`. |
-| `searchJiraIssuesUsingJql` | Scan and claim look up `externalId` (or `jiraExternalIdField`). One exact match is stored. Summary search from `/warp-jira-map --search` waits for `--yes`. |
+| `searchJiraIssuesUsingJql` | Scan and claim look up `jiraExternalIdField` (name or `customfield_NNNNN`), then the other external-id names, then a label `warp:<id>`. One exact match is stored. Summary search waits for `--yes`. |
+| `getJiraProjectIssueTypesMetadata` | Field catalog. Used to turn `jiraExternalIdField` or `External ID` into a `cf[NNNNN]` clause. |
+| `getJiraIssueRemoteIssueLinks` | Remote-link ids, after the external-id field and the label. |
 
 Those names, and the Slack, Teams, and GitHub names below, are defined once in `scripts/mcp_tools.py`. `/warp-allow-notify` reads that module. It does not invent a second list.
 
@@ -27,7 +29,7 @@ Who moves the issue:
 
 | When | Who | What |
 |---|---|---|
-| Scan | `scan.py` | Stores a Jira export `key`, a plan `jiraKey`, or a prefix-matching key. A plan id such as `WV-01` is left unmapped. No transition. |
+| Scan | `scan.py` | Stores a Jira export `key`, a plan `jiraKey`, a map-file key, or one exact external-id, label, or remote-link match. A plan id such as `WV-01` stays unmapped until that match. No transition. |
 | Claim | dispatch or the Shuttle, from the `jira:` lines `beam.py set` prints | In Progress, plus a Jira comment (started, shuttle, branch). |
 | PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. |
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |

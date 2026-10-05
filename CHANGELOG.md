@@ -5,6 +5,7 @@
 - A plan id such as `WV-01` is not sent to Jira. A key is kept when its prefix matches `jiraProject` or `jiraKeyPrefixes`, or it was set on the plan, in a Jira export, in the map file, or by hand.
 - `/warp-scan` stores `schedule.json` `jiraKey`, a markdown `Jira:` line, a `Jira Key` column, `[WAR-1]` in the heading, `.warp/jira-map.json`, and `jiraKeyMap`. A rescan keeps a key set with `beam.py set --jira`.
 - Scan and the first claim look up Jira's external id field. One exact match is stored. The summary line is `N tickets: K keyed, U need mapping`. `/warp-jira-map` is only for a ticket that stays unmapped or ambiguous, or for an override.
+- That lookup tries `jiraExternalIdField` (a field name or `customfield_NNNNN`), then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID, then a `warp:<id>` label and a remote-link id. A summary match stays a proposal until `--yes`. The beam and `.warp/jira-map.json` record the key, the source, and the confidence. A manual key is never overwritten. Two matches are reported and neither is stored. `map --from-jira` / `--auto` applies a saved search; `--dry-run` writes nothing.
 - A claim with no key searches before it flags. A miss or an ambiguous result goes to `.warp/outbox.md` and Herald and does not call Jira. `catchup` then asks for the transition the current status still owes.
 - Config keys `jiraKeyPrefixes`, `jiraKeyMap`, and `jiraExternalIdField`. `/warp-init` adds them to an existing file.
 

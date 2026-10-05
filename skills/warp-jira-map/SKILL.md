@@ -5,7 +5,7 @@ description: "Map plan ticket ids to real Jira issue keys. Use when Jira transit
 
 # Jira map
 
-A plan id such as `WV-01` is not a Jira issue key. `jiraKey` must be the real key, such as `WAR-1`. This command is not required. `/warp-scan` and the first claim already store a key from the plan, the map file, or one exact Jira external-id match. Use this command to review mappings, to set a ticket that stayed unmapped or ambiguous, or to override a key. It does not call Jira itself except when you ask for the summary search below.
+A plan id such as `WV-01` is not a Jira issue key. `jiraKey` must be the real key, such as `WAR-1`. This command is not required. `/warp-scan` and the first claim already store a key from the plan, the map file, or one exact Jira match. The order is: explicit key in the plan or map file, then an external-id field (`jiraExternalIdField`, or External ID, External Id, ExternalId, External Key, Plan ID, Ticket ID), then a label `warp:<id>` or a remote-link id, then a summary match that waits for confirmation. Use this command to review mappings, to set a ticket that stayed unmapped or ambiguous, or to override a key. A key set with `--set` or `beam.py set --jira` is never replaced by a later lookup. Two Jira issues are reported and neither is stored.
 
 `python3 <plugin>/scripts/jira_sync.py map ?` prints every option (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
 
@@ -35,9 +35,29 @@ python3 <plugin>/scripts/jira_sync.py map --import mappings.csv
 
 Plans can also carry the key: `schedule.json` `jiraKey`, a line `Jira: WAR-1`, a `Jira Key` column, or `[WAR-1]` in the heading.
 
+## From Jira
+
+When the user wants the external-id, label, and remote-link lookup again, or a dry run:
+
+```bash
+python3 <plugin>/scripts/jira_sync.py map --from-jira --beam .warp/beam.json
+```
+
+`--auto` is the same. This prints the JQL and writes no keys. Call `getJiraProjectIssueTypesMetadata`, then `searchJiraIssuesUsingJql` for each external and label query, then `getJiraIssueRemoteIssueLinks` when you have a candidate issue. Save:
+
+```json
+{"fields":[{"name":"External ID","id":"customfield_10050"}],"searches":[{"jql":"project = WAR AND cf[10050] = \"WV-01\"","issues":[{"key":"WAR-1"}]}],"remoteLinks":[]}
+```
+
+```bash
+python3 <plugin>/scripts/jira_sync.py map --from-jira --results results.json --dry-run
+```
+
+`--dry-run` prints `WV-01 -> WAR-1 (external, high)` and writes nothing. Drop `--dry-run` to store the key, the source, and the confidence on the ticket and in `.warp/jira-map.json`. Add `--yes` only to store a unique summary proposal. Without `--yes` a summary match is printed and not written.
+
 ## Search, then confirm
 
-Only when the user wants Jira searched by summary. This writes JQL and changes no keys.
+Only when the user wants Jira searched by summary alone. This writes JQL and changes no keys.
 
 ```bash
 python3 <plugin>/scripts/jira_sync.py map --search --beam .warp/beam.json

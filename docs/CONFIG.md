@@ -31,8 +31,8 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | pollSeconds | `300` | How often a running loop reconciles PRs. |
 | jiraKeyPrefixes | empty | Extra project prefixes, comma-separated, that confirm a Jira key besides `jiraProject`. |
 | jiraKeyMap | empty | Optional map of plan id to Jira issue key, for example `{"WV-01": "WAR-1"}`. `.warp/jira-map.json` is merged on top and wins. |
-| jiraExternalIdField | `externalId` | Jira field compared to the plan id. Scan and claim store the issue key when exactly one issue has that field equal to the plan id. |
-| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools in `scripts/mcp_tools.py` are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` (or `listJiraIssueTransitions`), `transitionJiraIssue`, `addOrEditJiraIssueComment` (or `addCommentToJiraIssue`), and `searchJiraIssuesUsingJql`. |
+| jiraExternalIdField | `externalId` | Field name or `customfield_NNNNN` compared to the plan id. Scan and claim try this first, then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID. A `warp:<id>` label and a remote-link id are next. One exact hit is stored. A summary match waits for confirmation. Two matches are reported. |
+| jiraMcp | `atlassian` | Connected Jira server name. This is not a tool name. The tools in `scripts/mcp_tools.py` are `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` (or `listJiraIssueTransitions`), `transitionJiraIssue`, `addOrEditJiraIssueComment` (or `addCommentToJiraIssue`), `searchJiraIssuesUsingJql`, `getJiraProjectIssueTypesMetadata`, and `getJiraIssueRemoteIssueLinks`. |
 | jiraSite | empty | Site URL passed as `cloudId` when you have more than one Atlassian site. Empty: the agent calls `getAccessibleAtlassianResources`. |
 | gitProvider | `auto` | `auto`, `github`, or `bitbucket`. `auto` reads the `origin` host. `/warp-init` writes the one it finds and leaves a custom value alone. Other hosts run local-only. |
 | githubMcp | `github` | Connected GitHub server name. |

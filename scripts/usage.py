@@ -28,6 +28,8 @@ SWITCHES = {
     "--major",
     "--force",
     "--search",
+    "--from-jira",
+    "--auto",
 }
 
 

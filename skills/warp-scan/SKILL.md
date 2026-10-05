@@ -58,12 +58,21 @@ A successful scan writes `.warp/notify-post.json`, headed `Warp | <repo> / <proj
 
 The scan stores a key that is already on the plan, in a Jira export, or in `.warp/jira-map.json`. It prints `N tickets: K keyed, U need mapping`.
 
-If `.warp/jira-resolve.json` lists tickets, and the Atlassian MCP is connected, resolve them before you tell the user the summary and before you post Herald:
+If `.warp/jira-resolve.json` lists tickets, and the Atlassian MCP is connected, resolve them before you tell the user the summary and before you post Herald. Order for each ticket: external-id field, then label `warp:<id>`, then a remote link. Stop at the first single match. Two matches are ambiguous: do not try the next step and do not pick one.
 
-1. Call `searchJiraIssuesUsingJql` on `jiraMcp` for each `jql`. The query matches `jiraExternalIdField` (default `externalId`) to the plan id.
-2. Save results keyed by plan id: `{"WV-01": [{"key": "WAR-1", "externalId": "WV-01"}]}`. One issue and no external-id field is still a hit, because the JQL was exact. Two issues are ambiguous.
-3. `python3 <plugin>/scripts/jira_sync.py resolve --apply results.json`. An exact single match is stored. Nothing asks the user to confirm.
-4. If the tool errors, save `{"WV-01": []}` and run the same `--apply`. Do not pass the plan id to `transitionJiraIssue`.
+1. Call `getJiraProjectIssueTypesMetadata` once. Keep each field `name`, `id`, and `clauseNames`.
+2. Call `searchJiraIssuesUsingJql` on `jiraMcp` for each `queries` entry whose `kind` is `external` or `label`. Prefer a field the catalog actually has. `jql` on the ticket is the configured `jiraExternalIdField` (a name or `cf[NNNNN]`).
+3. For remote links, call `getJiraIssueRemoteIssueLinks` only when you already have a candidate issue. Record `{key, ids}`.
+4. Save one transcript, not one file per ticket:
+
+```json
+{"fields":[{"name":"External ID","id":"customfield_10050","clauseNames":["cf[10050]"]}],"searches":[{"jql":"project = WAR AND cf[10050] = \"WV-01\"","issues":[{"key":"WAR-1","fields":{"customfield_10050":"WV-01"}}]},{"jql":"project = WAR AND labels = \"warp:WV-01\"","issues":[]}],"remoteLinks":[]}
+```
+
+A search that fails because the field does not exist is `{"jql":"...","error":"field not found","field":"External ID"}`. One issue and no echoed field value is still a hit, because the JQL was exact. Two issue keys are ambiguous.
+
+5. `python3 <plugin>/scripts/jira_sync.py resolve --apply results.json`. An exact single match is stored with its source (`external`, `label`, or `link`) and confidence. A summary match is not stored here. Nothing asks the user to confirm an external-id, label, or link hit.
+6. If Jira is not connected, save `{"WV-01": []}` and run the same `--apply`. Do not pass the plan id to `transitionJiraIssue`.
 
 Read the `N tickets: K keyed, U need mapping` line from that command to the user. Mention `/warp-jira-map` only for ids that are still unmapped or ambiguous. Do not post the scan Herald payload until this step has finished, so the message includes the resolved counts. `notify: quiet` posts nothing.
 

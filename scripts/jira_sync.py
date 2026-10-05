@@ -25,10 +25,13 @@ Settings (.warp/config.yaml, else the beam copy, else the defaults below):
 Only a ticket with a confirmed Jira issue key is touched. A plan id such as
 WV-01 is not that key. Inference accepts a key only when its project prefix
 matches jiraProject or jiraKeyPrefixes. A key on the plan, in the export, or
-in the map file is stored on scan. Tickets still open get an external-id
-lookup (.warp/jira-resolve.json); one exact match is stored on resolve --apply.
-/warp-jira-map is only for a leftover or an override. Pause and stop never
-move an issue. A missing or invalid key is not sent to Jira.
+in the map file is stored on scan. Tickets still open are looked up in Jira
+(.warp/jira-resolve.json): external-id field, then label warp:<id>, then a
+remote link. One exact match is stored on resolve --apply, with the source
+and confidence. A summary match waits for confirmation. An ambiguous match
+is reported and not chosen. /warp-jira-map is only for a leftover or an
+override. Pause and stop never move an issue. A missing or invalid key is
+not sent to Jira.
 """
 
 from __future__ import annotations
@@ -40,16 +43,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Tool names live in mcp_tools.py. Re-exported so callers can keep using these.
+import jira_lookup
 from mcp_tools import (
     GITHUB_COMMENT,
     TOOL_COMMENT,
     TOOL_COMMENT_ALT,
+    TOOL_FIELDS,
     TOOL_ISSUE,
+    TOOL_REMOTE_LINKS,
     TOOL_RESOURCES,
+    TOOL_SEARCH,
     TOOL_TRANSITION,
     TOOL_TRANSITIONS,
     TOOL_TRANSITIONS_ALT,
-    TOOL_SEARCH,
 )
 
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -60,7 +66,7 @@ ACTIVE = {"claimed", "planning", "coding", "review", "fix", "awaiting_approval",
 MAP_NAME = "jira-map.json"
 SEARCH_NAME = "jira-search.json"
 RESOLVE_NAME = "jira-resolve.json"
-CONFIRMED_SOURCES = {"plan", "export", "map", "manual", "external"}
+CONFIRMED_SOURCES = {"plan", "export", "map", "manual", "external", "label", "link", "summary"}
 DEFAULTS = {
     "jiraTransition": True,
     "jiraInProgressStatus": "In Progress",
@@ -195,7 +201,8 @@ def infer_key(ticket: dict, prefixes: list[str] | None = None) -> str | None:
     return None
 
 
-def parse_key_map(value) -> dict[str, str]:
+def parse_key_meta(value) -> dict[str, dict]:
+    """Plan id to {key, source, confidence}. A plain string value is a key with no source."""
     if isinstance(value, str):
         text = value.strip()
         if not text or text in {"{}", "[]"}:
@@ -208,14 +215,24 @@ def parse_key_map(value) -> dict[str, str]:
         return {}
     if isinstance(value.get("map"), dict):
         value = value["map"]
-    out: dict[str, str] = {}
+    out: dict[str, dict] = {}
     for tid, raw in value.items():
-        if str(tid) in {"map", "generatedAt"}:
+        if str(tid) in {"map", "generatedAt", "fields", "searches", "remoteLinks"}:
             continue
-        key = normalize_key(raw if isinstance(raw, str) else str(raw))
+        source = None
+        confidence = None
+        if isinstance(raw, dict):
+            source = raw.get("source")
+            confidence = raw.get("confidence")
+            raw = raw.get("key") or raw.get("jiraKey")
+        key = normalize_key(raw if isinstance(raw, str) else (str(raw) if raw else ""))
         if key:
-            out[str(tid)] = key
+            out[str(tid)] = {"key": key, "source": source, "confidence": confidence}
     return out
+
+
+def parse_key_map(value) -> dict[str, str]:
+    return {tid: row["key"] for tid, row in parse_key_meta(value).items()}
 
 
 def read_map_file(beam_path: Path) -> dict[str, str]:
@@ -228,17 +245,26 @@ def read_map_file(beam_path: Path) -> dict[str, str]:
         return {}
 
 
-def combined_map(beam_path: Path | None, cfg: dict) -> dict[str, str]:
-    merged = parse_key_map(cfg.get("jiraKeyMap"))
+def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+    merged = parse_key_meta(cfg.get("jiraKeyMap"))
     if beam_path is not None:
-        merged.update(read_map_file(beam_path))
+        path = beam_path.parent / MAP_NAME
+        if path.is_file():
+            try:
+                merged.update(parse_key_meta(json.loads(path.read_text())))
+            except (OSError, json.JSONDecodeError):
+                pass
     prefixes = prefixes_from(cfg)
     if not prefixes:
         return merged
-    return {tid: key for tid, key in merged.items() if prefix_ok(key, prefixes)}
+    return {tid: row for tid, row in merged.items() if prefix_ok(row["key"], prefixes)}
 
 
-def remember_map(beam_path: Path, tid: str, key: str) -> None:
+def combined_map(beam_path: Path | None, cfg: dict) -> dict[str, str]:
+    return {tid: row["key"] for tid, row in combined_meta(beam_path, cfg).items()}
+
+
+def remember_map(beam_path: Path, tid: str, key: str, source: str | None = None, confidence: str | None = None) -> None:
     path = beam_path.parent / MAP_NAME
     current: dict = {}
     if path.is_file():
@@ -250,7 +276,10 @@ def remember_map(beam_path: Path, tid: str, key: str) -> None:
             current = {}
     current.pop("map", None)
     current.pop("generatedAt", None)
-    current[str(tid)] = key
+    if source or confidence:
+        current[str(tid)] = {"key": key, "source": source or "map", "confidence": confidence or "high"}
+    else:
+        current[str(tid)] = key
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(current, indent=2) + "\n")
 
@@ -258,7 +287,7 @@ def remember_map(beam_path: Path, tid: str, key: str) -> None:
 def assign_keys(tickets, cfg: dict, beam_path: Path | None = None, previous: dict | None = None) -> list[str]:
     """Set jiraKey, jiraKeySource, and jiraMapping. Manual keys on `previous` survive a rescan."""
     prefixes = prefixes_from(cfg)
-    key_map = combined_map(beam_path, cfg)
+    key_map = combined_meta(beam_path, cfg)
     previous = previous or {}
     unmapped: list[str] = []
     for t in tickets:
@@ -270,31 +299,40 @@ def assign_keys(tickets, cfg: dict, beam_path: Path | None = None, previous: dic
                 t["jiraKey"] = kept
                 t["jiraKeySource"] = prev.get("jiraKeySource") or "manual"
                 t["jiraKeyForced"] = bool(prev.get("jiraKeyForced"))
+                t["jiraKeyConfidence"] = prev.get("jiraKeyConfidence")
                 t["jiraMapping"] = "mapped"
                 continue
-        mapped = key_map.get(tid)
+        info = key_map.get(tid) or {}
+        mapped = info.get("key")
         source_in = t.get("jiraKeySource")
         explicit = normalize_key(t.get("jiraKey")) if source_in in CONFIRMED_SOURCES else None
         chosen = None
         source = None
+        confidence = None
         forced = False
         if mapped and (not prefixes or prefix_ok(mapped, prefixes)):
-            chosen, source = mapped, "map"
+            chosen = mapped
+            source = info.get("source") if info.get("source") in CONFIRMED_SOURCES else "map"
+            confidence = info.get("confidence")
         elif explicit and (not prefixes or prefix_ok(explicit, prefixes)):
             chosen, source = explicit, source_in or "plan"
+            confidence = t.get("jiraKeyConfidence")
         if not chosen:
             inferred = infer_key(t, prefixes)
             if inferred:
-                chosen, source = inferred, "inferred"
+                chosen, source, confidence = inferred, "inferred", "high"
+        t.pop("jiraKeyCandidates", None)
         if chosen:
             t["jiraKey"] = chosen
             t["jiraKeySource"] = source
             t["jiraKeyForced"] = forced
+            t["jiraKeyConfidence"] = confidence
             t["jiraMapping"] = "mapped"
         else:
             t["jiraKey"] = None
             t["jiraKeySource"] = None
             t["jiraKeyForced"] = False
+            t["jiraKeyConfidence"] = None
             t["jiraMapping"] = "needs mapping"
             if tid:
                 unmapped.append(tid)
@@ -1276,20 +1314,26 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
     prefixes = prefixes_from(cfg)
+    project = prefixes[0] if prefixes else None
+    configured = external_field(cfg)
     wanted = set(only_ids) if only_ids else None
     rows = []
     for tid, t in (beam.get("tickets") or {}).items():
         if wanted is not None and tid not in wanted:
+            continue
+        if t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced"):
             continue
         if jira_key(t, prefixes):
             continue
         rows.append(
             {
                 "id": tid,
+                "summary": t.get("summary") or "",
                 "externalId": tid,
-                "field": external_field(cfg),
+                "field": configured,
                 "jql": external_id_jql(tid, cfg),
                 "tool": TOOL_SEARCH,
+                "queries": jira_lookup.plan_queries(tid, t.get("summary") or "", project, configured),
             }
         )
     path = beam_path.parent / RESOLVE_NAME
@@ -1301,8 +1345,11 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
     payload = {
         "server": cfg.get("jiraMcp") or "atlassian",
         "tool": TOOL_SEARCH,
+        "fieldsTool": TOOL_FIELDS,
+        "remoteLinksTool": TOOL_REMOTE_LINKS,
         "match": "external-id",
         "confirm": False,
+        "order": ["plan or map", "external id", "label", "remote link", "summary"],
         "tickets": rows,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n")
@@ -1311,10 +1358,13 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
     me = Path(__file__).resolve()
     return (
         f"{summary}\n"
-        f"jira: RESOLVE {shown}{extra} by external id (exact single match). "
-        f"Call {TOOL_SEARCH} on server {payload['server']} for each jql in .warp/{RESOLVE_NAME}.\n"
+        f"jira: RESOLVE {shown}{extra} by external id (exact single match), then label warp:<id>, then a remote link. "
+        f"Call {TOOL_FIELDS} once, then {TOOL_SEARCH} on server {payload['server']} for each jql in .warp/{RESOLVE_NAME}. "
+        f"Remote links use {TOOL_REMOTE_LINKS}.\n"
         f"jira: Then python3 {me} resolve --apply <results.json>. "
-        "One exact match is stored. Zero or several stay unmapped.\n"
+        'Save {"fields":[{"name":"External ID","id":"customfield_10050"}],'
+        '"searches":[{"jql":"...","issues":[{"key":"WAR-1"}]}],"remoteLinks":[{"key":"WAR-1","ids":["WV-01"]}]}. '
+        "One exact match is stored with its source. Zero or several stay unmapped. A summary match is only a proposal.\n"
         "jira: /warp-jira-map is only for tickets that stay unmapped or ambiguous."
     )
 
@@ -1440,9 +1490,10 @@ def apply_external(beam_path: Path, results_path: Path) -> str:
         if how == "matched" and key:
             t["jiraKey"] = key
             t["jiraKeySource"] = "external"
+            t["jiraKeyConfidence"] = "high"
             t["jiraKeyForced"] = False
             t["jiraMapping"] = "mapped"
-            remember_map(beam_path, tid, key)
+            remember_map(beam_path, tid, key, source="external", confidence="high")
             changed = True
             newly.append(tid)
             lines.append(f"jira: {tid} -> {key} (external id)")
@@ -1453,10 +1504,43 @@ def apply_external(beam_path: Path, results_path: Path) -> str:
         else:
             lines.append(f"jira: {tid} no external-id match")
             tried_miss.append(tid)
+    return _commit_mapping(
+        beam_path,
+        lines,
+        changed,
+        beam,
+        newly,
+        tried_miss,
+        flag_misses=True,
+        footer="External-id search did not find one match. /warp-jira-map is only for this leftover.",
+    )
+
+
+def _store_found(beam_path: Path, ticket: dict, tid: str, key: str, source: str, confidence: str | None) -> None:
+    ticket["jiraKey"] = key
+    ticket["jiraKeySource"] = source
+    ticket["jiraKeyConfidence"] = confidence
+    ticket["jiraKeyForced"] = False
+    ticket["jiraMapping"] = "mapped"
+    ticket.pop("jiraKeyCandidates", None)
+    remember_map(beam_path, tid, key, source=source, confidence=confidence)
+
+
+def _commit_mapping(
+    beam_path: Path,
+    lines: list[str],
+    changed: bool,
+    beam: dict,
+    newly: list[str],
+    tried_miss: list[str],
+    flag_misses: bool,
+    footer: str,
+) -> str:
     if changed:
         _save(beam_path, beam)
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
     lines.insert(0, key_summary(beam, cfg))
     mode = _mode(beam_path)
     root = _root(beam_path)
@@ -1471,23 +1555,111 @@ def apply_external(beam_path: Path, results_path: Path) -> str:
         if actions:
             payloads.append(_todo_payload(t, actions, cfg, mode))
             lines.append(render(t, actions, cfg))
-    for tid in tried_miss:
-        t = beam["tickets"].get(tid)
-        if not t or jira_key(t, prefixes):
-            continue
-        if (t.get("status") or "queued") in {"queued", "skipped"}:
-            continue
-        refused.append(t)
+    if flag_misses:
+        for tid in tried_miss:
+            t = beam["tickets"].get(tid)
+            if not t or jira_key(t, prefixes):
+                continue
+            if (t.get("status") or "queued") in {"queued", "skipped"}:
+                continue
+            refused.append(t)
     if payloads or refused:
         _write_todo(beam_path, payloads)
     if refused:
         note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
         _outbox(beam_path, note)
-        _loud(beam_path, note, footer="External-id search did not find one match. /warp-jira-map is only for this leftover.")
+        _loud(beam_path, note, footer=footer)
         lines.append(note)
     if newly:
         lines.append("jira: saved .warp/jira-map.json. A rescan keeps these keys.")
     return "\n".join(lines)
+
+
+def _transcript(data) -> bool:
+    return isinstance(data, dict) and any(name in data for name in ("searches", "fields", "remoteLinks"))
+
+
+def apply_jira_lookup(beam_path: Path, client, dry_run: bool = False, confirm_summary: bool = False, flag_active: bool = False) -> str:
+    """Store one exact Jira match. A manual key is left alone. Summary waits for confirm_summary."""
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    project = prefixes[0] if prefixes else None
+    configured = external_field(cfg)
+    lines: list[str] = []
+    changed = False
+    tried_miss: list[str] = []
+    newly: list[str] = []
+    for tid, t in (beam.get("tickets") or {}).items():
+        if t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced"):
+            continue
+        if jira_key(t, prefixes):
+            continue
+        row = jira_lookup.resolve_ticket(tid, t.get("summary") or "", project, configured, client, prefixes)
+        outcome = row.get("outcome")
+        notes = row.get("notes") or []
+        if outcome != "hit" or any(configured in note for note in notes):
+            for note in notes:
+                lines.append(f"jira: {tid} {note}")
+        key = row.get("key")
+        source = row.get("source")
+        confidence = row.get("confidence")
+        if outcome == "hit" and key:
+            if dry_run:
+                lines.append(f"jira: dry-run {tid} -> {key} ({source}, {confidence}). Not written.")
+                continue
+            _store_found(beam_path, t, tid, key, source, confidence)
+            changed = True
+            newly.append(tid)
+            lines.append(f"jira: {tid} -> {key} ({source}, {confidence})")
+        elif outcome == "proposed" and key:
+            if dry_run:
+                lines.append(f"jira: dry-run {tid} -> {key} (summary, {confidence or 'low'}). Not written.")
+            elif confirm_summary:
+                _store_found(beam_path, t, tid, key, source or "summary", confidence or "low")
+                changed = True
+                newly.append(tid)
+                lines.append(f"jira: {tid} -> {key} ({source or 'summary'}, {confidence or 'low'})")
+            else:
+                lines.append(f"jira: propose {tid}={key} (summary, {confidence or 'low'}). Not written.")
+        elif outcome == "ambiguous":
+            shown = ", ".join(row.get("matches") or [])
+            lines.append(f"jira: {tid} ambiguous ({shown}); still needs mapping")
+            if not dry_run:
+                t["jiraKey"] = None
+                t["jiraKeySource"] = None
+                t["jiraKeyConfidence"] = None
+                t["jiraMapping"] = "ambiguous"
+                t["jiraKeyCandidates"] = list(row.get("matches") or [])
+                changed = True
+            tried_miss.append(tid)
+        else:
+            lines.append(f"jira: {tid} no match")
+            tried_miss.append(tid)
+    return _commit_mapping(
+        beam_path,
+        lines,
+        changed and not dry_run,
+        beam,
+        newly,
+        tried_miss,
+        flag_misses=flag_active and not dry_run,
+        footer="Jira lookup did not find one match. /warp-jira-map is only for this leftover.",
+    )
+
+
+def apply_resolve(beam_path: Path, results_path: Path) -> str:
+    """Old per-ticket results stay on the external-id path. A transcript uses the full lookup."""
+    data = json.loads(results_path.read_text())
+    if _transcript(data):
+        return apply_jira_lookup(
+            beam_path,
+            jira_lookup.ReplayClient(data),
+            dry_run=False,
+            confirm_summary=False,
+            flag_active=True,
+        )
+    return apply_external(beam_path, results_path)
 
 
 JIRA_HELP = """
@@ -1501,6 +1673,9 @@ examples:
   python3 scripts/jira_sync.py map --import jira-map.csv
   python3 scripts/jira_sync.py map --search
   python3 scripts/jira_sync.py map --match results.json --yes
+  python3 scripts/jira_sync.py map --from-jira
+  python3 scripts/jira_sync.py map --auto --results results.json --dry-run
+  python3 scripts/jira_sync.py map --from-jira --results results.json --yes
   python3 scripts/jira_sync.py resolve --apply results.json
   python3 scripts/jira_sync.py plan --id T-9 --event claim
   python3 scripts/jira_sync.py pick --target "In Progress" --transitions-file transitions.json
@@ -1514,14 +1689,21 @@ key inferred from the id, summary, or branch only when that prefix matches
 jiraProject or jiraKeyPrefixes. This script does not call Jira.
 
 Scan and claim write .warp/jira-resolve.json. resolve --apply stores a key when
-the Jira external-id field equals the plan id on exactly one issue. That is not
-a separate user step. /warp-jira-map is only for tickets still unmapped or
-ambiguous, or for a review.
+exactly one Jira issue matches, in this order: external-id field (the
+configured jiraExternalIdField, then External ID, External Id, ExternalId,
+External Key, Plan ID, Ticket ID), a label warp:<id>, a remote-link id.
+A summary match is only a proposal. That lookup is not a separate user step.
+/warp-jira-map is only for tickets still unmapped or ambiguous, or for a review.
 
 map lists id and key, or unmapped. --set ID=KEY writes the beam and
 .warp/jira-map.json. --import reads CSV, JSON, or a markdown table.
 --search writes JQL for searchJiraIssuesUsingJql and does not change keys.
 --match proposes summary matches; --yes stores them.
+--from-jira and --auto are the same. With no --results they print the JQL
+and write no keys. --results FILE applies a saved search transcript.
+--dry-run prints the decision and writes nothing. --yes stores a unique
+summary proposal. A manual key is never overwritten. Two matches are reported
+and neither is stored. The map file records the key, source, and confidence.
 
 A plan id is not a Jira key unless its project prefix is configured.
 
@@ -1582,11 +1764,15 @@ def main() -> None:
     pm.add_argument("--import", dest="import_path", help="CSV, JSON, or markdown table")
     pm.add_argument("--search", action="store_true", help="write JQL for searchJiraIssuesUsingJql; changes nothing")
     pm.add_argument("--match", help="search results JSON; prints proposals unless --yes")
-    pm.add_argument("--yes", action="store_true", help="store proposals from --match")
+    pm.add_argument("--yes", action="store_true", help="store proposals from --match or a summary hit from --from-jira")
     pm.add_argument("--force", action="store_true", help="store a key whose prefix is not configured")
-    pv2 = sub.add_parser("resolve", help="match plan ids to Jira by external id")
+    pm.add_argument("--from-jira", action="store_true", help="match unmapped tickets from a Jira search transcript")
+    pm.add_argument("--auto", action="store_true", help="same as --from-jira")
+    pm.add_argument("--results", help="JSON transcript from searchJiraIssuesUsingJql")
+    pm.add_argument("--dry-run", action="store_true", help="print Jira matches and write nothing")
+    pv2 = sub.add_parser("resolve", help="match plan ids to Jira by external id, label, or remote link")
     pv2.add_argument("--beam", default=".warp/beam.json")
-    pv2.add_argument("--apply", help="search results JSON; an exact single external-id match is stored")
+    pv2.add_argument("--apply", help="search results JSON; an exact single match is stored")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -1611,7 +1797,23 @@ def main() -> None:
             print(verify(Path(args.beam), args.id))
         elif args.cmd == "map":
             beam_path = Path(args.beam)
-            if args.search:
+            if args.from_jira or args.auto:
+                if args.results:
+                    data = json.loads(Path(args.results).read_text())
+                    client = jira_lookup.ReplayClient(data if isinstance(data, dict) else {})
+                    print(
+                        apply_jira_lookup(
+                            beam_path,
+                            client,
+                            dry_run=args.dry_run,
+                            confirm_summary=bool(args.yes) and not args.dry_run,
+                            flag_active=False,
+                        )
+                    )
+                else:
+                    print(prepare_resolve(beam_path))
+                    print("jira: nothing written. Keys stay as they are until --results.")
+            elif args.search:
                 print(search_request(beam_path))
             elif args.match:
                 print(match_search(beam_path, Path(args.match), args.yes))
@@ -1631,7 +1833,7 @@ def main() -> None:
         elif args.cmd == "resolve":
             beam_path = Path(args.beam)
             if args.apply:
-                print(apply_external(beam_path, Path(args.apply)))
+                print(apply_resolve(beam_path, Path(args.apply)))
             else:
                 print(prepare_resolve(beam_path))
         else:
