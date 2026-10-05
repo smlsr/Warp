@@ -1040,6 +1040,8 @@ def post_merge_text(beam_path: Path, beam: dict, ticket: dict, cfg: dict, mode: 
     if moves_to_done(ticket, cfg):
         if jira.get("doneAt"):
             jira_line = f"jira: Done already recorded ({target})."
+        elif ticket.get("autoMerge"):
+            jira_line = f"jira: move to {target}."
         else:
             jira_line = f"jira: move to {target}. QA Ready was the wait before approval."
         reply = f"slack reply: Merged {tid} sha {sha}. Jira status {target}."

@@ -27,12 +27,15 @@ from beam import (  # noqa: E402
     ACTIVE,
     TERMINAL,
     atomic_write,
+    auto_merge,
     default_config,
     ingest,
     journal,
     load_json,
     metrics,
+    normalize_size,
     ready,
+    resolve_auto_merge_sizes,
     utcnow,
 )
 
@@ -119,14 +122,7 @@ def scan(root: Path, folder: Optional[Path] = None) -> dict:
 
 
 def _size_from_label(text: str) -> str:
-    t = (text or "").upper()
-    if "XL" in t or "CRITICAL" in t:
-        return "XL"
-    if re.search(r"\bL\b", t) or "HIGH" in t:
-        return "L"
-    if re.search(r"\bS\b", t) or "LOW" in t:
-        return "S"
-    return "M"
+    return normalize_size(text) or "M"
 
 
 def _note_jira(ticket: dict, raw: Optional[str]) -> None:
@@ -164,7 +160,7 @@ def from_schedule(path: Path) -> Optional[dict]:
                 "summary": t.get("summary") or t.get("title") or "",
                 "deps": t.get("deps") or t.get("blockedBy") or t.get("blockedByTempIds") or [],
                 "locks": t.get("locks") or [],
-                "size": t.get("size") or "M",
+                "size": _size_from_label(str(t.get("size") or "M")),
                 "hours": t.get("hours"),
                 "critical": bool(t.get("critical")),
                 "rankDays": t.get("rankDays") or 0,
@@ -474,13 +470,24 @@ def ticket_hours(t: dict) -> float:
     return float(HOURS.get(t.get("size") or "M", 7))
 
 
-def estimate(tickets: list[dict], gates: list[dict], critical: list[str], max_agents: int) -> dict:
+def _needs_review(ticket: dict, auto_sizes) -> bool:
+    """A size in autoMergeSizes is not a human review. L and XL are not special."""
+    if normalize_size(ticket.get("size")):
+        return not auto_merge(ticket.get("size"), auto_sizes)
+    if ticket.get("autoMerge") is False:
+        return True
+    if ticket.get("autoMerge") is True:
+        return False
+    return True
+
+
+def estimate(tickets: list[dict], gates: list[dict], critical: list[str], max_agents: int, auto_sizes=None) -> dict:
     """Agent hours are implementation time. Human hours assume each approval
     and each gate check is answered within 30 minutes."""
     by_id = {t["id"]: t for t in tickets}
+    allowed = auto_sizes if auto_sizes is not None else ["S", "M"]
     agent = round(sum(ticket_hours(t) for t in tickets), 1)
-    reviews = [t["id"] for t in tickets if t.get("size") in {"L", "XL"} or not t.get("autoMerge", t.get("size") in {"S", "M"})]
-    reviews = [i for i in reviews if by_id[i].get("size") in {"L", "XL"} or by_id[i].get("autoMerge") is False]
+    reviews = [t["id"] for t in tickets if _needs_review(t, allowed)]
     gate_n = len([g for g in gates if g.get("blocking", True)])
     human = round(APPROVAL_HOURS * (len(reviews) + gate_n), 1)
     memo: dict[str, float] = {}
@@ -520,15 +527,15 @@ def estimate(tickets: list[dict], gates: list[dict], critical: list[str], max_ag
         "maxAgents": max_agents,
         "assumptions": [
             "Agent hours are S=4, M=7, L=11, XL=16 unless the ticket has hours.",
-            "Each L/XL approval is provided within 30 minutes.",
+            "Each approval for a size not in autoMergeSizes is provided within 30 minutes.",
             "Each blocking gate check is signed within 30 minutes.",
-            "S/M auto-merge and add no human wait.",
+            "Sizes in autoMergeSizes add no human wait. The default list is S, M.",
             "Elapsed hours are the longer of the critical chain plus those waits, and agent hours divided by maxAgents.",
         ],
     }
 
 
-def to_schedule(graph: dict) -> dict:
+def to_schedule(graph: dict, auto_sizes=None) -> dict:
     return {
         "module": "warp",
         "generated": utcnow(),
@@ -541,8 +548,8 @@ def to_schedule(graph: dict) -> dict:
                 "deps": t.get("deps") or [],
                 "unlocks": [],
                 "locks": t.get("locks") or [],
-                "size": t.get("size") or "M",
-                "hours": t.get("hours") or {"S": 4, "M": 7, "L": 11, "XL": 16}.get(t.get("size") or "M", 7),
+                "size": (size := _size_from_label(str(t.get("size") or "M"))),
+                "hours": t.get("hours") or {"S": 4, "M": 7, "L": 11, "XL": 16}.get(size, 7),
                 "critical": bool(t.get("critical")),
                 "rankDays": t.get("rankDays") or 0,
                 "gate": t.get("gate"),
@@ -550,7 +557,7 @@ def to_schedule(graph: dict) -> dict:
                 "layer": t.get("layer"),
                 "priority": t.get("priority"),
                 "acs": t.get("acs"),
-                "autoMerge": t.get("autoMerge"),
+                "autoMerge": auto_merge(size, auto_sizes if auto_sizes is not None else ["S", "M"]),
                 "externalId": t.get("externalId"),
                 "jiraStatus": t.get("jiraStatus"),
             }
@@ -563,6 +570,7 @@ def to_schedule(graph: dict) -> dict:
             graph.get("gates") or [],
             graph.get("criticalPath") or [],
             int(graph.get("maxAgents") or 18),
+            auto_sizes,
         ),
     }
 
@@ -677,6 +685,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
         beam.get("gates") or [],
         beam.get("program", {}).get("criticalPath") or [],
         int((beam.get("config") or {}).get("maxAgents") or 18),
+        (beam.get("config") or {}).get("autoMergeSizes"),
     )
     plan = {
         "kind": "warp-plan",
@@ -684,7 +693,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
         "exportedAt": utcnow(),
         "estimate": est,
         "suggestion": {
-            "summary": "Critical path first. Parallel only across non-overlapping locks. S/M auto-merge; L/XL wait for APPROVED.",
+            "summary": "Critical path first. Parallel only across non-overlapping locks. Sizes in autoMergeSizes auto-merge; sizes not in autoMergeSizes wait for APPROVED.",
             "firstBatch": [t["id"] for t in nxt],
             "parallelBatches": batches[:12],
             "reviewRequired": [t["id"] for t in beam["tickets"].values() if not t.get("autoMerge")],
@@ -879,11 +888,12 @@ def main() -> None:
             where = f" in {folder.relative_to(root)}" if folder else ""
             print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
             sys.exit(2)
-        sched_path = warp / "_ingested_schedule.json"
-        atomic_write(sched_path, json.dumps(to_schedule(graph), indent=2) + "\n")
         cfg = default_config()
         cfg["maxAgents"] = args.max_agents
         cfg["model"] = args.model
+        cfg["autoMergeSizes"] = resolve_auto_merge_sizes(cfg, warp / "config.yaml")
+        sched_path = warp / "_ingested_schedule.json"
+        atomic_write(sched_path, json.dumps(to_schedule(graph, cfg["autoMergeSizes"]), indent=2) + "\n")
         try:
             import jira_project
 
@@ -917,6 +927,7 @@ def main() -> None:
             beam.get("gates") or [],
             beam.get("program", {}).get("criticalPath") or [],
             args.max_agents,
+            (beam.get("config") or {}).get("autoMergeSizes"),
         )
         atomic_write(Path(args.out), json.dumps(beam, indent=2) + "\n")
         try:
@@ -970,9 +981,10 @@ def main() -> None:
         if not graph:
             sys.exit("plan has no tickets")
         old = load_json(Path(args.beam)) if Path(args.beam).exists() else None
-        sched_path = Path(args.beam).parent / "_imported_schedule.json"
-        atomic_write(sched_path, json.dumps(to_schedule(graph), indent=2) + "\n")
         cfg = (old or {}).get("config") or default_config()
+        cfg["autoMergeSizes"] = resolve_auto_merge_sizes(cfg, Path(args.beam).parent / "config.yaml")
+        sched_path = Path(args.beam).parent / "_imported_schedule.json"
+        atomic_write(sched_path, json.dumps(to_schedule(graph, cfg["autoMergeSizes"]), indent=2) + "\n")
         beam = ingest(
             sched_path,
             Path(args.plan),

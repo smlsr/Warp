@@ -184,7 +184,7 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | Claim | In Progress (`jiraInProgressStatus`) and a comment, if `jiraTransition` is true and the ticket has a key | none |
 | PR opened | comment with the link | connected mode only: GitHub `add_issue_comment` or `gh pr comment`. Bitbucket uses the comment tool on `bitbucketMcp` (unnamed here). |
 | Bugbot / CI | comment | connected mode only |
-| Waiting (`autoMerge` false, L and XL by default) | After Bugbot pass and CI green: QA Ready (`jiraQaReadyStatus`) and a comment, "Bugbot clean, ready for manual review", with the findings-fixed count | connected mode only |
+| Waiting (`autoMerge` false, sizes not in `autoMergeSizes`) | After Bugbot pass and CI green: QA Ready (`jiraQaReadyStatus`) and a comment, "Bugbot clean, ready for manual review", with the findings-fixed count | connected mode only |
 | Merged, auto | Done (`jiraDoneStatus`) and a comment | connected mode only |
 | Merged, manual | Done (`jiraDoneStatus`) and a merged comment, unless `jiraDoneOnManualMerge` is false (then the comment only, and the issue stays at QA Ready) | connected mode only |
 | Release to queued | no move, unless `jiraRestoreOnRelease` is true | none |

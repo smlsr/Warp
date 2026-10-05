@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.24
+
+- A size in autoMergeSizes auto-merges after Bugbot and CI, including L and XL. Scan reads that list from config.yaml. Labels L, size:L, and L — … match the same token. A size not in the list stays on the manual path.
+
 ## 1.3.23
 
 - One `warp-listen` sub-agent reads Slack and Teams for the whole run. It is one listener for the beam (`listener.state`, `listener.agentId`, optional `listener.pid`), not one per awaiting_approval ticket, Shuttle, or Reed. `/warp-start` and `/warp-resume` run `inbound.py claim` and launch it only when the reply is `listener: started`. `listener: already running` does not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped.
