@@ -517,5 +517,150 @@ class LookupTests(CommandTests):
         self.assertIn("WAR-1", r.stdout)
 
 
+class CheckTests(CommandTests):
+    def _beam(self):
+        path = self.repo / self.beam
+        return json.loads(path.read_text()), path
+
+    def _save(self, beam, path):
+        path.write_text(json.dumps(beam))
+
+    def test_verify_names_why_nothing_linked_and_writes_nothing(self):
+        self.seed()
+        resolve = self.repo / ".warp/jira-resolve.json"
+        before = resolve.read_text() if resolve.is_file() else None
+        r = run("jira_sync.py", "verify", "--beam", self.beam, cwd=self.repo)
+        self.assertIn("jira: unmapped: WV-01, WV-02", r.stdout)
+        self.assertIn("needs mapping", r.stdout)
+        self.assertIn("status: unmapped", r.stdout)
+        self.assertIn("source: (none)", r.stdout)
+        self.assertIn("no Jira key in the plan, export, or map file", r.stdout)
+        self.assertIn("why nothing linked: no ticket has a Jira key in the plan, map file, or external id.", r.stdout)
+        self.assertIn("jiraMcp=atlassian", r.stdout)
+        self.assertIn("does not call Jira", r.stdout)
+        self.assertIn("verify --link", r.stdout)
+        self.assertIsNone(self.key("WV-01"))
+        after = resolve.read_text() if resolve.is_file() else None
+        self.assertEqual(before, after)
+
+    def test_verify_says_when_the_project_is_empty(self):
+        self.seed()
+        self.cfg('jiraProject: ""\n')
+        r = run("jira_sync.py", "verify", "--beam", self.beam, cwd=self.repo)
+        self.assertIn("why nothing linked: jiraProject is empty.", r.stdout)
+        self.assertIn("jiraProject is empty and jiraKeyPrefixes is empty", r.stdout)
+        self.assertIn("project --list", r.stdout)
+        self.assertIn("status: unmapped", r.stdout)
+
+    def test_verify_names_a_stored_plan_id(self):
+        self.seed()
+        beam, path = self._beam()
+        beam["tickets"]["WV-01"]["jiraKey"] = "WV-01"
+        beam["tickets"]["WV-02"]["jiraKey"] = "WV-02"
+        self._save(beam, path)
+        r = run("jira_sync.py", "verify", "--beam", self.beam, cwd=self.repo)
+        self.assertIn("stored WV-01 is the plan id, not a Jira key", r.stdout)
+        self.assertIn("why nothing linked: every stored key is the plan id, not a Jira key.", r.stdout)
+        self.assertIn("verify --link", r.stdout)
+        self.assertEqual(self.key("WV-01"), "WV-01")
+        self.assertIn("status: unmapped", r.stdout)
+
+    def test_verify_names_a_prefix_mismatch(self):
+        self.seed()
+        beam, path = self._beam()
+        beam["tickets"]["WV-01"]["jiraKey"] = "HOS-1"
+        beam["tickets"]["WV-01"]["jiraKeySource"] = "plan"
+        beam["tickets"]["WV-02"]["jiraKey"] = "HOS-2"
+        beam["tickets"]["WV-02"]["jiraKeySource"] = "plan"
+        self._save(beam, path)
+        r = run("jira_sync.py", "verify", "--beam", self.beam, cwd=self.repo)
+        self.assertIn("stored HOS-1 does not match jiraProject/jiraKeyPrefixes (WAR)", r.stdout)
+        self.assertIn("why nothing linked: stored keys do not match jiraProject/jiraKeyPrefixes (WAR).", r.stdout)
+        self.assertIn("map --set WV-01=WAR-1", r.stdout)
+        self.assertEqual(self.key("WV-01"), "HOS-1")
+
+    def test_verify_link_copies_map_keys_and_does_not_store_a_search(self):
+        self.seed()
+        (self.repo / ".warp/jira-map.json").write_text(json.dumps({"WV-01": "WAR-1", "WV-02": "WAR-2"}) + "\n")
+        quiet = run("jira_sync.py", "verify", "--beam", self.beam, cwd=self.repo)
+        self.assertIsNone(self.key("WV-01"))
+        self.assertIn("map file has WAR-1 but the beam has no confirmed key", quiet.stdout)
+        self.assertIn("why nothing linked: the map file has keys the beam never stored.", quiet.stdout)
+        linked = run("jira_sync.py", "verify", "--beam", self.beam, "--link", cwd=self.repo)
+        self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+        self.assertEqual(self.key("WV-01"), "WAR-1")
+        self.assertEqual(self.key("WV-02"), "WAR-2")
+        self.assertEqual(self.tickets()["WV-01"]["jiraKeySource"], "map")
+        self.assertIn("status: keyed", linked.stdout)
+        self.assertIn("source: map", linked.stdout)
+        self.assertIn("Jira search keys are not written until --results or --apply.", linked.stdout)
+        self.assertNotIn("why nothing linked", linked.stdout)
+
+    def test_verify_link_dry_run_writes_nothing(self):
+        self.seed()
+        (self.repo / ".warp/jira-map.json").write_text(json.dumps({"WV-01": "WAR-1"}) + "\n")
+        resolve = self.repo / ".warp/jira-resolve.json"
+        before = resolve.read_text() if resolve.is_file() else None
+        r = run("jira_sync.py", "verify", "--beam", self.beam, "--link", "--dry-run", cwd=self.repo)
+        self.assertIn("dry-run WV-01 -> WAR-1 (map). Not written.", r.stdout)
+        self.assertIn("nothing written. Keys stay as they are until --results or --apply.", r.stdout)
+        self.assertIsNone(self.key("WV-01"))
+        after = resolve.read_text() if resolve.is_file() else None
+        self.assertEqual(before, after)
+
+    def test_verify_link_prepares_jql_without_inventing_a_key(self):
+        self.seed()
+        r = run("jira_sync.py", "verify", "--beam", self.beam, "--link", cwd=self.repo)
+        self.assertIsNone(self.key("WV-01"))
+        self.assertIn("external id", r.stdout)
+        self.assertIn("Jira search keys are not written until --results or --apply.", r.stdout)
+        payload = json.loads((self.repo / ".warp/jira-resolve.json").read_text())
+        self.assertEqual(payload["tickets"][0]["jql"], 'project = WAR AND externalId = "WV-01"')
+
+    def test_verify_apply_stores_one_external_hit(self):
+        self.seed()
+        jql = jira_lookup.jql_equals("externalId", "WV-01", "WAR")
+        results = self.repo / "results.json"
+        results.write_text(json.dumps({"searches": [{"jql": jql, "issues": [{"key": "WAR-1", "externalId": "WV-01"}]}]}))
+        r = run("jira_sync.py", "verify", "--beam", self.beam, "--apply", "results.json", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.key("WV-01"), "WAR-1")
+        self.assertEqual(self.tickets()["WV-01"]["jiraKeySource"], "external")
+        self.assertIn("status: keyed", r.stdout)
+        self.assertIn("source: external", r.stdout)
+        self.assertIn("status: unmapped", r.stdout)
+        self.assertNotIn("why nothing linked", r.stdout)
+        self.assertIsNone(self.key("WV-02"))
+
+    def test_verify_apply_does_not_pick_an_ambiguous_match_or_a_manual_key(self):
+        self.seed()
+        run("beam.py", "set", "--beam", self.beam, "--id", "WV-02", "--jira", "WAR-9", cwd=self.repo)
+        external = jira_lookup.jql_equals("externalId", "WV-01", "WAR")
+        results = self.repo / "results.json"
+        results.write_text(
+            json.dumps({"searches": [{"jql": external, "issues": [{"key": "WAR-1"}, {"key": "WAR-2"}]}]})
+        )
+        r = run("jira_sync.py", "verify", "--beam", self.beam, "--id", "WV-01", "--apply", "results.json", cwd=self.repo)
+        self.assertIsNone(self.key("WV-01"))
+        self.assertIn("ambiguous (WAR-1, WAR-2)", r.stdout)
+        self.assertIn("map --set WV-01=WAR-1", r.stdout)
+        self.assertIn("why nothing linked: every open ticket matched more than one Jira issue.", r.stdout)
+        self.assertEqual(self.key("WV-02"), "WAR-9")
+        self.assertEqual(self.tickets()["WV-02"]["jiraKeySource"], "manual")
+
+    def test_verify_apply_on_a_claimed_miss_does_not_flag(self):
+        self.seed()
+        run("beam.py", "set", "--beam", self.beam, "--id", "WV-01", "--status", "claimed", "--agent", "s", cwd=self.repo)
+        results = self.repo / "results.json"
+        results.write_text(json.dumps({"searches": []}))
+        box = self.repo / ".warp/outbox.md"
+        if box.exists():
+            box.unlink()
+        r = run("jira_sync.py", "verify", "--beam", self.beam, "--results", "results.json", cwd=self.repo)
+        self.assertNotIn("MUST DO", r.stdout)
+        self.assertFalse(box.exists())
+        self.assertIsNone(self.key("WV-01"))
+
+
 if __name__ == "__main__":
     unittest.main()

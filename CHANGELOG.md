@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.6
+
+- /warp-jira-check prints why each ticket is unmapped and the one command that fixes it. verify with no flags only reads the beam and does not call Jira. verify --link copies a key already in the map file and writes the same JQL as map --from-jira. verify --apply stores one exact match. A needs mapping line on this report does not mean the lookup already ran.
+
 ## 1.3.5
 
 - jiraProject is detected instead of hand-edited. Init and scan write it when one prefix is clear from the plan, branches, or recent commits, and ignore plan-id prefixes such as WV that have no Jira key. Several prefixes are not guessed. When Jira is connected, one visible project or one match is stored, and a single site is stored in jiraSite. An empty jiraKeyPrefixes becomes that project. A value already set is left alone. The warning is: jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC).

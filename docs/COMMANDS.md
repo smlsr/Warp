@@ -148,7 +148,25 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 
 A plan id is not a Jira issue key. `WV-01` is not sent as `WV-01`. A key is confirmed when it is on the plan or export, in the map file, its project prefix matches `jiraProject` or `jiraKeyPrefixes`, or Jira has exactly one issue whose external id, `warp:<id>` label, or remote-link id equals the plan id. Otherwise `jiraKey` stays empty and the ticket is `needs mapping`. `/warp-scan` prints `N tickets: K keyed, U need mapping` and, when Jira is connected, resolves those matches before that summary is final. A claim on an unmapped ticket tries that search first. Only a miss or an ambiguous result writes `.warp/outbox.md` and a Herald payload, and it does not call `transitionJiraIssue`. Two Jira issues are reported and neither key is stored. A key set by hand is never replaced.
 
-`/warp-jira-check` runs `jira_sync.py verify` (print only) and `catchup` (writes `.warp/jira-todo.json` for tickets that have a key). `catchup --write` stores an inferred key only when the prefix matches. The script does not call Jira. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards.
+`/warp-jira-check` runs `jira_sync.py verify` and `catchup`. `verify` with no flags only prints. It does not call Jira, and `needs mapping` on this report does not mean the external-id search already ran. Each ticket has `status: keyed` or `status: unmapped`, `source` (`plan`, `export`, `map`, `manual`, `external`, `label`, `link`, `summary`, `inferred`, or none), and when unmapped a `reason` plus one `fix` command. When every ticket is unmapped the report ends with `why nothing linked:` (`jiraProject is empty`, map keys never copied onto the beam, or no ticket has a Jira key in the plan, map file, or external id). The same line names `jiraMcp`, which must match the Atlassian server Cursor shows. The script cannot tell whether that server is connected.
+
+```bash
+python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
+python3 <plugin>/scripts/jira_sync.py verify --link
+python3 <plugin>/scripts/jira_sync.py verify --link --dry-run
+python3 <plugin>/scripts/jira_sync.py verify --apply results.json
+python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Print the report. Write nothing. |
+| `--link` | Copy a key already in `.warp/jira-map.json` or `jiraKeyMap` onto a ticket with no confirmed key. Write `.warp/jira-resolve.json` (same JQL as `map --from-jira`). Do not store a Jira search. |
+| `--results FILE` | Store one exact match from a saved transcript. `--apply FILE` is the same. |
+| `--dry-run` | Print the map copy and the Jira match. Write nothing. |
+| `--id ID` | One ticket. |
+
+`catchup` writes `.warp/jira-todo.json` for tickets that have a key, and refuses an active ticket that still has none. `catchup --write` stores an inferred key only when the prefix matches. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards. Linking itself happens when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent runs that search, or when this check is run with `--link` and then `--apply`.
 
 ## /warp-jira-map
 

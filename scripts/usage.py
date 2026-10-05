@@ -31,6 +31,7 @@ SWITCHES = {
     "--from-jira",
     "--auto",
     "--list",
+    "--link",
 }
 
 

@@ -20,9 +20,9 @@ Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready
 
 ## Jira status did not move
 
-`/warp-jira-check` runs `jira_sync.py verify`. For each ticket it prints the key, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, the comment ids on file, and what is missing.
+`/warp-jira-check` runs `jira_sync.py verify`. For each ticket it prints `status: keyed` or `status: unmapped`, `source`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, the comment ids on file, and what is missing. An unmapped ticket also prints `reason` and one `fix` command. When every ticket is unmapped it prints `why nothing linked`.
 
-A line that says `needs mapping` means the plan id is not a Jira issue key and the lookup (external-id field, then `warp:<id>` label, then remote link) was not one exact match. An ambiguous line names both Jira keys and stores neither. `/warp-jira-map` is only for that leftover (`WV-01=WAR-1`), not for keys the scan already stored. Then `catchup`. An inferred key is stored only when its prefix matches. An already-merged auto-merge ticket is asked for Done, not for In Progress.
+`verify` with no flags does not call Jira. `needs mapping` on this report does not mean the external-id, label, or remote-link lookup already ran. That lookup runs when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent searches, or when you run `verify --link` (copies map-file keys and writes the JQL) and then `verify --apply results.json` (stores one exact match). An ambiguous result names both Jira keys and stores neither. `/warp-jira-map` is only for that leftover (`map --set WV-01=WAR-1`). Then `catchup`. An inferred key is stored only when its prefix matches. An already-merged auto-merge ticket is asked for Done, not for In Progress.
 
 The move itself is not done by the script. The agent that sees `jira: MUST DO` has to call `getTransitionsForJiraIssue` and `transitionJiraIssue` on the `jiraMcp` server, then `record`. If that server is not connected, the same failure is in `.warp/outbox.md` and in the Herald payload.
 

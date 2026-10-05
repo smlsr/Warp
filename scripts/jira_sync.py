@@ -10,7 +10,7 @@ or a scan.
   pick            choose a transition id from Jira's list
   record          store a transition result
   record-comment  store a Jira or pull-request comment id
-  verify          per ticket: what should have happened, and what is missing
+  verify          per ticket: keyed or unmapped, why, and the one command that fixes it
   catchup         print the moves still owed; --write stores an inferred key
 
 Settings (.warp/config.yaml, else the beam copy, else the defaults below):
@@ -245,7 +245,8 @@ def read_map_file(beam_path: Path) -> dict[str, str]:
         return {}
 
 
-def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+def all_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+    """Plan id to key from jiraKeyMap and .warp/jira-map.json, including prefixes that will be rejected."""
     merged = parse_key_meta(cfg.get("jiraKeyMap"))
     if beam_path is not None:
         path = beam_path.parent / MAP_NAME
@@ -254,6 +255,11 @@ def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
                 merged.update(parse_key_meta(json.loads(path.read_text())))
             except (OSError, json.JSONDecodeError):
                 pass
+    return merged
+
+
+def combined_meta(beam_path: Path | None, cfg: dict) -> dict[str, dict]:
+    merged = all_meta(beam_path, cfg)
     prefixes = prefixes_from(cfg)
     if not prefixes:
         return merged
@@ -350,7 +356,7 @@ def mapping_message(ticket: dict, cfg: dict) -> str:
         extra = f" Stored {stored} does not match and will not be sent to Jira."
     return (
         f"jira: {tid} needs mapping. Refusing to call Jira (no Jira key).{extra} "
-        f"The plan id is not the issue key. External-id search did not find one exact match. "
+        f"The plan id is not the issue key. "
         f"jiraProject/jiraKeyPrefixes: {shown}. "
         f"/warp-jira-map is only for this leftover: python3 {Path(__file__).resolve()} map --set {tid}={example}"
     )
@@ -1002,12 +1008,219 @@ def format_diagnosis(row: dict) -> str:
     return "\n".join(lines)
 
 
-def verify(beam_path: Path, tid: str | None = None) -> str:
+def _script() -> str:
+    return f"python3 {Path(__file__).resolve()}"
+
+
+def unmapped_reason(ticket: dict, cfg: dict, beam_path: Path) -> tuple[str, str]:
+    """Why this ticket has no confirmed key, and the one command that addresses it."""
+    me = _script()
+    tid = str(ticket.get("id") or "")
+    prefixes = prefixes_from(cfg)
+    stored = normalize_key(ticket.get("jiraKey"))
+    accepted = combined_meta(beam_path, cfg).get(tid) or {}
+    raw = all_meta(beam_path, cfg).get(tid) or {}
+    mapped = accepted.get("key")
+    raw_key = raw.get("key")
+    field = external_field(cfg)
+    mcp = cfg.get("jiraMcp") or "atlassian"
+    candidates = ticket.get("jiraKeyCandidates") or []
+    if not isinstance(candidates, list):
+        candidates = []
+    plan_id = normalize_key(tid)
+    stale_plan_id = bool(
+        stored
+        and plan_id
+        and stored == plan_id
+        and ticket.get("jiraKeySource") not in CONFIRMED_SOURCES
+        and not ticket.get("jiraKeyForced")
+    )
+    if not prefixes:
+        if mapped:
+            return (
+                f"jiraProject is empty. Map file has {mapped}, and it stays unconfirmed until the project is set",
+                f"{me} project --list",
+            )
+        if stale_plan_id:
+            return (
+                f"jiraProject is empty. Stored {stored} is the plan id, not a Jira key",
+                f"{me} project --list",
+            )
+        return (
+            "jiraProject is empty and jiraKeyPrefixes is empty, so a plan id cannot be confirmed",
+            f"{me} project --list",
+        )
+    if mapped and not jira_key(ticket, prefixes):
+        return (
+            f"map file has {mapped} but the beam has no confirmed key",
+            f"{me} verify --link",
+        )
+    if raw_key and not prefix_ok(raw_key, prefixes):
+        return (
+            f"map file has {raw_key} but that prefix is not in jiraProject/jiraKeyPrefixes ({', '.join(prefixes)})",
+            f"{me} map --set {tid}={prefixes[0]}-1",
+        )
+    if ticket.get("jiraMapping") == "ambiguous" or len(candidates) > 1:
+        shown = ", ".join(str(c) for c in candidates) or "several issues"
+        example = str(candidates[0]) if candidates else f"{prefixes[0]}-1"
+        return (
+            f"ambiguous matches ({shown}); neither was stored",
+            f"{me} map --set {tid}={example}",
+        )
+    if stored and not ticket.get("jiraKeyForced") and not prefix_ok(stored, prefixes):
+        shown = ", ".join(prefixes)
+        if stale_plan_id:
+            return (
+                f"stored {stored} is the plan id, not a Jira key, and its prefix is not in jiraProject/jiraKeyPrefixes ({shown})",
+                f"{me} verify --link",
+            )
+        return (
+            f"stored {stored} does not match jiraProject/jiraKeyPrefixes ({shown})",
+            f"{me} map --set {tid}={prefixes[0]}-1",
+        )
+    inferred = infer_key(ticket, prefixes)
+    if inferred:
+        return (
+            f"inferred {inferred} from the id, summary, or branch, and it is not stored",
+            f"{me} catchup --write --id {tid}",
+        )
+    return (
+        f"no Jira key in the plan, export, or map file. External-id field is {field}. "
+        f"This command does not call Jira (jiraMcp={mcp}). "
+        f"After the search, store one exact match with verify --apply <results.json>",
+        f"{me} verify --link",
+    )
+
+
+def link_lines(ticket: dict, cfg: dict, beam_path: Path) -> str:
+    prefixes = prefixes_from(cfg)
+    key = jira_key(ticket, prefixes)
+    source = ticket.get("jiraKeySource") or "(none)"
+    if key:
+        return f"status: keyed\nsource: {source}"
+    reason, fix = unmapped_reason(ticket, cfg, beam_path)
+    return f"status: unmapped\nsource: {source}\nreason: {reason}\nfix: {fix}"
+
+
+def why_nothing_linked(tickets: list[dict], cfg: dict, beam_path: Path) -> str | None:
+    """One line when every ticket in this report is unmapped. Omitted when any key is confirmed."""
+    if not tickets:
+        return None
+    prefixes = prefixes_from(cfg)
+    unmapped = [t for t in tickets if not jira_key(t, prefixes)]
+    if not unmapped or len(unmapped) != len(tickets):
+        return None
+    mcp = cfg.get("jiraMcp") or "atlassian"
+    tail = f"This command does not call Jira (jiraMcp={mcp})."
+    if not prefixes:
+        return f"why nothing linked: jiraProject is empty. {tail}"
+
+    def kind(reason: str) -> str:
+        if reason.startswith("map file has") and "beam has no confirmed" in reason:
+            return "map"
+        if reason.startswith("map file has"):
+            return "map-prefix"
+        if reason.startswith("ambiguous"):
+            return "ambiguous"
+        if reason.startswith("stored ") and "does not match" in reason:
+            return "prefix"
+        if "is the plan id" in reason:
+            return "plan-id"
+        if reason.startswith("inferred"):
+            return "inferred"
+        return "none"
+
+    kinds = {kind(unmapped_reason(t, cfg, beam_path)[0]) for t in unmapped}
+    if kinds == {"map"}:
+        return f"why nothing linked: the map file has keys the beam never stored. {tail}"
+    if kinds == {"map-prefix"}:
+        shown = ", ".join(prefixes)
+        return f"why nothing linked: map-file keys do not match jiraProject/jiraKeyPrefixes ({shown}). {tail}"
+    if kinds == {"ambiguous"}:
+        return f"why nothing linked: every open ticket matched more than one Jira issue. {tail}"
+    if kinds == {"prefix"}:
+        shown = ", ".join(prefixes)
+        return f"why nothing linked: stored keys do not match jiraProject/jiraKeyPrefixes ({shown}). {tail}"
+    if kinds == {"plan-id"}:
+        return f"why nothing linked: every stored key is the plan id, not a Jira key. {tail}"
+    if kinds == {"inferred"}:
+        return f"why nothing linked: keys can be inferred from the id but are not stored. {tail}"
+    if kinds == {"none"}:
+        return "why nothing linked: no ticket has a Jira key in the plan, map file, or external id. " + tail
+    return f"why nothing linked: see each ticket. {tail}"
+
+
+def apply_known_map(beam_path: Path, only_ids: list[str] | None = None, dry_run: bool = False) -> list[str]:
+    """Copy map-file and jiraKeyMap keys onto tickets with no confirmed key.
+
+    A manual or forced key is left alone. A stored key that is not confirmed is
+    replaced only when the map has a prefix-valid key. Other stored keys stay.
+    """
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    prefixes = prefixes_from(cfg)
+    meta = combined_meta(beam_path, cfg)
+    wanted = set(only_ids) if only_ids else None
+    lines: list[str] = []
+    changed = False
+    for tid, t in (beam.get("tickets") or {}).items():
+        if wanted is not None and tid not in wanted:
+            continue
+        if t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced"):
+            continue
+        if jira_key(t, prefixes):
+            continue
+        info = meta.get(tid)
+        if not info:
+            continue
+        key = info["key"]
+        source = info.get("source") if info.get("source") in CONFIRMED_SOURCES else "map"
+        confidence = info.get("confidence")
+        if dry_run:
+            lines.append(f"jira: dry-run {tid} -> {key} (map). Not written.")
+            continue
+        t["jiraKey"] = key
+        t["jiraKeySource"] = source
+        t["jiraKeyConfidence"] = confidence
+        t["jiraKeyForced"] = False
+        t["jiraMapping"] = "mapped"
+        t.pop("jiraKeyCandidates", None)
+        changed = True
+        lines.append(f"jira: {tid} -> {key} (map)")
+    if changed:
+        _save(beam_path, beam)
+    return lines
+
+
+def verify(
+    beam_path: Path,
+    tid: str | None = None,
+    link: bool = False,
+    results: Path | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Print each ticket. With no flags this writes nothing.
+
+    --link copies keys already in the map file and writes the same JQL as
+    map --from-jira. It does not call Jira. --results and --apply store one
+    exact match from a saved transcript unless --dry-run.
+    """
+    parts: list[str] = []
+    only = [tid] if tid else None
+    if link or results is not None:
+        parts.extend(apply_known_map(beam_path, only, dry_run=dry_run))
+    if results is not None:
+        parts.append(_apply_saved(beam_path, results, dry_run))
+    elif link:
+        parts.append(prepare_resolve(beam_path, only, write=not dry_run))
+        if dry_run:
+            parts.append("jira: nothing written. Keys stay as they are until --results or --apply.")
+        else:
+            parts.append("jira: Jira search keys are not written until --results or --apply.")
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
     mode = _mode(beam_path)
     ids = [tid] if tid else list(beam["tickets"])
-    parts = []
     if not str(cfg.get("jiraProject") or "").strip():
         try:
             import jira_project
@@ -1017,6 +1230,7 @@ def verify(beam_path: Path, tid: str | None = None) -> str:
         except Exception:
             parts.append("jiraProject not set: Jira moves are disabled until you set it (candidates: none)")
     unmapped: list[str] = []
+    reported: list[dict] = []
     for i in ids:
         t = beam["tickets"].get(i)
         if not t:
@@ -1025,7 +1239,11 @@ def verify(beam_path: Path, tid: str | None = None) -> str:
         row = diagnose(t, cfg, mode)
         if row["needsMapping"]:
             unmapped.append(str(i))
-        parts.append(format_diagnosis(row))
+        reported.append(t)
+        parts.append(format_diagnosis(row) + "\n" + link_lines(t, cfg, beam_path))
+    diagnosis = why_nothing_linked(reported, cfg, beam_path)
+    if diagnosis:
+        parts.append(diagnosis)
     if unmapped:
         parts.append("jira: unmapped: " + ", ".join(unmapped))
     return "\n\n".join(parts)
@@ -1327,7 +1545,7 @@ def external_id_jql(tid: str, cfg: dict) -> str:
     return jql
 
 
-def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
+def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None, write: bool = True) -> str:
     """Write JQL for an exact external-id lookup. Does not call Jira and does not flag a miss."""
     beam = _load(beam_path)
     cfg = settings(beam_path, beam)
@@ -1357,7 +1575,7 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
     path = beam_path.parent / RESOLVE_NAME
     summary = key_summary(beam, cfg)
     if not rows:
-        if wanted is None and path.is_file():
+        if write and wanted is None and path.is_file():
             path.unlink()
         return summary
     payload = {
@@ -1370,7 +1588,8 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
         "order": ["plan or map", "external id", "label", "remote link", "summary"],
         "tickets": rows,
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    if write:
+        path.write_text(json.dumps(payload, indent=2) + "\n")
     shown = ", ".join(row["id"] for row in rows[:30])
     extra = f" (+{len(rows) - 30} more)" if len(rows) > 30 else ""
     me = Path(__file__).resolve()
@@ -1379,7 +1598,7 @@ def prepare_resolve(beam_path: Path, only_ids: list[str] | None = None) -> str:
         f"jira: RESOLVE {shown}{extra} by external id (exact single match), then label warp:<id>, then a remote link. "
         f"Call {TOOL_FIELDS} once, then {TOOL_SEARCH} on server {payload['server']} for each jql in .warp/{RESOLVE_NAME}. "
         f"Remote links use {TOOL_REMOTE_LINKS}.\n"
-        f"jira: Then python3 {me} resolve --apply <results.json>. "
+        f"jira: Then python3 {me} verify --apply <results.json> or python3 {me} resolve --apply <results.json>. "
         'Save {"fields":[{"name":"External ID","id":"customfield_10050"}],'
         '"searches":[{"jql":"...","issues":[{"key":"WAR-1"}]}],"remoteLinks":[{"key":"WAR-1","ids":["WV-01"]}]}. '
         "One exact match is stored with its source. Zero or several stay unmapped. A summary match is only a proposal.\n"
@@ -1666,6 +1885,22 @@ def apply_jira_lookup(beam_path: Path, client, dry_run: bool = False, confirm_su
     )
 
 
+def _apply_saved(beam_path: Path, results_path: Path, dry_run: bool) -> str:
+    """Same write path as map --from-jira --results. A check does not flag active misses."""
+    data = json.loads(results_path.read_text())
+    if _transcript(data):
+        return apply_jira_lookup(
+            beam_path,
+            jira_lookup.ReplayClient(data),
+            dry_run=dry_run,
+            confirm_summary=False,
+            flag_active=False,
+        )
+    if dry_run:
+        return "jira: dry-run. Not written."
+    return apply_external(beam_path, results_path)
+
+
 def apply_resolve(beam_path: Path, results_path: Path) -> str:
     """Old per-ticket results stay on the external-id path. A transcript uses the full lookup."""
     data = json.loads(results_path.read_text())
@@ -1684,6 +1919,10 @@ JIRA_HELP = """
 examples:
   python3 scripts/jira_sync.py ?
   python3 scripts/jira_sync.py verify --beam .warp/beam.json
+  python3 scripts/jira_sync.py verify --link
+  python3 scripts/jira_sync.py verify --link --dry-run
+  python3 scripts/jira_sync.py verify --apply results.json
+  python3 scripts/jira_sync.py verify --link --results results.json
   python3 scripts/jira_sync.py catchup --beam .warp/beam.json
   python3 scripts/jira_sync.py catchup --write --id T-9
   python3 scripts/jira_sync.py map
@@ -1703,11 +1942,22 @@ examples:
   python3 scripts/jira_sync.py record --id T-9 --event claim --result moved
   python3 scripts/jira_sync.py record-comment --id T-9 --where jira --event claim --comment-id 10001
 
-verify only prints. It lists unmapped tickets. catchup writes .warp/jira-todo.json
-for tickets that have a confirmed key, and refuses (outbox + Herald, no MCP call)
-when the key is missing or the prefix does not match. catchup --write stores a
-key inferred from the id, summary, or branch only when that prefix matches
-jiraProject or jiraKeyPrefixes. This script does not call Jira.
+verify with no flags only prints. For each ticket it prints status: keyed or
+unmapped, source of the key, and when unmapped the reason and one fix command.
+When every ticket is unmapped it prints why nothing linked. It does not call
+Jira, and it does not mean the external-id search already ran. jiraMcp is the
+server name printed in that line (default atlassian). --link copies a key
+already in the map file or jiraKeyMap onto a ticket that has no confirmed key,
+and writes the same JQL as map --from-jira. Jira search keys are not written
+until --results or --apply. --dry-run prints the decision and writes nothing.
+--results FILE and --apply FILE store one exact match from a saved transcript
+(external id, then label, then remote link). A summary match is not stored.
+Two matches are reported and neither is stored. A manual key is never
+overwritten. catchup writes .warp/jira-todo.json for tickets that have a
+confirmed key, and refuses (outbox + Herald, no MCP call) when the key is
+missing or the prefix does not match. catchup --write stores a key inferred
+from the id, summary, or branch only when that prefix matches jiraProject or
+jiraKeyPrefixes. This script does not call Jira.
 
 Scan and claim write .warp/jira-resolve.json. resolve --apply stores a key when
 exactly one Jira issue matches, in this order: external-id field (the
@@ -1785,6 +2035,10 @@ def main() -> None:
     pv = sub.add_parser("verify")
     pv.add_argument("--beam", default=".warp/beam.json")
     pv.add_argument("--id")
+    pv.add_argument("--link", action="store_true", help="copy map-file keys and write JQL; a Jira search is not stored")
+    pv.add_argument("--results", help="JSON transcript; one exact match is stored")
+    pv.add_argument("--apply", dest="verify_apply", help="same as --results")
+    pv.add_argument("--dry-run", action="store_true", help="print matches and write nothing")
     pu = sub.add_parser("catchup")
     pu.add_argument("--beam", default=".warp/beam.json")
     pu.add_argument("--id")
@@ -1830,7 +2084,16 @@ def main() -> None:
         elif args.cmd == "record-comment":
             print(record_comment(Path(args.beam), args.id, args.where, args.event, args.comment_id))
         elif args.cmd == "verify":
-            print(verify(Path(args.beam), args.id))
+            results = args.results or args.verify_apply
+            print(
+                verify(
+                    Path(args.beam),
+                    args.id,
+                    link=bool(args.link),
+                    results=Path(results) if results else None,
+                    dry_run=bool(args.dry_run),
+                )
+            )
         elif args.cmd == "map":
             beam_path = Path(args.beam)
             if args.from_jira or args.auto:
