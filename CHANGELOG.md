@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.8
+
+- /warp-jira-view prints every field on a Jira issue. An issue key such as WAR-1 is fetched with getJiraIssue. An external id such as WV-01 is resolved from the beam and the map, then from the external-id field, and from each visible project when jiraProject is empty. Two matches are listed and neither issue is printed. --comments, --links, --all, --full, --verbose, and --json control the report.
+
 ## 1.3.7
 
 - A claim that finds a Jira issue by external id now has to record it before any transition: resolve --ticket WV-01 --key WAR-1 --issue-id ID --cloud-id CLOUD writes the beam and the map together, and the transition todo uses only that key. A plan id is refused. Jira import JSON uses externalId as the plan id (h2. Size, Locks, Blocked by, Acceptance, and size/auto-merge/area labels) and never as jiraKey. When several Jira projects are visible, project --probe and project --record pick the one that contains the plan id. verify prints key stored or key missing, jira.id, and jira.lastAttempt from record --result failed --error.

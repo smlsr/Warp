@@ -33,6 +33,11 @@ SWITCHES = {
     "--list",
     "--link",
     "--probe",
+    "--all",
+    "--full",
+    "--verbose",
+    "--comments",
+    "--links",
 }
 
 

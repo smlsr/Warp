@@ -20,6 +20,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-export` | `scan.py export` |
 | `/warp-import` | `scan.py import` |
 | `/warp-jira-check` | `jira_sync.py verify` and `catchup` |
+| `/warp-jira-view <key-or-id>` | `jira_view.py` |
 | `/warp-jira-map` | `jira_sync.py map` |
 | `/warp-allow-notify` | `allow_notify.py` |
 | `/warp-version` | `version.py` |
@@ -127,7 +128,7 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 |---|---|
 | `getAccessibleAtlassianResources` | `cloudId`, unless `jiraSite` is set. One site is stored in `jiraSite` |
 | `getVisibleJiraProjects` | Project list used to fill an empty `jiraProject` |
-| `getJiraIssue` | current status |
+| `getJiraIssue` | current status. `/warp-jira-view` asks for every field (`fields ["*all"]`, `expand names`) |
 | `getTransitionsForJiraIssue` | transitions offered now. Some servers call this `listJiraIssueTransitions` |
 | `transitionJiraIssue` | the id `jira_sync.py pick` chose |
 | `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue` |
@@ -167,6 +168,33 @@ python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 | `--id ID` | One ticket. |
 
 `catchup` writes `.warp/jira-todo.json` for tickets that have a key, and refuses an active ticket that still has none. `catchup --write` stores an inferred key only when the prefix matches. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards. Linking itself happens when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent runs that search, or when this check is run with `--link` and then `--apply`.
+
+## /warp-jira-view
+
+Print every field on one Jira issue. The argument is an issue key (`WAR-1`) or an external id / plan id (`WV-01`). The script does not call Jira. It writes `.warp/jira-view.json`. The agent calls `getJiraIssue`, `getTransitionsForJiraIssue`, and `searchJiraIssuesUsingJql` on `jiraMcp`, then `jira_view.py --results` renders the transcript. Those read tools are already included in `/warp-allow-notify --with-jira`.
+
+A value is an issue key when its prefix is `jiraProject` or `jiraKeyPrefixes`, or when those are empty and it matches `PROJECT-123`. Otherwise it is an external id. A key is fetched with `getJiraIssue`. If that call fails, the same text is looked up as an external id. An external id is taken from the beam and `.warp/jira-map.json` first, then the claim lookup: `jiraExternalIdField`, then the other external-id names, then label `warp:<id>`, then a remote link. The search is limited to `jiraProject`. When `jiraProject` is empty, each visible project is probed. Two matches are listed and neither issue is printed.
+
+```bash
+python3 <plugin>/scripts/jira_view.py WAR-1
+python3 <plugin>/scripts/jira_view.py WV-01
+python3 <plugin>/scripts/jira_view.py WV-01 --results view.json
+python3 <plugin>/scripts/jira_view.py WAR-1 --results view.json --comments --links --verbose --all --full --json
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Classify the argument and write `.warp/jira-view.json`. Print the tool calls. Write no issue fields. |
+| `--results FILE` | Render a saved transcript. |
+| `--comments` | Comment count and the latest comments. |
+| `--links` | Issue links and remote links. |
+| `--all` | Include empty and null fields. |
+| `--full` | Do not truncate long text. |
+| `--verbose` | Add the account id on a user field. |
+| `--json` | Print the issue as JSON. |
+| `--beam` | Beam path. Default `.warp/beam.json`. |
+
+The report starts with `resolved: WAR-1 (external id)` or `resolved: WAR-1 (issue key)`, the status, the external-id field name and id, and `beam:` / `map:` lines for the stored key. `discovered field` is the id to set as `jiraExternalIdField` when the configured name is different. Custom fields print as `External ID (customfield_10050): WV-01`. Description and comments are plain text. Users are the display name. Labels, components, and versions are comma-joined. Dates are ISO. A field whose name is a token, password, or secret is `<redacted>`.
 
 ## /warp-jira-map
 
