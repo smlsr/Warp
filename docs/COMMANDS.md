@@ -82,7 +82,7 @@ With no folder, plans in more than one folder are reported and the richest plan 
 
 Looks for `WARP_PLAN.json`, `schedule.json`, `CURSOR_PLAN.md`, a Jira ticket JSON export, or a markdown table with `id` and `deps`. Writes `.warp/beam.json` and `.warp/scan.json`. `runState` is `stopped`. A successful scan writes `.warp/notify-post.json` with the header `Warp | <repo> / <project>` and a footer that starts with `Warp v<version>`. `notify: quiet` posts nothing. No channel, or no server: the text goes to `.warp/outbox.md`. A failed scan posts nothing.
 
-Jira keys already on the plan, in a Jira export, or in `.warp/jira-map.json` / `jiraKeyMap` are stored during the scan. The script then prints a line like `12 tickets: 9 keyed, 3 need mapping`. For the ones still open it writes `.warp/jira-resolve.json`. When Jira is connected, the agent looks up each plan id in this order: `jiraExternalIdField` (a name or `customfield_NNNNN`), then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID, then a label `warp:<id>`, then a remote-link id. `jira_sync.py resolve --apply` stores an exact single match and where it came from. A summary match is only a proposal. That is part of `/warp-scan`, not a separate command. `/warp-jira-map` is only for tickets that stay unmapped or ambiguous.
+Jira keys already on the plan, in a Jira export, or in `.warp/jira-map.json` / `jiraKeyMap` are stored during the scan. The script then prints a line like `12 tickets: 9 keyed, 3 need mapping`. For the ones still open it writes `.warp/jira-resolve.json`. When Jira is connected, the agent looks up each plan id in this order: `jiraExternalIdField` (a name or `customfield_NNNNN`), then External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID, then a label `warp:<id>`, then a remote-link id. A Jira import file (`externalId`, `h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, labels `size:S`, `auto-merge`, `area:*`) uses `externalId` as the plan id. It is not stored as `jiraKey`. `jira_sync.py resolve --ticket WV-01 --key WAR-1 --issue-id 10001 --cloud-id <cloudId>` records the lookup before any transition. `jira_sync.py resolve --apply` stores an exact single match and where it came from. A summary match is only a proposal. That is part of `/warp-scan`, not a separate command. `/warp-jira-map` is only for tickets that stay unmapped or ambiguous.
 
 Other `scan.py` subcommands: `export` (`--beam`, `--out`), `import` (`--plan`, `--beam`, `--keep-status`), `status` (`--beam`), `bundle` (`--beam`, `--out` default `.warp/warp-review.zip`), `start`, `stop`, `pause`, `resume` (`--beam`, `--reason`).
 
@@ -148,7 +148,25 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 
 A plan id is not a Jira issue key. `WV-01` is not sent as `WV-01`. A key is confirmed when it is on the plan or export, in the map file, its project prefix matches `jiraProject` or `jiraKeyPrefixes`, or Jira has exactly one issue whose external id, `warp:<id>` label, or remote-link id equals the plan id. Otherwise `jiraKey` stays empty and the ticket is `needs mapping`. `/warp-scan` prints `N tickets: K keyed, U need mapping` and, when Jira is connected, resolves those matches before that summary is final. A claim on an unmapped ticket tries that search first. Only a miss or an ambiguous result writes `.warp/outbox.md` and a Herald payload, and it does not call `transitionJiraIssue`. Two Jira issues are reported and neither key is stored. A key set by hand is never replaced.
 
-`/warp-jira-check` runs `jira_sync.py verify` (print only) and `catchup` (writes `.warp/jira-todo.json` for tickets that have a key). `catchup --write` stores an inferred key only when the prefix matches. The script does not call Jira. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards.
+`/warp-jira-check` runs `jira_sync.py verify` and `catchup`. `verify` with no flags only prints. It does not call Jira, and `needs mapping` on this report does not mean the external-id search already ran. Each ticket has `status: keyed` or `status: unmapped`, `source` (`plan`, `export`, `map`, `manual`, `external`, `label`, `link`, `summary`, `inferred`, or none), and when unmapped a `reason` plus one `fix` command. When every ticket is unmapped the report ends with `why nothing linked:` (`jiraProject is empty`, map keys never copied onto the beam, or no ticket has a Jira key in the plan, map file, or external id). The same line names `jiraMcp`, which must match the Atlassian server Cursor shows. The script cannot tell whether that server is connected.
+
+```bash
+python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
+python3 <plugin>/scripts/jira_sync.py verify --link
+python3 <plugin>/scripts/jira_sync.py verify --link --dry-run
+python3 <plugin>/scripts/jira_sync.py verify --apply results.json
+python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
+```
+
+| Flag | Effect |
+|---|---|
+| (none) | Print the report. Write nothing. |
+| `--link` | Copy a key already in `.warp/jira-map.json` or `jiraKeyMap` onto a ticket with no confirmed key. Write `.warp/jira-resolve.json` (same JQL as `map --from-jira`). Do not store a Jira search. |
+| `--results FILE` | Store one exact match from a saved transcript. `--apply FILE` is the same. |
+| `--dry-run` | Print the map copy and the Jira match. Write nothing. |
+| `--id ID` | One ticket. |
+
+`catchup` writes `.warp/jira-todo.json` for tickets that have a key, and refuses an active ticket that still has none. `catchup --write` stores an inferred key only when the prefix matches. After a key is mapped, `catchup` asks for the transitions and comments the current beam status still owes (In Progress for a claim, QA Ready or Done for a merge). It does not move the ticket backwards. Linking itself happens when `/warp-scan` or the first claim prints `jira: RESOLVE` and the agent runs that search, or when this check is run with `--link` and then `--apply`.
 
 ## /warp-jira-map
 
@@ -195,7 +213,9 @@ python3 <plugin>/scripts/jira_sync.py project --apply results.json
 | (none) | Detect from plan files, branches, and recent commit subjects. Write `jiraProject` only when it is empty and one prefix wins. |
 | `--list` | Print candidates. Write nothing. |
 | `--set KEY` | Store that project key. Also fills an empty `jiraKeyPrefixes`. Replaces a previous value. |
-| `--apply FILE` | Transcript from `getAccessibleAtlassianResources` and `getVisibleJiraProjects`. One project, or one match, is stored. One site is stored in `jiraSite`. |
+| `--apply FILE` | Transcript from `getAccessibleAtlassianResources` and `getVisibleJiraProjects`. One project, or one match, is stored. One site is stored in `jiraSite`. Several projects write a probe instead of guessing. |
+| `--probe` | Write JQL that searches each visible project for the first plan ids (`externalId`, then `External ID`, then label `warp:<id>`). Writes nothing to `jiraProject`. |
+| `--record FILE` | Probe transcript. Exactly one project with a hit is stored, with how it was found. Several hits are listed with issue keys and `project --set`. None lists every project. |
 
 When it stays empty, init, scan, and `/warp-jira-check` print `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`.
 
@@ -204,7 +224,9 @@ When it stays empty, init, scan, and `/warp-jira-check` print `jiraProject not s
 Plans can carry the real key: `schedule.json` field `jiraKey`, a markdown line `Jira: WAR-1`, a table column `Jira Key` or `jiraKey`, or `[WAR-1]` on the ticket heading.
 
 ```bash
+python3 <plugin>/scripts/jira_sync.py resolve --ticket WV-01 --key WAR-1 --issue-id 10001 --cloud-id cloud-1
 python3 <plugin>/scripts/jira_sync.py resolve --apply results.json
+python3 <plugin>/scripts/jira_sync.py record --id WV-01 --event claim --result failed --error "transition rejected"
 python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py catchup --write --id T-9

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.7
+
+- A claim that finds a Jira issue by external id now has to record it before any transition: resolve --ticket WV-01 --key WAR-1 --issue-id ID --cloud-id CLOUD writes the beam and the map together, and the transition todo uses only that key. A plan id is refused. Jira import JSON uses externalId as the plan id (h2. Size, Locks, Blocked by, Acceptance, and size/auto-merge/area labels) and never as jiraKey. When several Jira projects are visible, project --probe and project --record pick the one that contains the plan id. verify prints key stored or key missing, jira.id, and jira.lastAttempt from record --result failed --error.
+
+## 1.3.6
+
+- /warp-jira-check prints why each ticket is unmapped and the one command that fixes it. verify with no flags only reads the beam and does not call Jira. verify --link copies a key already in the map file and writes the same JQL as map --from-jira. verify --apply stores one exact match. A needs mapping line on this report does not mean the lookup already ran.
+
 ## 1.3.5
 
 - jiraProject is detected instead of hand-edited. Init and scan write it when one prefix is clear from the plan, branches, or recent commits, and ignore plan-id prefixes such as WV that have no Jira key. Several prefixes are not guessed. When Jira is connected, one visible project or one match is stored, and a single site is stored in jiraSite. An empty jiraKeyPrefixes becomes that project. A value already set is left alone. The warning is: jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC).

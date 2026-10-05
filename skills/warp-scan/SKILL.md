@@ -60,7 +60,7 @@ If the scan prints `jira: PROJECT`, or `jiraProject` in `.warp/config.yaml` is s
 
 1. Call `getAccessibleAtlassianResources` and `getVisibleJiraProjects` on `jiraMcp`.
 2. Save the transcript and run `python3 <plugin>/scripts/jira_sync.py project --apply results.json`.
-3. If it prints `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`, ask the user to pick one with `project --set`. Do not guess. Do not pass a plan id to Jira.
+3. If several projects come back, run the JQL in `.warp/jira-project-probe.json` (`project --probe` reprints it). Save the searches and run `python3 <plugin>/scripts/jira_sync.py project --record probe.json`. Exactly one project with a hit is stored. If several projects match, or none do, the command lists them and the `project --set` lines. Do not guess. Do not pass a plan id to Jira.
 
 A `jiraProject` that already has a value is left alone.
 
@@ -81,7 +81,7 @@ If `.warp/jira-resolve.json` lists tickets, and the Atlassian MCP is connected, 
 
 A search that fails because the field does not exist is `{"jql":"...","error":"field not found","field":"External ID"}`. One issue and no echoed field value is still a hit, because the JQL was exact. Two issue keys are ambiguous.
 
-5. `python3 <plugin>/scripts/jira_sync.py resolve --apply results.json`. An exact single match is stored with its source (`external`, `label`, or `link`) and confidence. A summary match is not stored here. Nothing asks the user to confirm an external-id, label, or link hit.
+5. Record each hit before any transition: `python3 <plugin>/scripts/jira_sync.py resolve --ticket <id> --key <WAR-1> --issue-id <issue id> --cloud-id <cloudId>`. That writes the beam and `.warp/jira-map.json` together. `resolve --apply results.json` does the same from a saved transcript. An exact single match is stored with its source (`external`, `label`, or `link`) and confidence. A summary match is not stored here. Nothing asks the user to confirm an external-id, label, or link hit. Do not pass the plan id to `transitionJiraIssue`.
 6. If Jira is not connected, save `{"WV-01": []}` and run the same `--apply`. Do not pass the plan id to `transitionJiraIssue`.
 
 Read the `N tickets: K keyed, U need mapping` line from that command to the user. Mention `/warp-jira-map` only for ids that are still unmapped or ambiguous. Do not post the scan Herald payload until this step has finished, so the message includes the resolved counts. `notify: quiet` posts nothing.

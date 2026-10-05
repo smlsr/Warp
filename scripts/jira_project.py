@@ -125,8 +125,11 @@ def _from_json(path: Path, source: str, plan: list, link: list) -> bool:
         if not isinstance(row, dict):
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        tid = row.get("id") or row.get("tempId") or fields.get("tempId")
+        external = row.get("externalId") or fields.get("externalId")
+        tid = external or row.get("id") or row.get("tempId") or fields.get("tempId")
         key = row.get("jiraKey") or row.get("jira") or row.get("key") or fields.get("key")
+        if external and key and str(key).strip().upper() == str(external).strip().upper():
+            key = None
         _add(plan, _prefix(str(tid or "")), source)
         key_prefix = _prefix(str(key or ""))
         if key_prefix and (not tid or str(key).strip().upper() != str(tid).strip().upper() or row.get("key") or row.get("jiraKey") or row.get("jira")):
@@ -504,6 +507,8 @@ def apply_remote(root: Path, client: ReplayClient, *, write: bool = True) -> str
         note = warning(sorted(show))
         lines.append(note)
         lines.extend(_commands(sorted(show)))
+        if len(show) > 1:
+            lines.append(prepare_probe(root, sorted(show), write=write))
         if write and len(show) > 1:
             _outbox(root, "\n".join([note, *_commands(sorted(show))]))
         return "\n".join(lines)
@@ -512,6 +517,235 @@ def apply_remote(root: Path, client: ReplayClient, *, write: bool = True) -> str
     else:
         lines.append(f"jira: would set jiraProject to {chosen} ({how})")
     return "\n".join(lines)
+
+
+PROBE_NAME = "jira-project-probe.json"
+
+
+def collect_ids(root: Path, limit: int = 3) -> list[str]:
+    """Plan ids to probe, beam tickets first, then externalId values in plan JSON."""
+    ids: list[str] = []
+
+    def add(raw) -> None:
+        text = str(raw or "").strip()
+        if text and text not in ids:
+            ids.append(text)
+
+    beam = root / ".warp" / "beam.json"
+    if beam.is_file():
+        try:
+            data = json.loads(beam.read_text())
+            for tid in data.get("tickets") or {}:
+                add(tid)
+                if len(ids) >= limit:
+                    return ids
+        except (OSError, json.JSONDecodeError):
+            pass
+    for path in plan_files(root):
+        if path.suffix.lower() != ".json":
+            continue
+        try:
+            data = json.loads(path.read_text(errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        rows = data if isinstance(data, list) else []
+        if isinstance(data, dict):
+            rows = data.get("issues") or data.get("tickets") or []
+        for row in rows or []:
+            if isinstance(row, dict):
+                add(row.get("externalId") or row.get("id"))
+            if len(ids) >= limit:
+                return ids
+    return ids[:limit]
+
+
+def probe_queries(projects: list[str], ids: list[str], field: str = "externalId") -> list[dict]:
+    """JQL for each project and the first few plan ids. External id, then the named field, then a label."""
+    import jira_lookup
+
+    rows = []
+    seen = set()
+    names = []
+    for label in (field or "externalId", "External ID", "externalId"):
+        if label and label not in names:
+            names.append(label)
+    for project in projects:
+        for tid in ids:
+            for label in names:
+                clause = jira_lookup.clause_for(label)
+                jql = jira_lookup.jql_equals(clause, tid, project)
+                if jql in seen:
+                    continue
+                seen.add(jql)
+                rows.append({"project": project, "id": tid, "field": label, "kind": "external", "jql": jql})
+            label_jql = jira_lookup.jql_equals("labels", f"warp:{tid}", project)
+            if label_jql not in seen:
+                seen.add(label_jql)
+                rows.append({"project": project, "id": tid, "field": "labels", "kind": "label", "jql": label_jql})
+    return rows
+
+
+def _project_of(row: dict) -> str | None:
+    raw = row.get("project")
+    if raw and PREFIX_RE.fullmatch(str(raw).strip().upper()):
+        return str(raw).strip().upper()
+    match = re.search(r"project\s*=\s*([A-Z][A-Z0-9]+)", str(row.get("jql") or ""), re.I)
+    return match.group(1).upper() if match else None
+
+
+def _issue_keys(issues) -> list[str]:
+    found = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        key = str(issue.get("key") or issue.get("jiraKey") or "").strip().upper()
+        if KEY_RE.fullmatch(key) and key not in found:
+            found.append(key)
+    return found
+
+
+def decide_probe(projects: list[str], searches: list) -> dict:
+    """One project with a hit is chosen. Several or none are not."""
+    hits: dict[str, list[dict]] = {p: [] for p in projects}
+    for row in searches or []:
+        if not isinstance(row, dict) or row.get("error"):
+            continue
+        project = _project_of(row)
+        if project not in hits:
+            if project:
+                hits.setdefault(project, [])
+            else:
+                continue
+        keys = _issue_keys(row.get("issues"))
+        if not keys:
+            continue
+        tid = str(row.get("id") or "")
+        shown = keys[0] if len(keys) == 1 else ", ".join(keys)
+        if any(item["key"] == shown and item["id"] == tid for item in hits[project]):
+            continue
+        hits[project].append({"id": tid, "key": shown, "field": row.get("field")})
+    matched = [p for p, rows in hits.items() if rows]
+    chosen = matched[0] if len(matched) == 1 else None
+    how = ""
+    if chosen:
+        first = hits[chosen][0]
+        how = f"matched {first['field'] or 'external id'} {first['id']} on {first['key']}"
+    return {"chosen": chosen, "how": how, "hits": {p: rows for p, rows in hits.items() if rows}, "matched": matched}
+
+
+class ProbeClient:
+    """Saved Jira searches. A row with error is a missing field. No network."""
+
+    def __init__(self, data: dict):
+        self._rows = {}
+        for row in (data or {}).get("searches") or []:
+            if isinstance(row, dict) and row.get("jql"):
+                self._rows[row["jql"]] = row
+
+    def search(self, jql: str) -> list:
+        row = self._rows.get(jql)
+        if not row:
+            return []
+        if row.get("error"):
+            raise LookupError(str(row.get("error")))
+        return row.get("issues") or []
+
+
+def prepare_probe(root: Path, projects: list[str], *, write: bool = True) -> str:
+    """Write the JQL an agent should run. Does not set jiraProject and does not call Jira."""
+    projects = [p.strip().upper() for p in projects if PREFIX_RE.fullmatch(str(p).strip().upper())]
+    ids = collect_ids(root, 3)
+    field = config_value(config_text(root), "jiraExternalIdField") or "externalId"
+    queries = probe_queries(projects, ids, field) if projects and ids else []
+    payload = {
+        "projects": projects,
+        "ids": ids,
+        "field": field,
+        "tool": "searchJiraIssuesUsingJql",
+        "queries": queries,
+        "recordCommand": "python3 scripts/jira_sync.py project --record",
+    }
+    if write:
+        path = root / ".warp" / PROBE_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        todo = root / ".warp" / TODO_NAME
+        try:
+            current = json.loads(todo.read_text()) if todo.is_file() else {}
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        current["projects"] = projects
+        current["probe"] = PROBE_NAME
+        todo.write_text(json.dumps(current, indent=2) + "\n")
+    if not projects:
+        return "jira: PROBE no projects were given."
+    if not ids:
+        return (
+            "jira: PROBE no plan ids to match. "
+            + " ".join(_commands(projects))
+        )
+    shown = ", ".join(f"{row['project']} {row['id']} ({row['field']})" for row in queries[:12])
+    extra = f" (+{len(queries) - 12} more)" if len(queries) > 12 else ""
+    return (
+        f"jira: PROBE {', '.join(projects)} for {', '.join(ids)}. "
+        f"Call searchJiraIssuesUsingJql for each jql in .warp/{PROBE_NAME} ({shown}{extra}). "
+        "Save {\"projects\":[...],\"searches\":[{\"jql\":\"...\",\"project\":\"WAR\",\"id\":\"WV-01\",\"issues\":[{\"key\":\"WAR-1\"}]}]}. "
+        f"Then python3 scripts/jira_sync.py project --record probe.json. "
+        "One project with a hit is stored. Several are listed with their issue keys and a project --set command. None lists every project."
+    )
+
+
+def record_probe(root: Path, data: dict, *, write: bool = True) -> str:
+    """Store jiraProject when exactly one probed project contains a plan id."""
+    projects = []
+    for raw in data.get("projects") or []:
+        if isinstance(raw, dict):
+            raw = raw.get("key")
+        pref = str(raw or "").strip().upper()
+        if PREFIX_RE.fullmatch(pref) and pref not in projects:
+            projects.append(pref)
+    searches = data.get("searches") or []
+    for row in searches:
+        if isinstance(row, dict):
+            project = _project_of(row)
+            if project and project not in projects:
+                projects.append(project)
+    decision = decide_probe(projects, searches)
+    if decision["chosen"]:
+        if not write:
+            return f"jira: would set jiraProject to {decision['chosen']} ({decision['how']})"
+        return write_project(root, decision["chosen"], decision["how"], force=False)
+    lines = []
+    if len(decision["matched"]) > 1:
+        lines.append("jira: several projects matched an external id. Not set.")
+        for project in decision["matched"]:
+            pairs = ", ".join(f"{row['id']}={row['key']}" for row in decision["hits"][project])
+            lines.append(f"jira: {project} matched {pairs}")
+            lines.append(f"jira: {SET_COMMAND} {project}")
+    else:
+        lines.append("jira: no project matched an external id.")
+        lines.append(warning(sorted(projects)))
+        lines.extend(_commands(sorted(projects)))
+    if write and len(decision["matched"]) > 1:
+        _outbox(root, "\n".join(lines))
+    return "\n".join(lines)
+
+
+def run_probe(root: Path, client: ProbeClient, projects: list[str], ids: list[str] | None = None, *, write: bool = True) -> str:
+    """Ask a fake or saved client, then record. Field errors are skipped, not fatal."""
+    ids = ids if ids is not None else collect_ids(root, 3)
+    field = config_value(config_text(root), "jiraExternalIdField") or "externalId"
+    searches = []
+    for row in probe_queries(projects, ids, field):
+        try:
+            issues = client.search(row["jql"])
+        except LookupError as exc:
+            searches.append({**row, "issues": [], "error": str(exc)})
+            continue
+        searches.append({**row, "issues": issues})
+    return record_probe(root, {"projects": projects, "searches": searches}, write=write)
 
 
 def init_steps(root: Path, dry: bool) -> list[tuple[str, str]]:

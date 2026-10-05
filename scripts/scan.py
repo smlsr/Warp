@@ -183,6 +183,98 @@ def from_schedule(path: Path) -> dict | None:
     }
 
 
+_ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+_H2_RE = re.compile(r"(?im)^(?:h[1-6]\.\s*|#{1,6}\s+)(.+?)\s*$")
+
+
+def _issue_key(raw) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip().upper()
+    return text if _ISSUE_KEY_RE.fullmatch(text) else None
+
+
+def _wiki_sections(text: str) -> dict[str, str]:
+    """Jira wiki `h2. Heading` and markdown `## Heading` bodies, keyed by heading."""
+    matches = list(_H2_RE.finditer(text or ""))
+    out = {}
+    for i, match in enumerate(matches):
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out[match.group(1).strip().casefold()] = text[start:end].strip()
+    return out
+
+
+def _section(sections: dict, *names: str) -> str:
+    for name in names:
+        body = sections.get(name.casefold())
+        if body:
+            return body
+    return ""
+
+
+def _lines_of(body: str) -> list[str]:
+    rows = []
+    for line in (body or "").splitlines():
+        text = re.sub(r"^\s*(?:[*\-]|#)+\s*", "", line).strip()
+        if text:
+            rows.append(text)
+    return rows
+
+
+def _is_none(text: str) -> bool:
+    return text.strip().casefold() in {"", "none", "n/a", "na", "-", "—"}
+
+
+def _apply_import_labels(ticket: dict, labels) -> None:
+    for raw in labels or []:
+        text = str(raw).strip()
+        low = text.casefold()
+        if low == "auto-merge":
+            ticket["autoMerge"] = True
+        elif low == "warp-harness" or low.startswith("warp:"):
+            continue
+        elif low.startswith("size:"):
+            ticket["size"] = _size_from_label(text.split(":", 1)[1])
+        elif low.startswith("area:"):
+            ticket["module"] = text.split(":", 1)[1].strip() or ticket.get("module")
+
+
+def _from_import_issue(row: dict, fields: dict, external: str) -> dict:
+    """Jira import JSON. externalId is the plan id. It is never the issue key."""
+    sections = _wiki_sections(str(row.get("description") or fields.get("description") or ""))
+    size_body = _section(sections, "size")
+    size_line = _lines_of(size_body)[:1]
+    size = _size_from_label(size_line[0]) if size_line else None
+    locks_body = _section(sections, "locks")
+    locks = [] if _is_none(locks_body) else [line for line in _lines_of(locks_body) if not _is_none(line)]
+    blocked = _section(sections, "blocked by", "blockedby")
+    deps = [] if _is_none(blocked) else ID_RE.findall(blocked)
+    acceptance = _lines_of(_section(sections, "acceptance"))
+    raw_key = _issue_key(row.get("key") or fields.get("key"))
+    jira_key = raw_key if raw_key and raw_key != external.strip().upper() else None
+    ticket = {
+        "id": external.strip(),
+        "externalId": external.strip(),
+        "jiraKey": jira_key,
+        "jiraKeySource": "export" if jira_key else None,
+        "summary": row.get("summary") or fields.get("summary") or "",
+        "deps": deps,
+        "locks": locks or list(row.get("locks") or []),
+        "size": size or row.get("size") or "M",
+        "critical": False,
+        "rankDays": 0,
+        "module": None,
+        "priority": row.get("priority") or fields.get("priority"),
+        "acs": acceptance,
+        "jiraStatus": row.get("status") or fields.get("status") if isinstance(row.get("status") or fields.get("status"), str) else None,
+    }
+    if "auto-merge" in size_body.casefold():
+        ticket["autoMerge"] = True
+    _apply_import_labels(ticket, row.get("labels") or fields.get("labels"))
+    return ticket
+
+
 def from_jira(path: Path) -> dict | None:
     try:
         data = json.loads(path.read_text())
@@ -191,6 +283,8 @@ def from_jira(path: Path) -> dict | None:
     rows = None
     if isinstance(data, dict) and isinstance(data.get("tickets"), list):
         rows = data["tickets"]
+    elif isinstance(data, dict) and isinstance(data.get("issues"), list):
+        rows = data["issues"]
     elif isinstance(data, dict) and data.get("projects"):
         rows = []
         for proj in data["projects"]:
@@ -201,19 +295,25 @@ def from_jira(path: Path) -> dict | None:
         return None
     tickets = []
     for t in rows:
-        fields = t.get("fields") or t
-        tid = t.get("tempId") or t.get("key") or fields.get("tempId") or t.get("id")
+        if not isinstance(t, dict):
+            continue
+        fields = t.get("fields") if isinstance(t.get("fields"), dict) else {}
+        external = str(t.get("externalId") or fields.get("externalId") or "").strip()
+        if external:
+            tickets.append(_from_import_issue(t, fields, external))
+            continue
+        body = fields or t
+        tid = t.get("tempId") or t.get("key") or body.get("tempId") or t.get("id")
         if not tid:
             continue
         deps = list(t.get("blockedByTempIds") or t.get("blockedBy") or [])
-        for link in fields.get("issuelinks") or []:
+        for link in body.get("issuelinks") or []:
             if link.get("type", {}).get("name", "").lower() in {"blocks", "is blocked by"}:
                 inward = (link.get("inwardIssue") or {}).get("key")
                 if inward:
                     deps.append(inward)
-        summary = t.get("summary") or fields.get("summary") or ""
-        key = t.get("key") or fields.get("key")
-        explicit = key if isinstance(key, str) and re.fullmatch(r"[A-Z][A-Z0-9_]+-\d+", key.strip()) else None
+        summary = t.get("summary") or body.get("summary") or ""
+        explicit = _issue_key(t.get("key") or body.get("key"))
         tickets.append(
             {
                 "id": str(tid),
@@ -449,6 +549,9 @@ def to_schedule(graph: dict) -> dict:
                 "layer": t.get("layer"),
                 "priority": t.get("priority"),
                 "acs": t.get("acs"),
+                "autoMerge": t.get("autoMerge"),
+                "externalId": t.get("externalId"),
+                "jiraStatus": t.get("jiraStatus"),
             }
             for t in graph["tickets"]
         ],
