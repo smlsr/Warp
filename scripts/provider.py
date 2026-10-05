@@ -373,6 +373,21 @@ def main() -> None:
             except Exception:
                 pass
             msg = args.message or f"[{args.id}] {summary}".strip()
+            try:
+                import jira_sync
+
+                loaded = json.loads(beam_path.read_text())
+                ticket = loaded["tickets"][args.id]
+                if isinstance(ticket, dict) and "status" in ticket and isinstance(ticket.get("pr"), dict):
+                    block = jira_sync.review_block(ticket, jira_sync.settings(beam_path, loaded))
+                else:
+                    block = None
+            except Exception:
+                block = None
+            if block:
+                print(f"{args.id}: refusing merge: {block}")
+                print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")
+                sys.exit(1)
             ok, detail = merge_local(root, args.branch, base, msg)
             if ok:
                 print(f"merged {args.branch} into {base} locally ({detail}). Not pushed.")

@@ -34,7 +34,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 ## Run control
 
-`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. `/warp-status-post` posts the digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one green manual ticket. Reed refuses a red pull request.
+`/warp-start`, `/warp-pause`, `/warp-resume`, and `/warp-stop` take `--beam` and `--reason`. Pause keeps in-flight work. Stop stays stopped until the next start. `/warp` is one tick of that loop (reconcile, ready, claim) and does not implement a ticket. `/warp-status` rewrites `.warp/STATUS.md`, `.warp/status.json`, `.warp/BOARD.md`, and `.warp/board.html`. Working rows include `bugbot=` and `ci=` for manual tickets as well as auto-merge. `/warp-status-post` posts that digest. `/warp-export` writes `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json`. `/warp-import` replaces the graph from `--plan`, keeps status for ids that still exist (`--keep-status`, the default), and leaves the run stopped. `/warp-ingest` builds a beam from a schedule and does not dispatch. `/warp-proceed <id>` is `warp:proceed` for one manual ticket whose Bugbot pass and green CI are already on the beam. Reed refuses a red pull request.
 
 ## /warp-init
 
@@ -158,7 +158,7 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | Claim | In Progress (`jiraInProgressStatus`) and a comment, if `jiraTransition` is true and the ticket has a key | none |
 | PR opened | comment with the link | connected mode only: GitHub `add_issue_comment` or `gh pr comment`. Bitbucket uses the comment tool on `bitbucketMcp` (unnamed here). |
 | Bugbot / CI | comment | connected mode only |
-| Waiting (`autoMerge` false, L and XL by default) | QA Ready (`jiraQaReadyStatus`) and a comment | connected mode only |
+| Waiting (`autoMerge` false, L and XL by default) | After Bugbot pass and CI green: QA Ready (`jiraQaReadyStatus`) and a comment, "Bugbot clean, ready for manual review", with the findings-fixed count | connected mode only |
 | Merged, auto | Done (`jiraDoneStatus`) and a comment | connected mode only |
 | Merged, manual | comment only. Stays at QA Ready | connected mode only |
 | Release to queued | no move, unless `jiraRestoreOnRelease` is true | none |
@@ -411,7 +411,7 @@ python3 scripts/check_version.py --against origin/main
 
 ## Beam
 
-`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--bugbot`, `--ci`, `--alarm`, `--attempts`, `--force`. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
+`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `gate`, `pause`, `resume`, `board`, `check`, `eta`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--bugbot pass|fail`, `--ci green`, `--alarm`, `--attempts`, `--force`. `--status awaiting_approval`, `merging`, and `merged` are refused until CI is green and, when Bugbot applies, `--bugbot pass`. A fail sets `fix` or, at `maxFixAttempts`, `alarm` / `bugbot-failed`. A new `--sha` during `awaiting_approval` sets `bugbot_running` and does not move Jira. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
 
 ## Channel verbs
 

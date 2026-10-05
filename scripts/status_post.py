@@ -25,13 +25,13 @@ def payload(beam_path: Path) -> dict:
     status_md = (beam_path.parent / "STATUS.md").read_text()
     counts = {
         "done": sum(1 for t in beam["tickets"].values() if t["status"] in {"merged", "done", "skipped"}),
-        "working": sum(1 for t in beam["tickets"].values() if t["status"] in {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}),
+        "working": sum(1 for t in beam["tickets"].values() if t["status"] in {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}),
         "left": sum(1 for t in beam["tickets"].values() if t["status"] in {"queued", "blocked", "alarm"}),
     }
     working = [
-        f"{t['id']} {t['status']}"
+        f"{t['id']} {t['status']} bugbot={(t.get('pr') or {}).get('bugbot') or 'none'} ci={(t.get('pr') or {}).get('ci') or 'none'}"
         for t in beam["tickets"].values()
-        if t["status"] in {"claimed", "planning", "coding", "review", "fix", "awaiting_approval", "merging"}
+        if t["status"] in {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
     ]
     root = beam_path.resolve().parent.parent
     msg = fmt.message(

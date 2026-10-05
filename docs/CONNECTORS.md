@@ -42,7 +42,7 @@ Who moves the issue:
 | Claim | dispatch or the Shuttle, from the `jira:` lines `beam.py set` prints | In Progress, plus a Jira comment (started, shuttle, branch). |
 | PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. |
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
-| Waiting (L/XL, `autoMerge` false) | Reed, on `awaiting_approval` | QA Ready (`jiraQaReadyStatus`) and a comment that says to review or reply `warp:proceed <id>`. |
+| Waiting (L/XL, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
 | Merge, auto (`autoMerge` true) | Reed. Connected: `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected). |
 | Merge, manual | Reed, same commands | Merged comment only. The issue stays at QA Ready. |
 | Release back to queued | dispatch | No move, unless `jiraRestoreOnRelease` is true. |

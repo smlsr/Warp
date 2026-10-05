@@ -6,7 +6,11 @@
 
 ## A PR will not go green
 
-After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Herald posts. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` stops new claims.
+After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Herald posts. The same counter covers auto-merge and manual tickets. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` stops new claims.
+
+Manual tickets (`autoMerge` false) use that loop before anyone is asked to review. `beam.py set --status awaiting_approval` is refused until `pr.bugbot` is `pass` and `pr.ci` is `green`, unless `bugbotManual` is false (Bugbot off for that path only) or `bugbotRequired` is false (Bugbot off for both). QA Ready is the Jira move for that status, not for pull-request open.
+
+New commits after QA Ready (`--sha` while status is `awaiting_approval`) set status `bugbot_running`, clear Bugbot and CI, and comment "new commits, re-running Bugbot" on Jira and, in connected mode, the pull request. Jira stays at QA Ready. A later Bugbot failure goes to `fix` or `alarm` and does not move the Jira issue backwards. A later pass returns to `awaiting_approval` and comments again, without a second transition.
 
 ## L/XL waiting on you
 
