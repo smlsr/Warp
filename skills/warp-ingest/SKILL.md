@@ -28,7 +28,7 @@ python3 <plugin>/scripts/beam.py check --beam .warp/beam.json
 python3 <plugin>/scripts/beam.py board --beam .warp/beam.json
 ```
 
-Edit `.warp/config.yaml` for messenger and caps. The ingest copies defaults into the beam; the yaml is what agents re-read.
+Edit `.warp/config.yaml` for messenger and caps. The ingest copies defaults into the beam; the yaml is what agents re-read. `beam.py ?` prints every subcommand. Quote `?` if the shell expands it.
 
 ## Map Jira keys
 

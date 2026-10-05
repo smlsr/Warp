@@ -612,7 +612,7 @@ def default_config() -> dict:
         "messenger": "both",
         "notify": "verbose",
         "runner": "cloud",
-        "jiraProject": "HOS",
+        "jiraProject": "",
         "jiraTransition": True,
         "jiraInProgressStatus": "In Progress",
         "jiraRestoreOnRelease": False,
@@ -629,8 +629,28 @@ def default_config() -> dict:
     }
 
 
+BEAM_HELP = """
+examples:
+  python3 scripts/beam.py ?
+  python3 scripts/beam.py ready --beam .warp/beam.json
+  python3 scripts/beam.py set --beam .warp/beam.json --id T-9 --status claimed
+  python3 scripts/beam.py board --beam .warp/beam.json
+
+Subcommands: ingest, ready, set, spend, gate, pause, resume, board, check, eta.
+set takes --status, --agent, --branch, --jira, --pr, --sha,
+--via local|connected, --bugbot, --ci, --alarm, --attempts.
+ready's only cap is maxAgents. Do not hand-edit beam.json.
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+"""
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Warp beam")
+    p = argparse.ArgumentParser(
+        description="Warp beam",
+        epilog=BEAM_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("ingest")
@@ -688,7 +708,9 @@ def main() -> None:
     pe = sub.add_parser("eta")
     pe.add_argument("--beam", required=True)
 
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     if args.cmd == "ingest":
         cfg = default_config()
         if args.config:

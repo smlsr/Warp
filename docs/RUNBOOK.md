@@ -6,7 +6,7 @@
 
 ## A PR will not go green
 
-After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Herald posts. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue, or `warp:hold <id>` to leave it out of the ready set.
+After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Herald posts. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` stops new claims.
 
 ## L/XL waiting on you
 
@@ -38,7 +38,7 @@ Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-read
 
 ## Reinstall or reset
 
-`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` or existing plugin files, so it will not upgrade an installed copy. To start clean, copy `.warp/` aside if you want the journal, run `/warp-stop`, then `/warp-uninstall` and confirm, reload Cursor, and run `/warp-init`.
+`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` values or existing plugin files, so it will not upgrade an installed copy. It does append config keys the file is missing, and it records the installed version in `.warp/version`. When that copy is older than the plugin you ran, it prints `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`. To start clean, copy `.warp/` aside if you want the journal, run `/warp-stop`, then `/warp-uninstall` and confirm, reload Cursor, and run `/warp-init`. See the README upgrade section.
 
 ## Scan one folder
 

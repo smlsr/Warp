@@ -58,7 +58,9 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--beam", default=".warp/beam.json")
     p.add_argument("--out", default=".warp/status-post.json")
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     body = payload(Path(args.beam))
     Path(args.out).write_text(json.dumps(body, indent=2) + "\n")
     print(body["text"])

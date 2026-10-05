@@ -10,6 +10,8 @@ python3 <plugin>/scripts/jira_sync.py verify --beam .warp/beam.json
 python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json
 ```
 
+`jira_sync.py ?` prints every subcommand and flag (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
+
 Add `--id <id>` to look at one ticket. `verify` only prints. `catchup` prints the moves still owed and writes `.warp/jira-todo.json`. `catchup --write` also stores a Jira key inferred from the id, summary, or branch. It does not call Jira.
 
 Read the report to the user. For each ticket it shows `jiraKey`, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, recorded comment ids, what should have happened, and what is missing.

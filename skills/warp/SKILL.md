@@ -24,6 +24,8 @@ python3 <plugin>/scripts/scan.py resume --beam .warp/beam.json
 python3 <plugin>/scripts/scan.py stop --beam .warp/beam.json --reason "end of day"
 ```
 
+`scan.py ?` prints these subcommands and their flags. Quote `?` if the shell expands it.
+
 `ready` returns nothing unless `runState` is `running`. A tick on a stopped or paused beam only reconciles and writes status.
 
 ## One running tick

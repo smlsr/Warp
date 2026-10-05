@@ -176,10 +176,19 @@ def report(payload: dict) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Herald message for init and scan")
+    p = argparse.ArgumentParser(
+        description="Herald message for init and scan",
+        epilog="examples:\n  python3 scripts/notify.py ?\n  python3 scripts/notify.py init --root .\n"
+        "  python3 scripts/notify.py scan --root .\n  python3 scripts/notify.py outbox --root .\n\n"
+        "init and scan write .warp/notify-post.json. outbox appends that text to .warp/outbox.md.\n"
+        "notify: quiet skips init and scan. ?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("kind", choices=["init", "scan", "outbox"])
     p.add_argument("--root", default=".")
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     root = Path(args.root).resolve()
     if args.kind == "outbox":
         f = root / ".warp" / PAYLOAD

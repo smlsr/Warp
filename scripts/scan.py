@@ -618,8 +618,37 @@ def set_run(beam_path: Path, state: str, reason: str | None) -> None:
     print(state)
 
 
+SCAN_HELP = """
+examples:
+  python3 scripts/scan.py ?
+  python3 scripts/scan.py scan --root . --out .warp/beam.json
+  python3 scripts/scan.py scan --folder HOS/spec
+  python3 scripts/scan.py scan --folder spec
+  python3 scripts/scan.py status --beam .warp/beam.json
+  python3 scripts/scan.py export --beam .warp/beam.json
+  python3 scripts/scan.py import --plan path/to/WARP_PLAN.json
+  python3 scripts/scan.py start --beam .warp/beam.json
+  python3 scripts/scan.py pause --beam .warp/beam.json --reason "hold"
+
+scan looks for WARP_PLAN.json, schedule.json, CURSOR_PLAN.md, a Jira ticket
+export, or a markdown table with id and deps. --folder is a path or a name.
+Several matches and no single folder with plan files exits 3 and scans
+nothing. No plan exits 2. --max-agents defaults to 18 and --model to
+claude-sonnet-5-5-high; the live cap and slug are maxAgents and model in
+config. start, stop, pause, and resume take --beam and --reason.
+import --keep-status keeps status for ids that still exist (the default).
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+--folder help is a folder named help.
+"""
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Warp scan / plan / status")
+    p = argparse.ArgumentParser(
+        description="Warp scan / plan / status",
+        epilog=SCAN_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     ps = sub.add_parser("scan")
     ps.add_argument("--root", default=".")
@@ -642,7 +671,9 @@ def main() -> None:
         sp = sub.add_parser(name)
         sp.add_argument("--beam", default=".warp/beam.json")
         sp.add_argument("--reason")
-    args = p.parse_args()
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(None))
     if args.cmd == "scan":
         root = Path(args.root).resolve()
         folder = None

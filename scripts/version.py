@@ -96,9 +96,17 @@ def find_root(arg: str | None) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Print the Warp plugin version")
+    p = argparse.ArgumentParser(
+        description="Print the Warp plugin version",
+        epilog="examples:\n  python3 scripts/version.py ?\n  python3 scripts/version.py --root .\n\n"
+        "Prints installed (.cursor/plugins/warp), source (this plugin tree), and recorded (.warp/version).\n"
+        "?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--root", help="repo whose .cursor/plugins/warp copy to read")
-    args = p.parse_args(argv)
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(argv))
     print(describe(find_root(args.root)))
     return 0
 

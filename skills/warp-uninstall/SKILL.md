@@ -15,6 +15,8 @@ Destructive. `.warp/` holds the beam, journal, and config, and none of it can be
 python3 <plugin>/scripts/install.py uninstall --remove-gitignore
 ```
 
+`install.py uninstall ?` prints the options (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
+
 Drop `--remove-gitignore` if the user wants to keep the `.gitignore` entry.
 
 2. Show the user the list under "Will remove" and any warnings. If the beam is running, suggest `/warp-stop` first.

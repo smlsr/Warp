@@ -798,8 +798,39 @@ def catchup(beam_path: Path, tid: str | None, write: bool) -> str:
     return "\n".join(lines)
 
 
+JIRA_HELP = """
+examples:
+  python3 scripts/jira_sync.py ?
+  python3 scripts/jira_sync.py verify --beam .warp/beam.json
+  python3 scripts/jira_sync.py catchup --beam .warp/beam.json
+  python3 scripts/jira_sync.py catchup --write --id T-9
+  python3 scripts/jira_sync.py plan --id T-9 --event claim
+  python3 scripts/jira_sync.py pick --target "In Progress" --transitions-file transitions.json
+  python3 scripts/jira_sync.py record --id T-9 --event claim --result moved
+  python3 scripts/jira_sync.py record-comment --id T-9 --where jira --event claim --comment-id 10001
+
+verify only prints. catchup writes .warp/jira-todo.json. catchup --write
+stores a jiraKey inferred from the id, summary, or branch. This script does
+not call Jira.
+
+plan/record --event: claim, release, qa-ready, done.
+record --result: moved, already, skipped, unavailable, no-transition, failed.
+record-comment --where: jira or pr.
+record-comment --event: claim, pr-opened, qa-ready, merged, bugbot, ci, alarm, blocked.
+pick --kind: start, qa, done, restore. --no-category skips the status-category match.
+
+?, help, -h, and --help print this text. Quote ? if the shell expands it.
+"""
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Jira status sync for claims")
+    import usage
+
+    p = argparse.ArgumentParser(
+        description="Jira status sync for claims",
+        epilog=JIRA_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     pp = sub.add_parser("plan")
     pp.add_argument("--beam", default=".warp/beam.json")
@@ -833,7 +864,7 @@ def main() -> None:
     pu.add_argument("--beam", default=".warp/beam.json")
     pu.add_argument("--id")
     pu.add_argument("--write", action="store_true", help="store an inferred jiraKey on the ticket")
-    args = p.parse_args()
+    args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
             beam_path = Path(args.beam)
