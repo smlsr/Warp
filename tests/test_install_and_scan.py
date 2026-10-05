@@ -96,10 +96,62 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertIn("[warn] slackChannel 'Eng-Team' has uppercase", r.stdout)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(
-            cfg.read_text(),
-            'slackChannel: "Eng-Team"\nteamsChannel: "Eng Team"\npushMerge: false\n',
-        )
+        text = cfg.read_text()
+        self.assertIn('slackChannel: "Eng-Team"', text)
+        self.assertIn('teamsChannel: "Eng Team"', text)
+        self.assertNotIn('slackChannel: "warp"', text)
+        self.assertIn("\npushMerge: false\n", text)
+        self.assertIn("jiraTransition:", text)
+
+    def test_fresh_config_has_every_example_key_and_local_hints(self):
+        run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        text = (self.repo / ".warp/config.yaml").read_text()
+        example = (ROOT / "assets/config.example.yaml").read_text()
+
+        def keys(s):
+            return {line.split(":", 1)[0] for line in s.splitlines() if line[:1].isalpha()}
+
+        self.assertEqual(keys(text), keys(example))
+        for hint in (
+            "# pushMerge: false",
+            "# runner: local",
+            '# baseBranch: "develop"',
+            "# gitProvider: github",
+            "# gitProvider: bitbucket",
+            "# ghCli: false",
+        ):
+            self.assertIn(hint, text)
+        self.assertIn("pushMerge: true", example)
+        self.assertRegex(text, r"(?m)^pushMerge: (true|false)$")
+        self.assertIn("runner: cloud", text)
+        self.assertIn("gitProvider: auto", text)
+        for key in ("jiraTransition", "jiraInProgressStatus", "jiraRestoreOnRelease", "jiraQaReadyStatus", "jiraDoneStatus"):
+            self.assertIn(f"{key}:", text)
+
+    def test_upgrade_adds_missing_keys_and_keeps_custom_values(self):
+        (self.repo / ".warp").mkdir()
+        cfg = self.repo / ".warp/config.yaml"
+        cfg.write_text('maxAgents: 3  # careful\n# my note\nmodel: "custom-model"\nslackChannel: "eng"\nteamsChannel: "eng"\n')
+        r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("added missing config keys:", r.stdout)
+        self.assertIn("jiraTransition", r.stdout)
+        self.assertIn("jiraQaReadyStatus", r.stdout)
+        text = cfg.read_text()
+        self.assertIn("maxAgents: 3  # careful", text)
+        self.assertIn("# my note", text)
+        self.assertIn('model: "custom-model"', text)
+        self.assertIn('slackChannel: "eng"', text)
+        self.assertIn("jiraTransition: true", text)
+        self.assertIn('jiraInProgressStatus: "In Progress"', text)
+        self.assertIn("jiraRestoreOnRelease: false", text)
+        self.assertIn('jiraQaReadyStatus: "QA Ready"', text)
+        self.assertIn('jiraDoneStatus: "Done"', text)
+        self.assertIn("# pushMerge: false", text)
+        self.assertIn("# runner: local", text)
+        r2 = run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        self.assertNotIn("added missing config keys", r2.stdout)
+        self.assertEqual(text, cfg.read_text())
 
     def test_dry_run_writes_nothing(self):
         run(INSTALL, "init", "--root", ".", "--dry-run", cwd=self.repo)

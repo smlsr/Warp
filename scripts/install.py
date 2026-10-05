@@ -107,6 +107,61 @@ def apply_channels(text: str, channel: str) -> tuple[str, list[str]]:
     return text, changed
 
 
+# An active key is a line that starts with the name. A commented line such as
+# `# pushMerge: false` is a hint, not a key, so it never counts as "already set"
+# and never blocks adding the real line.
+_KEY_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*):")
+
+
+def active_keys(text: str) -> list[str]:
+    return [m.group(1) for line in text.splitlines() if (m := _KEY_LINE.match(line))]
+
+
+def key_blocks(example: str) -> list[tuple[str, str]]:
+    """Each active key plus the comments that introduce it and the comment lines right after it.
+
+    `# key: value` stays inside a block as a comment. It is not its own key.
+    """
+    lines = example.splitlines()
+    blocks: list[tuple[str, str]] = []
+    pending: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _KEY_LINE.match(line)
+        if not m:
+            if line.strip() or pending:
+                pending.append(line)
+            i += 1
+            continue
+        block = pending + [line]
+        pending = []
+        i += 1
+        while i < len(lines) and lines[i].lstrip().startswith("#"):
+            block.append(lines[i])
+            i += 1
+        while block and not block[0].strip():
+            block.pop(0)
+        blocks.append((m.group(1), "\n".join(block).rstrip() + "\n"))
+    return blocks
+
+
+def add_missing_keys(text: str, example: str) -> tuple[str, list[str]]:
+    """Append example blocks whose active key is absent. Does not edit existing lines."""
+    have = set(active_keys(text))
+    added: list[str] = []
+    extra: list[str] = []
+    for key, block in key_blocks(example):
+        if key in have:
+            continue
+        extra.append(block.rstrip("\n"))
+        added.append(key)
+        have.add(key)
+    if not extra:
+        return text, []
+    return text.rstrip("\n") + "\n\n" + "\n\n".join(extra) + "\n", added
+
+
 def has_ignore_entry(text: str) -> bool:
     return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
 
@@ -139,11 +194,20 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
     if cfg.exists():
         text = cfg.read_text()
         new, changed = apply_channels(text, channel)
-        if changed:
+        src = example_config(root)
+        added: list[str] = []
+        if src:
+            new, added = add_missing_keys(new, src.read_text())
+        elif not active_keys(new):
+            steps.append(("warn", "assets/config.example.yaml not found; could not add missing config keys"))
+        if changed or added:
             if not dry:
                 cfg.write_text(new)
+        if changed:
             steps.append(("done", f"set {', '.join(changed)} to {channel!r} in existing config (was empty or the old default)"))
-        else:
+        if added:
+            steps.append(("done", "added missing config keys: " + ", ".join(added) + " (existing values and comments kept)"))
+        if not changed and not added:
             steps.append(("skip", ".warp/config.yaml exists, channels already set; left as is"))
         _, slack = channel_value(new, "slackChannel")
         if slack != slack.lower():

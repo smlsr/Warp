@@ -8,8 +8,9 @@
 .warp/journal.jsonl   append-only events
 .warp/BOARD.md        generated
 .warp/board.html      generated
-.warp/outbox.md       Herald fallback if a messenger is down or no channel is set
-.warp/notify-post.json  Last init or scan message (slack, teams, text views) and where to post it
+.warp/outbox.md       Herald fallback if a messenger is down or no channel is set. Also a failed Jira move.
+.warp/notify-post.json  Last Herald payload (init, scan, or a failed Jira move) and where to post it
+.warp/jira-todo.json  Actions the current turn must do: transitions and comment bodies
 ```
 
 ## Ticket status
@@ -18,7 +19,7 @@
 
 Side exits: `blocked` (human hold), `alarm` (needs a human), `skipped`.
 
-Jira keys: `jiraKey` is set only when the plan source has one (a Jira export, a `schedule.json` with `jiraKey`, or `beam.py set --jira KEY`). A markdown plan has none, so Warp makes no Jira moves for it. `jira.startedAt` and `jira.previousStatus` are set when Warp moves an issue to In Progress, `jira.qaReadyAt` when a manual-path ticket reaches QA Ready, `jira.doneAt` when an auto-merge ticket reaches Done, and `jira.lastSync` holds the last result. `autoMerge` on the ticket, set at ingest from size and `autoMergeSizes`, chooses QA Ready or Done.
+Jira keys: `jiraKey` is set from a Jira export, a `schedule.json` field, `beam.py set --jira KEY`, or inferred from the ticket id, summary, or branch when that text contains a key like `ABC-123` (two or more letters, then a number; `T-3` is not one). A markdown plan is included. `jira.startedAt` and `jira.previousStatus` are set when Warp moves an issue to In Progress, `jira.qaReadyAt` when a manual-path ticket reaches QA Ready, `jira.doneAt` when an auto-merge ticket reaches Done, and `jira.lastSync` holds the last result. `jira.comments` and `pr.comments` map an event (`claim`, `pr-opened`, `qa-ready`, `merged`, `bugbot`, `ci`, `alarm`, `blocked`) to `{at, id}` so a retry does not post it again. `autoMerge` on the ticket, set at ingest from size and `autoMergeSizes`, chooses QA Ready or Done. `/warp-jira-check` (`jira_sync.py verify`) prints, per ticket, what should have happened and which of these fields are empty.
 
 `merged` and `done` both unblock dependents. `done` means Jira was transitioned. Reed sets `merged` then `done`. If Jira fails, the ticket stays `merged` and the next tick retries the transition.
 

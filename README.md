@@ -21,7 +21,7 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 |---|---|
 | `mkdir -p .cursor/plugins .warp` | both folders exist |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
-| Copy `assets/config.example.yaml` to `.warp/config.yaml` | the config exists. It is never overwritten. |
+| Copy `assets/config.example.yaml` to `.warp/config.yaml` | the file exists and already has every key. A re-run appends missing keys (with their defaults and comments) and names them. Values you set are not changed. |
 | Set `slackChannel` and `teamsChannel` to `warp` | the channel already has a value. Only an empty channel (or the old `Warp` default) is filled; a custom name is kept. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
 
@@ -37,7 +37,7 @@ cp .cursor/plugins/warp/assets/config.example.yaml .warp/config.yaml
 
 Append `assets/gitignore-snippet.txt` to the repo `.gitignore`. Reload Cursor. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams in Cursor Settings.
 
-Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, and `/warp-uninstall`.
+Commands include `/warp-init`, `/warp-scan`, `/warp-start`, `/warp-pause`, `/warp-resume`, `/warp-stop`, `/warp-status`, `/warp-status-post`, `/warp-jira-check`, and `/warp-uninstall`. `/warp-jira-check` prints, per ticket, which Jira move and which comment should have happened and which of those the beam never recorded.
 
 ## Slack and Teams messages
 
@@ -197,7 +197,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
 | `pollSeconds` | `300` | How often pull requests and channel commands are read. |
-| `jiraMcp` | `atlassian` | Connected Jira server name. |
+| `jiraMcp` | `atlassian` | Connected Jira server name, not a tool name. |
+| `jiraSite` | empty | Optional site URL used as `cloudId` when you have more than one Atlassian site. |
 | `gitProvider` | `auto` | `github`, `bitbucket`, or `auto` (from the `origin` host). |
 | `githubMcp` / `bitbucketMcp` | `github` / `bitbucket` | Connected git server names. |
 | `ghCli` | `true` | GitHub may use an already-authenticated `gh`. Warp does not install it. |

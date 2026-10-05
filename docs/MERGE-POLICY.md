@@ -34,11 +34,13 @@ Decision: auto-merge (size M)
 
 Which status depends on the ticket's `autoMerge` flag, set at ingest from its size and `autoMergeSizes`. Warp does not decide the path again later.
 
-- Auto-merge (S and M by default): after the merge sha is known, connected or local, move the issue to `jiraDoneStatus` (default Done). Comment the sha. If the transition fails, leave the beam at `merged` and retry next tick.
-- Manual (L and XL by default): when the ticket moves to `awaiting_approval`, move the issue to `jiraQaReadyStatus` (default QA Ready). After the person merges it, leave Jira there. QA moves it on. Warp does not set Done for these.
+- Auto-merge (S and M by default): after the merge sha is known, connected or local, move the issue to `jiraDoneStatus` (default Done). Comment the sha, the PR link, and whether the merge was local or connected. If the transition fails, leave the beam at `merged` and retry next tick.
+- Manual (L and XL by default): when the ticket moves to `awaiting_approval`, move the issue to `jiraQaReadyStatus` (default QA Ready) and comment what the person has to do. After the person merges it, leave Jira there and still post the merged comment. QA moves it on. Warp does not set Done for these.
 
-Same lookup as the claim move: transition name, then target status name, then (for Done) the done status category. Never a fixed transition id. No Jira key, no connector, or no matching transition: a note in `.warp/outbox.md`, and the merge stands.
+`beam.py set` writes the transition and the comment into `.warp/jira-todo.json`. Reed does that file, then `jira_sync.py record` and `record-comment`. `provider.py merge-local` sets the beam to `merged` itself, so the Done request is printed on a local merge too. Connected mode also comments on the pull request. Local mode does not.
+
+Same lookup as the claim move: transition name, then target status name, then (for Done) the done status category. Never a fixed transition id. No Jira key, no connector, or no matching transition: `.warp/outbox.md` and a Herald message, and the merge stands. `/warp-jira-check` shows which of these steps the beam never recorded.
 
 ## Local-only
 
-`pushMerge: false`, no `origin` remote, or an origin host that is not GitHub or Bitbucket: never push and never open a pull request. Reed squash-merges the ticket branch into `baseBranch` with `scripts/provider.py merge-local`. The Jira moves above still happen, because they follow the beam status, not the provider. A missing connector in connected mode falls back to this for that ticket instead of failing.
+`pushMerge: false`, no `origin` remote, or an origin host that is not GitHub or Bitbucket: never push and never open a pull request. Reed squash-merges the ticket branch into `baseBranch` with `scripts/provider.py merge-local`, which also sets the beam status to `merged` and prints the Jira move. The Jira moves above still happen, because they follow the beam status, not the provider. A missing connector in connected mode falls back to this for that ticket instead of failing. Pull-request comments are skipped in local mode; Jira comments are not.

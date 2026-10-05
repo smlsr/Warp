@@ -5,7 +5,7 @@ description: "Install Warp in the current repo: copy the plugin to .cursor/plugi
 
 # Warp init
 
-Automates the manual install. Each step checks first and runs only if needed, so a second run changes nothing.
+Automates the manual install. Each step checks first. A second run on a complete install changes nothing. A second run on an older config adds any keys that config is missing, and says which ones.
 
 ## Run
 
@@ -21,14 +21,16 @@ python3 <plugin>/scripts/install.py init
 |---|---|---|
 | `mkdir -p .cursor/plugins .warp` | both folders exist | create them |
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is present | copy only the missing files. Existing files are never overwritten. |
-| `.warp/config.yaml` | the file exists | copy `assets/config.example.yaml` |
+| `.warp/config.yaml` | the file exists and has every key from `assets/config.example.yaml` | on a fresh install, copy the example (every key, its comments, and the commented local-only lines). On a re-run, append any missing key with its default and comments. Existing values and comments are not changed or removed. The output names the keys that were added. |
 | Channel | `slackChannel` and `teamsChannel` are set | set each empty one (or the old `Warp` default) to `warp` |
 | `.gitignore` | it already ignores `.warp/` | append `assets/gitignore-snippet.txt` once |
 | Git provider | `gitProvider` is already `github` or `bitbucket` | read `origin` and write it. A custom value is left alone, with a warning if it disagrees with the remote. No remote sets `pushMerge: false`. |
 
-`warp` is one shared channel for every repo. A channel that already has a value is left alone, and so is the rest of an existing config. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
+`warp` is one shared channel for every repo. A channel that already has a value is left alone. Other existing config values are left alone too; only keys that are absent are added. `--channel NAME` sets a different name on a fresh config; it is lowercased and must be lowercase letters, digits, `-` or `_`. If an existing `slackChannel` has uppercase letters, init prints a `[warn]` line and Herald posts to the lowercase name; pass that on to the user. Warp does not create the channel; tell the user to create `warp` in Slack and Teams if it does not exist.
 
-To upgrade an installed copy, run `/warp-uninstall` and then `/warp-init`. Init does not replace files.
+The example includes commented lines such as `# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, and `# ghCli: false`. They are hints. Uncommenting one does not by itself turn the active line off; comment out the active line too. Init treats a line that starts with `#` as a comment, not as the key, so those hints never block adding the real key.
+
+Re-run `/warp-init` to pick up new keys after a plugin upgrade. Init still does not overwrite plugin files or replace a value you already set. A missing key in an old config still behaves as the default until you re-run: the scripts fill it in when they read.
 
 ## Message to Slack or Teams
 

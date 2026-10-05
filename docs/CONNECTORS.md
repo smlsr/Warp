@@ -4,16 +4,40 @@ Warp uses Cursor's native MCP connections. Names in `.warp/config.yaml` are hint
 
 ## Jira
 
-Server: `jiraMcp` (Atlassian). Project `HOS`.
+Server name: `jiraMcp` (default `atlassian`). That name is the Cursor MCP server, not a tool. Project `jiraProject`, if you set one.
 
-- Fetch issue by key, or by tempId label if the key is not on the beam yet.
-- Transition to In Progress when a ticket is claimed (`jiraTransition`, default on), only if the ticket has a Jira key. Read the issue's available transitions and choose with `scripts/jira_sync.py pick`, which matches the transition name, then the target status name (`jiraInProgressStatus`), then an in-progress status category. Never hardcode a transition id. An issue already in progress is left alone, and a Done issue is never reopened. Record the outcome with `jira_sync.py record`. If Jira is not connected or no transition fits, the note goes to `.warp/outbox.md` and the claim stands.
-- Release (claim back to `queued`): leave the issue, unless `jiraRestoreOnRelease` is true, then move it back to the status it had. Pause and stop never move an issue.
-- Comment: status, PR url, AC evidence, Bugbot result.
-- Manual path (`autoMerge` false, L and XL by default): when the ticket moves to `awaiting_approval`, transition to `jiraQaReadyStatus` (default QA Ready). After the merge, leave it there.
-- Auto-merge path (`autoMerge` true, S and M by default): after the merge, connected or local, transition to `jiraDoneStatus` (default Done). Retry next tick if it fails; the beam stays `merged`.
-- Both use `scripts/jira_sync.py` the same way as the claim move: `plan`, `pick` (by transition name, target status name, then status category; `--kind qa` is name-only, `--kind done` may use the done category), `record`. Never a fixed transition id. A failure is a note in `.warp/outbox.md`, not a failed merge or claim.
-- Do not create tickets.
+`jiraMcp: atlassian` does not by itself call Jira. `beam.py set` writes `.warp/jira-todo.json` and prints `jira: MUST DO`. The Shuttle or Reed in that turn has to call the tools and then `jira_sync.py record` / `record-comment`. `/warp-jira-check` prints what is still missing. A missing tool or a failed call writes `.warp/outbox.md` and a Herald message. The ticket is not stopped.
+
+Every Jira call needs `cloudId`. Get it from `getAccessibleAtlassianResources`. If `jiraSite` is set (a site URL such as `https://yoursite.atlassian.net`), pass that as `cloudId`.
+
+| Tool | Use |
+|---|---|
+| `getAccessibleAtlassianResources` | cloudId for this user |
+| `getJiraIssue` | current status name and status category |
+| `getTransitionsForJiraIssue` | transitions offered right now. Some servers list this as `listJiraIssueTransitions`. |
+| `transitionJiraIssue` | apply the id `jira_sync.py pick` chose. Pass `transition.id`, or `transitionId` if that is the field in the tool schema. |
+| `addOrEditJiraIssueComment` | comment, argument `commentBody`. Older servers call this `addCommentToJiraIssue`. |
+
+`pick` matches the transition name, then the target status name, then (for In Progress and Done only) the status category. QA Ready is name-only. Never send a fixed transition id. An issue already in progress is left alone, and a Done issue is not reopened.
+
+Who moves the issue:
+
+| When | Who | What |
+|---|---|---|
+| Scan | `scan.py` | Stores `jiraKey` from a Jira export, or infers `ABC-123` from the id, summary, or branch. No transition. |
+| Claim | dispatch or the Shuttle, from the `jira:` lines `beam.py set` prints | In Progress, plus a Jira comment (started, shuttle, branch). |
+| PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. |
+| Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
+| Waiting (L/XL, `autoMerge` false) | Reed, on `awaiting_approval` | QA Ready (`jiraQaReadyStatus`) and a comment that says to review or reply `warp:proceed <id>`. |
+| Merge, auto (`autoMerge` true) | Reed. Connected: `beam.py set --status merged --sha`. Local: `provider.py merge-local`, which sets merged itself. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected). |
+| Merge, manual | Reed, same commands | Merged comment only. The issue stays at QA Ready. |
+| Release back to queued | dispatch | No move, unless `jiraRestoreOnRelease` is true. |
+| Pause / stop | nobody | No Jira change. |
+| Blocked / alarm | whoever sets that status | Jira comment. A failed transition is the Herald message above. |
+
+Comments start with `Warp | <repo> / <project> / <key>`, the same header Herald uses plus the key. The beam stores `jira.comments.<event>` and `pr.comments.<event>` (`at`, `id`). A recorded event is not posted again.
+
+Do not create tickets.
 
 ## GitHub and Bitbucket
 

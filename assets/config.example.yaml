@@ -19,6 +19,8 @@ notify: verbose
 # verbose | quiet
 runner: cloud
 # cloud = Cursor cloud agent VM. local = this machine's agent.
+# To run on this machine, comment out the line above and uncomment the next.
+# runner: local
 
 jiraProject: ""
 jiraTransition: true
@@ -35,6 +37,9 @@ jiraQaReadyStatus: "QA Ready"
 # Done after that; QA does.
 jiraDoneStatus: "Done"
 # Auto-merge path (S and M by default): the issue moves here after the merge.
+jiraSite: ""
+# Atlassian site URL, for example https://yoursite.atlassian.net. Passed as cloudId
+# when you have more than one site. Empty: look the site up with getAccessibleAtlassianResources.
 bugbotRequired: true
 maxFixAttempts: 3
 stuckAfterMinutes: 90
@@ -46,17 +51,26 @@ jiraMcp: atlassian
 gitProvider: auto
 # auto | github | bitbucket. auto reads the host of the origin remote, and
 # /warp-init writes the one it finds. Other hosts run local-only.
+# Uncomment one of these to force a provider, and comment out the line above.
+# gitProvider: github
+# gitProvider: bitbucket
 githubMcp: github
 bitbucketMcp: bitbucket
 ghCli: true
 # GitHub only: use the gh CLI when no GitHub server is connected, if gh is
 # installed and logged in. Warp never installs gh or logs in.
+# Uncomment to never try the gh CLI.
+# ghCli: false
 pushMerge: true
 # true: connected mode, push branches, open and merge PRs through the provider.
 # false: local-only. Never push, never open PRs, never call a provider; merge
 # ticket branches into baseBranch with local git. No remote also means local.
+# Uncomment for local-only: never push and never open a pull request.
+# pushMerge: false
 baseBranch: ""
 # Branch tickets start from and merge into. Empty uses origin's default, then main or master.
+# Uncomment to branch and merge into develop instead of the detected default.
+# baseBranch: "develop"
 slackMcp: slack
 teamsMcp: teams
 slackChannel: "warp"

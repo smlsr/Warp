@@ -18,6 +18,16 @@ Do not proceed a red PR. Reed will refuse.
 
 Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship.
 
+## Jira status did not move
+
+`/warp-jira-check` runs `jira_sync.py verify`. For each ticket it prints the key, the beam status, `startedAt`, `qaReadyAt`, `doneAt`, the comment ids on file, and what is missing.
+
+A blank `jiraKey` means the plan never had one and the id, summary, and branch did not contain a key like `ABC-123`. `catchup --write` stores an inferred key when there is one. An already-merged auto-merge ticket is asked for Done, not for In Progress.
+
+The move itself is not done by the script. The agent that sees `jira: MUST DO` has to call `getTransitionsForJiraIssue` and `transitionJiraIssue` on the `jiraMcp` server, then `record`. If that server is not connected, the same failure is in `.warp/outbox.md` and in the Herald payload.
+
+An existing `.warp/config.yaml` is not rewritten when the plugin updates. Missing keys still default correctly. Re-run `/warp-init` to append them. Check that `jiraTransition` is not `false`, that `jiraMcp` is the server name you connected, and that `jiraInProgressStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the names in your workflow.
+
 ## Stuck agent
 
 Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (default 90) and the ticket is not `awaiting_approval`. Reattach by spawning a Shuttle on the same id; it must reuse the branch.

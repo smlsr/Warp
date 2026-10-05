@@ -134,6 +134,14 @@ def ingest(schedule_path: Path, plan_path: Path | None, out: Path, config: dict)
             "jira": {"status": None, "lastCommentAt": None},
             "updatedAt": None,
         }
+    try:
+        import jira_sync
+
+        for row in tickets.values():
+            if not jira_sync.jira_key(row):
+                row["jiraKey"] = jira_sync.infer_key(row)
+    except Exception:
+        pass
     gates = []
     for g in sched.get("gates") or []:
         gates.append(
@@ -347,6 +355,17 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         sys.exit(f"unknown ticket {args.id}")
     if args.status and args.status not in STATUSES:
         sys.exit(f"bad status {args.status}; use {STATUSES}")
+    pr = t.get("pr") or {}
+    before = {
+        "status": t.get("status"),
+        "pr_url": pr.get("url"),
+        "bugbot": pr.get("bugbot"),
+        "ci": pr.get("ci"),
+        "alarm": t.get("alarm"),
+        "branch": t.get("branch"),
+        "agent": t.get("agent"),
+        "sha": pr.get("sha"),
+    }
     prev = t["status"]
     if args.status:
         t["status"] = args.status
@@ -358,6 +377,10 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         t["jiraKey"] = args.jira
     if args.pr is not None:
         t["pr"]["url"] = args.pr
+    if getattr(args, "sha", None) is not None:
+        t["pr"]["sha"] = args.sha
+    if getattr(args, "via", None) is not None:
+        t["pr"]["via"] = args.via
     if args.bugbot is not None:
         t["pr"]["bugbot"] = args.bugbot
     if args.ci is not None:
@@ -372,6 +395,15 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         t["pr"]["reviewedAt"] = t["pr"]["reviewedAt"] or utcnow()
     if args.status in {"coding", "claimed"} and not t["pr"]["openedAt"] and args.pr:
         t["pr"]["openedAt"] = utcnow()
+    try:
+        import jira_sync
+
+        if not jira_sync.jira_key(t):
+            inferred = jira_sync.infer_key(t)
+            if inferred:
+                t["jiraKey"] = inferred
+    except Exception:
+        jira_sync = None
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
@@ -381,9 +413,9 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     )
     print(f"{args.id} {prev} -> {t['status']}")
     try:
-        import jira_sync
-
-        jira_sync.on_set(beam_path, beam, t, prev, t["status"])
+        if jira_sync is None:
+            import jira_sync as jira_sync  # noqa: F811
+        jira_sync.on_set(beam_path, beam, t, before)
     except Exception as e:  # fail-soft: Jira sync never blocks a transition
         print(f"jira: skipped ({e})")
 
@@ -584,6 +616,10 @@ def default_config() -> dict:
         "jiraTransition": True,
         "jiraInProgressStatus": "In Progress",
         "jiraRestoreOnRelease": False,
+        "jiraQaReadyStatus": "QA Ready",
+        "jiraDoneStatus": "Done",
+        "jiraMcp": "atlassian",
+        "jiraSite": "",
         "bugbotRequired": True,
         "maxFixAttempts": 3,
         "stuckAfterMinutes": 90,
@@ -617,6 +653,8 @@ def main() -> None:
     ps.add_argument("--branch")
     ps.add_argument("--jira")
     ps.add_argument("--pr")
+    ps.add_argument("--sha", help="merge commit sha, stored on pr.sha and included in the Jira comment")
+    ps.add_argument("--via", choices=["local", "connected"], help="how this merge happened; local skips pull-request comments")
     ps.add_argument("--bugbot")
     ps.add_argument("--ci")
     ps.add_argument("--alarm")
