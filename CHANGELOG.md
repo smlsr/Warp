@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.23
+
+- One `warp-listen` sub-agent reads Slack and Teams for the whole run. It is one listener for the beam (`listener.state`, `listener.agentId`, optional `listener.pid`), not one per awaiting_approval ticket, Shuttle, or Reed. `/warp-start` and `/warp-resume` run `inbound.py claim` and launch it only when the reply is `listener: started`. `listener: already running` does not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped.
+- Recognized `warp:` commands are acknowledged in the channel before they run. `warp:proceed XV-01` on an awaiting_approval ticket acks `Received warp:proceed XV-01. Merging and moving Jira to Done.` and merges only that ticket. A plan id or a Jira key both match. A bad id acks and merges nothing else. Pause, resume, stop, start, retry, and status get the same ack-then-act path. Unknown commands ack the accepted forms.
+- Cursor cannot start the listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. If the listener's turn has ended, the flag can still say running. Release it, then `/warp-resume`. Until this build is on the live run, approve from the agent chat with `/warp-proceed XV-01`.
+
 ## 1.3.22
 
 - Scan writes jiraProject when every stored issue key is in one project, even if getVisibleJiraProjects is missing. Mixed keys are named and left empty. A different existing value is not overwritten. The same value is left in place, with no project --set instruction.

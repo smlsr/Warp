@@ -65,6 +65,12 @@ def print_hint(beam_path: Path) -> None:
         )
     )
     print(FOLLOW)
+    try:
+        import inbound
+
+        print(inbound.status_line(beam))
+    except Exception:
+        print("listener: stopped")
 
 
 def main(argv: Optional[list] = None) -> int:

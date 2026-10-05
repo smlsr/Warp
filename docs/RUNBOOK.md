@@ -14,9 +14,11 @@ New commits after QA Ready (`--sha` while status is `awaiting_approval`) set sta
 
 ## L/XL waiting on you
 
-Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode. Jira is at QA Ready while this waits. After the merge it moves to Done (`jiraDoneOnManualMerge`, default true).
+Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode besides the listener. Jira is at QA Ready while this waits. After the merge it moves to Done (`jiraDoneOnManualMerge`, default true).
 
-`/warp-proceed WV-01` also accepts the Jira key (`WAR-1`) or a `#` number (`#01`). Run `proceed.py`. If the ticket is not `awaiting_approval`, it replies with the current status and does not merge. When it accepts, merge in that same turn and run the post-merge MUST DO before you reply. The Slack reply includes the merge sha and the Jira status.
+The channel reader is one `warp-listen` sub-agent for the beam, not one per awaiting_approval ticket. `/warp-start` and `/warp-resume` launch it when `listener.state` is not `running`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` set `listener.state` to `stopped` through `inbound.py release`. The listener must not keep reading while paused or stopped. Cursor cannot start it from Slack. There is no webhook, and plugin hooks do not run on cloud runners. If its turn has ended, send `/warp-proceed <id>` in the agent chat, or `/warp-pause` then `/warp-resume`, so a listener is up to read the channel again.
+
+`/warp-proceed WV-01` also accepts the Jira key (`WAR-1`) or a `#` number (`#01`). The listener runs `inbound.py`, which acks in the channel before `proceed.py`. The ack is `Received warp:proceed XV-01. Merging and moving Jira to Done.` A bad id acks and merges nothing else. If the ticket is not `awaiting_approval`, the ack says so and does not merge. When it accepts, merge in that same turn and run the post-merge MUST DO before you reply. The channel gets the ack first, then the merge sha and the Jira status.
 
 Do not proceed a red PR. Reed will refuse.
 

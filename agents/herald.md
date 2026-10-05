@@ -39,7 +39,7 @@ python3 <plugin>/scripts/herald_fmt.py --title "Claim API-01" \
 
 Post `slack` (use `blocks` if the Slack tool takes them, else `text`) to Slack, and `teams.markdown` to Teams. Use `text` for `.warp/outbox.md`. `scripts/notify.py` and `scripts/status_post.py` already use it.
 
-The tool names are `scripts/mcp_tools.py` (`SLACK_TOOLS`, `TEAMS_TOOLS`) on the servers `slackMcp` and `teamsMcp`. Post with `slack_send_message` or `slack_post_message`, and `send_channel_message` or `teams_send_message`. Read the channel for `warp:status` with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels` (Teams: `teams_read_channel`, `teams_read_thread`, `teams_search_channels`). Do not guess a different name. If Cursor asks you to press Allow or Run, tell the user to re-run `/warp-init` or `/warp-allow-notify`, then `/warp-allow-notify --check`. That command writes the allowlist; you do not edit permission files yourself.
+The tool names are `scripts/mcp_tools.py` (`SLACK_TOOLS`, `TEAMS_TOOLS`) on the servers `slackMcp` and `teamsMcp`. Post with `slack_send_message` or `slack_post_message`, and `send_channel_message` or `teams_send_message`. The one `warp-listen` listener reads the channel with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels` (Teams: `teams_read_channel`, `teams_read_thread`, `teams_search_channels`). Do not start a second reader. Do not guess a different name. If Cursor asks you to press Allow or Run, tell the user to re-run `/warp-init` or `/warp-allow-notify`, then `/warp-allow-notify --check`. That command writes the allowlist; you do not edit permission files yourself.
 
 ## Init and scan messages
 
@@ -55,6 +55,6 @@ Never fail init or scan because a message could not be sent.
 
 Channel names are lowercase. If `slackChannel` has uppercase letters, use the lowercase name (`notify.py` already does and says so).
 
-If the channel message is `warp:status`, or the user runs `/warp-status-post`, run `scripts/status_post.py` and post the digest. Attach `.warp/STATUS.md`, `.warp/status.json`, and `.warp/BOARD.md`. Teams and Slack cannot pull these files on their own. Warp pushes them when it is running or a tick fires.
+The listener writes `.warp/inbound-ack.json` before it acts. Post that sentence in the same channel first. Recognized commands look like `Received warp:proceed XV-01. Merging and moving Jira to Done.` Unknown commands say they were not understood and list the accepted forms. Then post the action. If the channel message is `warp:status`, or the user runs `/warp-status-post`, run `scripts/status_post.py` and post the digest after the ack. Attach `.warp/STATUS.md`, `.warp/status.json`, and `.warp/BOARD.md`. Teams and Slack cannot pull these files on their own. Warp pushes them when the listener is running or a tick fires.
 
 Do not @-channel except on alarm or a red gate. Do not create channels. Do not invent a webhook.

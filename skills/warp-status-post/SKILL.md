@@ -21,6 +21,8 @@ Channels: `teamsChannel`, `slackChannel` in `.warp/config.yaml` (default `warp`,
 
 ## Pull from the channel
 
-On each tick, read new messages in the configured channels with `slack_search_channels`, `slack_read_channel`, and `slack_read_thread` (Teams: `teams_search_channels`, `teams_read_channel`, `teams_read_thread`). If a message is `warp:status`, run this skill and reply in that thread. Also honor `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:proceed <id>`, and `warp:retry <id>`. `warp:proceed` runs `proceed.py` (plan id, Jira key, or `#` number). Reply with what it prints, including the merge sha and the Jira status after the post-merge steps.
+The one `warp-listen` listener reads the channel. This skill does not. Do not start a second reader.
+
+When the listener drains `warp:status`, it has already written an ack (`Received warp:status. Posting the digest.`). Herald posts that ack in the channel first. Then run this skill and post the digest. The same listener acks and acts on `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:proceed <id>`, and `warp:retry <id>`. `warp:proceed` runs `proceed.py` (plan id, Jira key, or `#` number) for the one matching ticket. Reply with what it prints, including the merge sha and the Jira status after the post-merge steps.
 
 A quiet notify setting still posts this reply. Someone asked.

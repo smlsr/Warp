@@ -25,7 +25,7 @@ Runner: `config.runner`. `cloud` uses Cursor cloud/background agents. `local` us
 ## Merge policy
 
 - Size S or M (`autoMerge` true): after Bugbot pass, CI green, and every AC has evidence, Reed may merge and Jira moves to Done. The move and the comment are the `jira: MUST DO` block from `beam.py set`, including after `provider.py merge-local`.
-- Size L or XL (`autoMerge` false): same Bugbot and CI gate, including the fix loop, before anyone is asked. Then `awaiting_approval` (Jira moves to QA Ready, comment "Bugbot clean, ready for manual review"). Notify, and poll the provider for an approval. Also accept `warp:proceed <id>` from Slack, Teams, or a PR comment (`proceed.py` resolves a plan id, a Jira key, or a `#` number, and refuses a ticket that is not awaiting approval). Then merge in the same turn. Jira moves to Done with the merged comments, locks drop, and dependents unblock. `jiraDoneOnManualMerge: false` leaves Jira at QA Ready. New commits after QA Ready re-run Bugbot and leave Jira at QA Ready.
+- Size L or XL (`autoMerge` false): same Bugbot and CI gate, including the fix loop, before anyone is asked. Then `awaiting_approval` (Jira moves to QA Ready, comment "Bugbot clean, ready for manual review"). Notify, and poll the provider for an approval. Slack and Teams `warp:proceed <id>` are read by the one `warp-listen` listener, not by a reader on each waiting ticket (`proceed.py` resolves a plan id, a Jira key, or a `#` number, and refuses a ticket that is not awaiting approval). Herald posts the ack in that channel before the merge. Then merge that one ticket in the same turn. Jira moves to Done with the merged comments, locks drop, and dependents unblock. Other waiting tickets stay waiting. `jiraDoneOnManualMerge: false` leaves Jira at QA Ready. New commits after QA Ready re-run Bugbot and leave Jira at QA Ready.
 - `pushMerge: false` or no usable provider: the same rules, on a local merge, with no push.
 - Never merge a red gate ticket to unblock later work. Fix on the gate branch.
 
@@ -35,7 +35,7 @@ When `ready` is empty because nothing is queued or active, or you stop the run, 
 
 ## Halt
 
-`/warp-pause` sets `paused`. In-flight Shuttles finish their current step and checkpoint; they do not start a new ticket. `/warp-resume` continues from the beam. A killed session is safe: the next Warp turn runs `scripts/resume_hint.py`, which reprints the board. Plugin hooks do not run on cloud runners, so do not wait for one.
+`/warp-pause` sets `paused` and stops the one channel listener. In-flight Shuttles finish their current step and checkpoint; they do not start a new ticket. The listener must not keep reading while paused or stopped. `/warp-resume` continues from the beam and launches the listener when `listener.state` is not `running`. `listener: already running` means do not launch a second. A killed session is safe: the next Warp turn runs `scripts/resume_hint.py`, which reprints the board. Plugin hooks do not run on cloud runners, so do not wait for one.
 
 ## What you never do
 

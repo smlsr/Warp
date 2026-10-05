@@ -74,10 +74,10 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 |---|---|---|
 | `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/`, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
-| `/warp-start` | Start dispatch | `--reason` |
-| `/warp-pause` | Stop new claims. In-flight work finishes its step | `--reason` |
-| `/warp-resume` | Resume a paused beam | `--reason` |
-| `/warp-stop` | Stay stopped until the next start | `--reason` |
+| `/warp-start` | Start dispatch and the one channel listener | `--reason` |
+| `/warp-pause` | Stop new claims and the listener. In-flight work finishes its step | `--reason` |
+| `/warp-resume` | Resume a paused beam and the listener, unless one is already running | `--reason` |
+| `/warp-stop` | Stay stopped until the next start. The listener stops | `--reason` |
 | `/warp` | One tick of the master loop | |
 | `/warp-status` | Rewrite `.warp/STATUS.md` and the board | |
 | `/warp-status-post` | Post that digest to Slack or Teams | |
@@ -400,13 +400,19 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 
 ## Status in Teams or Slack
 
-Teams and Slack cannot pull files from a stopped agent. They can ask, and Warp pushes, when the agent is running or a tick fires.
+One listener sub-agent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the whole run. It is one listener for the beam: not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. `/warp-start` and `/warp-resume` launch the `warp-listen` skill when `inbound.py claim` prints `listener: started`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
 
-- In the agent window: `/warp-status-post`. Herald posts the digest and attaches `STATUS.md`, `status.json`, and `BOARD.md`.
-- In the channel: send `warp:status`. The next tick replies in thread with the same files.
-- The same channels accept `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:proceed <id>`, and `warp:retry <id>`.
+The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the one sub-agent id. `pid` is optional and is often empty on a cloud runner.
 
-Set `teamsChannel` and `slackChannel` in `.warp/config.yaml`. If a connector is missing, the text is appended to `.warp/outbox.md`. Warp does not store tokens.
+Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. If that turn has ended, a message sits unread until `/warp-pause` (or `inbound.py release`) and then `/warp-resume`. A start while the flag is still `running` does not launch a second listener.
+
+Every recognized `warp:` command is acknowledged in the channel before it runs. The ack names the command and, when there is one, the ticket id. Unknown or malformed commands get an ack that says they were not understood and lists the accepted forms.
+
+- `warp:proceed <id>` merges that one `awaiting_approval` ticket and moves Jira to Done (`jiraDoneOnManualMerge`). The id is the plan id or the Jira key. A bad id is acknowledged and nothing else is merged. The ack is `Received warp:proceed XV-01. Merging and moving Jira to Done.`
+- `warp:pause`, `warp:resume`, `warp:stop`, `warp:start`, `warp:retry <id>`, and `warp:status` are acknowledged, then run. Pause and stop also stop the listener.
+- In the agent window, `/warp-status-post` still posts the digest and attaches `STATUS.md`, `status.json`, and `BOARD.md`. `warp:status` does that after its ack.
+
+Set `teamsChannel` and `slackChannel` in `.warp/config.yaml`. If a connector is missing, the text is appended to `.warp/outbox.md`. Warp does not store tokens. Teams and Slack cannot pull files from a stopped agent.
 
 ## Configuration
 
@@ -441,7 +447,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. |
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
-| `pollSeconds` | `300` | How often pull requests and channel commands are read. |
+| `pollSeconds` | `300` | How often the one listener re-reads the channel, and how often a running loop reconciles pull requests. |
 | `reportOnComplete` | `true` | Write `.warp/warp-complete.html` and ask Herald to post the totals when the run finishes or is stopped. `false` writes the file only from `/warp-report`. |
 | `reportPath` | `.warp/warp-complete.html` | Where the completion report is written, relative to the repo. The default stays inside `.warp`, which is gitignored. |
 | `jiraMcp` | `atlassian` | Connected Jira server name, not a tool name. |
@@ -452,14 +458,14 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `pushMerge` | `true` | `false` is local-only: no push, no pull request, local merge. |
 | `baseBranch` | empty | Integration branch. Empty detects it. |
 | `slackMcp` / `teamsMcp` | `slack` / `teams` | Connected messenger names. |
-| `slackChannel` / `teamsChannel` | `warp` | Shared channel to post to and to watch for `warp:status`. Must already exist. |
+| `slackChannel` / `teamsChannel` | `warp` | Shared channel the one listener reads, and Herald posts to. Must already exist. |
 | `projectName` | empty | Shown after the repo in message headers. Empty uses `jiraProject`, then the folder name. |
 | `notifyAllow` | empty | Extra `server:tool` pairs for `/warp-allow-notify`. No wildcards. |
 | `autoAllowTools` | `true` | `/warp-init` writes the project MCP allowlist. `false` or `--no-allow` skips it. |
 
 ## Merge policy
 
-S and M (`autoMerge` true) and L and XL (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. S and M then auto-merge and Jira moves to Done. L and XL then move to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number), and Reed merges in that same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
+S and M (`autoMerge` true) and L and XL (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. S and M then auto-merge and Jira moves to Done. L and XL then move to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 
 ## Estimate
 
