@@ -25,6 +25,10 @@ Ticket id, Jira key, lock paths, size, autoMerge flag, model slug, preamble path
 
 After every status change, run `scripts/beam.py set`. If the session dies, the next Shuttle for this id resumes from the branch and the beam, not from chat memory.
 
+## If Cursor asks you to Allow or Run
+
+Do not edit permission files. Tell the user the tool name from the dialog and to run `/warp-allow-notify --check`, then `/warp-init` or `/warp-allow-notify`. A name that is not in `scripts/mcp_tools.py` goes in `notifyAllow` as `server:tool`.
+
 ## Forbidden
 
 - Merging.

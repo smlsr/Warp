@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.13
+
+- /warp-init writes the project MCP allowlist for Slack, Teams, and Jira. Entries include user-, plugin-, and *name* variants because the Run dialog often does not use the mcp.json key. server:* stays behind --allow-server-tools. --check and --list diagnose a prompt. autoAllowTools defaults to true. --no-allow skips one init. User-level files still need --user --yes.
+
 ## 1.3.12
 
 - /warp-jira-external-id remembers a missing External ID field and, by default, adds label warp:<id> with editJiraIssue update.labels add. Field creation stays off unless jiraCreateExternalIdField or --create-field --yes. The Rovo MCP catalog has no create-field tool; a missing tool or a denial is not a failure. getJiraScreen and updateJiraScreen only add a field that already exists. --recheck looks again. jira.externalIdWritten.method is field, label, or remote-link. No comment is added.

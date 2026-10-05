@@ -55,17 +55,24 @@ class AllowNotifyTests(Base):
         cli = load(self.repo / ".cursor" / "cli.json")
         hooks = load(self.repo / ".cursor" / "hooks.json")
         allow = perm["mcpAllowlist"]
-        self.assertEqual(
-            allow,
-            [
-                "slack:slack_post_message",
-                "slack:slack_send_message",
-                "teams:send_channel_message",
-                "teams:teams_send_message",
-            ],
-        )
+        for entry in (
+            "slack:slack_send_message",
+            "slack:slack_read_channel",
+            "user-slack:slack_send_message",
+            "plugin-slack-slack:slack_send_message",
+            "*slack*:slack_send_message",
+            "atlassian:addOrEditJiraIssueComment",
+            "*atlassian*:addOrEditJiraIssueComment",
+            "atlassian-rovo:editJiraIssue",
+            "claude_ai_Atlassian:getJiraIssue",
+            "teams:teams_read_thread",
+        ):
+            self.assertIn(entry, allow)
+        self.assertNotIn("github:add_issue_comment", allow)
         for entry in allow:
-            self.assertNotIn("*", entry)
+            _server, tool = entry.split(":", 1)
+            self.assertNotEqual(tool, "*")
+            self.assertFalse(entry.endswith(":*"))
         self.assertNotIn("mcpAllowlist", {k for k in perm if k != "mcpAllowlist"})
         self.assertEqual(cli["permissions"]["allow"], [f"Mcp({e})" for e in allow])
         self.assertNotIn("*:*", json.dumps(cli))
@@ -174,7 +181,8 @@ class AllowNotifyTests(Base):
         self.assertFalse(any(entry.startswith("bitbucket:") for entry in allow))
         self.assertIn("Bitbucket", r.stdout)
         for entry in allow:
-            self.assertNotIn("*", entry)
+            _server, tool = entry.split(":", 1)
+            self.assertNotEqual(tool, "*")
 
     def test_wildcard_and_bare_name_are_rejected(self):
         self.write_config("notifyAllow:\n  - slack:*\n")
@@ -229,6 +237,9 @@ class AllowNotifyTests(Base):
 
         self.assertEqual(decide({"mcp_server_name": "slack", "tool_name": "slack_post_message", "tool_input": "{}"}), "allow")
         self.assertEqual(decide({"mcp_server_name": "Slack", "tool_name": "SLACK_SEND_MESSAGE"}), "allow")
+        self.assertEqual(decide({"mcp_server_name": "plugin-slack-slack", "tool_name": "slack_send_message"}), "allow")
+        self.assertEqual(decide({"mcp_server_name": "project-0-repo-slack", "tool_name": "slack_read_channel"}), "allow")
+        self.assertEqual(decide({"mcp_server_name": "claude_ai_Atlassian", "tool_name": "addOrEditJiraIssueComment"}), "allow")
         self.assertEqual(decide({"mcp_server_name": "teams", "tool_name": "send_channel_message"}), "allow")
         self.assertEqual(decide({"mcp_server_name": "slack", "tool_name": "slack_list_channels"}), "ask")
         self.assertEqual(decide({"mcp_server_name": "github", "tool_name": "add_issue_comment"}), "ask")
@@ -262,3 +273,130 @@ class AllowNotifyTests(Base):
         done = run(INSTALL, "uninstall", "--root", str(self.repo), "--yes", cwd=self.repo)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertFalse((self.repo / ".cursor").exists())
+
+    def _fixture_servers(self, home: Path):
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "mcp.json").write_text(
+            '{"mcpServers": {"slack": {"url": "https://mcp.slack.com/mcp"}}}\n'
+        )
+        plugin = self.repo / ".cursor" / "plugins" / "slack"
+        plugin.mkdir(parents=True)
+        (plugin / "mcp.json").write_text('{"mcpServers": {"slack": {"url": "https://mcp.slack.com/mcp"}}}\n')
+        (plugin / ".cursor-plugin").mkdir()
+        (plugin / ".cursor-plugin" / "plugin.json").write_text('{"name": "slack"}\n')
+        cache = home / "plugins" / "cache" / "cursor-public" / "slack" / "abc123def"
+        (cache / ".cursor-plugin").mkdir(parents=True)
+        (cache / "mcp.json").write_text('{"slack": {"type": "http", "url": "https://mcp.slack.com/mcp"}}\n')
+        (cache / ".cursor-plugin" / "plugin.json").write_text('{"name": "slack"}\n')
+        atlassian = self.repo / ".cursor" / "mcp.json"
+        atlassian.parent.mkdir(parents=True, exist_ok=True)
+        atlassian.write_text('{"mcpServers": {"atlassian": {"url": "https://mcp.atlassian.com/v1/mcp"}}}\n')
+
+    def test_discovery_variants_server_override_and_check(self):
+        home = self.tmp / "cursor-home"
+        self._fixture_servers(home)
+        listed = self.allow("--list", "--cursor-home", str(home))
+        self.assertEqual(listed.returncode, 0, listed.stderr + listed.stdout)
+        self.assertIn("Detected MCP servers:", listed.stdout)
+        self.assertIn("user-slack", listed.stdout)
+        self.assertIn("plugin-slack-slack", listed.stdout)
+        self.assertFalse((self.repo / ".cursor" / "permissions.json").exists())
+        checked = self.allow("--check", "--cursor-home", str(home), "--server", "claude_ai_Atlassian")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertIn("Run Mode", checked.stdout)
+        self.assertIn("Ask Every Time", checked.stdout)
+        self.assertIn("Cloud agents", checked.stdout)
+        self.assertIn("plugin-slack-slack:slack_send_message", checked.stdout)
+        self.assertIn("Entries that would fix the IDE prompt", checked.stdout)
+        self.assertFalse((self.repo / ".cursor" / "permissions.json").exists())
+        wrote = self.allow("--cursor-home", str(home), "--server", "claude_ai_Atlassian")
+        self.assertEqual(wrote.returncode, 0, wrote.stderr + wrote.stdout)
+        allow = load(self.repo / ".cursor" / "permissions.json")["mcpAllowlist"]
+        self.assertIn("user-slack:slack_send_message", allow)
+        self.assertIn("plugin-slack-slack:slack_send_message", allow)
+        self.assertNotIn("plugin-slack-slack:addOrEditJiraIssueComment", allow)
+        self.assertIn("project-atlassian:editJiraIssue", allow)
+        self.assertIn("claude_ai_Atlassian:addOrEditJiraIssueComment", allow)
+        self.assertNotIn("slack:*", allow)
+        again = self.allow("--check", "--cursor-home", str(home))
+        self.assertIn("IDE: covered", again.stdout)
+
+    def test_server_wildcard_is_gated(self):
+        home = self.tmp / "empty-home"
+        plain = self.allow("--cursor-home", str(home))
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        allow = load(self.repo / ".cursor" / "permissions.json")["mcpAllowlist"]
+        self.assertNotIn("slack:*", allow)
+        self.assertNotIn("*slack*:*", allow)
+        self.allow("--revoke")
+        flagged = self.allow("--allow-server-tools", "--cursor-home", str(home))
+        self.assertEqual(flagged.returncode, 0, flagged.stderr + flagged.stdout)
+        self.assertIn("destructive", flagged.stdout)
+        allow = load(self.repo / ".cursor" / "permissions.json")["mcpAllowlist"]
+        self.assertIn("slack:*", allow)
+        self.assertIn("*slack*:*", allow)
+        self.assertIn("atlassian:*", allow)
+        self.assertNotIn("*:*", allow)
+
+    def test_init_writes_allowlist_idempotently_and_no_allow_skips(self):
+        home = self.tmp / "cursor-home"
+        self._fixture_servers(home)
+        # init discovers the real home plus the repo. The fixture servers live in the repo.
+        first = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+        self.assertIn("allowed Warp MCP tools", first.stdout)
+        self.assertIn("--revoke", first.stdout)
+        allow = load(self.repo / ".cursor" / "permissions.json")["mcpAllowlist"]
+        self.assertIn("atlassian:addOrEditJiraIssueComment", allow)
+        self.assertIn("*slack*:slack_send_message", allow)
+        self.assertIn("autoAllowTools: true", (self.repo / ".warp" / "config.yaml").read_text())
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        second = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertIn("Nothing changed", second.stdout)
+        after = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        self.allow("--revoke")
+        skipped = run(INSTALL, "init", "--root", str(self.repo), "--no-allow", cwd=self.repo)
+        self.assertEqual(skipped.returncode, 0, skipped.stderr + skipped.stdout)
+        self.assertIn("--no-allow", skipped.stdout)
+        self.assertFalse((self.repo / ".cursor" / "permissions.json").exists())
+        (self.repo / ".warp" / "config.yaml").write_text(
+            (self.repo / ".warp" / "config.yaml").read_text().replace("autoAllowTools: true", "autoAllowTools: false")
+        )
+        off = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertIn("autoAllowTools is false", off.stdout)
+        self.assertFalse((self.repo / ".cursor" / "permissions.json").exists())
+
+
+class ToolCoverageTests(unittest.TestCase):
+    def test_referenced_mcp_tools_are_allowed_or_excluded(self):
+        import re
+
+        pattern = re.compile(
+            r"\b("
+            r"slack_[a-z0-9_]+|"
+            r"teams_[a-z0-9_]+|"
+            r"send_channel_message|"
+            r"add_issue_comment|"
+            r"(?:get|add|edit|create|list|search|transition|lookup|update)[A-Za-z0-9]*Jira[A-Za-z0-9]*|"
+            r"getAccessibleAtlassianResources|"
+            r"lookupJiraAccountId"
+            r")\b"
+        )
+        roots = [ROOT / "agents", ROOT / "skills", ROOT / "commands", ROOT / "docs", ROOT / "README.md"]
+        found = set()
+        for root in roots:
+            files = [root] if root.is_file() else list(root.rglob("*"))
+            for path in files:
+                if path.suffix not in {".md", ".txt"} and path.name != "README.md":
+                    continue
+                if not path.is_file():
+                    continue
+                found.update(pattern.findall(path.read_text()))
+        allowed = mcp_tools.warp_tool_names(with_jira=True, with_git=True)
+        missing = sorted(name for name in found if name not in allowed and name not in mcp_tools.EXCLUDED_TOOLS)
+        self.assertEqual(missing, [], "MCP tool names must be in the allowlist or EXCLUDED_TOOLS")
+        self.assertIn("lookupJiraAccountId", mcp_tools.EXCLUDED_TOOLS)
+        self.assertIn("slack_send_message", allowed)
+        self.assertIn("addOrEditJiraIssueComment", allowed)
+        self.assertIn("slack_read_channel", allowed)

@@ -8,7 +8,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 | Chat | What it does | Script and common flags |
 |---|---|---|
-| `/warp-init` | Copy the plugin and backfill missing config keys | `install.py init` `--channel` `--dry-run` |
+| `/warp-init` | Copy the plugin, backfill config, and allow Warp's MCP tools | `install.py init` `--channel` `--dry-run` `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `scan.py scan` `--folder` |
 | `/warp-start` | Start dispatch | `scan.py start` `--reason` |
 | `/warp-pause` | Stop new claims | `scan.py pause` `--reason` |
@@ -25,7 +25,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-jira-match` | Match summaries. Optionally write External ID | `jira_match.py` `--apply` `--yes` `--write-external-id` |
 | `/warp-jira-external-id` | Write mappings into External ID, or a label if that field is missing | `jira_external_id.py` `--apply` `--yes` `--create-field` `--recheck` `--force` `--ticket` |
 | `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
-| `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--with-jira` `--with-git` |
+| `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--list` `--check` `--server` `--allow-server-tools` `--with-jira` `--with-git` |
 | `/warp-proceed <id>` | Merge one green manual ticket | Reed. Not a script flag. |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
@@ -42,6 +42,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 python3 <plugin>/scripts/install.py init
 python3 <plugin>/scripts/install.py init --dry-run
 python3 <plugin>/scripts/install.py init --channel eng-builds
+python3 <plugin>/scripts/install.py init --no-allow
 python3 <plugin>/scripts/install.py ?
 ```
 
@@ -52,8 +53,9 @@ Idempotent. A second run on a complete install changes nothing.
 | `--root` | Repo root. Default is the git top level, else the current directory. |
 | `--channel NAME` | Channel for a fresh config, or for an empty channel. Lowercased. Letters, digits, `-`, `_`, max 80. |
 | `--dry-run` | Print the steps. Write nothing. |
+| `--no-allow` | Do not write the project MCP allowlist. `autoAllowTools: false` does the same on every init. |
 
-Steps: create `.cursor/plugins` and `.warp` if missing; copy plugin files that are not already there (existing files are never overwritten); copy `assets/config.example.yaml` on a fresh config, or append missing keys with their defaults and comments; set an empty `slackChannel` or `teamsChannel` (or the old `Warp` default) to `warp`; detect `gitProvider` from `origin` unless it is already `github` or `bitbucket`; set `pushMerge: false` when there is no remote; append the gitignore snippet once; write `.warp/version` from the project plugin copy.
+Steps: create `.cursor/plugins` and `.warp` if missing; copy plugin files that are not already there (existing files are never overwritten); copy `assets/config.example.yaml` on a fresh config, or append missing keys with their defaults and comments; set an empty `slackChannel` or `teamsChannel` (or the old `Warp` default) to `warp`; detect `gitProvider` from `origin` unless it is already `github` or `bitbucket`; set `pushMerge: false` when there is no remote; write the project MCP allowlist when `autoAllowTools` is true (Slack, Teams, Jira, and GitHub `add_issue_comment` when the provider is GitHub); append the gitignore snippet once; write `.warp/version` from the project plugin copy. User-level `~/.cursor` files are not written. Undo the allowlist with `/warp-allow-notify --revoke`.
 
 If `.cursor/plugins/warp` is older than the plugin this command ran from, it prints `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` and does not replace plugin files.
 
@@ -364,25 +366,33 @@ Full behavior is also in the README. Summary:
 python3 <plugin>/scripts/allow_notify.py ?
 python3 <plugin>/scripts/allow_notify.py --dry-run
 python3 <plugin>/scripts/allow_notify.py
-python3 <plugin>/scripts/allow_notify.py --with-jira --with-git
+python3 <plugin>/scripts/allow_notify.py --list
+python3 <plugin>/scripts/allow_notify.py --check
+python3 <plugin>/scripts/allow_notify.py --server plugin-slack-slack
+python3 <plugin>/scripts/allow_notify.py --allow-server-tools
+python3 <plugin>/scripts/allow_notify.py --with-git
 python3 <plugin>/scripts/allow_notify.py --user --yes
 python3 <plugin>/scripts/allow_notify.py --revoke
 ```
 
 | Flag | Effect |
 |---|---|
-| (default) | Project files. Slack and Teams post tools only. |
+| (default) | Project files. Slack, Teams, and Jira tools. |
 | `--dry-run` | Unified diff. Writes nothing, including no backup. |
-| `--user` | `~/.cursor/permissions.json`, `cli-config.json`, and `hooks.json`. Refuses to write without `--yes`. `--dry-run` does not need `--yes`. |
-| `--with-jira` | Also every Atlassian tool in the Jira table above, including `editJiraIssue` and `getJiraIssueEditmeta`. |
+| `--user` | `~/.cursor/permissions.json`, `cli-config.json`, and `hooks.json`. Refuses to write without `--yes`. `--dry-run`, `--list`, and `--check` do not need `--yes`. |
+| `--with-jira` | Accepted. Jira tools are already included. |
 | `--with-git` | Also GitHub `add_issue_comment`. No Bitbucket name. |
+| `--list` | Detected MCP server names. Writes nothing. |
+| `--check` | Covered and missing Warp tools, Run Mode caveat, entries that would fix the IDE prompt. Writes nothing. |
+| `--server NAME` | Also allow the tools on this server id. Repeatable. |
+| `--allow-server-tools` | Also write `server:*` and `*name*:*`. Every tool on that server, including destructive ones. |
 | `--revoke` | Remove only what `.cursor/warp-allow.json` recorded. |
 | `--root` | Repo root. |
 | `--cursor-home` | Stand-in for `~/.cursor`. Tests. |
 
-Default tool names: `slack_post_message`, `slack_send_message`, `send_channel_message`, `teams_send_message`. Extras go in `notifyAllow` as `server:tool`. The Run prompt shows the tool name when it is different.
+Default tool names come from `scripts/mcp_tools.py`: `slack_post_message`, `slack_send_message`, `slack_read_channel`, `slack_read_thread`, `slack_search_channels`, `send_channel_message`, `teams_send_message`, `teams_read_channel`, `teams_read_thread`, `teams_search_channels`, and the Jira tools in the table above. `lookupJiraAccountId` is not called. Each tool is also written as `user-<name>`, `project-<name>`, `plugin-<name>-<name>`, and `*<name>*:<tool>`. Extras go in `notifyAllow` as `server:tool`. The Run prompt shows the tool name when it is different.
 
-IDE: `permissions.json` `mcpAllowlist` skips the prompt when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time ignores it. The key replaces the in-app MCP allowlist. CLI entries do not change the IDE button. The hook returns allow for this list only; a hook allow does not currently skip the prompt. Cloud agents do not prompt.
+IDE: `permissions.json` `mcpAllowlist` skips the prompt when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time ignores it. The key replaces the in-app MCP allowlist. CLI entries do not change the IDE button. Headless CLI uses those `Mcp(server:tool)` lines, or `agent -f` for one process. The hook returns allow for this list only; a hook allow does not currently skip the prompt. Cloud agents and automations do not prompt.
 
 A second run with the same flags writes nothing. Changed files get a `.bak`. `/warp-uninstall` removes the project entries only.
 

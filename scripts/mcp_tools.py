@@ -70,6 +70,37 @@ CREATE_FIELD_TOOLS = (
 GITHUB_COMMENT = "add_issue_comment"
 GITHUB_TOOLS = (GITHUB_COMMENT,)
 
-# Channel post tools. Both names are specific tools; neither entry is a wildcard.
-SLACK_TOOLS = ("slack_post_message", "slack_send_message")
-TEAMS_TOOLS = ("send_channel_message", "teams_send_message")
+# Channel post tools, plus the reads Herald uses for warp:status.
+# slack_read_channel, slack_read_thread, and slack_search_channels are the
+# hosted Slack MCP names. Teams uses the same three jobs under teams_ names.
+# A connector that spells them differently goes in notifyAllow as server:tool.
+SLACK_TOOLS = (
+    "slack_post_message",
+    "slack_send_message",
+    "slack_read_channel",
+    "slack_read_thread",
+    "slack_search_channels",
+)
+TEAMS_TOOLS = (
+    "send_channel_message",
+    "teams_send_message",
+    "teams_read_channel",
+    "teams_read_thread",
+    "teams_search_channels",
+)
+
+# Named in docs so a reader can see it, and not called by any Warp flow.
+# The coverage test requires every referenced tool to be allowed or listed here.
+EXCLUDED_TOOLS = {
+    "lookupJiraAccountId": "Not called by any Warp flow.",
+}
+
+
+def warp_tool_names(*, with_jira: bool = True, with_git: bool = True) -> set[str]:
+    """Tool names /warp-allow-notify writes. Server ids are separate."""
+    names = set(SLACK_TOOLS) | set(TEAMS_TOOLS)
+    if with_jira:
+        names |= set(JIRA_TOOLS)
+    if with_git:
+        names |= set(GITHUB_TOOLS)
+    return names

@@ -166,7 +166,7 @@ def has_ignore_entry(text: str) -> bool:
     return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
 
 
-def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
+def init(root: Path, channel: str | None, dry: bool, allow: bool = True) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = []
     channel = channel or DEFAULT_CHANNEL
     plugin = root / PLUGIN_REL
@@ -254,7 +254,28 @@ def init(root: Path, channel: str | None, dry: bool) -> list[tuple[str, str]]:
                 gi.write_text(text + sep + snippet)
             steps.append(("done", "appended Warp snippet to .gitignore"))
 
+    steps.extend(allow_steps(root, dry, allow))
     steps.append(record_version(root, dry))
+    return steps
+
+
+def allow_steps(root: Path, dry: bool, allow: bool) -> list[tuple[str, str]]:
+    """Write the project MCP allowlist. User-level files stay opt-in."""
+    if not allow:
+        return [("skip", "MCP allowlist skipped (--no-allow). /warp-allow-notify writes it. Undo: /warp-allow-notify --revoke")]
+    cfg = root / ".warp" / "config.yaml"
+    text = cfg.read_text() if cfg.is_file() else ""
+    import allow_notify
+
+    if not allow_notify.auto_allow_enabled(text):
+        return [("skip", "autoAllowTools is false. MCP allowlist not written. /warp-allow-notify writes it.")]
+    try:
+        with_git, note = allow_notify.git_comment_wanted(root)
+        steps = allow_notify.apply_project(root, dry=dry, with_git=with_git)
+    except Exception as e:  # allowlist must never fail init
+        return [("warn", f"could not write the MCP allowlist: {e}")]
+    if note:
+        steps.append(("warn", note))
     return steps
 
 
@@ -379,14 +400,19 @@ examples:
   python3 scripts/install.py init
   python3 scripts/install.py init --dry-run
   python3 scripts/install.py init --channel eng-builds
+  python3 scripts/install.py init --no-allow
   python3 scripts/install.py uninstall
   python3 scripts/install.py uninstall --remove-gitignore --yes
 
 init is idempotent. It copies missing plugin files, appends missing config
 keys with their defaults, sets an empty slackChannel or teamsChannel (or the
-old Warp default) to warp, detects gitProvider from origin, and writes
-.warp/version. --dry-run writes nothing. --channel is lowercased (letters,
-digits, - and _, max 80). --root is the repo (default: git top level).
+old Warp default) to warp, detects gitProvider from origin, writes the project
+MCP allowlist (the same tools as allow_notify.py, including Jira, and the
+GitHub comment tool when the provider is GitHub), and writes .warp/version.
+autoAllowTools defaults to true. --no-allow skips the allowlist. --user is
+not used here; user-level files stay opt-in. --dry-run writes nothing.
+--channel is lowercased (letters, digits, - and _, max 80). --root is the
+repo (default: git top level). Undo the allowlist with allow_notify.py --revoke.
 
 uninstall without --yes only lists. --yes deletes .cursor/plugins/warp and
 .warp/, and the project allow-notify entries. --remove-gitignore removes only
@@ -409,6 +435,7 @@ def main() -> None:
     pi.add_argument("--root")
     pi.add_argument("--channel", help="channel to use instead of warp (lowercase letters, digits, - and _)")
     pi.add_argument("--dry-run", action="store_true")
+    pi.add_argument("--no-allow", action="store_true", help="do not write the project MCP allowlist")
     pu = sub.add_parser("uninstall")
     pu.add_argument("--root")
     pu.add_argument("--remove-gitignore", action="store_true")
@@ -425,7 +452,7 @@ def main() -> None:
             if wanted != args.channel:
                 print(f"note: --channel {args.channel!r} normalized to {wanted!r}")
             args.channel = wanted
-        steps = init(root, args.channel, args.dry_run)
+        steps = init(root, args.channel, args.dry_run, allow=not args.no_allow)
         print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
         for status, msg in steps:
             print(f"  [{status}] {msg}")
