@@ -36,6 +36,20 @@ When nothing is queued or active, or you run `/warp-stop`, Warp writes `.warp/wa
 
 Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship.
 
+## First ticket is not linked to Jira
+
+The first claimed ticket of a run is the claim made while no ticket has `jira.startedAt`. No earlier ticket was linked and moved to In Progress. If Jira says that issue was not found (`record --result not-found`), or the lookup cannot resolve a real issue key, Warp does not leave the claim standing. It sets the ticket back to `queued`, clears `agent`, `branch`, `jira.startedAt`, and `jira.previousStatus`, writes a session note, and stops the run the same way as `/warp-stop`. Beam, `.warp/STATUS.md`, and `.warp/BOARD.md` all show that ticket as queued and the run stopped. Nothing is implemented and no pull request is opened.
+
+Herald posts one message:
+
+```text
+Run stopped because Jira issues are not linked (WV-01 / WAR-1). Fix jiraProject, /warp-jira-match, or /warp-jira-external-id, then /warp-resume.
+```
+
+It does not also post that the claim still stands. The reason on the beam is `tickets are not linked to Jira (WV-01 / WAR-1)`. Fix `jiraProject`, run `/warp-jira-match`, or run `/warp-jira-external-id`, then `/warp-resume`.
+
+A later miss, after at least one ticket has `jira.startedAt`, stays a per-ticket alarm. The claim stands, Herald posts Jira not updated, and the run continues. `jiraTransition: false` does not stop the run. A missing transition or a disconnected Jira server is still that per-ticket note, not this stop, unless the result is not-found or the key cannot be resolved on the first ticket.
+
 ## Jira status did not move
 
 `/warp-jira-check` runs `jira_sync.py verify`, then `catchup`. `verify` with no flags only prints. It does not call Jira. For each ticket: `status: keyed` or `status: unmapped`, `source`, beam status, `startedAt`, `qaReadyAt`, `doneAt`, comment ids, `jira.id`, and `lastAttempt` when a move failed. An unmapped ticket also has `reason` and one `fix` command. When every ticket is unmapped the report ends with `why nothing linked`.

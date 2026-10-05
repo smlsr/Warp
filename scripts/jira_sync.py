@@ -3,8 +3,9 @@
 
 Warp has no Jira credentials. An agent calls the Atlassian MCP server. This
 script decides the move, picks a transition from the ones Jira offers, writes
-the comment text, and records what happened. It never blocks a claim, a merge,
-or a scan.
+the comment text, and records what happened. It never blocks a merge or a scan.
+The first claimed ticket of a run that Jira cannot resolve is released and the
+run is stopped. A later miss, after one ticket was moved to In Progress, is not.
 
   plan            what one event should do
   pick            choose a transition id from Jira's list
@@ -97,7 +98,7 @@ COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "bugbot-
 GATED_STATUSES = {"awaiting_approval", "merging", "merged"}
 DONE = {"merged", "done"}
 FALSE = {"false", "no", "off", "0"}
-RESULTS = {"moved", "already", "skipped", "unavailable", "no-transition", "failed"}
+RESULTS = {"moved", "already", "skipped", "unavailable", "no-transition", "failed", "not-found"}
 OK_RESULTS = {"moved", "already", "skipped"}
 TODO_NAME = "jira-todo.json"
 
@@ -751,6 +752,11 @@ def instruction(p: dict) -> str:
             "If none fits, record --result no-transition. That writes .warp/outbox.md and Herald posts Jira not updated. "
             "The merge stands."
         )
+    elif p.get("event") == "claim":
+        tail += (
+            " If getJiraIssue says the issue was not found, record --result not-found. "
+            "When no ticket in this run has jira.startedAt, that releases the claim and stops the run."
+        )
     return (
         f"jira: {p['id']} ({p['jiraKey']}): {VERB[p['event']]} \"{p['target']}\" through the connected Jira MCP server. "
         f"Read the issue with {TOOL_ISSUE} and its transitions with {TOOL_TRANSITIONS} "
@@ -758,7 +764,7 @@ def instruction(p: dict) -> str:
         f"--current '<{{\"name\":..., \"category\":...}}>' --transitions '<json>'. "
         f"Call {TOOL_TRANSITION} with the id it picks (argument transition.id, or transitionId if that is the schema's field). "
         f"Then record: python3 {me} record --beam <beam> --id {p['id']} --event {p['event']} "
-        f"--result moved|already|skipped|unavailable|no-transition|failed --from '<old status>' --to '<new status>'. "
+        f"--result moved|already|skipped|unavailable|no-transition|failed|not-found --from '<old status>' --to '<new status>'. "
         + tail
     )
 
@@ -1152,6 +1158,110 @@ def on_set(beam_path: Path, beam: dict, ticket: dict, prev, new: Optional[str] =
         print(f"jira: skipped ({e})")
 
 
+def _jira_moves_enabled(cfg: dict) -> bool:
+    return _flag(cfg.get("jiraTransition", True), True)
+
+
+def _moved_to_in_progress(beam: dict) -> bool:
+    """True when any ticket in this run was linked and moved to In Progress.
+
+    That marker is jira.startedAt, written when a claim transition is recorded
+    as moved. No startedAt means this claim is the first ticket of the run.
+    """
+    for ticket in (beam.get("tickets") or {}).values():
+        if (ticket.get("jira") or {}).get("startedAt"):
+            return True
+    return False
+
+
+def _issue_not_found(result: str, error: Optional[str], detail: Optional[str]) -> bool:
+    """Jira said the issue is missing. A missing custom field is not that."""
+    if result in {"not-found", "not_found"}:
+        return True
+    text = " ".join(part for part in (error, detail) if part).casefold()
+    if not text or "field not found" in text:
+        return False
+    return "not found" in text or "does not exist" in text
+
+
+def _should_stop_for_unlinked(beam: dict, cfg: dict, ticket: dict) -> bool:
+    """First claimed ticket, Jira enabled, and nothing in this run is In Progress yet."""
+    if not _jira_moves_enabled(cfg):
+        return False
+    import beam as beam_mod
+
+    if (ticket.get("status") or "") not in beam_mod.ACTIVE:
+        return False
+    return not _moved_to_in_progress(beam)
+
+
+def _refresh_views(beam_path: Path) -> None:
+    import beam as beam_mod
+
+    data = beam_mod.load_json(beam_path)
+    data["metrics"] = beam_mod.metrics(data)
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.refresh_outputs(beam_path, data)
+
+
+def _release_unlinked_claim(beam_path: Path, tid: str) -> None:
+    """Back to queued. Clear the claim's agent, branch, and In Progress clocks."""
+    import beam as beam_mod
+
+    data = _load(beam_path)
+    ticket = data["tickets"][tid]
+    prev = ticket.get("status")
+    ticket["status"] = "queued"
+    ticket["agent"] = None
+    ticket["branch"] = None
+    jira = ticket.setdefault("jira", {})
+    jira.pop("startedAt", None)
+    jira.pop("previousStatus", None)
+    ticket["updatedAt"] = now()
+    if prev != "queued":
+        beam_mod.append_ticket_event(beam_path, ticket, {"type": "status", "from": prev, "to": "queued"})
+    data["metrics"] = beam_mod.metrics(data)
+    _save(beam_path, data)
+    _journal(beam_path, {"type": "set", "id": tid, "from": prev, "to": "queued", "agent": None, "reason": "jira-unlinked"})
+    _write_todo(beam_path, [])
+
+
+def unlinked_sentence(pair: str) -> str:
+    """The one Herald/Slack sentence for a run stopped because Jira is not linked."""
+    return (
+        f"Run stopped because Jira issues are not linked ({pair}). "
+        "Fix jiraProject, /warp-jira-match, or /warp-jira-external-id, then /warp-resume."
+    )
+
+
+def stop_unlinked_run(beam_path: Path, tid: str, key_label: str) -> str:
+    """Release tid and stop the same way as /warp-stop. One Herald message."""
+    _release_unlinked_claim(beam_path, tid)
+    pair = f"{tid} / {key_label}"
+    reason = f"tickets are not linked to Jira ({pair})"
+    sentence = unlinked_sentence(pair)
+    import scan
+
+    scan.set_run(beam_path, "stopped", reason, announce_report=False)
+    _refresh_views(beam_path)
+    _outbox(beam_path, sentence)
+    root = _root(beam_path)
+    try:
+        import herald_fmt
+        import notify
+
+        msg = herald_fmt.message(root, "Run stopped", intro=sentence)
+        notify.report(notify.build("jira-unlinked", root, msg=msg))
+    except Exception as e:
+        print(f"herald: not posted ({e})")
+    return (
+        f"jira: STOP {reason}. {tid} returned to queued "
+        "(agent, branch, and in-progress timestamps cleared). "
+        "Run stopped. Do not implement. Do not open a pull request.\n"
+        + sentence
+    )
+
+
 def _loud(beam_path: Path, note: str, footer: str = "Run /warp-jira-check. The ticket was not stopped.") -> None:
     """Outbox is already written. Also ask Herald to post the same failure."""
     root = _root(beam_path)
@@ -1213,11 +1323,19 @@ def record(
     _journal(beam_path, {"type": "jira", "id": tid, "event": event, "result": result, "from": frm, "to": to, "detail": detail})
     if result in OK_RESULTS:
         return f"jira: {tid} {result}" + (f" ({to})" if to else "")
+    if (
+        event == "claim"
+        and _issue_not_found(result, error, detail)
+        and _should_stop_for_unlinked(beam, settings(beam_path, beam), t)
+    ):
+        label = str(t.get("jiraKey") or "unresolved")
+        return stop_unlinked_run(beam_path, tid, label)
     key = t.get("jiraKey")
     why = {
         "unavailable": "Jira is not connected",
         "no-transition": "no matching transition was available",
         "failed": "the Jira call failed",
+        "not-found": "the Jira issue was not found",
     }.get(result, result)
     note = f"Jira status not updated for {tid} ({key}): {why}." + (f" {error or detail}" if (error or detail) else "")
     if event != "release":
@@ -2408,6 +2526,12 @@ def _commit_mapping(
     if payloads or refused:
         _write_todo(beam_path, payloads)
     if refused:
+        victim = next((t for t in refused if _should_stop_for_unlinked(beam, cfg, t)), None)
+        if victim is not None:
+            stored = victim.get("jiraKey")
+            label = str(stored) if stored else "unresolved"
+            lines.append(stop_unlinked_run(beam_path, str(victim["id"]), label))
+            return "\n".join(lines)
         note = "jira: needs mapping. Nothing was sent to Jira.\n" + "\n".join(mapping_message(t, cfg) for t in refused)
         _outbox(beam_path, note)
         _loud(beam_path, note, footer=footer)
@@ -2613,7 +2737,10 @@ already set is left alone. When nothing is chosen the warning is:
 jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)
 
 plan/record --event: claim, release, qa-ready, done.
-record --result: moved, already, skipped, unavailable, no-transition, failed.
+record --result: moved, already, skipped, unavailable, no-transition, failed, not-found.
+not-found on the first claimed ticket (no jira.startedAt anywhere in the run)
+releases that claim and stops the run. A later not-found does not. jiraTransition
+false does not stop the run.
 record-comment --where: jira or pr.
 record-comment --event: claim, pr-opened, qa-ready, merged, bugbot, bugbot-rerun, ci, alarm, blocked.
 pick --kind: start, qa, done, restore. --no-category skips the status-category match.

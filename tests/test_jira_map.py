@@ -232,6 +232,11 @@ class CommandTests(Repo):
         self.assertFalse((self.repo / ".warp/outbox.md").exists())
         todo = json.loads((self.repo / ".warp/jira-todo.json").read_text())
         self.assertEqual(todo["tickets"], [])
+        # WV-02 already moved to In Progress, so this miss is a later per-ticket alarm.
+        beam = json.loads((self.repo / self.beam).read_text())
+        beam["tickets"]["WV-02"]["jiraKey"] = "WAR-2"
+        beam["tickets"]["WV-02"].setdefault("jira", {})["startedAt"] = "2026-01-01T00:00:00Z"
+        (self.repo / self.beam).write_text(json.dumps(beam))
 
         missed = self.repo / "none.json"
         missed.write_text(json.dumps({"WV-01": [{"key": "WAR-4"}, {"key": "WAR-5"}]}))
@@ -241,6 +246,8 @@ class CommandTests(Repo):
         self.assertIsNone(self.key("WV-01"))
         self.assertIn("needs mapping", (self.repo / ".warp/outbox.md").read_text())
         self.assertNotIn("MUST DO", amb.stdout)
+        self.assertNotIn("Run stopped because", amb.stdout)
+        self.assertEqual(self.tickets()["WV-01"]["status"], "claimed")
 
         mapped = run("jira_sync.py", "map", "--beam", self.beam, "--set", "WV-01=WAR-1", cwd=self.repo)
         self.assertIn("WV-01 -> WAR-1", mapped.stdout)

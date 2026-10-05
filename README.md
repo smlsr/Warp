@@ -290,6 +290,8 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 **One Jira issue, every field.** `/warp-jira-view WAR-1` or `/warp-jira-view WV-01`. `WAR-1` is fetched with `getJiraIssue`. `WV-01` is resolved from the beam and `.warp/jira-map.json`, then from the external-id field (and each visible project when `jiraProject` is empty). The script prints `field: value`, the status, the external-id field id, and whether that key is stored. `--comments`, `--links`, `--all`, `--full`, `--verbose`, and `--json` are in [docs/COMMANDS.md](docs/COMMANDS.md). `getJiraIssue`, `getTransitionsForJiraIssue`, and `searchJiraIssuesUsingJql` are already on `/warp-allow-notify --with-jira`.
 
+**First ticket is not linked to Jira.** The first claimed ticket is the one claimed while no ticket has `jira.startedAt` (no earlier ticket was linked and moved to In Progress). If Jira says that issue was not found, or no real issue key can be resolved, Warp releases the claim back to `queued`, clears the agent, branch, and in-progress timestamps, and stops the run the same way as `/warp-stop`. It does not start implementation or open a pull request. Herald posts one message: `Run stopped because Jira issues are not linked (WV-01 / WAR-1). Fix jiraProject, /warp-jira-match, or /warp-jira-external-id, then /warp-resume.` It does not also post that the claim still stands. A later miss, after one ticket has `jira.startedAt`, stays a per-ticket alarm and does not stop the run. `jiraTransition: false` does not stop the run. Fix the link, then `/warp-resume`.
+
 **Jira did not move.** Start with `/warp-jira-check`. With no flags it only prints the beam. It does not call Jira, and `needs mapping` does not mean the lookup already ran. The longer tree is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 1. The first line is `jiraProject not set`. Run `project --list`. One candidate you recognize: `project --set WAR`. Jira is connected and several projects are visible: `project --probe`, then `project --record`.
@@ -427,7 +429,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraExternalIdFieldName` | `External ID` | Name used if field creation is allowed. |
 | `jiraCreateExternalIdField` | `false` | Probe for a create-field tool when the field is missing. Site-wide admin change. Off by default. `--create-field --yes` is the one-shot consent. |
 | `jiraExternalIdFallback` | `label` | `label`, `remote-link`, or `none` when the External ID field is missing. |
-| `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). |
+| `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). `false` does not stop the run when the first ticket has no Jira issue. |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
 | `jiraQaReadyStatus` | `QA Ready` | Manual path (L and XL): Jira moves here after Bugbot is clean and CI is green, and waits here until the merge. |
 | `jiraDoneStatus` | `Done` | Jira moves here after the merge, auto or manual. |
