@@ -18,11 +18,23 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 import jira_sync
-from mcp_tools import TOOL_EDIT, TOOL_EDITMETA, TOOL_FIELDS, TOOL_ISSUE, TOOL_PROJECTS, TOOL_SEARCH
+from mcp_tools import (
+    CREATE_FIELD_TOOLS,
+    TOOL_EDIT,
+    TOOL_EDITMETA,
+    TOOL_FIELDS,
+    TOOL_ISSUE,
+    TOOL_PROJECTS,
+    TOOL_REMOTE_CREATE,
+    TOOL_SCREEN,
+    TOOL_SCREEN_UPDATE,
+    TOOL_SEARCH,
+)
 
 MATCH_NAME = "jira-match.json"
 REPORT_NAME = "jira-match-report.json"
 WRITE_NAME = "jira-external-id.json"
+FIELD_STATE_NAME = "jira-field.json"
 PAGE_SIZE = 50
 MAX_PAGES = 2
 MAX_TICKETS = 25
@@ -817,8 +829,196 @@ def _current_label(value: str | None, attempt: str = "") -> str:
     return value
 
 
-def _backfill_rows(beam: dict, cfg: dict, *, only_ids: set[str] | None, force: bool, force_value: bool):
-    """Mapped tickets that still need the plan id written to External ID."""
+def warp_label(tid: str) -> str:
+    return f"warp:{tid}"
+
+
+def field_display_name(cfg: dict) -> str:
+    raw = str(cfg.get("jiraExternalIdFieldName") or "External ID").strip().strip("\"'")
+    return raw or "External ID"
+
+
+def fallback_mode(cfg: dict) -> str:
+    raw = str(cfg.get("jiraExternalIdFallback") or "label").strip().lower()
+    if raw in {"remote-link", "remotelink", "remote_link", "link"}:
+        return "remote-link"
+    if raw == "none":
+        return "none"
+    return "label"
+
+
+def project_key(cfg: dict) -> str:
+    prefixes = jira_sync.prefixes_from(cfg)
+    return prefixes[0] if prefixes else ""
+
+
+def field_fingerprint(cfg: dict) -> str:
+    return "|".join(
+        [
+            project_key(cfg),
+            jira_sync.external_field(cfg),
+            field_display_name(cfg),
+            "1" if cfg.get("jiraCreateExternalIdField") else "0",
+            fallback_mode(cfg),
+        ]
+    )
+
+
+def load_field_state(beam_path: Path) -> dict:
+    path = beam_path.parent / FIELD_STATE_NAME
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_field_state(beam_path: Path, state: dict) -> None:
+    path = beam_path.parent / FIELD_STATE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n")
+
+
+def _attempts_say_missing(beam: dict) -> bool:
+    for ticket in (beam.get("tickets") or {}).values():
+        err = ((ticket.get("jira") or {}).get("externalIdAttempt") or {}).get("error")
+        if err == "field missing":
+            return True
+    return False
+
+
+def remembered_missing(beam_path: Path, beam: dict, cfg: dict, *, recheck: bool) -> bool:
+    """True when a previous catalog check showed the field is missing. --recheck ignores that."""
+    if recheck:
+        return False
+    state = load_field_state(beam_path)
+    if state.get("status") == "missing" and state.get("fingerprint") == field_fingerprint(cfg):
+        return True
+    return _attempts_say_missing(beam)
+
+
+def remember_missing(beam_path: Path, beam: dict, cfg: dict, *, save: bool, refresh: bool = False) -> dict:
+    state = load_field_state(beam_path)
+    fresh = not (state.get("status") == "missing" and state.get("fingerprint") == field_fingerprint(cfg) and state.get("checkedAt"))
+    if fresh or refresh:
+        state = {
+            "project": project_key(cfg),
+            "status": "missing",
+            "checkedAt": jira_sync.now(),
+            "fingerprint": field_fingerprint(cfg),
+            "fieldName": field_display_name(cfg),
+            "configuredField": jira_sync.external_field(cfg),
+            "fallback": fallback_mode(cfg),
+        }
+    changed = False
+    if save:
+        for ticket in (beam.get("tickets") or {}).values():
+            jira = ticket.get("jira") or {}
+            attempt = jira.get("externalIdAttempt") or {}
+            if attempt.get("error") == "field missing":
+                jira.pop("externalIdAttempt", None)
+                changed = True
+    if save:
+        save_field_state(beam_path, state)
+        if changed:
+            jira_sync._save(beam_path, beam)
+    return state
+
+
+def remember_present(beam_path: Path, cfg: dict, field_id: str, field_name: str, *, save: bool) -> None:
+    state = {
+        "project": project_key(cfg),
+        "status": "present",
+        "id": field_id,
+        "name": field_name,
+        "checkedAt": jira_sync.now(),
+        "fingerprint": field_fingerprint(cfg),
+        "configuredField": jira_sync.external_field(cfg),
+    }
+    if save:
+        save_field_state(beam_path, state)
+
+
+def report_discovered_id(beam_path: Path, beam: dict, field_id: str, *, save: bool) -> str:
+    """Remember the id on the beam and in jira-field.json. Write yaml only when the key is empty."""
+    import jira_project
+
+    cfg_copy = beam.setdefault("config", {})
+    if isinstance(cfg_copy, dict):
+        cfg_copy["jiraExternalIdField"] = field_id
+    root = beam_path.parent.parent
+    text = jira_project.config_text(root)
+    current = jira_project.config_value(text, "jiraExternalIdField")
+    line = f"jiraExternalIdField: {field_id}"
+    if jira_project._blank(current):
+        if save:
+            updated = jira_project._write_line(text, "jiraExternalIdField", field_id, "discovered External ID field")
+            jira_project._save_config(root, updated)
+            jira_sync._save(beam_path, beam)
+        return f"jira: set {line}"
+    if save:
+        jira_sync._save(beam_path, beam)
+    return (
+        f"jira: jiraExternalIdField is {current}; left as is. "
+        f"Add this line when you want scans to use the discovered id:\n{line}"
+    )
+
+
+def _admin_lines(cfg: dict) -> list[str]:
+    project = project_key(cfg) or "the project"
+    name = field_display_name(cfg)
+    return [
+        "jira: Creating a field is a site-wide Jira admin change and is off.",
+        "jira: To allow creation: /warp-jira-external-id --create-field --yes",
+        (
+            f'jira: Or in Jira admin, create a Short text custom field named "{name}", '
+            f"add it to the {project} screens and field context, then /warp-jira-external-id --recheck."
+        ),
+    ]
+
+
+def _ensure_lines(cfg: dict) -> list[str]:
+    project = project_key(cfg) or "the project"
+    name = field_display_name(cfg)
+    tools = ", ".join(CREATE_FIELD_TOOLS)
+    return [
+        "jira: MUST DO ensure field. Creating a field is a site-wide Jira admin change.",
+        f"jira: Probe the connected server for {tools}. If discover exists, ask it to create a short text custom field. Do not invent a tool.",
+        (
+            "jira: The Atlassian Rovo MCP catalog (30 Sep 2026) has no create-field tool. "
+            "It does not expose POST /rest/api/3/field or field contexts. "
+            f"{TOOL_SCREEN} and {TOOL_SCREEN_UPDATE} only add a field that already exists."
+        ),
+        (
+            f'jira: If a create tool exists, create a single-line text field named "{name}". '
+            f"Then {TOOL_SCREEN} and {TOOL_SCREEN_UPDATE} (commit) so {project} edit screens include it. "
+            f"Verify with {TOOL_EDITMETA} on one issue."
+        ),
+        "jira: If the tool is missing or permission is denied, do not fail. Record createField.result as unavailable or denied and use the fallback.",
+        "jira: Do not overwrite jiraExternalIdField in .warp/config.yaml when it already has a value. Report the line jiraExternalIdField: <id>.",
+    ]
+
+
+def _label_command(row: dict) -> str:
+    return f"jira: editJiraIssue {row['key']} update.labels add {warp_label(row['id'])}"
+
+
+def _remote_command(row: dict) -> str:
+    tid = row["id"]
+    return (
+        f"jira: {TOOL_REMOTE_CREATE} {row['key']} globalId {warp_label(tid)} "
+        f"title {tid} url https://warp.local/tickets/{tid}"
+    )
+
+
+def _field_command(row: dict, field: str) -> str:
+    return f"jira: editJiraIssue {row['key']} field {field} = {row['value']}"
+
+
+def _backfill_rows(beam: dict, cfg: dict, *, only_ids: set[str] | None, force: bool, force_value: bool, method: str = "field"):
+    """Mapped tickets that still need the plan id written."""
     prefixes = jira_sync.prefixes_from(cfg)
     queue = []
     equal = []
@@ -841,20 +1041,41 @@ def _backfill_rows(beam: dict, cfg: dict, *, only_ids: set[str] | None, force: b
         if str(written.get("value") or "") == str(tid) and not force:
             equal.append({"id": str(tid), "key": key, "reason": "already written", "current": str(tid)})
             continue
-        if current not in (None, "") and current != str(tid) and not force_value:
+        if method == "none":
+            skipped.append({"id": str(tid), "key": key, "reason": "field missing"})
+            continue
+        if method == "field" and current not in (None, "") and current != str(tid) and not force_value:
             skipped.append({"id": str(tid), "key": key, "reason": "different value", "current": current})
             continue
-        queue.append({"id": str(tid), "key": key, "value": str(tid), "current": current, "attempt": attempt})
+        queue.append({"id": str(tid), "key": key, "value": str(tid), "current": current, "attempt": attempt, "method": method})
     return queue, equal, skipped
 
 
 def _summary_line(verb: str, n_write: int, n_equal: int, skipped: list[dict]) -> str:
-    reasons = ", ".join(f"{row['id']} {row['reason']}" for row in skipped)
-    tail = f" ({reasons})" if reasons else ""
+    detail = []
+    missing_n = 0
+    for row in skipped:
+        if row["reason"] == "field missing":
+            missing_n += 1
+        else:
+            detail.append(f"{row['id']} {row['reason']}")
+    if missing_n:
+        detail.append("field missing" if missing_n == 1 else f"field missing x{missing_n}")
+    tail = f" ({', '.join(detail)})" if detail else ""
     return f"jira: external id: {verb} {n_write}, already equal {n_equal}, skipped {len(skipped)}{tail}"
 
 
-def _write_backfill_file(beam_path: Path, cfg: dict, queue: list[dict], *, must: bool, force: bool, force_value: bool) -> None:
+def _write_backfill_file(
+    beam_path: Path,
+    cfg: dict,
+    queue: list[dict],
+    *,
+    must: bool,
+    force: bool,
+    force_value: bool,
+    method: str,
+    create: bool,
+) -> None:
     path = beam_path.parent / WRITE_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -862,20 +1083,57 @@ def _write_backfill_file(beam_path: Path, cfg: dict, queue: list[dict], *, must:
             {
                 "server": cfg.get("jiraMcp") or "atlassian",
                 "field": jira_sync.external_field(cfg),
+                "fieldName": field_display_name(cfg),
+                "method": method,
+                "fallback": fallback_mode(cfg),
+                "createField": create,
+                "createTools": list(CREATE_FIELD_TOOLS),
                 "editTool": TOOL_EDIT,
                 "editmetaTool": TOOL_EDITMETA,
                 "fieldsTool": TOOL_FIELDS,
                 "issueTool": TOOL_ISSUE,
+                "screenTool": TOOL_SCREEN,
+                "screenUpdateTool": TOOL_SCREEN_UPDATE,
+                "remoteTool": TOOL_REMOTE_CREATE,
                 "mustDo": must,
                 "force": force,
                 "forceExternalId": force_value,
-                "note": "Call editJiraIssue for each pair, then jira_sync.py record-external-id. No comment.",
-                "pairs": [{"id": row["id"], "key": row["key"], "value": row["value"]} for row in queue],
+                "note": "One catalog call. If the External ID field is missing, do not edit it per ticket. Use method. Labels are update.labels add, never fields.labels. No comment. Then record-external-id.",
+                "pairs": [
+                    {
+                        "id": row["id"],
+                        "key": row["key"],
+                        "value": row["value"],
+                        "method": row.get("method") or method,
+                        "label": warp_label(row["id"]),
+                    }
+                    for row in queue
+                ],
             },
             indent=2,
         )
         + "\n"
     )
+
+
+def _dry_line(row: dict, field: str) -> str:
+    method = row.get("method") or "field"
+    if method == "label":
+        return f"jira: {row['id']} -> {row['key']}: method label: would add label {warp_label(row['id'])}"
+    if method == "remote-link":
+        return f"jira: {row['id']} -> {row['key']}: method remote-link: would add remote link {warp_label(row['id'])}"
+    current = _current_label(row.get("current"), row.get("attempt") or "")
+    return (
+        f"jira: {row['id']} -> {row['key']}: External ID currently {current} -> would set {row['value']} (method field)"
+    )
+
+
+def _command_for(row: dict, field: str, method: str) -> str:
+    if method == "label":
+        return _label_command(row)
+    if method == "remote-link":
+        return _remote_command(row)
+    return _field_command(row, field)
 
 
 def external_id_backfill(
@@ -885,12 +1143,16 @@ def external_id_backfill(
     only_ids: set[str] | None = None,
     force: bool = False,
     force_value: bool = False,
+    create: bool = False,
+    recheck: bool = False,
 ) -> str:
     """List or queue External ID writes for mapped tickets.
 
     mode auto: queue a MUST DO block when jiraWriteExternalId is true, else say nothing.
     mode dry: list the same tickets and write nothing onto the beam. The config flag is not required.
     mode must: MUST DO block. Used by --apply --yes. The config flag is not required.
+    create: --create-field --yes, or jiraCreateExternalIdField. Field creation is admin and off by default.
+    recheck: ignore .warp/jira-field.json and look the field up again.
     """
     beam_path = beam_path.resolve()
     beam = _load_beam(beam_path)
@@ -898,25 +1160,56 @@ def external_id_backfill(
     if mode == "auto" and not writes_on_scan(cfg):
         return ""
     must = mode in {"auto", "must"}
-    queue, equal, skipped = _backfill_rows(beam, cfg, only_ids=only_ids, force=force, force_value=force_value)
+    missing = remembered_missing(beam_path, beam, cfg, recheck=recheck)
+    if missing and must:
+        remember_missing(beam_path, beam, cfg, save=True)
+        beam = _load_beam(beam_path)
+    method = fallback_mode(cfg) if missing else "field"
+    create_ok = bool(create or cfg.get("jiraCreateExternalIdField"))
+    queue, equal, skipped = _backfill_rows(
+        beam, cfg, only_ids=only_ids, force=force, force_value=force_value, method=method
+    )
     todo = beam_path.parent / WRITE_NAME
     if must and queue:
-        _write_backfill_file(beam_path, cfg, queue, must=must, force=force, force_value=force_value)
+        _write_backfill_file(
+            beam_path, cfg, queue, must=must, force=force, force_value=force_value, method=method, create=create_ok
+        )
     elif must and todo.is_file():
         todo.unlink()
     me = Path(jira_sync.__file__).resolve()
     field = jira_sync.external_field(cfg)
     lines = []
-    for row in queue:
+    if missing:
+        state = load_field_state(beam_path)
+        checked = state.get("checkedAt") or "a previous check"
+        project = project_key(cfg) or "the project"
         lines.append(
-            f"jira: {row['id']} -> {row['key']}: External ID currently {_current_label(row['current'], row.get('attempt') or '')} -> would set {row['value']}"
+            f"jira: External ID field is missing on {project} (checked {checked}). "
+            "One summary. Not one skip per ticket."
         )
+        if create_ok:
+            lines.extend(_ensure_lines(cfg))
+        else:
+            lines.extend(_admin_lines(cfg))
+        if method == "label":
+            lines.append(
+                "jira: Falling back to label. editJiraIssue update.labels add warp:<id>. "
+                "Do not set fields.labels. Do not remove other labels."
+            )
+        elif method == "remote-link":
+            lines.append(
+                f"jira: Falling back to remote link via {TOOL_REMOTE_CREATE}. globalId is warp:<id>."
+            )
+        else:
+            lines.append("jira: jiraExternalIdFallback is none. No label or remote link is queued.")
+    for row in queue:
+        lines.append(_dry_line(row, field))
     for row in equal:
         lines.append(
             f"jira: {row['id']} -> {row['key']}: External ID currently {row['current']} -> already equal ({row['reason']})"
         )
     for row in skipped:
-        if row["reason"] == "no key":
+        if row["reason"] in {"no key", "field missing"}:
             continue
         if row["reason"] == "different value":
             lines.append(
@@ -933,18 +1226,38 @@ def external_id_backfill(
         return "\n".join(lines)
     server = cfg.get("jiraMcp") or "atlassian"
     lines.append(
-        f"jira: MUST DO write External ID. {len(queue)} ticket(s). Server \"{server}\". "
+        f'jira: MUST DO write External ID. {len(queue)} ticket(s). Server "{server}". Method {method}. '
         f"Field {field}. Call {TOOL_FIELDS} once, then {TOOL_ISSUE} and {TOOL_EDITMETA} for each key in .warp/{WRITE_NAME}. "
-        f"Then {TOOL_EDIT} sets that field to the plan id. No comment is posted."
+        "No comment is posted."
     )
     if mode == "auto":
         lines.append("jira: jiraWriteExternalId is on. This config flag is the consent. --yes is not required.")
-    lines.append(
-        "jira: Skip a missing or read-only field. Skip a value that already equals the plan id. "
-        "Leave a different non-empty value unless --force-external-id."
-    )
-    for row in queue:
-        lines.append(f"jira: editJiraIssue {row['key']} field {field} = {row['value']}")
+    if not missing:
+        lines.append(
+            "jira: If that one catalog call shows the External ID field, use the FIELD LINES. "
+            "If it is missing, do not edit the field on each ticket. Use the FALLBACK LINES in this same turn."
+        )
+        if create_ok:
+            lines.extend(_ensure_lines(cfg))
+        else:
+            lines.append("jira: If the field is missing, do not create it. To allow creation: /warp-jira-external-id --create-field --yes")
+        lines.append("jira: FIELD LINES, only if the field exists. Skip a value that already equals the plan id. Leave a different non-empty value unless --force-external-id.")
+        for row in queue:
+            lines.append(_field_command(row, field))
+        alt = fallback_mode(cfg)
+        if alt == "none":
+            lines.append("jira: FALLBACK LINES: jiraExternalIdFallback is none. If the field is missing, stop. Do not add a label.")
+        else:
+            lines.append(
+                "jira: FALLBACK LINES, only if the field is missing. Do not run these if you ran the field lines. "
+                "Labels use update.labels add, not fields.labels."
+            )
+            for row in queue:
+                lines.append(_command_for(row, field, alt))
+    else:
+        lines.append("jira: Skip a value that already equals the plan id. A missing or read-only field is not a failure.")
+        for row in queue:
+            lines.append(_command_for(row, field, method))
     lines.append(f"jira: then python3 {me} record-external-id --beam {beam_path} --results <file>")
     lines.append("jira: It does not post a comment.")
     return "\n".join(lines)
@@ -988,33 +1301,119 @@ def _live_value(issue: dict | None, field_id: str) -> str | None:
     return None
 
 
+def _issue_labels(issue: dict | None) -> list[str]:
+    if not isinstance(issue, dict):
+        return []
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    raw = issue.get("labels")
+    if raw is None and isinstance(fields, dict):
+        raw = fields.get("labels")
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw]
+
+
+def _mark_written(jira: dict, tid: str, method: str) -> None:
+    jira["externalId"] = tid
+    jira["externalIdWritten"] = {"value": tid, "at": jira_sync.now(), "method": method}
+    jira.pop("externalIdAttempt", None)
+    if method == "field":
+        jira["externalIdOnIssue"] = tid
+
+
 def record_external_id(beam_path: Path, data: dict, *, force: bool = False, force_value: bool = False, save: bool = True) -> str:
     """Record editJiraIssue results. A missing or read-only field is skipped and is not a failure."""
     beam_path = beam_path.resolve()
     beam = _load_beam(beam_path)
     cfg = jira_sync.settings(beam_path, beam)
     field = discover_editable_field(data, jira_sync.external_field(cfg))
-    queue, equal, skipped = _backfill_rows(beam, cfg, only_ids=None, force=force, force_value=force_value)
+    created = data.get("createField") if isinstance(data.get("createField"), dict) else {}
+    was_missing = load_field_state(beam_path).get("status") == "missing" or _attempts_say_missing(beam)
+    lines = []
+    if field.get("found") and field.get("id"):
+        remember_present(beam_path, cfg, str(field["id"]), str(field.get("name") or field_display_name(cfg)), save=save)
+        if created.get("result") == "created" or was_missing:
+            lines.append(report_discovered_id(beam_path, beam, str(field["id"]), save=save))
+            beam = _load_beam(beam_path)
+    elif created.get("result"):
+        lines.append(
+            "jira: Could not create the External ID field "
+            f"({created.get('error') or created.get('result')}). This is not a failure."
+        )
+        lines.append(
+            f'jira: In Jira admin, create a Short text custom field named "{field_display_name(cfg)}", '
+            f"add it to the {project_key(cfg) or 'project'} screens and field context, then /warp-jira-external-id --recheck."
+        )
+    if not field.get("found"):
+        remember_missing(beam_path, beam, cfg, save=save, refresh=True)
+        beam = _load_beam(beam_path) if save else beam
+        method = fallback_mode(cfg)
+        if not created.get("result"):
+            if cfg.get("jiraCreateExternalIdField"):
+                lines.append("jira: External ID field is missing. The transcript did not create one.")
+            else:
+                lines.extend(_admin_lines(cfg))
+        lines.append("jira: External ID field is missing. Nothing was written to that field.")
+        queue, equal, skipped = _backfill_rows(
+            beam, cfg, only_ids=None, force=force, force_value=force_value, method=method if method != "none" else "none"
+        )
+        edits = {str(row.get("id") or ""): row for row in _edit_rows(data)}
+        written_n = 0
+        equal_n = len(equal)
+        changed = False
+        if method == "none":
+            lines.append("jira: jiraExternalIdFallback is none. No label or remote link was written.")
+        else:
+            for tid, row in {item["id"]: item for item in queue}.items():
+                ticket = (beam.get("tickets") or {}).get(tid)
+                if not ticket:
+                    skipped.append({"id": tid, "reason": "unknown ticket"})
+                    continue
+                edit = edits.get(tid) or {}
+                issue = _issue_for(data, row["key"])
+                edit_method = str(edit.get("method") or method)
+                has_label = warp_label(tid) in _issue_labels(issue)
+                result = edit.get("result")
+                jira = ticket.setdefault("jira", {"status": None, "lastCommentAt": None})
+                if edit_method == "label" and (result in {"updated", "already"} or has_label):
+                    _mark_written(jira, tid, "label")
+                    changed = True
+                    if result == "updated":
+                        written_n += 1
+                        lines.append(f"jira: {tid} {row['key']} label {warp_label(tid)} added. Recorded.")
+                    else:
+                        equal_n += 1
+                        lines.append(f"jira: {tid} {row['key']} label {warp_label(tid)} already equal. Recorded.")
+                    continue
+                if edit_method == "remote-link" and result in {"updated", "already"}:
+                    _mark_written(jira, tid, "remote-link")
+                    changed = True
+                    if result == "updated":
+                        written_n += 1
+                        lines.append(f"jira: {tid} {row['key']} remote link {warp_label(tid)} added. Recorded.")
+                    else:
+                        equal_n += 1
+                        lines.append(f"jira: {tid} {row['key']} remote link already equal. Recorded.")
+                    continue
+                if result in {"failed", "denied", "unavailable"}:
+                    jira["externalIdAttempt"] = {
+                        "at": jira_sync.now(),
+                        "result": "skipped",
+                        "error": edit.get("error") or result,
+                        "event": "external-id",
+                    }
+                    skipped.append({"id": tid, "reason": result})
+                    changed = True
+                    lines.append(f"jira: {tid} {row['key']} skipped. {result}. Nothing was written.")
+        if changed and save:
+            jira_sync._save(beam_path, beam)
+        lines.append(_summary_line("written" if save else "would write", written_n, equal_n, skipped))
+        return "\n".join(lines)
+    queue, equal, skipped = _backfill_rows(beam, cfg, only_ids=None, force=force, force_value=force_value, method="field")
     wanted = {row["id"]: row for row in queue}
     written_n = 0
     equal_n = len(equal)
-    lines = []
     changed = False
-    if not field.get("found"):
-        for row in list(wanted.values()):
-            ticket = (beam.get("tickets") or {}).get(row["id"])
-            if not ticket:
-                skipped.append({"id": row["id"], "reason": "unknown ticket"})
-                continue
-            jira = ticket.setdefault("jira", {"status": None, "lastCommentAt": None})
-            jira["externalIdAttempt"] = {"at": jira_sync.now(), "result": "skipped", "error": "field missing", "event": "external-id"}
-            skipped.append({"id": row["id"], "reason": "field missing"})
-            changed = True
-        if changed and save:
-            jira_sync._save(beam_path, beam)
-        lines.append("jira: External ID field is missing. Skipped. Nothing was written.")
-        lines.append(_summary_line("written" if save else "would write", 0, equal_n, skipped))
-        return "\n".join(lines)
     edits = {str(row.get("id") or ""): row for row in _edit_rows(data)}
     for tid, row in wanted.items():
         ticket = (beam.get("tickets") or {}).get(tid)
@@ -1064,10 +1463,7 @@ def record_external_id(beam_path: Path, data: dict, *, force: bool = False, forc
             continue
         result = edit.get("result")
         if shown == tid or result == "already":
-            jira["externalId"] = tid
-            jira["externalIdOnIssue"] = tid
-            jira["externalIdWritten"] = {"value": tid, "at": jira_sync.now()}
-            jira.pop("externalIdAttempt", None)
+            _mark_written(jira, tid, str(edit.get("method") or "field"))
             equal_n += 1
             changed = True
             lines.append(f"jira: {tid} {key} already equal. Recorded.")
@@ -1083,10 +1479,7 @@ def record_external_id(beam_path: Path, data: dict, *, force: bool = False, forc
             changed = True
             lines.append(f"jira: {tid} {key} before {_current_label(shown)} after {tid}. Not recorded until editJiraIssue returns.")
             continue
-        jira["externalId"] = tid
-        jira["externalIdOnIssue"] = tid
-        jira["externalIdWritten"] = {"value": tid, "at": jira_sync.now()}
-        jira.pop("externalIdAttempt", None)
+        _mark_written(jira, tid, str(edit.get("method") or "field"))
         written_n += 1
         changed = True
         lines.append(f"jira: {tid} {key} before {_current_label(shown)} after {tid}. Recorded.")

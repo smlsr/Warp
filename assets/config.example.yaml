@@ -48,6 +48,20 @@ jiraWriteExternalId: false
 # external-id search is skipped. false: scan and catchup never queue that write.
 # /warp-jira-external-id --apply --yes still can. A different value already
 # in that field is left alone unless --force-external-id. No comment is posted.
+jiraExternalIdFieldName: "External ID"
+# Name used when creating the field. Creation is off unless the next key is true.
+jiraCreateExternalIdField: false
+# true: when the field is missing, scan and /warp-jira-external-id may ask the
+# agent to create a single-line text field. That is a site-wide Jira admin
+# change. The Rovo MCP catalog has no create-field tool; if the probe finds
+# none, or permission is denied, Warp does not fail. false: print the one
+# command /warp-jira-external-id --create-field --yes and use the fallback.
+jiraExternalIdFallback: label
+# When the External ID field is missing: label (add warp:<id>, default),
+# remote-link (createJiraIssueRemoteIssueLink), or none. label uses
+# editJiraIssue update.labels add and does not remove other labels.
+# .warp/jira-field.json remembers a missing field so the next scan prints
+# one summary. --recheck looks again.
 jiraTransition: true
 # On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
 # Needs the Jira MCP server; without it Warp logs a note and the claim goes on.

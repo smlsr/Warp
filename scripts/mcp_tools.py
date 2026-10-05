@@ -27,6 +27,16 @@ TOOL_REMOTE_LINKS = "getJiraIssueRemoteIssueLinks"
 TOOL_PROJECTS = "getVisibleJiraProjects"
 TOOL_EDIT = "editJiraIssue"
 TOOL_EDITMETA = "getJiraIssueEditmeta"
+# Screen tools exist on Rovo (manage_jira). They add a field that already exists.
+TOOL_SCREEN = "getJiraScreen"
+TOOL_SCREEN_UPDATE = "updateJiraScreen"
+# Remote-link create exists on Rovo write_jira. Lookup matches globalId warp:<id>.
+TOOL_REMOTE_CREATE = "createJiraIssueRemoteIssueLink"
+# Not in the Rovo catalog (30 Sep 2026). Listed so a future create-field tool is allowed.
+# POST /rest/api/3/field and field contexts are not exposed. Probe these names; do not invent a call.
+TOOL_CREATE_FIELD = "createJiraField"
+TOOL_CREATE_FIELD_ALT = "createCustomField"
+TOOL_CREATE_FIELD_ALT2 = "createJiraCustomField"
 
 JIRA_TOOLS = (
     TOOL_RESOURCES,
@@ -42,6 +52,18 @@ JIRA_TOOLS = (
     TOOL_PROJECTS,
     TOOL_EDIT,
     TOOL_EDITMETA,
+    TOOL_SCREEN,
+    TOOL_SCREEN_UPDATE,
+    TOOL_REMOTE_CREATE,
+    TOOL_CREATE_FIELD,
+    TOOL_CREATE_FIELD_ALT,
+    TOOL_CREATE_FIELD_ALT2,
+)
+
+CREATE_FIELD_TOOLS = (
+    TOOL_CREATE_FIELD,
+    TOOL_CREATE_FIELD_ALT,
+    TOOL_CREATE_FIELD_ALT2,
 )
 
 # GitHub pull-request comment. `gh pr comment` is a CLI fallback, not an MCP tool.

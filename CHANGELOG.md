@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.12
+
+- /warp-jira-external-id remembers a missing External ID field and, by default, adds label warp:<id> with editJiraIssue update.labels add. Field creation stays off unless jiraCreateExternalIdField or --create-field --yes. The Rovo MCP catalog has no create-field tool; a missing tool or a denial is not a failure. getJiraScreen and updateJiraScreen only add a field that already exists. --recheck looks again. jira.externalIdWritten.method is field, label, or remote-link. No comment is added.
+
 ## 1.3.11
 
 - /warp-jira-external-id and scan/catchup write existing plan-id mappings into Jira External ID when jiraWriteExternalId is true. The config flag is the consent, so scan does not need --yes. Keys found by the external-id search are already equal and are skipped. record-external-id records each edit. A missing or read-only field is skipped. A different non-empty value needs --force-external-id. No comment is added.

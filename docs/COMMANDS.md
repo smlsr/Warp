@@ -23,7 +23,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-jira-check` | Keyed or unmapped, what is missing, one fix | `jira_sync.py verify`, `catchup` |
 | `/warp-jira-view <key-or-id>` | Every field on one issue | `jira_view.py` `--comments` `--links` `--all` `--full` `--verbose` `--json` |
 | `/warp-jira-match` | Match summaries. Optionally write External ID | `jira_match.py` `--apply` `--yes` `--write-external-id` |
-| `/warp-jira-external-id` | Write existing mappings into the External ID field | `jira_external_id.py` `--apply` `--yes` `--force` `--force-external-id` `--ticket` |
+| `/warp-jira-external-id` | Write mappings into External ID, or a label if that field is missing | `jira_external_id.py` `--apply` `--yes` `--create-field` `--recheck` `--force` `--ticket` |
 | `/warp-jira-map` | Review or set plan id to issue key | `jira_sync.py map` `--set` `--import` `--from-jira` |
 | `/warp-allow-notify` | Allow specific MCP tools | `allow_notify.py` `--dry-run` `--with-jira` `--with-git` |
 | `/warp-proceed <id>` | Merge one green manual ticket | Reed. Not a script flag. |
@@ -144,8 +144,12 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | `searchJiraIssuesUsingJql` | Scan and claim: exact external-id match, then a `warp:<id>` label. One hit is stored. Summary search waits for `--yes` |
 | `getJiraProjectIssueTypesMetadata` | Field names and ids, so `jiraExternalIdField` or External ID can be queried as `cf[NNNNN]` |
 | `getJiraIssueRemoteIssueLinks` | Remote-link ids, checked after the external-id field and the label |
-| `editJiraIssue` | Write the plan id into the External ID field. `/warp-jira-external-id --apply --yes`, `/warp-jira-match --write-external-id --yes`, or `jira_sync.py external-id --yes`. Also `/warp-scan` and `/warp-jira-check` when `jiraWriteExternalId` is true (that flag is the consent, so `--yes` is not required). Not a comment. |
-| `getJiraIssueEditmeta` | Whether that field exists and is editable on the issue. A missing or read-only field is skipped. |
+| `editJiraIssue` | Write the plan id into the External ID field, or add a label with `update.labels` add (never `fields.labels`, which would replace every label). `/warp-jira-external-id --apply --yes`, `/warp-jira-match --write-external-id --yes`, or `jira_sync.py external-id --yes`. Also `/warp-scan` and `/warp-jira-check` when `jiraWriteExternalId` is true (that flag is the consent, so `--yes` is not required). Not a comment. |
+| `getJiraIssueEditmeta` | Whether that field exists and is editable on the issue. A missing field falls back. A read-only field is skipped. |
+| `getJiraScreen` | Read a company-managed screen. Used only when trying to attach an External ID field that already exists. |
+| `updateJiraScreen` | Add an existing field to a screen. It does not create a field. Returns a plan until commit. |
+| `createJiraIssueRemoteIssueLink` | Add a remote link whose globalId is `warp:<id>` when `jiraExternalIdFallback` is `remote-link`. |
+| `createJiraField`, `createCustomField`, `createJiraCustomField` | Probes. Not in the Rovo catalog (30 Sep 2026). `/warp-jira-external-id --create-field --yes` looks for one of these names and does not invent a call. |
 
 | When | Jira | Pull request |
 |---|---|---|
@@ -337,8 +341,16 @@ python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json
 | `--force` | Queue a ticket that already has `jira.externalIdWritten`, including a key whose source is `external`. An equal live value is not an error. |
 | `--force-external-id` | Replace a different non-empty External ID. The line shows before and after. |
 | `--results FILE` | Record a saved transcript. With `--apply --yes` the beam is updated. |
+| `--create-field` | With `--yes`, probe for a create-field tool. Site-wide admin change. Needs `--apply --yes` to queue the rest. |
+| `--recheck` | Ignore `.warp/jira-field.json` and look the field up again. |
 
-The summary is `jira: external id: would write N, already equal N, skipped N (ID reason)`. After `record-external-id` the verb is `written`. Skips are `no key`, `not editable`, `field missing`, and `different value`.
+The summary is `jira: external id: would write N, already equal N, skipped N (ID reason)`. After `record-external-id` the verb is `written`. Skips are `no key`, `not editable`, and `different value`. A missing field is one summary line, then the fallback, not one skip per ticket.
+
+Dry-run names the method on each line: `(method field)`, `method label`, or `method remote-link`.
+
+When `.warp/jira-field.json` says the field is missing for this project and config, scan and this command queue the fallback only. `--recheck`, or a change to `jiraExternalIdField`, `jiraExternalIdFieldName`, `jiraProject`, `jiraCreateExternalIdField`, or `jiraExternalIdFallback`, looks again.
+
+`jiraCreateExternalIdField` defaults to false. The one command that allows creation is `/warp-jira-external-id --create-field --yes`. If no create tool exists, or Jira denies it, the command still succeeds and uses `jiraExternalIdFallback`. `jira.externalIdWritten.method` is `field`, `label`, or `remote-link`. `/warp-jira-check` prints `jira mapping:`. `/warp-jira-view` prints `stored in Jira:`.
 
 A key that came from the external-id search is already equal and is not queued. A ticket with no confirmed key is skipped. `jira.externalId` on the beam is the desired plan id, not a confirmation that Jira holds it. Idempotency is `jira.externalIdWritten`. The field is discovered with `getJiraProjectIssueTypesMetadata` and checked with `getJiraIssueEditmeta` on each issue. A missing or read-only field is skipped and the command still succeeds. No comment is added.
 

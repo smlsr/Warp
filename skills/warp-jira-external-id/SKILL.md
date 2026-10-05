@@ -23,9 +23,18 @@ python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json
 3. The last line is `jira: external id: would write N, already equal N, skipped N (...)`.
 4. A key whose source is `external` is already equal. A ticket with no confirmed key is skipped. A different non-empty value is skipped unless the user passed `--force-external-id`. `jira.externalId` on the beam is the plan id we want. It is not proof that Jira holds that value. `jira.externalIdWritten` is that proof.
 
+## Missing field
+
+Call `getJiraProjectIssueTypesMetadata` once. If the External ID field is absent, do not edit it on every ticket.
+
+- Creation is off unless the block says `MUST DO ensure field` (`jiraCreateExternalIdField` or `--create-field --yes`). Probe `createJiraField`, `createCustomField`, and `createJiraCustomField`. Also `discover` if that tool exists. Do not invent a tool. The Rovo catalog (30 Sep 2026) has none of those create-field tools. `getJiraScreen` and `updateJiraScreen` only add a field that already exists. A missing tool or a permission denial is not a failure.
+- Tell the user they can create a Short text custom field named `External ID` in Jira admin, add it to the project screens and field context, then rerun with `--recheck`.
+- Then use the fallback in the same turn. Default is `editJiraIssue KEY update.labels add warp:PLANID`. Do not set `fields.labels`. Do not remove other labels. `remote-link` calls `createJiraIssueRemoteIssueLink` with globalId `warp:PLANID`. `none` writes nothing.
+- `.warp/jira-field.json` remembers the miss. The next scan prints one summary. `--recheck` looks again.
+
 ## Apply
 
-`--apply --yes` is the consent for this command. It works even when `jiraWriteExternalId` is false. `--dry-run` wins over `--apply`.
+`--apply --yes` is the consent for this command. It works even when `jiraWriteExternalId` is false. `--dry-run` wins over `--apply`. `--create-field` needs `--yes`.
 
 When the output contains `MUST DO write External ID`, do this in the same turn. One block, every line:
 
