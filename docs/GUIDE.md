@@ -33,7 +33,7 @@ The same steps, as a numbered tree, are in [RUNBOOK.md](RUNBOOK.md).
 
 The manual plan is 3 people, 6 Cursor windows each, merge windows at 08:30, 13:00, and 17:00. Warp keeps the caps and the gates, and drops the calendar as a blocker. Dispatch is continuous. Windows are digest times unless `respectMergeWindows` is true.
 
-The speed plan's lever still holds: an L ticket that gets a review within the hour does not wait for the next window. Reed polls APPROVED instead of waiting for a human to paste a preamble.
+The speed plan's lever still holds: an L ticket that is not in `autoMergeSizes`, and that gets a review within the hour, does not wait for the next window. Reed polls APPROVED instead of waiting for a human to paste a preamble. L and XL are not special. A size in `autoMergeSizes` auto-merges, including L and XL when they are listed.
 
 ## Graph
 
@@ -45,10 +45,10 @@ Sizes map to complexity:
 
 | Size | Hours | Class | Merge |
 |---|---|---|---|
-| S | 4 | LOW | auto after Bugbot + CI |
-| M | 7 | MEDIUM | auto after Bugbot + CI |
-| L | 11 | HIGH | wait for APPROVED |
-| XL | 16 | CRITICAL | wait for APPROVED |
+| S | 4 | LOW | auto after Bugbot + CI when listed in `autoMergeSizes` (the default) |
+| M | 7 | MEDIUM | auto after Bugbot + CI when listed (the default) |
+| L | 11 | HIGH | auto when listed in `autoMergeSizes`; otherwise wait for APPROVED |
+| XL | 16 | CRITICAL | same as L |
 
 Counts in the generated graph: S 73, M 109, L 111, XL 73.
 

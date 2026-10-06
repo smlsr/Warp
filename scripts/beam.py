@@ -794,7 +794,7 @@ def render_board(beam: dict) -> str:
         for t in alarms:
             lines.append(f"- **{t['id']}** {t.get('alarm') or t['status']} — {t['summary']}")
     waiting = [t for t in beam["tickets"].values() if t["status"] == "awaiting_approval"]
-    lines += ["", "## Awaiting approval (above MEDIUM)", ""]
+    lines += ["", "## Awaiting approval", ""]
     if not waiting:
         lines.append("None.")
     else:
@@ -1241,9 +1241,11 @@ unless --force is set. A plan id is not a Jira key.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
 uses inbound.py heartbeat. watchdog runs on every Warp tick and on start
-and resume. It replaces a dead listener once and re-dispatches a dead
-Shuttle once. Paused and stopped runs do nothing. A fresh heartbeat is
-left alone. Past maxRecoveries the ticket is alarm worker-died.
+and resume. A worker is dead when lastSeenAt is older than staleMinutes,
+or it never heartbeated and the claim or listener start is older than that.
+It replaces a dead listener once and re-dispatches a dead Shuttle once.
+Paused and stopped runs do nothing. A fresh heartbeat is left alone.
+Past maxRecoveries the ticket is alarm worker-died.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """

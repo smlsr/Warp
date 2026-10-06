@@ -35,7 +35,7 @@ Updated 2026-10-03T16:43:24Z · paused=False
 
 None.
 
-## Awaiting approval (above MEDIUM)
+## Awaiting approval
 
 None.
 

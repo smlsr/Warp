@@ -33,4 +33,4 @@ Edit only the export. Do not hand-edit `beam.json`.
 6. Import. `/warp-import` with that path. The run returns to stopped.
 7. Read `.warp/STATUS.md`. Confirm counts. `/warp-start` or `/warp-resume`.
 
-Import keeps status, PR url, tokens, and minutes for ids that still exist. New ids start queued. Removed ids drop off.
+Import keeps status, agent, branch, attempts, tokens, minutes, alarm, the pull request, and `jira` for ids that still exist. Heartbeats (`lastSeenAt`) are not in the plan file and are not copied. A `recovering` status is kept with the other status fields. The run is stopped, so the watchdog does not replace anyone until the next start. New ids start queued. Removed ids drop off.

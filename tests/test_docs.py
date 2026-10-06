@@ -62,6 +62,121 @@ class WorkerRecoveryDocTests(unittest.TestCase):
         self.assertIn("inbound.py heartbeat", blobs["docs/COMMANDS.md"])
         self.assertIn("beam.py watchdog", blobs["docs/GUIDE.md"])
 
+    def test_readme_has_a_dead_worker_section(self):
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Dead workers")
+        self.assertGreaterEqual(start, 0, "README has no Dead workers section")
+        section, sep, _after = readme[start:].partition("\n## ")
+        self.assertTrue(sep, "dead-worker section has no following heading")
+        for needle in (
+            "staleMinutes",
+            "lastSeenAt",
+            "maxRecoveries",
+            "worker-died",
+            "recovering",
+            "Listener died. A new one started.",
+            "worker died. A new Shuttle started.",
+            "beam.py heartbeat",
+            "inbound.py heartbeat",
+            "beam.py watchdog",
+            "do not run on cloud",
+            "fresh heartbeat",
+        ):
+            self.assertIn(needle, section, needle)
+        install = readme[readme.find("## Install"):].partition("\n## ")[0]
+        self.assertNotIn("## Dead workers", install)
+
+    def test_recovery_keys_are_named_on_upgrade(self):
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Upgrade")
+        self.assertGreaterEqual(start, 0)
+        section = readme[start:].partition("\n## ")[0]
+        self.assertIn("staleMinutes", section)
+        self.assertIn("maxRecoveries", section)
+
+
+class Since193DocTests(unittest.TestCase):
+    """Behaviors shipped after the 1.3.19 docs pass stay required."""
+
+    USER_DOCS = (
+        "README.md",
+        "docs/COMMANDS.md",
+        "docs/CONFIG.md",
+        "docs/GUIDE.md",
+        "docs/RUNBOOK.md",
+        "docs/STATE.md",
+        "docs/CONNECTORS.md",
+        "docs/MERGE-POLICY.md",
+        "docs/EXPORT.md",
+        "AGENTS.md",
+    )
+
+    def test_l_and_xl_follow_the_size_list(self):
+        for rel in (
+            "README.md",
+            "docs/GUIDE.md",
+            "docs/MERGE-POLICY.md",
+            "docs/CONFIG.md",
+            "rules/warp-operating.mdc",
+            "examples/BOARD.sample.md",
+        ):
+            text = (ROOT / rel).read_text()
+            self.assertNotIn("above MEDIUM", text, rel)
+            self.assertNotIn("L and XL run that same", text, rel)
+        for rel in ("README.md", "docs/MERGE-POLICY.md", "docs/CONFIG.md", "rules/warp-operating.mdc", "docs/GUIDE.md"):
+            self.assertIn("L and XL are not special", (ROOT / rel).read_text(), rel)
+            self.assertIn("autoMergeSizes", (ROOT / rel).read_text(), rel)
+        guide = (ROOT / "docs/GUIDE.md").read_text()
+        self.assertNotIn("| L | 11 | HIGH | wait for APPROVED |", guide)
+        self.assertIn("auto when listed in `autoMergeSizes`", guide)
+
+    def test_connectors_cover_listener_recovery_and_agreed_project(self):
+        text = (ROOT / "docs/CONNECTORS.md").read_text()
+        for needle in (
+            "lastSeenAt",
+            "staleMinutes",
+            "watchdog",
+            "recovering",
+            "worker-died",
+            "inbound.py heartbeat",
+            "not one per",
+            "Listener died. A new one started.",
+            "set jiraProject to WAR (every stored key is in project WAR)",
+            "Do not run `project --set`",
+            "the run stops",
+            "do not run on cloud",
+        ):
+            self.assertIn(needle, text, needle)
+
+    def test_agents_and_export_name_recovery(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        for needle in ("staleMinutes", "maxRecoveries", "recovering", "worker-died", "lastSeenAt", "beam.py watchdog"):
+            self.assertIn(needle, agents, needle)
+        export = (ROOT / "docs/EXPORT.md").read_text()
+        self.assertIn("lastSeenAt", export)
+        self.assertIn("recovering", export)
+        self.assertIn("are not copied", export)
+
+    def test_no_doc_requires_a_listener_per_ticket_or_hooks_on_cloud(self):
+        for rel in self.USER_DOCS:
+            text = (ROOT / rel).read_text()
+            self.assertNotIn("each waiting ticket has its own listener", text, rel)
+            self.assertNotIn("hooks are required on cloud", text, rel)
+            self.assertNotIn("its own listener", text, rel)
+        for rel in ("README.md", "docs/CONNECTORS.md", "docs/RUNBOOK.md", "docs/STATE.md", "docs/GUIDE.md"):
+            self.assertIn("not one per", (ROOT / rel).read_text(), rel)
+
+    def test_first_ticket_miss_stops_the_run(self):
+        sentence = "Run stopped because Jira issues are not linked"
+        for rel in ("docs/RUNBOOK.md", "docs/GUIDE.md", "README.md"):
+            text = (ROOT / rel).read_text()
+            self.assertTrue(
+                sentence in text or "stops the run" in text or "the run stops" in text,
+                rel,
+            )
+        self.assertIn(sentence, (ROOT / "docs/RUNBOOK.md").read_text())
+        self.assertIn("jira.startedAt", (ROOT / "docs/CONNECTORS.md").read_text())
+
 
 class ConfigDocTests(unittest.TestCase):
     def test_every_example_key_is_in_config_doc(self):
@@ -190,13 +305,13 @@ class ScriptHelpTests(unittest.TestCase):
             "scan.py": ("--folder", "--max-agents", "claude-sonnet-5-5-high", "--keep-status"),
             "jira_sync.py": ("--write", "qa-ready", "no-transition", "--no-category"),
             "provider.py": ("merge-local", "--reason", "pushMerge"),
-            "beam.py": ("--via", "maxAgents", "ingest"),
+            "beam.py": ("--via", "maxAgents", "ingest", "heartbeat", "watchdog", "worker-died", "staleMinutes"),
             "version.py": (".warp/version",),
             "bump_version.py": ("--minor", "--major", "--note"),
             "notify.py": ("outbox", "quiet"),
             "status_post.py": ("--beam", "--out"),
             "proceed.py": ("--beam", "--by", "WV-01", "awaiting_approval"),
-            "inbound.py": ("--beam", "--text", "--by", "--agent-id", "--pid", "--message-id", "--source", "claim", "release", "already running"),
+            "inbound.py": ("--beam", "--text", "--by", "--agent-id", "--pid", "--message-id", "--source", "claim", "release", "heartbeat", "already running"),
             "report.py": ("--out", "--open", "--partial", "warp-complete"),
             "check_version.py": ("--against",),
             "jira_view.py": ("--results", "--comments", "--links", "--all", "--full", "--verbose", "getJiraIssue"),

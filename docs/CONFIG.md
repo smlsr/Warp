@@ -13,7 +13,7 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | stateDir | `.warp` | Where beam, status, and exports are written. Gitignore this. Absolute path keeps it outside the repo. |
 | model | `claude-sonnet-5-5-high` | Coding slug (Claude Sonnet 5.5 High). Must match the Cursor model picker. Overridden by this file. |
 | maxAgents | `18` | Concurrent Shuttles. Only cap. |
-| autoMergeSizes | `S, M` | Sizes that merge without a human approval. A size in this list auto-merges after Bugbot and CI. A size not in `autoMergeSizes` stays manual. |
+| autoMergeSizes | `S, M` | Sizes that merge without a human approval. A size in this list auto-merges after Bugbot and CI, including L and XL. L and XL are not special. A size not in `autoMergeSizes` stays manual. The default leaves L and XL waiting. |
 | messenger | `both` | `slack`, `teams`, or `both`. |
 | notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms, approval waits, a red gate, and pause/stop. A `warp:status` request is always answered. |
 | runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |

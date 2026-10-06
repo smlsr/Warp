@@ -81,11 +81,11 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 |---|---|---|
 | `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/`, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
-| `/warp-start` | Start dispatch and the one channel listener | `--reason` |
+| `/warp-start` | Start dispatch, run the watchdog, and start the one channel listener | `--reason` |
 | `/warp-pause` | Stop new claims and the listener. In-flight work finishes its step | `--reason` |
-| `/warp-resume` | Resume a paused beam and the listener, unless one is already running | `--reason` |
+| `/warp-resume` | Resume a paused beam, run the watchdog, and start the listener unless one is already running | `--reason` |
 | `/warp-stop` | Stay stopped until the next start. The listener stops | `--reason` |
-| `/warp` | One tick of the master loop | |
+| `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | Rewrite `.warp/STATUS.md` and the board | |
 | `/warp-status-post` | Post that digest to Slack or Teams | |
 | `/warp-export` | Write `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json` | |
@@ -220,6 +220,18 @@ Plugin hooks do not run on cloud runners. Warp does not depend on them there. Th
 
 A local IDE may still run `hooks/hooks.json` and the `beforeMCPExecution` hook `/warp-allow-notify` installs. Those hooks call the same scripts. They are not a second behavior, and cloud runners do not need them. `mcp_allow.py` does not approve shell commands and does not allow every MCP tool.
 
+## Dead workers
+
+A Shuttle on a claimed ticket and the one channel listener are the background workers. A dead turn does not notify Warp. Cursor does not restart it. Plugin hooks do not run on cloud runners. There is no process table.
+
+Each worker writes a heartbeat on the beam: `lastSeenAt` and its agent id. A Shuttle runs `beam.py heartbeat` at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener runs `inbound.py heartbeat` at claim and on every channel read. Both stay inside `staleMinutes` (default 15). `/warp-init` backfills `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
+
+`beam.py watchdog` runs on every `/warp` tick and on `/warp-start` and `/warp-resume`. A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than that. A fresh heartbeat is left alone. Do not start a second worker. Pause and stop do not replace anyone.
+
+A dead listener, while the run is running, is cleared and exactly one replacement is reserved. Herald posts `Listener died. A new one started.` A second tick does not start another.
+
+A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`, and exactly one new Shuttle is dispatched for that same ticket. Herald posts `<id> worker died. A new Shuttle started.` It is not released, so another ticket cannot take the files. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
+
 ## Version
 
 The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`.
@@ -242,7 +254,7 @@ When `/warp-version` or init says the project copy is older than the source copy
 4. Reload Cursor.
 5. `/warp-init`. It copies the current plugin into `.cursor/plugins/warp` and writes config.
 
-A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
+A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
 ## Troubleshooting
 
@@ -351,7 +363,7 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 | Step | In the agent window | What you should see |
 |---|---|---|
 | Install | `/warp-init`. Reload. | `/warp-scan` and `/warp-start` appear. |
-| Tick | `/warp` | One pass: reconcile, ready, claim. |
+| Tick | `/warp` | One pass: watchdog, reconcile, ready, claim. |
 | Scan | `/warp-scan` or `/warp-scan <folder>` | Ticket count, format, run stopped. `beam.json` exists. |
 | Start | `/warp-start` | Herald posts. Shuttles claim up to `maxAgents`. |
 | Pause | `/warp-pause` | No new claims. In-flight finishes its step. |
@@ -378,7 +390,7 @@ Export writes `.warp/WARP_PLAN.json` and `.warp/WARP_PLAN.md`. Download both. On
 
 Safe edits: `deps`, `locks`, `size`, `autoMerge`, `critical`, and gate `members` and `checks`. Keep an id stable if you want its pull request, tokens, and minutes kept. A renamed id is treated as new.
 
-Upload by dragging the file into the agent chat, or saving it in the workspace. Then `/warp-import` on that path. Import rewrites the graph, copies status onto ids that still exist, drops removed ids, and sets the run to stopped. Config is not replaced. Read `.warp/STATUS.md`, then `/warp-start`.
+Upload by dragging the file into the agent chat, or saving it in the workspace. Then `/warp-import` on that path. Import rewrites the graph, copies status, agent, branch, attempts, tokens, minutes, alarm, the pull request, and `jira` onto ids that still exist, drops removed ids, and sets the run to stopped. Heartbeats (`lastSeenAt`) are not part of the plan file and are not copied. Config is not replaced. Read `.warp/STATUS.md`, then `/warp-start`.
 
 | File | Edit | Role |
 |---|---|---|
@@ -411,7 +423,7 @@ One listener sub-agent reads the configured Slack channel, and Teams when `messe
 
 The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the one sub-agent id. `pid` is optional and is often empty on a cloud runner. `lastSeenAt` is the heartbeat, written by `inbound.py heartbeat` at claim and on every read.
 
-Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. A dead turn does not notify Warp, and Cursor does not restart it. `beam.py watchdog` runs on every Warp tick and on start and resume. The listener is dead when `lastSeenAt` is older than `staleMinutes` (default 15), or it never heartbeated and `startedAt` is older than that. While the run is running, the watchdog clears the stale `running` flag and reserves exactly one new id. Launch that one listener (`listener: replace`). A fresh heartbeat is left alone. A second tick does not launch another. Herald posts one line: `Listener died. A new one started.` Pause and stop do not replace it. The same rule covers a Shuttle: `beam.py heartbeat` writes `lastSeenAt` and the agent id, a dead Shuttle becomes `recovering` on the same branch, and exactly one new Shuttle starts. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no Shuttle starts.
+Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. If that turn dies, [Dead workers](#dead-workers) is how Warp notices and starts one replacement. Pause and stop do not.
 
 Every recognized `warp:` command is acknowledged in the channel before it runs. The ack names the command and, when there is one, the ticket id. Unknown or malformed commands get an ack that says they were not understood and lists the accepted forms.
 
@@ -430,7 +442,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
 | `maxAgents` | `18` | Concurrent Shuttles. The only cap. |
-| `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI. Sizes not in `autoMergeSizes` wait. |
+| `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI, including L and XL when they are listed. L and XL are not special. Sizes not in `autoMergeSizes` wait. The default leaves L and XL waiting. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |
 | `notify` | `verbose` | Every claim and tick, plus init and scan. `quiet` posts alarms, approval waits, a red gate, and pause/stop. `warp:status` is always answered. |
 | `runner` | `cloud` | Cloud VM, or `local` for this machine. |
@@ -474,7 +486,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 
 ## Merge policy
 
-Sizes in `autoMergeSizes` (`autoMerge` true) and sizes not in `autoMergeSizes` (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. A listed size then auto-merges and Jira moves to Done. A size not in `autoMergeSizes` then moves to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
+L and XL are not special. `autoMergeSizes` is the cut. Sizes in `autoMergeSizes` (`autoMerge` true) and sizes not in `autoMergeSizes` (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. A listed size then auto-merges and Jira moves to Done. A size not in `autoMergeSizes` then moves to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 
 ## Estimate
 
