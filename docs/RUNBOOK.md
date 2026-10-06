@@ -50,7 +50,11 @@ When nothing is queued or active, or you run `/warp-stop`, Warp writes `.warp/wa
 
 ## Gate red
 
-Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship.
+Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship. A red gate stays red when a member check is red or the evidence names a red check. A stale red, with every member merged or done and no red check, is cleared on the same pass as a pending gate.
+
+## Gate still pending
+
+Nothing in flight, nothing awaiting approval, no alarms, and an empty ready set can still mean a pending or stale red gate whose members are already merged or done. The same is true when every ticket on the beam is merged and a gate is still pending. The listener's pass (`alarmRepairMinutes`, default 15) recomputes those gates. A gate turns green when every member is merged or done, or when every ticket is, the evidence is `members merged:` and those ids, and the board is rewritten. Herald posts `G1 pending cleared. Members merged. Tick ran.` and that pass runs the dispatch tick so work blocked only by the stale gate starts. Every tick recomputes before `ready()`, so a merge does not wait for the pass. The pass is the backstop when no tick is running. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A second pass does not dispatch again. A green gate stays green. Pause and stop do not recompute.
 
 ## First ticket is not linked to Jira
 

@@ -14,6 +14,8 @@ any number as a built-in cap.
   python3 scripts/orchestrator.py rebuild --beam .warp/beam.json --facts facts.json
   python3 scripts/orchestrator.py resolve --path shared/notes.md --append-only shared/notes.md
   python3 scripts/orchestrator.py dispatch --beam .warp/beam.json
+dispatch recomputes pending gates first. A gate turns green when every member
+is merged or done, then this command prints the start lines.
   python3 scripts/orchestrator.py record --beam .warp/beam.json --id T-1 --plan "..." --result "..."
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
@@ -663,6 +665,26 @@ def launch_for(config: Optional[dict]) -> dict:
     }
 
 
+def format_dispatch(data: dict) -> list:
+    """Lines the dispatch tick prints. Empty when nothing can start."""
+    import beam as beam_mod
+
+    rows = beam_mod.ready(data)
+    cap = beam_mod.configured_cap(data.get("config") or {})
+    lines = []
+    for action in dispatch_actions(data, rows, cap=cap):
+        extra = " launch=%s" % action.get("launch")
+        if action.get("refuseInProcess"):
+            extra += " refuse-in-process"
+        if action["action"] == "dispatch-base-fix":
+            lines.append("dispatch-base-fix checkout=%s%s" % (action["checkout"], extra))
+        else:
+            lines.append(
+                "start %s checkout=%s branch=%s%s" % (action["id"], action["checkout"], action["branch"], extra)
+            )
+    return lines
+
+
 def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) -> list:
     """What to start after a dispatch loop: base fix first, then ready tickets.
 
@@ -821,17 +843,14 @@ def main(argv: Optional[list] = None) -> int:
     if args.cmd == "dispatch":
         import beam as beam_mod
 
-        data = _load(Path(args.beam))
-        rows = beam_mod.ready(data)
-        cap = beam_mod.configured_cap(data.get("config") or {})
-        for action in dispatch_actions(data, rows, cap=cap):
-            extra = " launch=%s" % action.get("launch")
-            if action.get("refuseInProcess"):
-                extra += " refuse-in-process"
-            if action["action"] == "dispatch-base-fix":
-                print("dispatch-base-fix checkout=%s%s" % (action["checkout"], extra))
-            else:
-                print("start %s checkout=%s branch=%s%s" % (action["id"], action["checkout"], action["branch"], extra))
+        path = Path(args.beam)
+        herald, data = beam_mod.refresh_pending_gates(path, run_dispatch=False)
+        for line in herald:
+            print(line)
+        if not data:
+            data = _load(path)
+        for line in format_dispatch(data):
+            print(line)
         return 0
     if args.cmd == "record":
         path = Path(args.beam)

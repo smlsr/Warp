@@ -243,6 +243,8 @@ One repair runs at a time, in plan order. If it alarms `lock-escape` again, or e
 
 `/warp-init` backfills `alarmRepairMinutes` and `maxAlarmRepairs` when `.warp/config.yaml` does not have them yet.
 
+When that pass opens and the ready set is empty, the listener recomputes every pending gate, and a red gate whose failure the beam can already disprove. A gate turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence stored is `members merged:` plus those ids, and the board is rewritten. Herald posts one line naming the condition that was cleared, `G1 pending cleared. Members merged. Tick ran.`, and that same pass runs the dispatch tick so work blocked only by that stale gate starts. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A ticket that is still alarmed does not. A green gate stays green. Every tick recomputes before `beam.py ready` and before `orchestrator.py dispatch`, so a merge does not wait for this pass. The pass is the backstop when no tick is running. Pause and stop do not recompute.
+
 ## Version
 
 The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-upgrade`. Init does not replace plugin files. `/warp-upgrade` does.

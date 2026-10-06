@@ -64,6 +64,8 @@ A dead listener is cleared and exactly one new `warp-listen` agent is launched (
 
 The same listener repairs `lock-escape` while the run is running. Every `alarmRepairMinutes` (default 15) it calls `alarm_repair.py next` and starts one repair. The repair widens that ticket's locks to the paths that escaped (`escaped` on the alarm). It does not take a path an in-flight ticket holds. It waits, then widens and starts. A queued ticket's overlapping lock can be widened. A failure moves to the next lock-escape ticket in that call. Success waits until the ticket is merged, or back on the normal path with the alarm cleared, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm and later passes skip it. Pause and stop do not repair. Other alarm reasons are left alone.
 
+When that pass opens and the ready set is empty, it also recomputes every pending gate. A gate turns green when every member is merged or done. Herald posts `G1 pending cleared. Members merged. Tick ran.` and the pass dispatches in that same output. Every tick recomputes before `ready()`, so a merge does not wait until the next pass. A green gate stays green. Pause and stop do not recompute.
+
 The orchestrator is the only merger. Reed reviews and does not merge. A Shuttle never merges and never pushes to the base branch (`baseBranch`, or the detected default).
 
 `ready()` refuses a ticket when:
@@ -80,9 +82,11 @@ The merge queue is serial: rebase, run `checkCommand` when it is set (otherwise 
 
 ## Gates
 
-G0–G11 from the schedule. A gate stays pending until every member is merged and someone records check evidence. Red blocks dependents. Members of the gate may still run; that is how G0 gets built.
+G0–G11 from the schedule. Members of a gate may still run; that is how G0 gets built. A blocking gate that is not green keeps every non-member that depends on a member out of `ready()`.
 
-Do not mark a gate green because the member PRs merged. The schedule's `checks` are the evidence.
+A pending gate, or a red gate whose failure the beam can disprove, turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence recorded is `members merged:` and those ids, and the board is rewritten. Every tick does this before `ready()`. The listener does it again when a pass opens (`alarmRepairMinutes`, default 15) and the ready set is empty, then runs the dispatch tick in that same pass. Herald posts one line, `G1 pending cleared. Members merged. Tick ran.` A stale red gate uses `red cleared` in that line. A second pass does not dispatch again. A green gate stays green.
+
+One member still not merged leaves the gate as it is. So does a ticket that is still alarmed or parked, and a check that is actually red: member CI, Bugbot, rollup, or checkCommand, or gate evidence that names a red check. A recovered ticket counts once it is merged or done. A ticket that is still alarmed does not.
 
 ## Model
 

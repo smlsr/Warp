@@ -492,6 +492,145 @@ def configured_cap(cfg: Optional[dict]) -> int:
     return cap
 
 
+def _member_done(ticket) -> bool:
+    """Merged or done on the beam. An alarm, a park, or an open ticket is not."""
+    return isinstance(ticket, dict) and ticket.get("status") in {"merged", "done"}
+
+
+def _actually_red(value) -> bool:
+    return str(value or "").strip().casefold() in {"red", "fail", "failed", "failure"}
+
+
+def _member_check_red(ticket) -> bool:
+    """A CI, Bugbot, rollup, or checkCommand result that is red on this ticket."""
+    if not isinstance(ticket, dict):
+        return False
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    return any(_actually_red(pr.get(key)) for key in ("ci", "bugbot", "rollup", "check"))
+
+
+def _gate_evidence_red(gate) -> bool:
+    """Evidence that names a red or failed check. A bare red status is not that."""
+    evidence = gate.get("evidence")
+    if not isinstance(evidence, str) or not evidence.strip():
+        return False
+    text = evidence.casefold()
+    return "red" in text or "fail" in text
+
+
+def _all_tickets_merged(tickets: dict) -> bool:
+    rows = [t for t in tickets.values() if isinstance(t, dict)]
+    return bool(rows) and all(_member_done(t) for t in rows)
+
+
+def _members_merged(tickets: dict, members: list) -> bool:
+    if not members:
+        return False
+    return all(isinstance(tid, str) and tid.strip() and _member_done(tickets.get(tid)) for tid in members)
+
+
+def advance_pending_gates(data: dict, now_s: str) -> list:
+    """Clear a pending or stale red gate the beam can already disprove.
+
+    A gate clears when every member is merged or done, or when every ticket
+    on the beam is merged or done. Green gates stay green. A member that is
+    not merged, a ticket that is still alarmed or parked, or a check that is
+    actually red (member CI, Bugbot, rollup, or checkCommand, or evidence
+    that names a red check) leaves the gate as it is. Evidence is the member
+    ids in gate order.
+    """
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    everyone = _all_tickets_merged(tickets)
+    flipped = []
+    for gate in data.get("gates") or []:
+        if not isinstance(gate, dict) or gate.get("status") not in {"pending", "red"}:
+            continue
+        members = list(gate.get("members") or [])
+        member_ok = _members_merged(tickets, members)
+        if members:
+            if not member_ok:
+                continue
+        elif not everyone:
+            continue
+        if _gate_evidence_red(gate):
+            continue
+        scope = [tickets.get(tid) for tid in members] if members else list(tickets.values())
+        if any(_member_check_red(t) for t in scope):
+            continue
+        prior = gate.get("status")
+        gate["status"] = "green"
+        if members:
+            gate["evidence"] = "members merged: " + ", ".join(str(tid) for tid in members)
+        else:
+            gate["evidence"] = "members merged: all tickets merged"
+        gate["greenAt"] = now_s
+        gate["_clearedCondition"] = prior
+        flipped.append(gate)
+    return flipped
+
+
+def gate_flip_lines(flipped: list, data: dict, run_dispatch: bool) -> list:
+    """One herald line per cleared gate, then the dispatch tick."""
+    lines = []
+    for gate in flipped:
+        condition = gate.pop("_clearedCondition", "pending")
+        lines.append("herald: %s %s cleared. Members merged. Tick ran." % (gate.get("key"), condition))
+    if flipped and run_dispatch:
+        lines.extend(orchestrator.format_dispatch(data))
+    return lines
+
+
+def write_board_files(beam_path: Path, data: dict) -> None:
+    parent = Path(beam_path).parent
+    atomic_write(parent / "BOARD.md", render_board(data))
+    atomic_write(parent / "board.html", render_html(data))
+
+
+def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False) -> tuple:
+    """Recompute pending gates on a live run. Returns (lines, beam).
+
+    A flip is saved with evidence and the board. No flip writes nothing.
+    Paused and stopped runs change nothing. Callers that already hold the
+    alarm-repair lock use advance_pending_gates instead of this.
+    """
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return ["gates: no beam at %s" % beam_path], {}
+    lock_path = beam_path.parent / ".alarm-repair.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            data = load_json(beam_path)
+            live, _why = _run_live(data)
+            if not live:
+                return [], data
+            _dt, now_s = coerce_now(now)
+            flipped = advance_pending_gates(data, now_s)
+            if not flipped:
+                return [], data
+            lines = gate_flip_lines(flipped, data, run_dispatch)
+            data["metrics"] = metrics(data)
+            atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            for gate in flipped:
+                journal(
+                    beam_path,
+                    {
+                        "type": "gate",
+                        "key": gate.get("key"),
+                        "status": "green",
+                        "evidence": gate.get("evidence"),
+                    },
+                )
+            try:
+                write_board_files(beam_path, data)
+            except Exception as exc:
+                print("board: not rewritten (%s)" % exc)
+            return lines, data
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
     """A blocking gate that is not green blocks non-members that depend on a member."""
     anc = ancestors(beam["tickets"], tid, anc_cache)
@@ -1311,6 +1450,15 @@ sha, mergedAt, via, merge method, and who approved, then prints one
 post-merge MUST DO (Jira Done, comments, locks, dependents, Slack).
 --jira KEY is rejected when it does not match jiraProject or jiraKeyPrefixes,
 unless --force is set. A plan id is not a Jira key.
+ready recomputes every pending gate first, and a stale red gate whose
+members are merged and whose checks are not red. A gate turns green when
+every member is merged or done, or when every ticket on the beam is. The
+evidence is those member ids, and the board is rewritten. Herald prints
+"<gate> pending cleared. Members merged. Tick ran." and start lines for the
+tickets that just became ready. A second call does not flip a green gate
+and does not print those start lines again. A member that is not merged, a
+ticket that is still alarmed or parked, or a check that is actually red
+leaves the gate as it is. Paused and stopped runs do not recompute.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
 uses inbound.py heartbeat. watchdog runs on every Warp tick and on start
@@ -1434,7 +1582,12 @@ def main() -> None:
         beam = ingest(Path(args.schedule), Path(args.plan) if args.plan else None, out, cfg)
         print(f"wrote {args.out} tickets={len(beam['tickets'])} gates={len(beam['gates'])}")
     elif args.cmd == "ready":
-        beam = load_json(Path(args.beam))
+        path = Path(args.beam)
+        notices, beam = refresh_pending_gates(path, run_dispatch=True)
+        for line in notices:
+            print(line)
+        if not beam:
+            sys.exit(f"no beam at {path}")
         rows = ready(beam, args.limit)
         for t in rows:
             print(f"{t['id']}\t{t['size']}\t{t['complexity']}\t{'AUTO' if t['autoMerge'] else 'REVIEW'}\t{t['summary']}")

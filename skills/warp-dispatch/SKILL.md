@@ -5,7 +5,7 @@ description: "Compute the ready set and claim tickets under lock, gate, and agen
 
 # Warp dispatch
 
-`scripts/beam.py ready` is the only ready-set. Do not reimplement it in the chat.
+`scripts/beam.py ready` is the only ready-set. Do not reimplement it in the chat. It recomputes every pending gate first. A gate turns green when every member is merged or done. Post `herald: <gate> pending cleared. Members merged. Tick ran.` when that line is present. `start` lines are the same ids as the table. Claim each id once.
 
 Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. Run `python3 <plugin>/scripts/beam.py watchdog --beam .warp/beam.json` before `ready()`. For each `shuttle: replace <id>` line, start exactly one Shuttle for that same ticket. Status is `recovering`. Keep the branch, pull request, `jira.startedAt`, and locks. Do not queue a duplicate and do not release the lock. A second tick must not start a second Shuttle for that id. `shuttle: alive` and `shuttle: fresh` are not new work. `shuttle: alarm <id> worker-died` means `maxRecoveries` is spent: do not start another. `watchdog: skipped` means the run is paused or stopped: do not recover. When a Shuttle you spawned returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`, then reconcile that ticket from the beam before the next claim.
 
@@ -68,4 +68,4 @@ Post the Herald payload it writes. The file is gitignored and stays on this mach
 ## Do not
 
 - Borrow a lock from a running ticket.
-- Start a gate-dependent ticket because the member PR is open. Open is not merged. Merged is not green, for a gate.
+- Start a gate-dependent ticket because the member PR is open. Open is not merged. A pending gate stays pending until every member is merged or done.

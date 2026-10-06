@@ -17,7 +17,7 @@
 .warp/notify-post.json     Last Herald payload (init, scan, a failed Jira move, or an inbound ack) and where to post it
 .warp/inbound-ack.json     Ack for the latest warp: command. Herald posts this before the action
 .warp/recovery.json        Herald lines when the watchdog replaces a dead listener or Shuttle
-.warp/alarm-repair.json    Herald lines when the listener starts, advances, or gives up a lock-escape repair
+.warp/alarm-repair.json    Herald lines when the listener starts, advances, or gives up a lock-escape repair, and when that pass turns a gate green
 .warp/pending-commands.jsonl  Channel lines waiting for inbound.py drain. A message id is applied once
 .warp/jira-map.json        plan id to issue key, with source and confidence. Wins over jiraKeyMap.
 .warp/jira-resolve.json    JQL for the external-id, label, and remote-link lookup
@@ -48,7 +48,7 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 
 ## Fields that matter
 
-- `deps`, `locks`, `gate`, `critical`, `rankDays` — from the schedule, not edited live.
+- `deps`, `locks`, `gate`, `critical`, `rankDays` — from the schedule, not edited live. A gate's `status` is `pending`, `green`, or `red`. A pending gate, or a red gate with no red check, becomes `green` when every member is `merged` or `done`, or when every ticket on the beam is. `evidence` is `members merged:` and those ids. `greenAt` is when that happened. A green gate is not set back to pending. Evidence that names a red check, or a member CI, Bugbot, rollup, or checkCommand that is red, keeps the gate. The tick and the listener's empty-ready pass do this. `beam.py gate` can still set `red` or `green` with evidence.
 - `autoMerge` — true when the size is in `autoMergeSizes`. Both paths wait for Bugbot and CI. This flag chooses auto-merge or `awaiting_approval`. `bugbotManual` applies only when the flag is false.
 - `pr.bugbot` (`pass` or `fail`), `pr.bugbotEvidence`, `pr.bugbotFindings`, `pr.bugbotFixed`, `pr.ci` (`green`), `pr.approvedAt`, `pr.reviewedSha`, `pr.rerun` (`new-commits`), `pr.url`.
 - `bugbot_running` — Bugbot is in progress again after new commits landed on a ticket that was already `awaiting_approval`. Jira is left at QA Ready.

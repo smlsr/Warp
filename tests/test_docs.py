@@ -199,6 +199,15 @@ class Since193DocTests(unittest.TestCase):
         self.assertIn("in-flight", section)
         self.assertIn("alarm_repair.py", section)
 
+    def test_pending_gates_recompute_when_members_are_merged(self):
+        sentence = "G1 pending cleared. Members merged. Tick ran."
+        for rel in ("README.md", "docs/GUIDE.md", "docs/RUNBOOK.md", "docs/COMMANDS.md"):
+            text = (ROOT / rel).read_text()
+            self.assertIn(sentence, text, rel)
+            self.assertIn("every member is merged or done", text, rel)
+        guide = (ROOT / "docs/GUIDE.md").read_text()
+        self.assertNotIn("Do not mark a gate green because the member PRs merged", guide)
+
 
 class OrchestratorDocTests(unittest.TestCase):
     FILES = (
