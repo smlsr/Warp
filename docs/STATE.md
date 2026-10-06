@@ -67,6 +67,10 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 
 ## Restart
 
+The orchestrator is the only merger. On start or resume it rebuilds from git before dispatch. `orchestrator.py rebuild --facts` classifies each ticket: `merged` when the work is on the base branch, `in-flight` when that ticket has an open branch or pull request, and `pending` otherwise. An explicit `parked` ticket stays parked. Then the dispatch loop runs.
+
+`checkCommand` (empty by default) is the rebase check. When it is empty, Bugbot and CI as configured are the required checks. `appendOnlyPaths` (empty by default) lists shared files whose conflicts keep both sides. A slot frees when required checks are green. Locks stay until merge or park. The cap is `maxAgents`. A project may set 18.
+
 1. `scripts/resume_hint.py` prints done/total and the pause flag. Cloud runners run this from the Warp commands. A local sessionStart hook only repeats it.
 2. `/warp-start` and `/warp-resume` run `beam.py watchdog` from `scan.py`. Every Warp tick runs it before `ready()`. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp, and Cursor does not restart it.
 3. Warp reconciles PRs before `ready()`.

@@ -33,6 +33,8 @@ One reference for the chat commands and the scripts they run. Config keys and de
 
 `jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
 
+The orchestrator is the only merger. `orchestrator.py` is the policy the master loop runs. It does not edit ticket product code. `queue --beam` prints the next merge candidate. `fail --beam --id --output` records a red check and parks on the third. `rebuild --beam --facts` classifies `merged`, `in-flight`, and `pending` from git. `resolve --path --append-only --base --ours --theirs` keeps both sides for `appendOnlyPaths` and prints `send-back` for any other path. `dispatch --beam` prints starts after a freed slot, a merge, or a failure. `record --beam --id --plan --result` stores the plan record and the result record. `checkCommand` empty means Bugbot and CI as configured. The cap is `maxAgents`. A project may set 18.
+
 ## Run control
 
 Plugin hooks do not run on cloud runners. `/warp-start`, `/warp-resume`, and `/warp-status` print the resume hint from `scripts/resume_hint.py` (`--root`, `--beam`). Follow it. It does not dispatch. `/warp-stop` (`scan.py stop`) and `/warp-pause` (`scan.py pause` or `beam.py pause`) append a `session-stop` line through `scripts/session_note.py --type session-stop`. A Shuttle finishes with `scripts/session_note.py --type subagent-stop`. A second note of the same type is skipped while it is still the last journal line. Local hooks in `hooks/hooks.json` only repeat those scripts.

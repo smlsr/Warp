@@ -1,5 +1,7 @@
 # Warp agents
 
+The orchestrator is the only merger. It reads `maxAgents`, `checkCommand`, and `appendOnlyPaths` from config. A project may set `maxAgents` to 18. Shuttles do not merge.
+
 Every pull request bumps the patch version and adds a changelog entry.
 
 - The version lives in `VERSION`. `.cursor-plugin/plugin.json` must carry the same number.

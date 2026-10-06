@@ -9,6 +9,14 @@ alwaysApply: false
 - Do not dispatch unless `runState` is `running`.
 - Do not start a ticket until every dep is merged and every blocking upstream gate is green.
 - Do not run two active tickets whose lock paths overlap.
+- The orchestrator is the only merger. It dispatches, merges, and tracks, and it writes no ticket product code. Shuttles and Reed do not merge and do not push to the base branch.
+- The only concurrency cap is `maxAgents`. A project may set 18. Do not hardcode a cap.
+- One sub-agent, one ticket, one branch, one isolated checkout (its own cloud VM, or its own git worktree when `runner` is `local`). Never two agents in one working copy. Never two agents on one ticket.
+- Ready means every dependency and every `after` id is merged on the base branch, and no lock path overlaps a lock held by an in-flight ticket. Overlap is the same path or a parent folder. Use the ticket's full lock list. An open or green pull request is not merged.
+- Dispatch at start and after every merge, failure, and freed slot. Starred and priority first, then lowest rank, until `maxAgents` are in flight. Do not hold a slot for a ticket that is not ready. Do not wait for a whole dependency level.
+- A slot frees when the required checks are green. Locks stay until merge or park. `checkCommand` empty means Bugbot and CI as configured. `appendOnlyPaths` is empty by default. A conflict there keeps both sides, every added line. Any other conflict is sent back. Do not hand-merge it.
+- The merge queue is serial: starred first, then lowest rank. Rebase, run the check, merge, delete the branch, dispatch. Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed`. The third red check parks the ticket, releases its locks, and leaves the branch and pull request open. A red base branch stops merging and a fix is dispatched ahead of every rank.
+- On start or resume, rebuild from git: merged on the base branch, in flight when a branch or pull request is open, otherwise pending. Done means every ticket is merged or explicitly parked, and the base branch is green.
 - There is no per-person cap. The only concurrency cap is `maxAgents`.
 - A size in `autoMergeSizes` auto-merges after Bugbot and CI are green, including L and XL when they are listed. L and XL are not special. The default list is S, M, so those wait for a provider approval or `warp:proceed <id>` unless you add them. QA Ready is not set before Bugbot is clean.
 - The git provider is `gitProvider` in `.warp/config.yaml` (`auto`, `github`, or `bitbucket`). `pushMerge: false` means local branches and a local merge, no push and no pull request.

@@ -64,13 +64,19 @@ A dead listener is cleared and exactly one new `warp-listen` agent is launched (
 
 The same listener repairs `lock-escape` while the run is running. Every `alarmRepairMinutes` (default 15) it calls `alarm_repair.py next` and starts one repair. The repair widens that ticket's locks to the paths that escaped (`escaped` on the alarm). It does not take a path an in-flight ticket holds. It waits, then widens and starts. A queued ticket's overlapping lock can be widened. A failure moves to the next lock-escape ticket in that call. Success waits until the ticket is merged, or back on the normal path with the alarm cleared, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm and later passes skip it. Pause and stop do not repair. Other alarm reasons are left alone.
 
+The orchestrator is the only merger. Reed reviews and does not merge. A Shuttle never merges and never pushes to the base branch (`baseBranch`, or the detected default).
+
 `ready()` refuses a ticket when:
 
 - the beam is paused
-- a dep is not merged
+- a dependency or an `after` id is not merged on the base branch. An open pull request does not count, even when its checks are green
 - a blocking upstream gate is not green
-- a lock path overlaps an active ticket
-- `maxAgents` is full. There is no per-person cap.
+- a lock path overlaps a lock held by an in-flight ticket, including when one path is a parent folder of the other. The check uses the ticket's full lock list
+- `maxAgents` is full. A green pull request has already freed its slot. Locks stay until merge or park. There is no per-person cap. A project may set 18.
+
+Dispatch runs at start and again after every merge, failure, and freed slot. Starred tickets first, then priority, then the lowest `rank`. It does not wait for a whole dependency level, and it does not hold a slot for a ticket that is not ready. One sub-agent, one ticket, one branch, one checkout: its own cloud VM, or its own git worktree when `runner` is `local`. The branch starts at the head of the base branch and keeps Warp's `warp/<id>` name.
+
+The merge queue is serial: rebase, run `checkCommand` when it is set (otherwise Bugbot and CI), merge, delete the branch, then dispatch. Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed`. `appendOnlyPaths` is the only shared-file conflict the orchestrator resolves, by keeping both sides. Any other conflict is sent back. The third red check parks the ticket. Parked tickets and what they block are in `warp-complete.html`. A red base branch stops merging and a fix is dispatched ahead of every rank. On start or resume, rebuild from git: merged on the base branch, in flight when a branch or pull request is open, otherwise pending. Done means every ticket is merged or explicitly parked, and the base branch is green.
 
 ## Gates
 

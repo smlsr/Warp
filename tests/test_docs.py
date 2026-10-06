@@ -200,6 +200,26 @@ class Since193DocTests(unittest.TestCase):
         self.assertIn("alarm_repair.py", section)
 
 
+class OrchestratorDocTests(unittest.TestCase):
+    FILES = (
+        "README.md",
+        "docs/COMMANDS.md",
+        "docs/CONFIG.md",
+        "docs/GUIDE.md",
+        "docs/RUNBOOK.md",
+        "docs/STATE.md",
+        "rules/warp-operating.mdc",
+    )
+
+    def test_orchestrator_is_the_only_merger_and_new_keys_are_named(self):
+        for rel in self.FILES:
+            text = (ROOT / rel).read_text()
+            self.assertIn("orchestrator is the only merger", text, rel)
+            self.assertIn("checkCommand", text, rel)
+            self.assertIn("appendOnlyPaths", text, rel)
+            self.assertIn("maxAgents", text, rel)
+
+
 class ConfigDocTests(unittest.TestCase):
     def test_every_example_key_is_in_config_doc(self):
         example = (ROOT / "assets/config.example.yaml").read_text()
@@ -328,6 +348,7 @@ class ScriptHelpTests(unittest.TestCase):
             "jira_sync.py": ("--write", "qa-ready", "no-transition", "--no-category"),
             "provider.py": ("merge-local", "--reason", "pushMerge"),
             "beam.py": ("--via", "maxAgents", "ingest", "heartbeat", "watchdog", "worker-died", "staleMinutes"),
+            "orchestrator.py": ("checkCommand", "appendOnlyPaths", "--facts", "send-back", "parked", "--output"),
             "version.py": (".warp/version",),
             "bump_version.py": ("--minor", "--major", "--note"),
             "notify.py": ("outbox", "quiet"),
@@ -402,6 +423,7 @@ class ScriptHelpTests(unittest.TestCase):
             "session_note.py",
             "mcp_allow.py",
             "alarm_repair.py",
+            "orchestrator.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

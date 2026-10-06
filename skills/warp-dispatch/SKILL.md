@@ -16,11 +16,13 @@ Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the 
 - A blocking gate that is not green blocks any non-member with that gate's member in its ancestor set. G0 members can run; tickets that depend on L-01, M-01, or D-01 cannot, until G0 is green.
 - Active lock paths must not overlap, including prefix (`internal/app` blocks `internal/app/stub`).
 - Cap is `maxAgents` minus active. There is no per-person cap.
-- Order is critical path, then `rankDays` descending, then id.
+- Order is starred (including the critical path), then priority, then lowest `rank`. When the plan has no `rank`, a higher `rankDays` starts first.
+- The cap is `maxAgents`. A project may set 18. A green pull request does not hold a slot. It does hold its locks until merge or park.
+- One checkout per ticket. Cloud is its own VM. Local is its own git worktree. Never two agents in one working copy.
 
 ## Claim
 
-For each id `ready` prints, claim it, then start a Shuttle in this same workspace (local agent or cloud agent on this clone). The kickoff is only:
+For each id `ready` prints, claim it, then start a Shuttle in its own checkout. `runner: cloud` is a cloud VM. `runner: local` is a git worktree. Never two agents in one working copy. The kickoff is only:
 
 ```
 IMPLEMENT A-03

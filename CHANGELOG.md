@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.2
+
+- The orchestrator is the only merger. It dispatches, merges, and tracks, and it writes no ticket product code. Shuttles and Reed do not merge. The cap is `maxAgents`. A project may set 18.
+- Ready requires every dependency and `after` id to be merged on the base branch, and no overlap with a lock an in-flight ticket holds, including a parent folder, using the full lock list. A green pull request frees the slot and keeps the locks until merge or park. Dispatch fills free slots from the ready set, starred and priority first, then lowest rank.
+- The merge queue is serial. `checkCommand` empty means Bugbot and CI as configured. `appendOnlyPaths` defaults to empty and keeps both sides of a conflict. Any other conflict is sent back. The third red parks the ticket. A red base branch stops merging. Restart classifies merged, in flight, and pending from git.
+
 ## 1.4.1
 
 - The one `warp-listen` listener repairs `lock-escape` alarms, and no other reason, while the run is running. `alarmRepairMinutes` (default 15) opens a pass. `alarm_repair.py next` is idempotent if the listener ticks twice. Pause and stop do not repair.

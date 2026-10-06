@@ -48,6 +48,14 @@ Lock-escape repair is the listener's job, not this tick. Do not launch a repair 
 
 A second tick must not launch a second replacement for the same worker. The first write reserved it.
 
+## Orchestrator
+
+The orchestrator is the only merger. This loop dispatches, merges, and tracks. It writes no ticket product code. The cap is `maxAgents`. A project may set 18. One sub-agent, one ticket, one branch, one checkout (`cloud` is its own VM, `local` is its own git worktree).
+
+On start, resume, and after every merge, failure, and freed slot: rebuild when the run is starting (`orchestrator.py rebuild --facts`), then `beam.py ready`, then start that list only. Starred and priority first, then lowest rank. Do not hold a slot for a ticket that is not ready. Do not wait for a dependency level. A slot frees when required checks are green. Locks stay until merge or park.
+
+`checkCommand` empty means Bugbot and CI as configured. `appendOnlyPaths` is empty by default. Keep both sides of a conflict there. Send any other conflict back. Park on the third red (`orchestrator.py fail`). Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed`. If the base branch is red, stop merging and dispatch a fix ahead of every rank. Done means every ticket is merged or explicitly parked, and the base branch is green.
+
 ## One running tick
 
 1. `beam.py check`

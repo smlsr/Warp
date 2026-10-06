@@ -43,7 +43,7 @@ python3 <plugin>/scripts/inbound.py drain --beam .warp/beam.json
 ```
 
 3. For each `ack:` line, Herald posts that sentence in the same channel before you act. The payload is `.warp/inbound-ack.json`. Post it first. Then do the action under that ack, and only that.
-4. `warp:proceed <id>` merges that one awaiting_approval ticket. The id may be the plan id or the Jira key. Follow the `proceed.py` steps drain prints: merge, then the post-merge MUST DO, including Jira to Done when `jiraDoneOnManualMerge` is true. Other waiting tickets stay waiting. A bad id was already acked. Do not merge anything else.
+4. `warp:proceed <id>` is the orchestrator merging that one awaiting_approval ticket. A Shuttle does not merge. The id may be the plan id or the Jira key. Follow the `proceed.py` steps drain prints: merge, then the post-merge MUST DO, including Jira to Done when `jiraDoneOnManualMerge` is true. Other waiting tickets stay waiting. A bad id was already acked. Do not merge anything else.
 5. `warp:retry <id>` requeues that alarmed ticket. `warp:status` posts the digest after the ack. `warp:pause` and `warp:stop` have already stopped the listener. Exit the loop. Do not keep reading. `warp:resume` and `warp:start` leave you as the one listener. Do not launch a second.
 6. An unknown or malformed `warp:` command was acked with the accepted forms. Do nothing else.
 7. Wait `pollSeconds`, then read again.
