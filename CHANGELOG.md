@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.26
+
+- User docs match 1.3.20 through 1.3.25: a README Dead workers section, autoMergeSizes including L and XL, one listener, agreed jiraProject with no project --set, and tests that keep those sentences.
+
 ## 1.3.25
 
 - Customize does not install a pasted GitHub URL. `.cursor-plugin/marketplace.json` lists the root plugin so a team marketplace import of https://github.com/smlsr/Warp can find Warp. `plugin.json` adds publisher, repository, and homepage. The logo remains `assets/logo.svg`. The README install section says where to paste the URL, then install from Customize and reload.
