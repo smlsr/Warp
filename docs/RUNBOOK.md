@@ -1,5 +1,19 @@
 # Runbook
 
+## Orchestrator
+
+The orchestrator is the only merger. It dispatches, merges, and tracks. It writes no ticket product code. Shuttles do not merge, do not push to the base branch, and do not ask mid-ticket. Reed reviews and does not merge.
+
+Ready work is a ticket whose dependency and `after` lists are merged on the base branch, and whose full lock list does not overlap a lock an in-flight ticket holds. Overlap includes a parent folder. An open or green pull request is not merged. The dispatch loop runs at start and after every merge, failure, and freed slot. Starred and priority tickets start first, then the lowest rank, until `maxAgents` are in flight. A project may set 18. A slot frees when the sub-agent reports a pull request whose required checks are green. Locks stay until that pull request is merged or the ticket is parked.
+
+The merge queue is serial and automatic for sizes in `autoMergeSizes`: rebase onto the current base, run `checkCommand` on that head, merge, delete the branch, dispatch. When `checkCommand` is empty, the check is Bugbot and CI as configured. Several green auto-merge pull requests may be stacked in rank order and checked once. A red stack falls back to one pull request at a time. Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed` before they enter the queue.
+
+`appendOnlyPaths` is empty by default. A conflict in one of those files keeps both sides, every added line. Any other conflict is sent back to a sub-agent on the same branch. Do not hand-merge it. A red pull request, or red after rebase, goes back the same way with the failing output. It takes a slot at that ticket's rank. `orchestrator.py fail --output` records it. The third red parks the ticket: locks release, the branch and pull request stay open, and the blocker is written on the plan record. Tickets that do not depend on it keep going. Parked tickets and what they block are in `.warp/warp-complete.html`.
+
+If the base branch goes red, stop merging. Sub-agents keep working. Dispatch a fix ahead of every rank. Resume the queue when the base is green. On start or resume, rebuild from git (`merged`, `in-flight`, `pending`) and run the dispatch loop. Done means every ticket is merged or explicitly parked, and the base branch is green.
+
+One sub-agent, one ticket, one branch, one checkout. `runner: cloud` is its own VM. `runner: local` is its own git worktree. Never two agents in one working copy.
+
 ## Pause overnight but keep the board
 
 `/warp-pause` with a reason. In-flight Shuttles finish the current step and checkpoint. The HTML board stays valid. `/warp-resume` reconciles, then ticks.

@@ -28,6 +28,7 @@ from beam import (  # noqa: E402
     TERMINAL,
     atomic_write,
     auto_merge,
+    configured_cap,
     default_config,
     ingest,
     journal,
@@ -160,7 +161,10 @@ def from_schedule(path: Path) -> Optional[dict]:
                 "jiraKeyForced": bool(t.get("jiraKeyForced")),
                 "summary": t.get("summary") or t.get("title") or "",
                 "deps": t.get("deps") or t.get("blockedBy") or t.get("blockedByTempIds") or [],
+                "after": t.get("after") or [],
                 "locks": t.get("locks") or [],
+                "starred": bool(t.get("starred") or t.get("star")),
+                "rank": t.get("rank"),
                 "size": _size_from_label(str(t.get("size") or "M")),
                 "hours": t.get("hours"),
                 "critical": bool(t.get("critical")),
@@ -552,6 +556,9 @@ def to_schedule(graph: dict, auto_sizes=None) -> dict:
                 "size": (size := _size_from_label(str(t.get("size") or "M"))),
                 "hours": t.get("hours") or {"S": 4, "M": 7, "L": 11, "XL": 16}.get(size, 7),
                 "critical": bool(t.get("critical")),
+                "starred": bool(t.get("starred") or t.get("star")),
+                "rank": t.get("rank"),
+                "after": list(t.get("after") or []),
                 "rankDays": t.get("rankDays") or 0,
                 "gate": t.get("gate"),
                 "module": t.get("module"),
@@ -570,7 +577,7 @@ def to_schedule(graph: dict, auto_sizes=None) -> dict:
             graph["tickets"],
             graph.get("gates") or [],
             graph.get("criticalPath") or [],
-            int(graph.get("maxAgents") or 18),
+            configured_cap({"maxAgents": graph.get("maxAgents")} if graph.get("maxAgents") not in (None, "") else {}),
             auto_sizes,
         ),
     }
@@ -685,7 +692,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
         list(beam["tickets"].values()),
         beam.get("gates") or [],
         beam.get("program", {}).get("criticalPath") or [],
-        int((beam.get("config") or {}).get("maxAgents") or 18),
+        configured_cap(beam.get("config") or {}),
         (beam.get("config") or {}).get("autoMergeSizes"),
     )
     plan = {
@@ -792,6 +799,7 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
             print("listener: not stopped (%s)" % e)
     print(state)
     if state == "running":
+        print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
         for line in watchdog(beam_path):
             print(line)
     if state == "stopped":

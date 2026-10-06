@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import orchestrator
+
 SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 DEFAULT_AUTO_MERGE_SIZES = ["S", "M"]
 _SIZE_TOKEN = re.compile(r"^(XL|S|M|L)\b", re.I)
@@ -53,6 +55,7 @@ STATUSES = [
     "done",
     "blocked",
     "alarm",
+    "parked",
     "skipped",
 ]
 
@@ -325,10 +328,15 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
             "autoMerge": merged,
             "hours": t.get("hours"),
             "deps": list(t.get("deps") or []),
+            "after": list(t.get("after") or []),
             "unlocks": list(t.get("unlocks") or []),
             "locks": list(t.get("locks") or []),
             "critical": bool(t.get("critical")),
+            "starred": bool(t.get("starred") or t.get("star")),
+            "rank": t.get("rank"),
             "rankDays": t.get("rankDays"),
+            "plan": t.get("plan") if isinstance(t.get("plan"), dict) else {},
+            "result": t.get("result") if isinstance(t.get("result"), dict) else {},
             "gate": t.get("gate") or None,
             "priority": t.get("priority"),
             "acs": t.get("acs"),
@@ -435,7 +443,7 @@ def ancestors(tickets: dict, tid: str, cache: dict, stack: Optional[set] = None)
         return set()
     stack.add(tid)
     acc: set[str] = set()
-    for d in tickets.get(tid, {}).get("deps") or []:
+    for d in orchestrator.blockers(tickets.get(tid, {})):
         if d == tid:
             continue
         acc.add(d)
@@ -446,23 +454,40 @@ def ancestors(tickets: dict, tid: str, cache: dict, stack: Optional[set] = None)
 
 
 def lock_overlap(a: list[str], b: list[str]) -> bool:
-    sa, sb = set(a), set(b)
+    """Same path, or one path is a parent folder of the other.
+
+    The lists are the tickets' full lock lists. A shortened board line is not
+    an input to this check.
+    """
+    sa = {orchestrator._norm(x) for x in a if orchestrator._norm(x)}
+    sb = {orchestrator._norm(y) for y in b if orchestrator._norm(y)}
     if sa & sb:
         return True
-    # prefix overlap: HumanifyOS/internal/app blocks HumanifyOS/internal/app/stub
     for x in sa:
         for y in sb:
-            if x == y or x.startswith(y.rstrip("/") + "/") or y.startswith(x.rstrip("/") + "/"):
+            if x == y or x.startswith(y + "/") or y.startswith(x + "/"):
                 return True
     return False
 
 
 def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
+    """Locks held by in-flight tickets. A parked ticket is not in this list."""
     held = []
     for t in beam["tickets"].values():
         if t["status"] in ACTIVE:
-            held.append((t["id"], t["locks"]))
+            held.append((t["id"], orchestrator.lock_paths(t)))
     return held
+
+
+def configured_cap(cfg: Optional[dict]) -> int:
+    """maxAgents from config. The product default applies only when it is unset.
+
+    A project may set 18. The orchestrator does not special-case that number.
+    """
+    cap = orchestrator.agent_cap(cfg)
+    if cap is None:
+        return int(default_config()["maxAgents"])
+    return cap
 
 
 def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
@@ -479,45 +504,62 @@ def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
 
 
 def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
-    # People are not a scheduling axis. A human roster belonged to the manual
-    # plan. The only cap is maxAgents (concurrent Shuttles).
+    """Tickets that may start now.
+
+    A blocker counts only when it is merged to the base branch. An open or
+    green pull request does not. Lock overlap uses each ticket's full lock
+    list, including a parent folder. The cap is maxAgents minus slots still
+    held. A green pull request has already freed its slot. A red base branch
+    reserves one slot for a fix when no fix ticket exists yet. Ready tickets
+    fill the remaining slots. Nothing is held back for a ticket that is not
+    ready, and a later ticket does not wait for an unrelated dependency level.
+    """
     state = beam.get("runState") or ("paused" if beam.get("paused") else "running")
     if beam.get("paused") or state in {"paused", "stopped"}:
         return []
     cfg = beam.get("config") or {}
-    cap = int(cfg.get("maxAgents", 18))
-    running = sum(1 for t in beam["tickets"].values() if t["status"] in ACTIVE)
+    cap = configured_cap(cfg)
+    running = sum(1 for t in beam["tickets"].values() if orchestrator.holds_slot(t, cfg))
     slots = max(0, cap - running)
+    if orchestrator.needs_base_fix(beam) and slots > 0:
+        slots -= 1
     if limit is not None:
         slots = min(slots, limit)
     if slots == 0:
         return []
     anc_cache: dict = {}
     held = held_locks(beam)
+    base_red = not orchestrator.base_is_green(beam)
     candidates = []
     for t in beam["tickets"].values():
         if t["status"] not in {"queued", "blocked"}:
             continue
-        unmet = [d for d in t["deps"] if beam["tickets"].get(d, {}).get("status") not in TERMINAL]
+        unmet = [
+            d
+            for d in orchestrator.blockers(t)
+            if not orchestrator.merged_on_base(beam["tickets"].get(d, {}).get("status"))
+        ]
         if unmet:
             continue
         gb = gate_blocks(beam, t["id"], anc_cache)
         if gb:
             continue
+        paths = orchestrator.lock_paths(t)
         conflict = None
         for oid, locks in held:
-            if lock_overlap(t["locks"], locks):
+            if lock_overlap(paths, locks):
                 conflict = oid
                 break
         if conflict:
             continue
         candidates.append(t)
-    candidates.sort(key=lambda t: (not t["critical"], -(t.get("rankDays") or 0), t["id"]))
+    candidates.sort(key=lambda t: orchestrator.sort_key(t, base_red=base_red))
     chosen = []
     for t in candidates:
         if len(chosen) >= slots:
             break
-        if any(lock_overlap(t["locks"], c["locks"]) for c in chosen):
+        paths = orchestrator.lock_paths(t)
+        if any(lock_overlap(paths, orchestrator.lock_paths(c)) for c in chosen):
             continue
         chosen.append(t)
     return chosen
@@ -542,7 +584,7 @@ def metrics(beam: dict) -> dict:
         for t in beam["tickets"].values()
         if t["status"] not in TERMINAL
     )
-    cap = int((beam.get("config") or {}).get("maxAgents", 18))
+    cap = configured_cap(beam.get("config") or {})
     # rough: remaining agent-hours / parallelism, critical path still bounds it
     crit = beam.get("program", {}).get("criticalPath") or []
     crit_left = [
@@ -812,7 +854,11 @@ def render_board(beam: dict) -> str:
         lines.append("None.")
     else:
         for t in active:
-            lines.append(f"- **{t['id']}** {t['status']} agent={t.get('agent')} locks={', '.join(t['locks'][:2])}")
+            shown = orchestrator.lock_paths(t)
+            preview = ", ".join(shown[:2])
+            if len(shown) > 2:
+                preview = "%s, …" % preview
+            lines.append(f"- **{t['id']}** {t['status']} agent={t.get('agent')} locks={preview}")
     merged_rows = [t for t in beam["tickets"].values() if t["status"] in {"merged", "done"}]
     lines += ["", "## Merged", ""]
     if not merged_rows:
@@ -827,7 +873,7 @@ def render_board(beam: dict) -> str:
         if len(merged_rows) > 20:
             lines.append(f"- … {len(merged_rows) - 20} more")
     nxt = ready(beam, limit=12)
-    lines += ["", "## Next ready (critical first)", ""]
+    lines += ["", "## Next ready (starred, then rank)", ""]
     if not nxt:
         lines.append("None — paused, capped, gated, or lock-blocked.")
     else:
@@ -1217,6 +1263,8 @@ def default_config() -> dict:
         "pollSeconds": 300,
         "reportOnComplete": True,
         "reportPath": ".warp/warp-complete.html",
+        "checkCommand": "",
+        "appendOnlyPaths": [],
     }
 
 

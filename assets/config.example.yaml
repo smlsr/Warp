@@ -8,7 +8,18 @@ model: claude-sonnet-5-5-high
 # The slug must match the Cursor model picker. Override it here.
 
 maxAgents: 18
-# Concurrent Shuttles. No per-person cap.
+# Concurrent Shuttles. No per-person cap. A project may set 18.
+# The orchestrator reads this value. It does not assume a fixed cap.
+
+checkCommand: ""
+# Optional. The orchestrator runs this on a rebased head before it merges.
+# Empty: the required checks are Bugbot and CI as configured
+# (bugbotRequired, bugbotManual). Warp does not invent a build command.
+
+appendOnlyPaths: []
+# Shared files a ticket may append to, besides its lock paths. Empty by default.
+# A conflict in one of these files keeps both sides, every added line.
+# Any other conflict is sent back to a sub-agent. Nothing here is a special filename.
 
 autoMergeSizes: [S, M]
 # Sizes in this list auto-merge after Bugbot and CI. Sizes not in autoMergeSizes wait.

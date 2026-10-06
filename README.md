@@ -2,9 +2,9 @@
 
 Warp is a Cursor plugin that scans a repo for a plan, builds a schedule, and dispatches workers under dependency, lock, and gate rules. It is not tied to one product. A third party can point it at their own specs.
 
-Shuttle workers implement one ticket each. Reed reviews and merges, or holds a large ticket for approval. Herald posts to Slack and Teams. The beam survives a stop.
+Shuttle workers implement one ticket each. Reed reviews. The orchestrator is the only merger: the Warp master loop dispatches, merges, and tracks, and it writes no ticket product code. Herald posts to Slack and Teams. The beam survives a stop.
 
-There is no per-person cap. The only concurrency cap is `maxAgents`.
+There is no per-person cap. The only concurrency cap is `maxAgents`. A project may set 18. The orchestrator reads that config value.
 
 ## Quick start
 
@@ -451,7 +451,9 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 |---|---|---|
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
-| `maxAgents` | `18` | Concurrent Shuttles. The only cap. |
+| `maxAgents` | `18` | Concurrent Shuttles. The only cap. A project may set 18. |
+| `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. |
+| `appendOnlyPaths` | empty | Shared files a ticket may append to, besides its locks. Empty by default. A conflict there keeps both sides. |
 | `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI, including L and XL when they are listed. L and XL are not special. Sizes not in `autoMergeSizes` wait. The default leaves L and XL waiting. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |
 | `notify` | `verbose` | Every claim and tick, plus init and scan. `quiet` posts alarms, approval waits, a red gate, and pause/stop. `warp:status` is always answered. |

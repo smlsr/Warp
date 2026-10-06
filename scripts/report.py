@@ -50,7 +50,7 @@ WORKING = {"claimed", "recovering", "planning", "coding", "fix", "merging"}
 BUGBOT = {"review", "bugbot_running"}
 HUMAN = {"awaiting_approval"}
 OPEN = {"queued"} | set(beam.ACTIVE)
-FINISHED = {"merged", "done", "skipped"}
+FINISHED = {"merged", "done", "skipped", "parked"}
 KIND = {
     "claimed": "bar",
     "recovering": "bar",
@@ -446,7 +446,7 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
     spend = 0
     any_spend = False
     usage_tickets = 0
-    done = blocked = failed = skipped = 0
+    done = blocked = failed = skipped = parked = 0
     auto_merged = manual_merged = 0
     for ticket in tickets:
         status = ticket.get("status") or ""
@@ -462,6 +462,8 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
             failed += 1
         elif status == "skipped":
             skipped += 1
+        elif status == "parked":
+            parked += 1
         if status == "alarm" or ticket.get("alarm"):
             alarms += 1
         if "stuck" in str(ticket.get("alarm") or "").casefold():
@@ -581,6 +583,7 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
         "blocked": str(blocked),
         "failed": str(failed),
         "skipped": str(skipped),
+        "parked": str(parked),
         "autoMerged": str(auto_merged),
         "manualMerged": str(manual_merged),
         "agentHours": _show_hours(estimate.get("agentHours") if estimate.get("agentHours") is not None else program.get("agentHours")),
@@ -604,6 +607,9 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
         "jiraComments": str(jira_comments),
         "waves": str(len(wave_rows)),
     }
+    import orchestrator
+
+    parked_rows = orchestrator.parked_blocks(data)
     return {
         "version": ver,
         "mode": ctx.get("mode") or "local",
@@ -620,6 +626,7 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
         "waves": wave_rows,
         "steps": step_rows,
         "notes": notes,
+        "parked": parked_rows,
     }
 
 
@@ -629,6 +636,7 @@ def totals_plain(summary: dict) -> str:
         "Tickets: {} total, {} done, {} blocked, {} failed, {} skipped".format(
             t["total"], t["done"], t["blocked"], t["failed"], t["skipped"]
         ),
+        "Parked: {}".format(t.get("parked", "0")),
         "Auto-merged (sizes in autoMergeSizes): {}".format(t["autoMerged"]),
         "Manual merged (sizes not in autoMergeSizes): {}".format(t["manualMerged"]),
         "Agent hours (estimate): {}".format(t["agentHours"]),
@@ -914,6 +922,17 @@ a { color: var(--bar); }
         esc(summary["end"]),
         esc(summary["totals"]["elapsed"]),
     )
+    parked_items = []
+    for row in summary.get("parked") or []:
+        blocks = ", ".join(row.get("blocks") or []) or "nothing"
+        parked_items.append(
+            "<li><strong>{}</strong> blocks {}</li>".format(esc(row.get("id") or ""), esc(blocks))
+        )
+    parked_html = (
+        "<h2>Parked</h2><ul class=\"parked\">{}</ul>".format(
+            "".join(parked_items) or "<li>None.</li>"
+        )
+    )
     table = (
         "<div class=\"wrap\"><table>"
         "<thead><tr>"
@@ -932,7 +951,7 @@ a { color: var(--bar); }
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<title>Warp completion report</title><style>{}</style></head><body>"
         "{}{}<h2>Totals</h2><div class=\"strip\">{}</div>"
-        "<h2>Tickets</h2>{}<h2>Waves</h2><p>{}</p>{}<ol class=\"waves\">{}</ol>"
+        "<h2>Tickets</h2>{}{}<h2>Waves</h2><p>{}</p>{}<ol class=\"waves\">{}</ol>"
         "<h2>Timeline</h2>{}<h2>Concurrency</h2>{}"
         "<h2>Final counts</h2><pre class=\"totals\">{}</pre>"
         "<h2>Data quality</h2><ul class=\"notes\">{}</ul>"
@@ -943,6 +962,7 @@ a { color: var(--bar); }
         header,
         "".join(cards),
         table,
+        parked_html,
         esc(ALGO),
         legend,
         "".join(wave_items),

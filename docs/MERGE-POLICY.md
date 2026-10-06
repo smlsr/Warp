@@ -1,6 +1,6 @@
 # Merge policy
 
-A size in `autoMergeSizes` auto-merges. A size not in `autoMergeSizes` waits. L and XL are not special.
+The orchestrator is the only merger. A size in `autoMergeSizes` enters the merge queue when checks are green. A size not in `autoMergeSizes` waits for `/warp-proceed` or `warp:proceed`. L and XL are not special. `checkCommand` empty means Bugbot and CI. `appendOnlyPaths` conflicts keep both sides.
 
 | Size | Class | Auto | Required before the last step |
 |---|---|---|---|
