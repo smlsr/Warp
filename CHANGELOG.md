@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.4
+
+- A pending gate, or a stale red gate, turns green when every member is merged or done, or when every ticket on the beam is. The evidence is `members merged:` and those ids, and the board is rewritten. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A green gate stays green.
+- Every tick recomputes pending gates before `beam.py ready` and `orchestrator.py dispatch`. The listener's `alarmRepairMinutes` pass (default 15) does it again when the ready set is empty, then runs the dispatch tick in that same pass. Herald posts `G1 pending cleared. Members merged. Tick ran.` A second pass does not dispatch again. Pause and stop do not recompute.
+
 ## 1.4.3
 
 - One checkout per ticket. On `runner: cloud` the Warp session launches one Cursor cloud agent per ticket (`environment: cloud`, `subagent_type: shuttle`). The plugin has no cloud-agent API, so `checkout.py implement` refuses to write the ticket in the orchestrator checkout. On `runner: local`, `git worktree add` and `git worktree remove` give each ticket its own worktree and branch. The beam stores the agent id and worktree path. A second agent on the same ticket, or two occupied tickets in one worktree, is refused.

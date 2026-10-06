@@ -27,7 +27,7 @@ Decision: auto-merge (size M)
 
 - A human emoji on Slack.
 - A green Bugbot with an AC missing.
-- A gate member merging. The gate still needs its checks.
+- A gate member merging. The gate stays pending until every member is merged or done.
 - An approval on a red pipeline.
 
 ## Jira

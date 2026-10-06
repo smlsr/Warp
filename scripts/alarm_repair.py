@@ -66,6 +66,13 @@ Subcommand: next. One repair Shuttle at a time, for lock-escape only.
 alarmRepairMinutes (default 15) is how often a running listener opens a pass.
 maxAlarmRepairs (default 3) is the cap per ticket. A second tick is idempotent.
 Paused and stopped runs print alarm-repair: skipped and change nothing.
+When that pass opens and the ready set is empty, pending gates are
+recomputed, including a stale red gate the beam can disprove. A gate turns
+green when every member is merged or done, or when every ticket is. Herald
+prints "<gate> pending cleared. Members merged. Tick ran." and the dispatch
+tick prints start lines in that same output. A second pass does not start
+them again. A member that is not merged, a ticket that is still alarmed or
+parked, or a check that is actually red leaves the gate as it is.
 The repair widens the ticket's locks to the paths on `escaped` and does not
 clear the alarm. It waits when an in-flight ticket holds one of those paths.
 A queued ticket does not block the widen. Herald lines, including the paths
@@ -546,6 +553,7 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
         cap = DEFAULT_MAX_ALARM_REPAIRS
     repair = _repair_state(data)
     lines: list = []
+    flipped_gates: list = []
     if repair.get("active"):
         changed = _settle_active(data, beam_path, now_s, cap, returned, error, lines)
     elif repair.get("naming"):
@@ -571,11 +579,34 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
         changed = False
     else:
         _open_pass(repair, now_s)
+        # Snapshot before repair mutates the beam. The idle case Shawn hit
+        # is an empty ready set: nothing in flight, nothing waiting, no
+        # alarms, and pending gates whose members are already merged.
+        ready_empty = not beam.ready(data)
         _finish_pass_or_start(data, beam_path, now_s, cap, lines)
+        if ready_empty:
+            flipped_gates = beam.advance_pending_gates(data, now_s)
+            if flipped_gates:
+                lines.extend(beam.gate_flip_lines(flipped_gates, data, True))
         changed = True
     if changed:
         data["metrics"] = beam.metrics(data)
         beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        if flipped_gates:
+            for gate in flipped_gates:
+                beam.journal(
+                    beam_path,
+                    {
+                        "type": "gate",
+                        "key": gate.get("key"),
+                        "status": "green",
+                        "evidence": gate.get("evidence"),
+                    },
+                )
+            try:
+                beam.write_board_files(beam_path, data)
+            except Exception as exc:
+                print("board: not rewritten (%s)" % exc)
         herald = [line[len("herald: ") :] for line in lines if line.startswith("herald: ")]
         if herald:
             beam.atomic_write(
