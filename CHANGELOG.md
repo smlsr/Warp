@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0
+
+- This marks 1.4.0.
+
 ## 1.3.26
 
 - A Shuttle and the one `warp-listen` listener write a heartbeat on the beam (`lastSeenAt` and the agent id) at claim, at each status change, and while the turn is alive. `beam.py heartbeat` and `inbound.py heartbeat` do that. There is no process table. A dead turn does not notify Warp, and Cursor does not restart it. Plugin hooks do not run on cloud runners.
