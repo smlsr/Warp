@@ -2,6 +2,9 @@
 
 ## 1.3.26
 
+- A Shuttle and the one `warp-listen` listener write a heartbeat on the beam (`lastSeenAt` and the agent id) at claim, at each status change, and while the turn is alive. `beam.py heartbeat` and `inbound.py heartbeat` do that. There is no process table. A dead turn does not notify Warp, and Cursor does not restart it. Plugin hooks do not run on cloud runners.
+- `beam.py watchdog` runs on every Warp tick and on `/warp-start` and `/warp-resume`. `staleMinutes` (default 15) marks a worker dead when the heartbeat is older than that, or it never heartbeated and the claim or listener start is older than that. Pause and stop do not replace anyone. A fresh heartbeat is left alone. `/warp-init` backfills the key.
+- A dead listener is cleared and exactly one replacement is reserved. Herald posts `Listener died. A new one started.` A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks, with status `recovering`, and exactly one new Shuttle is dispatched. Herald posts `<id> worker died. A new Shuttle started.` A second tick does not start a second worker. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
 - User docs match 1.3.20 through 1.3.25: a README Dead workers section, autoMergeSizes including L and XL, one listener, agreed jiraProject with no project --set, and tests that keep those sentences.
 
 ## 1.3.25
