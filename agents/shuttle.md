@@ -23,7 +23,9 @@ Ticket id, Jira key, lock paths, size, autoMerge flag, model slug, preamble path
 
 ## Checkpoint
 
-After every status change, run `scripts/beam.py set`. If the session dies, the next Shuttle for this id resumes from the branch and the beam, not from chat memory.
+After every status change, run `scripts/beam.py set`, then `scripts/beam.py heartbeat --id <id> --agent <your agent id>`. Also heartbeat at least every 5 minutes while this turn is alive, inside `staleMinutes` (default 15). `lastSeenAt` and your agent id are the only signal Warp has. A dead turn does not notify Warp. Cursor does not restart you. There is no process table. Plugin hooks do not run on cloud runners.
+
+If the session dies, the watchdog sets this ticket to `recovering` and starts one new Shuttle on the same branch. The pull request, `jira.startedAt`, and locks stay. You do not release them. If you are that replacement, status is `recovering` and `agent` is you. Heartbeat, set status back to `recoveryPriorStatus`, and continue the branch. Do not open a second pull request.
 
 ## If Cursor asks you to Allow or Run
 

@@ -2,8 +2,9 @@
 """Write the Warp completion report, .warp/warp-complete.html.
 
 Waves are concurrency-run segments. A ticket is active from the status event
-that enters the working set (claimed, planning, coding, review, bugbot_running,
-fix, awaiting_approval, merging) until a status event leaves that set. The
+that enters the working set (claimed, recovering, planning, coding, review,
+bugbot_running, fix, awaiting_approval, merging) until a status event leaves
+that set. The
 interval is half-open: start inclusive, end exclusive. Boundaries are every
 start and end. Each open stretch between two boundaries has one set of active
 tickets. An empty set is a gap: it is drawn on the concurrency chart and is
@@ -34,8 +35,8 @@ import beam  # noqa: E402
 
 ALGO = (
     "Waves are concurrency-run segments. A ticket is active from the status "
-    "event that enters the working set (claimed, planning, coding, review, "
-    "bugbot_running, fix, awaiting_approval, merging) until a status event "
+    "event that enters the working set (claimed, recovering, planning, coding, "
+    "review, bugbot_running, fix, awaiting_approval, merging) until a status event "
     "leaves that set. The interval is half-open: start inclusive, end exclusive. "
     "Boundaries are every start and end. Each stretch between two boundaries has "
     "one set of active tickets. An empty set is a gap: it is drawn on the "
@@ -45,13 +46,14 @@ ALGO = (
     "two waves, because the set changed. Dependency levels are not used."
 )
 
-WORKING = {"claimed", "planning", "coding", "fix", "merging"}
+WORKING = {"claimed", "recovering", "planning", "coding", "fix", "merging"}
 BUGBOT = {"review", "bugbot_running"}
 HUMAN = {"awaiting_approval"}
 OPEN = {"queued"} | set(beam.ACTIVE)
 FINISHED = {"merged", "done", "skipped"}
 KIND = {
     "claimed": "bar",
+    "recovering": "bar",
     "planning": "bar",
     "coding": "bar",
     "fix": "bar",

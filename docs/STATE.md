@@ -16,6 +16,7 @@
 .warp/outbox.md            Herald fallback if a messenger is down or no channel is set. Also a failed Jira move.
 .warp/notify-post.json     Last Herald payload (init, scan, a failed Jira move, or an inbound ack) and where to post it
 .warp/inbound-ack.json     Ack for the latest warp: command. Herald posts this before the action
+.warp/recovery.json        Herald lines when the watchdog replaces a dead listener or Shuttle
 .warp/pending-commands.jsonl  Channel lines waiting for inbound.py drain. A message id is applied once
 .warp/jira-map.json        plan id to issue key, with source and confidence. Wins over jiraKeyMap.
 .warp/jira-resolve.json    JQL for the external-id, label, and remote-link lookup
@@ -30,7 +31,7 @@
 .warp/version              One line, the plugin version init recorded from .cursor/plugins/warp
 ```
 
-`listener` on the beam is the one channel listener for the whole run, not one per ticket. `state` is `running` or `stopped` (the flag). `agentId` is the single sub-agent id. `pid` is optional. `startedAt` and `stoppedAt` are timestamps. `/warp-start` and `/warp-resume` call `inbound.py claim`. A second claim while `state` is `running` prints `listener: already running <id>` and does not replace the id. `/warp-pause` and `/warp-stop` call `inbound.py release`, which sets `state` to `stopped`. The listener must not keep reading while paused or stopped. Tickets do not grow their own listener fields.
+`listener` on the beam is the one channel listener for the whole run, not one per ticket. `state` is `running` or `stopped` (the flag). `agentId` is the single sub-agent id. `pid` is optional. `startedAt` and `stoppedAt` are timestamps. `lastSeenAt` is the heartbeat. `recoveredAt`, `recoveries`, and `replacedAgentId` are set when the watchdog replaces a dead listener. `/warp-start` and `/warp-resume` call `inbound.py claim`. A second claim while `state` is `running` prints `listener: already running <id>` and does not replace the id. `/warp-pause` and `/warp-stop` call `inbound.py release`, which sets `state` to `stopped`. The listener must not keep reading while paused or stopped. Tickets do not grow their own listener fields. The listener writes `lastSeenAt` with `inbound.py heartbeat` at claim and on every pass of its read loop.
 
 Plugin hooks do not run on cloud runners, and they are not required there. `scripts/resume_hint.py` prints the resume hint (paused, done/total, ETA, alarms) and does not dispatch. `/warp-start`, `/warp-resume`, and `/warp-status` print it. `scripts/session_note.py` appends `session-stop` or `subagent-stop` to `.warp/journal.jsonl`. `/warp-stop` and `/warp-pause` append `session-stop`. A Shuttle appends `subagent-stop` when it finishes. A second note of the same type is skipped while it is still the last journal line. The beam stays the source of truth. Local hooks in `hooks/hooks.json` only repeat those scripts. `/warp-allow-notify` still installs a local `beforeMCPExecution` hook. Cloud agents run `scripts/mcp_allow.py` and call a tool only when it prints `allow`.
 
@@ -38,7 +39,7 @@ Plugin hooks do not run on cloud runners, and they are not required there. `scri
 
 `queued` → `claimed` → `planning` → `coding` → `review` → `bugbot_running` → (`fix` → `bugbot_running`)* → `awaiting_approval`? → `merging` → `merged` → `done`
 
-Side exits: `blocked` (human hold), `alarm` (needs a human), `skipped`.
+Side exits: `blocked` (human hold), `alarm` (needs a human), `skipped`. `recovering` is still in flight: the Shuttle died and one replacement is reserved. It holds the same locks. It is not a second claim.
 
 Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`), unless that id's project prefix matches `jiraProject` or `jiraKeyPrefixes`. It is set from a Jira export `key`, a `schedule.json` `jiraKey`, a markdown `Jira:` line, `Jira Key` column, or `[WAR-1]` heading, `.warp/jira-map.json`, `jiraKeyMap`, `beam.py set --jira`, or one exact Jira match. A Jira JSON import's `externalId` is the plan id, not this field. `jiraMapping` is `mapped`, `ambiguous`, or `needs mapping`. `jiraKeySource` is `plan`, `export`, `map`, `manual`, `external`, `label`, `link`, `summary`, or `inferred`. `jiraKeyConfidence` is `high` for an external-id field or an exact summary, `medium` for a label, a remote link, or a 60-character prefix, and `low` for a fuzzy summary stored with `--yes`. `.warp/jira-map.json` stores the same key, source, and confidence. A manual key is never overwritten. Two matches set `jiraKeyCandidates` and do not pick a key. A rescan keeps a manual key and reapplies the map file. `jira.id` and `jira.cloudId` are written by `resolve --ticket`. `jira.externalId` is the plan id once a key is stored. It is the value we want on the issue, not proof Jira holds it. `jira.externalIdOnIssue` is the last value seen on the issue (`""` empty, absent means unknown). `jira.externalIdWritten` is `{value, at, method}` after the plan id was stored on the Jira issue. `method` is `field`, `label`, or `remote-link`. A second write is skipped. `jira.externalIdAttempt` is `{at, result, error, event: "external-id"}` when that write was skipped or failed. It does not replace `jira.lastAttempt`. A missing External ID field is remembered in `.warp/jira-field.json` (`status`, `project`, `checkedAt`, `fingerprint`) so later scans print one summary. `/warp-jira-check` prints `jira mapping:`. `jira.startedAt` and `jira.previousStatus` are set when Warp moves an issue to In Progress. The first claimed ticket of a run is a claim made while no ticket has `jira.startedAt`: no earlier ticket was linked and moved to In Progress. If Jira returns not found, or no real issue key can be resolved, and `jiraTransition` is true, Warp sets that ticket back to `queued`, clears `agent`, `branch`, `jira.startedAt`, and `jira.previousStatus`, and stops the run (`runState: stopped`, the same session note as `/warp-stop`). `jira.lastAttempt` still records the miss. A later miss, after any ticket has `jira.startedAt`, is a per-ticket alarm: the claim stays and the run continues. `jiraTransition: false` does not stop the run. `jira.qaReadyAt` is set when a manual-path ticket reaches QA Ready, `jira.doneAt` when a merge moves the issue to Done (auto-merge, and manual merge when `jiraDoneOnManualMerge` is true), and `jira.lastSync` holds the last result. A beam status of `merged` with an empty `jira.doneAt` is `merged-but-not-done` on `/warp-jira-check`. `jira.lastAttempt` is `{event, result, error}` from `record --result failed --error "..."` and does not set `startedAt`. `jira.comments` and `pr.comments` map an event (`claim`, `pr-opened`, `qa-ready`, `merged`, `bugbot`, `bugbot-rerun`, `ci`, `alarm`, `blocked`) to `{at, id}` so a retry does not post it again. `autoMerge` on the ticket, set by `beam.auto_merge` from the size and `autoMergeSizes`, chooses QA Ready or Done. A size in the list does not move to QA Ready. `/warp-jira-check` (`jira_sync.py verify`) prints, per ticket, what should have happened and which of these fields are empty.
 
@@ -51,6 +52,9 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 - `pr.bugbot` (`pass` or `fail`), `pr.bugbotEvidence`, `pr.bugbotFindings`, `pr.bugbotFixed`, `pr.ci` (`green`), `pr.approvedAt`, `pr.reviewedSha`, `pr.rerun` (`new-commits`), `pr.url`.
 - `bugbot_running` — Bugbot is in progress again after new commits landed on a ticket that was already `awaiting_approval`. Jira is left at QA Ready.
 - `attempts`, `tokens`, `minutes`, `alarm`, `jiraKey`.
+- `lastSeenAt` — Shuttle heartbeat. `agent` is the agent id that owns it. Written by `beam.py heartbeat` at claim, at each status change, and on a short interval while that turn is alive (at least every 5 minutes, and always inside `staleMinutes`).
+- `claimedAt`, `workerStartedAt` — when this claim started, and when the current worker started. A recovery sets `workerStartedAt` and clears `lastSeenAt`. The original `claimedAt` stays.
+- `recoveries`, `recoveredAt`, `recoveryPriorStatus` — how many times this ticket's Shuttle was replaced, when, and the status to resume (`coding`, `fix`, and the other Shuttle statuses). Past `maxRecoveries` (default 3) the next death sets `alarm` to `worker-died` and does not start another.
 - `events` — append-only list on the ticket. Each row is `{at, type, ...}`. `type` is `status` (`from`, `to`), `bugbot`, `ci`, `alarm`, or `usage`. The same row, plus `id`, is appended to `.warp/events.jsonl`. Old beams without `events` still render. The timeline uses these rows and does not invent a claim time.
 - `usage` — `{tokensIn, tokensOut, tokensCached, cost}` from `beam.py usage` or the same flags on `set`. Each flag replaces that field. It is not added to the previous number. `tokens` and `minutes` from `spend` stay a separate additive total.
 - `pr.ciRetries` — how many times CI was recorded as something other than `green`.
@@ -59,11 +63,19 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 ## Restart
 
 1. `scripts/resume_hint.py` prints done/total and the pause flag. Cloud runners run this from the Warp commands. A local sessionStart hook only repeats it.
-2. Warp reconciles PRs before `ready()`.
-3. A Shuttle whose branch exists continues that branch.
-4. A claim with no branch and a dead agent goes back to `queued` on reconcile if `updatedAt` is older than `stuckAfterMinutes`.
+2. `/warp-start` and `/warp-resume` run `beam.py watchdog` from `scan.py`. Every Warp tick runs it before `ready()`. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp, and Cursor does not restart it.
+3. Warp reconciles PRs before `ready()`.
+4. A Shuttle whose branch exists continues that branch. A dead Shuttle stays on that same branch.
 
-Pause sets `paused: true`. `ready()` returns nothing. In-flight status is kept.
+A worker is dead when `lastSeenAt` is older than `staleMinutes` (default 15), or it never heartbeated and the claim or listener start is older than `staleMinutes`. A fresh heartbeat means alive: do not start a second worker. Paused and stopped runs do not recover and do not start a replacement.
+
+Dead listener while `runState` is running: the watchdog clears the stale `running` flag and reserves exactly one new `listener.agentId` (`listener: replace <id>`). Launch that one `warp-listen` agent. A second tick sees the fresh start and does not launch another. Herald posts one line: `Listener died. A new one started.`
+
+Dead Shuttle (`claimed`, `planning`, `coding`, `fix`, or already `recovering`): status becomes `recovering`. Branch, pull request, `jira.startedAt`, and locks stay. The ticket is not queued, so `ready()` will not hand the same files to someone else. Dispatch exactly one new Shuttle for that id (`shuttle: replace <id>`). Herald posts one line: `<id> worker died. A new Shuttle started.` The replacement heartbeats, then sets status back to `recoveryPriorStatus` and continues the branch. Past `maxRecoveries`, status is `alarm` and `alarm` is `worker-died`. Do not start another.
+
+`stuckAfterMinutes` is a different signal (no beam update, and not waiting on approval). It does not release a lock and it does not by itself start a Shuttle.
+
+Pause sets `paused: true`. `ready()` returns nothing. The watchdog prints `watchdog: skipped (paused)` and changes nothing. In-flight status is kept.
 
 ## Invariants `beam.py check` enforces
 

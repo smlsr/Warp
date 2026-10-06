@@ -37,6 +37,7 @@ from beam import (  # noqa: E402
     ready,
     resolve_auto_merge_sizes,
     utcnow,
+    watchdog,
 )
 
 SKIP = {".git", "node_modules", "vendor", "dist", ".warp", "coverage"}
@@ -790,6 +791,9 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         except Exception as e:
             print("listener: not stopped (%s)" % e)
     print(state)
+    if state == "running":
+        for line in watchdog(beam_path):
+            print(line)
     if state == "stopped":
         try:
             import report

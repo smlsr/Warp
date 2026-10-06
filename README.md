@@ -391,7 +391,7 @@ Upload by dragging the file into the agent chat, or saving it in the workspace. 
 
 ## Status
 
-`/warp-status` rewrites `.warp/STATUS.md` and `.warp/status.json`. Working means claimed, coding, review, fix, or waiting on approval. Done means merged or moved to Done in Jira. Left is everything else. `.warp/BOARD.md` and `board.html` add gates, alarms, and ETA. When `.warp/warp-complete.html` exists, the status file names it.
+`/warp-status` rewrites `.warp/STATUS.md` and `.warp/status.json`. Working means claimed, recovering, coding, review, fix, or waiting on approval. `recovering` is a Shuttle whose heartbeat went stale: the same branch is kept and one replacement is started. Done means merged or moved to Done in Jira. Left is everything else. `.warp/BOARD.md` and `board.html` add gates, alarms, and ETA. When `.warp/warp-complete.html` exists, the status file names it.
 
 ## Completion report
 
@@ -409,9 +409,9 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 
 One listener sub-agent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the whole run. It is one listener for the beam: not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. `/warp-start` and `/warp-resume` launch the `warp-listen` skill when `inbound.py claim` prints `listener: started`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
 
-The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the one sub-agent id. `pid` is optional and is often empty on a cloud runner.
+The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the one sub-agent id. `pid` is optional and is often empty on a cloud runner. `lastSeenAt` is the heartbeat, written by `inbound.py heartbeat` at claim and on every read.
 
-Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. If that turn has ended, a message sits unread until `/warp-pause` (or `inbound.py release`) and then `/warp-resume`. A start while the flag is still `running` does not launch a second listener.
+Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. A dead turn does not notify Warp, and Cursor does not restart it. `beam.py watchdog` runs on every Warp tick and on start and resume. The listener is dead when `lastSeenAt` is older than `staleMinutes` (default 15), or it never heartbeated and `startedAt` is older than that. While the run is running, the watchdog clears the stale `running` flag and reserves exactly one new id. Launch that one listener (`listener: replace`). A fresh heartbeat is left alone. A second tick does not launch another. Herald posts one line: `Listener died. A new one started.` Pause and stop do not replace it. The same rule covers a Shuttle: `beam.py heartbeat` writes `lastSeenAt` and the agent id, a dead Shuttle becomes `recovering` on the same branch, and exactly one new Shuttle starts. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no Shuttle starts.
 
 Every recognized `warp:` command is acknowledged in the channel before it runs. The ack names the command and, when there is one, the ticket id. Unknown or malformed commands get an ack that says they were not understood and lists the accepted forms.
 
@@ -451,7 +451,9 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `bugbotRequired` | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. |
 | `bugbotManual` | `true` | Manual tickets only. `false` skips Bugbot before QA Ready. Auto-merge still uses `bugbotRequired`. |
 | `maxFixAttempts` | `3` | Shared fix loop, then the ticket alarms. |
-| `stuckAfterMinutes` | `90` | No update in this window raises stuck. |
+| `stuckAfterMinutes` | `90` | No update in this window raises stuck. Separate from a dead worker. |
+| `staleMinutes` | `15` | Heartbeat older than this, or no heartbeat and a claim or listener start older than this, means the worker is dead. The watchdog replaces it while the run is running. Pause and stop do not. `/warp-init` backfills this key. |
+| `maxRecoveries` | `3` | Shuttle replacements on one ticket. The next death is `alarm` / `worker-died` and does not start another. `/warp-init` backfills this key. |
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
 | `pollSeconds` | `300` | How often the one listener re-reads the channel, and how often a running loop reconciles pull requests. |

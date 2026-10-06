@@ -38,6 +38,31 @@ def mentioned(name: str, text: str) -> bool:
     return re.search(rf"(?<![\w/]){re.escape(name)}(?![\w-])", text) is not None
 
 
+class WorkerRecoveryDocTests(unittest.TestCase):
+    def test_docs_describe_heartbeat_and_recovery(self):
+        files = (
+            "README.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIG.md",
+            "docs/GUIDE.md",
+            "docs/RUNBOOK.md",
+            "docs/STATE.md",
+        )
+        blobs = {rel: (ROOT / rel).read_text() for rel in files}
+        for rel, text in blobs.items():
+            self.assertIn("staleMinutes", text, rel)
+            self.assertIn("lastSeenAt", text, rel)
+            self.assertIn("do not run on cloud", text, rel)
+        for rel in ("README.md", "docs/CONFIG.md", "docs/RUNBOOK.md", "docs/STATE.md", "docs/COMMANDS.md", "docs/GUIDE.md"):
+            self.assertIn("maxRecoveries", blobs[rel], rel)
+            self.assertIn("worker-died", blobs[rel], rel)
+        self.assertIn("Listener died. A new one started.", blobs["docs/RUNBOOK.md"])
+        self.assertIn("worker died. A new Shuttle started.", blobs["docs/RUNBOOK.md"])
+        self.assertIn("beam.py heartbeat", blobs["docs/COMMANDS.md"])
+        self.assertIn("inbound.py heartbeat", blobs["docs/COMMANDS.md"])
+        self.assertIn("beam.py watchdog", blobs["docs/GUIDE.md"])
+
+
 class ConfigDocTests(unittest.TestCase):
     def test_every_example_key_is_in_config_doc(self):
         example = (ROOT / "assets/config.example.yaml").read_text()

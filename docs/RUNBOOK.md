@@ -16,7 +16,7 @@ New commits after QA Ready (`--sha` while status is `awaiting_approval`) set sta
 
 Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode besides the listener. Jira is at QA Ready while this waits. After the merge it moves to Done (`jiraDoneOnManualMerge`, default true).
 
-The channel reader is one `warp-listen` sub-agent for the beam, not one per awaiting_approval ticket. `/warp-start` and `/warp-resume` launch it when `listener.state` is not `running`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` set `listener.state` to `stopped` through `inbound.py release`. The listener must not keep reading while paused or stopped. Cursor cannot start it from Slack. There is no webhook, and plugin hooks do not run on cloud runners. If its turn has ended, send `/warp-proceed <id>` in the agent chat, or `/warp-pause` then `/warp-resume`, so a listener is up to read the channel again.
+The channel reader is one `warp-listen` sub-agent for the beam, not one per awaiting_approval ticket. `/warp-start` and `/warp-resume` launch it when `listener.state` is not `running`, and `beam.py watchdog` replaces it when `lastSeenAt` is older than `staleMinutes`. `listener: already running` with a fresh heartbeat means do not launch a second. `/warp-pause` and `/warp-stop` set `listener.state` to `stopped` through `inbound.py release`. The listener must not keep reading while paused or stopped. Cursor cannot start it from Slack. There is no webhook, and plugin hooks do not run on cloud runners. If its turn has just ended and the heartbeat is still fresh, send `/warp-proceed <id>` in the agent chat. After `staleMinutes`, the next tick starts one replacement. Pause and stop do not.
 
 `/warp-proceed WV-01` also accepts the Jira key (`WAR-1`) or a `#` number (`#01`). The listener runs `inbound.py`, which acks in the channel before `proceed.py`. The ack is `Received warp:proceed XV-01. Merging and moving Jira to Done.` A bad id acks and merges nothing else. If the ticket is not `awaiting_approval`, the ack says so and does not merge. When it accepts, merge in that same turn and run the post-merge MUST DO before you reply. The channel gets the ack first, then the merge sha and the Jira status.
 
@@ -91,7 +91,23 @@ A Jira JSON import stores `externalId` as the plan id. `h2. Size`, `h2. Locks`, 
 
 ## Stuck agent
 
-Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (default 90) and the ticket is not `awaiting_approval`. Reattach by spawning a Shuttle on the same id; it must reuse the branch.
+Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (default 90) and the ticket is not `awaiting_approval`. Reattach by spawning a Shuttle on the same id; it must reuse the branch. That window is not worker death. A dead background worker is `staleMinutes` below.
+
+## Dead worker
+
+Warp's background workers are the Shuttle on a claimed ticket (`claimed`, `planning`, `coding`, `fix`) and the one `warp-listen` listener (`listener` on the beam). A dead turn does not notify Warp. Cursor does not restart it. Plugin hooks do not run on cloud runners. There is no process table.
+
+Each worker writes a heartbeat on the beam: `lastSeenAt` and its agent id. A Shuttle runs `beam.py heartbeat` at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener runs `inbound.py heartbeat` at claim and on every pass of its read loop. Both stay inside `staleMinutes` (default 15).
+
+`beam.py watchdog` runs on every Warp tick and from `/warp-start` and `/warp-resume` (`scan.py start` and `scan.py resume`). A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than `staleMinutes`. A fresh heartbeat is alive. Do not start a second worker. `watchdog: skipped (paused)` or `watchdog: skipped (stopped)` means do not recover and do not start a replacement.
+
+Dead listener while the run is running: the stale `running` flag is cleared in the same write that reserves one new id. Launch exactly one `warp-listen` agent for `listener: replace <id>`. Do not claim a different id. A second tick prints `listener: fresh` and must not launch another. Herald posts one line: `Listener died. A new one started.` The same text is in `.warp/recovery.json`.
+
+Dead Shuttle: the ticket stays on the same work. Branch, pull request, `jira.startedAt`, and locks stay. Status becomes `recovering` (not a silent stuck claim, and not `queued`). Dispatch exactly one new Shuttle for `shuttle: replace <id>`. Do not queue a duplicate. `ready()` will not give those locks to another ticket. `recoveredAt` and `recoveries` record the replacement. The new Shuttle heartbeats, sets status back to `recoveryPriorStatus`, and continues that branch. It does not open a second pull request. Herald posts one line: `<id> worker died. A new Shuttle started.`
+
+Two ticks close together reserve the replacement on the first write. The second tick sees the fresh start and does not launch another.
+
+`maxRecoveries` (default 3) caps Shuttle replacements. Past the cap the ticket is `alarm` with reason `worker-died` and no new Shuttle starts. Herald posts `<id> worker died. Recovery cap reached.` Branch, pull request, and `jira.startedAt` stay. `/warp-retry` is the way back onto the queue. `/warp-init` appends `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
 
 ## Cap change
 

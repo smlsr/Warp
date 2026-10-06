@@ -27,7 +27,9 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | bugbotRequired | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. `false` skips that gate on both. |
 | bugbotManual | `true` | Manual tickets only (`autoMerge` false). `false` skips Bugbot before QA Ready. Auto-merge still follows `bugbotRequired`. |
 | maxFixAttempts | `3` | Shared fix loop. Then the ticket alarms `bugbot-failed`. |
-| stuckAfterMinutes | `90` | No beam update in this window, and not waiting on approval, raises stuck. |
+| stuckAfterMinutes | `90` | No beam update in this window, and not waiting on approval, raises stuck. This is separate from a dead worker. |
+| staleMinutes | `15` | A Shuttle or the one listener is dead when `lastSeenAt` is older than this, or it never heartbeated and the claim (`claimedAt` or `workerStartedAt`) or listener `startedAt` is older than this. The watchdog on each Warp tick and on `/warp-start` and `/warp-resume` replaces that worker while `runState` is running. Pause and stop do not. A fresh heartbeat is left alone. `/warp-init` appends this key when the file does not have it yet. |
+| maxRecoveries | `3` | How many times a dead Shuttle is started again on the same ticket. The next death sets `alarm` / `worker-died` and does not start another. The branch, pull request, and `jira.startedAt` stay. `/warp-init` appends this key when the file does not have it yet. |
 | respectMergeWindows | `false` | If true, new claims wait for a window. |
 | mergeWindows | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag above is true. |
 | pollSeconds | `300` | How often a running loop reconciles PRs. The one channel listener also waits this long between Slack and Teams reads. |
@@ -60,4 +62,4 @@ There is no person cap and no people list.
 
 ## Cloud runners
 
-Plugin hooks do not run on cloud runners, and none of these keys turn them on. Resume, stop notes, and the MCP allow check are scripts the Warp commands already run: `scripts/resume_hint.py`, `scripts/session_note.py`, and `scripts/mcp_allow.py`. A local IDE may still run `hooks/hooks.json`. That is a duplicate of those scripts, not a separate cloud path. `mcp_allow.py` allows the same Slack, Teams, Jira, and optional GitHub tools as `/warp-allow-notify`. It does not allow every MCP tool, and it does not approve shell commands.
+Plugin hooks do not run on cloud runners, and none of these keys turn them on. Resume, stop notes, the MCP allow check, heartbeats, and the watchdog are scripts the Warp commands already run: `scripts/resume_hint.py`, `scripts/session_note.py`, `scripts/mcp_allow.py`, `scripts/beam.py heartbeat`, `scripts/inbound.py heartbeat`, and `scripts/beam.py watchdog`. A dead turn does not notify Warp, and Cursor does not restart it. There is no process table. A local IDE may still run `hooks/hooks.json`. That is a duplicate of those scripts, not a separate cloud path. `mcp_allow.py` allows the same Slack, Teams, Jira, and optional GitHub tools as `/warp-allow-notify`. It does not allow every MCP tool, and it does not approve shell commands.
