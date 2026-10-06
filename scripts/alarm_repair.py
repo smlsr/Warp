@@ -33,6 +33,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import beam  # noqa: E402
+import orchestrator  # noqa: E402
 
 REASON = "lock-escape"
 DEFAULT_ALARM_REPAIR_MINUTES = 15
@@ -73,6 +74,11 @@ prints "<gate> pending cleared. Members merged. Tick ran." and the dispatch
 tick prints start lines in that same output. A second pass does not start
 them again. A member that is not merged, a ticket that is still alarmed or
 parked, or a check that is actually red leaves the gate as it is.
+The same pass sends a red `make ci` back to that ticket even when the
+ready set is not empty: `send-back <id> fix` and a start line. Launch
+that Shuttle with the log. A Shuttle already in fix is not started
+again. Parked does not launch. A green `make ci` is recorded and is
+not a failure.
 The repair widens the ticket's locks to the paths on `escaped` and does not
 clear the alarm. It waits when an in-flight ticket holds one of those paths.
 A queued ticket does not block the widen. Herald lines, including the paths
@@ -554,6 +560,7 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
     repair = _repair_state(data)
     lines: list = []
     flipped_gates: list = []
+    sent: list = []
     if repair.get("active"):
         changed = _settle_active(data, beam_path, now_s, cap, returned, error, lines)
     elif repair.get("naming"):
@@ -584,6 +591,16 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
         # alarms, and pending gates whose members are already merged.
         ready_empty = not beam.ready(data)
         _finish_pass_or_start(data, beam_path, now_s, cap, lines)
+        yaml_text = ""
+        cfg_path = beam.config_yaml_path(beam_path)
+        if cfg_path.is_file():
+            try:
+                yaml_text = cfg_path.read_text()
+            except OSError:
+                yaml_text = ""
+        sent = orchestrator.send_back_red_checks(data, yaml_text)
+        if sent:
+            lines.extend(orchestrator.format_send_back(sent, data))
         if ready_empty:
             flipped_gates = beam.advance_pending_gates(data, now_s)
             if flipped_gates:
@@ -592,6 +609,16 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
     if changed:
         data["metrics"] = beam.metrics(data)
         beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        for action in sent:
+            beam.journal(
+                beam_path,
+                {
+                    "type": "send-back",
+                    "id": action.get("id"),
+                    "outcome": action.get("outcome"),
+                    "check": "make ci",
+                },
+            )
         if flipped_gates:
             for gate in flipped_gates:
                 beam.journal(

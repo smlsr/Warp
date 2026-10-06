@@ -15,6 +15,8 @@ checkCommand: ""
 # Optional. The orchestrator runs this on a rebased head before it merges.
 # Empty: the required checks are Bugbot and CI as configured
 # (bugbotRequired, bugbotManual). Warp does not invent a build command.
+# `make ci` is a valid command. The space is part of the command.
+# A red result is stored on pr.check and sent back to that ticket with the log.
 
 appendOnlyPaths: []
 # Shared files a ticket may append to, besides its lock paths. Empty by default.

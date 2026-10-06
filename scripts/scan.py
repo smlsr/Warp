@@ -909,6 +909,12 @@ def main() -> None:
         cfg["maxAgents"] = args.max_agents
         cfg["model"] = args.model
         cfg["autoMergeSizes"] = resolve_auto_merge_sizes(cfg, warp / "config.yaml")
+        if (warp / "config.yaml").is_file():
+            import orchestrator
+
+            cmd = orchestrator.check_command_text((warp / "config.yaml").read_text())
+            if cmd:
+                cfg["checkCommand"] = cmd
         sched_path = warp / "_ingested_schedule.json"
         atomic_write(sched_path, json.dumps(to_schedule(graph, cfg["autoMergeSizes"]), indent=2) + "\n")
         try:

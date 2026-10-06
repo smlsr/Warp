@@ -10,6 +10,8 @@ The merge queue is serial and automatic for sizes in `autoMergeSizes`: rebase on
 
 `appendOnlyPaths` is empty by default. A conflict in one of those files keeps both sides, every added line. Any other conflict is sent back to a sub-agent on the same branch. Do not hand-merge it. A red pull request, or red after rebase, goes back the same way with the failing output. It takes a slot at that ticket's rank. `orchestrator.py fail --output` records it. The third red parks the ticket: locks release, the branch and pull request stay open, and the blocker is written on the plan record. Tickets that do not depend on it keep going. Parked tickets and what they block are in `.warp/warp-complete.html`.
 
+A project check command or CI check named `make ci` is that check. The space is part of the command. A red result is stored on `pr.check` and goes back to that ticket with the log, the same way as `orchestrator.py fail`. The run does not sit idle. A Shuttle already on the ticket is not sent again. The gate stays while that check is red. It still clears when every member is merged or done and no current check is red. Evidence that is only the name `make ci` is not a red check.
+
 If the base branch goes red, stop merging. Sub-agents keep working. Dispatch a fix ahead of every rank. Resume the queue when the base is green. On start or resume, rebuild from git (`merged`, `in-flight`, `pending`) and run the dispatch loop. Done means every ticket is merged or explicitly parked, and the base branch is green.
 
 One sub-agent, one ticket, one branch, one checkout. `runner: cloud` is its own VM. `runner: local` is its own git worktree. Never two agents in one working copy.
