@@ -221,6 +221,23 @@ class AgainstRefTests(unittest.TestCase):
         (self.tmp / "README.md").write_text("changed\n")
         self.assertEqual(check_version.against(self.tmp, "main"), [])
 
+    def test_minor_bump_past_a_higher_patch_passes(self):
+        (self.tmp / "VERSION").write_text("1.3.26\n")
+        _git(self.tmp, "add", "VERSION")
+        _git(self.tmp, "commit", "-q", "-m", "1.3.26")
+        (self.tmp / "VERSION").write_text("1.4.0\n")
+        (self.tmp / "README.md").write_text("changed\n")
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+        (self.tmp / "VERSION").write_text("1.4.0\n")
+        _git(self.tmp, "add", "VERSION", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "1.4.0")
+        (self.tmp / "README.md").write_text("again\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.4.0 is not newer than main (1.4.0)"])
+        (self.tmp / "VERSION").write_text("1.3.26\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.26 is not newer than main (1.4.0)"])
+
     def test_older_version_fails(self):
         (self.tmp / "VERSION").write_text("1.3.13\n")
         found = check_version.against(self.tmp, "main")
