@@ -29,6 +29,52 @@ def run(script, *args, cwd):
     )
 
 
+class PluginManifestTests(unittest.TestCase):
+    def test_manifest_has_customize_fields_and_logo(self):
+        manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        for key in (
+            "name",
+            "displayName",
+            "description",
+            "version",
+            "publisher",
+            "repository",
+            "keywords",
+            "logo",
+        ):
+            self.assertIn(key, manifest, key)
+            self.assertTrue(manifest[key], key)
+        self.assertEqual(manifest["name"], "warp")
+        self.assertEqual(manifest["displayName"], "Warp")
+        self.assertEqual(manifest["publisher"], "HumanifyOS")
+        self.assertEqual(manifest["author"]["name"], "HumanifyOS")
+        self.assertEqual(manifest["repository"], "https://github.com/smlsr/Warp")
+        self.assertEqual(manifest["homepage"], "https://github.com/smlsr/Warp")
+        self.assertIsInstance(manifest["keywords"], list)
+        self.assertGreater(len(manifest["keywords"]), 0)
+        self.assertEqual(manifest["logo"], "assets/logo.svg")
+        self.assertNotIn("..", manifest["logo"])
+        logo = ROOT / manifest["logo"]
+        self.assertTrue(logo.is_file(), logo)
+        text = logo.read_text()
+        self.assertTrue(text.lstrip().startswith("<svg"))
+        self.assertIn("viewBox", text)
+        self.assertGreater(logo.stat().st_size, 0)
+
+        market = json.loads((ROOT / ".cursor-plugin" / "marketplace.json").read_text())
+        self.assertEqual(market["name"], "warp")
+        self.assertTrue(market["owner"]["name"])
+        self.assertEqual(len(market["plugins"]), 1)
+        entry = market["plugins"][0]
+        self.assertEqual(set(entry), {"name", "source", "description"})
+        self.assertEqual(entry["name"], manifest["name"])
+        self.assertEqual(entry["source"], ".")
+        self.assertTrue(entry["description"])
+        plugin_dir = (ROOT / entry["source"]).resolve()
+        self.assertEqual(plugin_dir, ROOT.resolve())
+        self.assertTrue((plugin_dir / ".cursor-plugin" / "plugin.json").is_file())
+
+
 class RepoVersionTests(unittest.TestCase):
     def test_version_files_and_changelog_agree(self):
         self.assertEqual(check_version.problems(ROOT), [])

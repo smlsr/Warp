@@ -101,6 +101,23 @@ class CloudHookDocTests(unittest.TestCase):
         missing = [item for item in strings if "`%s`" % item not in section]
         self.assertEqual(missing, [], "allowlist globs missing from the README install section")
 
+    def test_readme_install_explains_customize_github_url(self):
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Install")
+        self.assertGreaterEqual(start, 0)
+        section, sep, _after = readme[start:].partition("\n## ")
+        self.assertTrue(sep, "install section has no following heading")
+        for needle in (
+            "https://github.com/smlsr/Warp",
+            "Customize",
+            "Reload Window",
+            ".cursor-plugin/marketplace.json",
+            ".cursor-plugin/plugin.json",
+            "assets/logo.svg",
+            "Plugins & MCPs",
+        ):
+            self.assertIn(needle, section, needle)
+
 
 class HelpTokenTests(unittest.TestCase):
     def test_question_mark_is_always_help_and_help_can_be_a_value(self):

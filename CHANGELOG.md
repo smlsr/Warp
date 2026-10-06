@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.25
+
+- Customize does not install a pasted GitHub URL. `.cursor-plugin/marketplace.json` lists the root plugin so a team marketplace import of https://github.com/smlsr/Warp can find Warp. `plugin.json` adds publisher, repository, and homepage. The logo remains `assets/logo.svg`. The README install section says where to paste the URL, then install from Customize and reload.
+
 ## 1.3.24
 
 - A size in autoMergeSizes auto-merges after Bugbot and CI, including L and XL. Scan reads that list from config.yaml. Labels L, size:L, and L — … match the same token. A size not in the list stays on the manual path.
