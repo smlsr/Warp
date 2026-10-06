@@ -17,6 +17,7 @@ these scripts; they do not hand-edit the JSON.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -31,10 +32,16 @@ SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 DEFAULT_AUTO_MERGE_SIZES = ["S", "M"]
 _SIZE_TOKEN = re.compile(r"^(XL|S|M|L)\b", re.I)
 TERMINAL = {"merged", "done", "skipped"}
-ACTIVE = {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
+ACTIVE = {"claimed", "recovering", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
+# Shuttle-owned work. review and later belong to Reed or a person. recovering
+# is the visible status while a replacement Shuttle is being started.
+SHUTTLE_WORK = {"claimed", "planning", "coding", "fix", "recovering"}
+DEFAULT_STALE_MINUTES = 15
+DEFAULT_MAX_RECOVERIES = 3
 STATUSES = [
     "queued",
     "claimed",
+    "recovering",
     "planning",
     "coding",
     "review",
@@ -620,6 +627,14 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     if note and note.startswith("refusing "):
         print(f"{args.id}: {note}")
         sys.exit(1)
+    if t.get("status") == "claimed" and prev != "claimed":
+        stamp = utcnow()
+        t["claimedAt"] = stamp
+        t["workerStartedAt"] = stamp
+        t["recoveries"] = 0
+        t.pop("recoveredAt", None)
+        t.pop("recoveryPriorStatus", None)
+        t.pop("lastSeenAt", None)
     if args.alarm is not None:
         t["alarm"] = None if args.alarm == "-" else args.alarm
     if args.status in {"coding", "claimed"} and not t["pr"]["openedAt"] and args.pr:
@@ -742,6 +757,9 @@ def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
         except Exception as e:
             print("listener: not stopped (%s)" % e)
     print("paused" if paused else "resumed")
+    if not paused:
+        for line in watchdog(beam_path):
+            print(line)
 
 
 def render_board(beam: dict) -> str:
@@ -776,7 +794,7 @@ def render_board(beam: dict) -> str:
         for t in alarms:
             lines.append(f"- **{t['id']}** {t.get('alarm') or t['status']} — {t['summary']}")
     waiting = [t for t in beam["tickets"].values() if t["status"] == "awaiting_approval"]
-    lines += ["", "## Awaiting approval (above MEDIUM)", ""]
+    lines += ["", "## Awaiting approval", ""]
     if not waiting:
         lines.append("None.")
     else:
@@ -881,6 +899,245 @@ def refresh_outputs(beam_path: Path, beam: dict) -> None:
         print(f"board: not rewritten ({e})")
 
 
+def parse_ts(value) -> Optional[datetime]:
+    """Parse a beam timestamp. Anything else is missing."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def coerce_now(now) -> tuple:
+    if isinstance(now, datetime):
+        dt = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    elif now:
+        dt = parse_ts(str(now)) or datetime.now(timezone.utc)
+    else:
+        dt = datetime.now(timezone.utc)
+    return dt, dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def config_int(data: dict, beam_path: Path, key: str, default: int) -> int:
+    """Beam config, then .warp/config.yaml. A missing or bad value keeps the default."""
+    val = default
+    cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
+    if key in cfg and cfg[key] not in (None, ""):
+        val = cfg[key]
+    path = Path(beam_path).parent / "config.yaml"
+    if path.is_file():
+        match = re.search(rf"^{re.escape(key)}:[ \t]*(.*?)[ \t]*(#.*)?$", path.read_text(), re.M)
+        if match and match.group(1).strip():
+            val = match.group(1).strip().strip("\"'")
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def worker_is_dead(last_seen, started, now: datetime, stale_minutes: int) -> bool:
+    """Dead when the heartbeat is older than staleMinutes, or there is no heartbeat and the start is.
+
+    A missing start as well as a missing heartbeat is not dead: Warp cannot prove the age.
+    A fresh heartbeat is alive even when the original claim is old.
+    """
+    seen = parse_ts(last_seen)
+    if seen is not None:
+        return (now - seen).total_seconds() / 60.0 > stale_minutes
+    start = parse_ts(started)
+    if start is None:
+        return False
+    return (now - start).total_seconds() / 60.0 > stale_minutes
+
+
+def _run_live(data: dict) -> tuple:
+    state = data.get("runState") or ("paused" if data.get("paused") else "running")
+    if data.get("paused") or state == "paused":
+        return False, "paused"
+    if state == "stopped":
+        return False, "stopped"
+    return True, "running"
+
+
+def _unique_id(prefix: str, number: int, current: Optional[str]) -> tuple:
+    """(id, number) that does not reuse the dead worker's id."""
+    n = number
+    candidate = "%s-r%d" % (prefix, n)
+    while current and candidate == current:
+        n += 1
+        candidate = "%s-r%d" % (prefix, n)
+    return candidate, n
+
+
+def _recover_listener(data: dict, beam_path: Path, now: datetime, now_s: str, stale: int, lines: list, events: list) -> bool:
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    state = raw.get("state") if raw.get("state") in {"running", "stopped"} else "stopped"
+    agent = raw.get("agentId") or None
+    if state != "running" or not agent:
+        lines.append("listener: stopped")
+        return False
+    if not worker_is_dead(raw.get("lastSeenAt"), raw.get("startedAt"), now, stale):
+        kind = "alive" if raw.get("lastSeenAt") else "fresh"
+        lines.append("listener: %s %s" % (kind, agent))
+        return False
+    number = int(raw.get("recoveries") or 0) + 1
+    new_id, number = _unique_id("listener", number, agent)
+    # Replace the record in one write. The old running flag is gone, so it
+    # cannot block a new listener, and the new id is already reserved so a
+    # second tick sees a fresh start instead of launching another.
+    data["listener"] = {
+        "state": "running",
+        "agentId": new_id,
+        "pid": None,
+        "startedAt": now_s,
+        "stoppedAt": None,
+        "recoveredAt": now_s,
+        "recoveries": number,
+        "replacedAgentId": agent,
+    }
+    lines.append("listener: died %s" % agent)
+    lines.append("listener: replace %s" % new_id)
+    lines.append("herald: Listener died. A new one started.")
+    events.append({"type": "listener-died", "agentId": agent, "replacedBy": new_id})
+    events.append({"type": "listener-replace", "agentId": new_id, "replaced": agent, "recoveries": number})
+    return True
+
+
+def _shuttle_anchor(ticket: dict) -> Optional[str]:
+    return ticket.get("workerStartedAt") or ticket.get("claimedAt") or ticket.get("updatedAt")
+
+
+def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, stale: int, cap: int, lines: list, events: list) -> bool:
+    changed = False
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for tid in sorted(tickets):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict) or ticket.get("status") not in SHUTTLE_WORK:
+            continue
+        if not worker_is_dead(ticket.get("lastSeenAt"), _shuttle_anchor(ticket), now, stale):
+            kind = "alive" if ticket.get("lastSeenAt") else "fresh"
+            lines.append("shuttle: %s %s" % (kind, tid))
+            continue
+        count = int(ticket.get("recoveries") or 0)
+        if count >= cap:
+            prev = ticket.get("status")
+            ticket["status"] = "alarm"
+            ticket["alarm"] = "worker-died"
+            ticket["updatedAt"] = now_s
+            append_ticket_event(beam_path, ticket, {"at": now_s, "type": "status", "from": prev, "to": "alarm"})
+            append_ticket_event(beam_path, ticket, {"at": now_s, "type": "alarm", "value": "worker-died"})
+            lines.append("shuttle: alarm %s worker-died" % tid)
+            lines.append("herald: %s worker died. Recovery cap reached." % tid)
+            events.append({"type": "shuttle-alarm", "id": tid, "alarm": "worker-died", "recoveries": count})
+            changed = True
+            continue
+        number = count + 1
+        new_agent, number = _unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
+        prev = ticket.get("status")
+        if prev != "recovering":
+            ticket["recoveryPriorStatus"] = prev
+        ticket["status"] = "recovering"
+        ticket["agent"] = new_agent
+        ticket["recoveries"] = number
+        ticket["recoveredAt"] = now_s
+        ticket["workerStartedAt"] = now_s
+        ticket.pop("lastSeenAt", None)
+        ticket["updatedAt"] = now_s
+        append_ticket_event(beam_path, ticket, {"at": now_s, "type": "status", "from": prev, "to": "recovering"})
+        append_ticket_event(
+            beam_path,
+            ticket,
+            {"at": now_s, "type": "recovery", "recoveries": number, "agent": new_agent},
+        )
+        branch = ticket.get("branch") or ""
+        lines.append("shuttle: replace %s agent=%s branch=%s" % (tid, new_agent, branch))
+        lines.append("herald: %s worker died. A new Shuttle started." % tid)
+        events.append(
+            {
+                "type": "shuttle-recover",
+                "id": tid,
+                "agent": new_agent,
+                "branch": branch,
+                "recoveries": number,
+                "from": prev,
+            }
+        )
+        changed = True
+    return changed
+
+
+def watchdog(beam_path: Path, now=None) -> list:
+    """Detect dead Shuttles and the listener. Reserve at most one replacement each.
+
+    Paused and stopped runs change nothing. A fresh heartbeat, or a start newer
+    than staleMinutes, is left alone. The caller launches the agent named on
+    each `replace` line. This does not look at a process table.
+    """
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return ["watchdog: no beam at %s" % beam_path]
+    lock_path = beam_path.parent / ".watchdog.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            return _watchdog_locked(beam_path, now)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _watchdog_locked(beam_path: Path, now) -> list:
+    data = load_json(beam_path)
+    now_dt, now_s = coerce_now(now)
+    live, why = _run_live(data)
+    if not live:
+        return ["watchdog: skipped (%s)" % why]
+    stale = config_int(data, beam_path, "staleMinutes", DEFAULT_STALE_MINUTES)
+    cap = config_int(data, beam_path, "maxRecoveries", DEFAULT_MAX_RECOVERIES)
+    lines: list = []
+    events: list = []
+    listener_changed = _recover_listener(data, beam_path, now_dt, now_s, stale, lines, events)
+    shuttles_changed = _recover_shuttles(data, beam_path, now_dt, now_s, stale, cap, lines, events)
+    if listener_changed or shuttles_changed:
+        if shuttles_changed:
+            data["metrics"] = metrics(data)
+        atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        for event in events:
+            journal(beam_path, event)
+        herald = [line[len("herald: ") :] for line in lines if line.startswith("herald: ")]
+        if herald:
+            atomic_write(
+                beam_path.parent / "recovery.json",
+                json.dumps({"at": now_s, "lines": herald}, indent=2) + "\n",
+            )
+    return lines
+
+
+def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
+    """Record lastSeenAt and the owning agent. Does not journal each beat."""
+    beam = load_json(beam_path)
+    ticket = beam["tickets"].get(args.id)
+    if not ticket:
+        sys.exit(f"unknown ticket {args.id}")
+    if ticket.get("status") not in SHUTTLE_WORK and ticket.get("status") not in ACTIVE:
+        sys.exit(f"{args.id}: heartbeat refused ({ticket.get('status')})")
+    agent = args.agent or ticket.get("agent")
+    if not agent:
+        sys.exit(f"{args.id}: heartbeat needs --agent")
+    if ticket.get("agent") and ticket["agent"] != agent:
+        sys.exit(f"{args.id}: heartbeat agent {agent} does not own the ticket ({ticket['agent']})")
+    stamp = utcnow()
+    ticket["agent"] = agent
+    ticket["lastSeenAt"] = stamp
+    ticket["updatedAt"] = stamp
+    if not ticket.get("workerStartedAt"):
+        ticket["workerStartedAt"] = ticket.get("claimedAt") or stamp
+    beam["metrics"] = metrics(beam)
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    print(f"{args.id} heartbeat {agent}")
+
+
 def cmd_check(beam: dict) -> int:
     errors = []
     ids = set(beam["tickets"])
@@ -947,6 +1204,8 @@ def default_config() -> dict:
         "bugbotManual": True,
         "maxFixAttempts": 3,
         "stuckAfterMinutes": 90,
+        "staleMinutes": DEFAULT_STALE_MINUTES,
+        "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "respectMergeWindows": False,
         "mergeWindows": ["08:30", "13:00", "17:00"],
         "pollSeconds": 300,
@@ -961,8 +1220,10 @@ examples:
   python3 scripts/beam.py ready --beam .warp/beam.json
   python3 scripts/beam.py set --beam .warp/beam.json --id T-9 --status claimed
   python3 scripts/beam.py board --beam .warp/beam.json
+  python3 scripts/beam.py heartbeat --beam .warp/beam.json --id T-9 --agent shuttle-T-9
+  python3 scripts/beam.py watchdog --beam .warp/beam.json
 
-Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta.
+Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta, heartbeat, watchdog.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
 --via local|connected, --approved-by, --proceeded-by, --merge-method,
 --bugbot pass|fail, --ci green, --alarm, --attempts, --force,
@@ -978,6 +1239,13 @@ post-merge MUST DO (Jira Done, comments, locks, dependents, Slack).
 --jira KEY is rejected when it does not match jiraProject or jiraKeyPrefixes,
 unless --force is set. A plan id is not a Jira key.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
+heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
+uses inbound.py heartbeat. watchdog runs on every Warp tick and on start
+and resume. A worker is dead when lastSeenAt is older than staleMinutes,
+or it never heartbeated and the claim or listener start is older than that.
+It replaces a dead listener once and re-dispatches a dead Shuttle once.
+Paused and stopped runs do nothing. A fresh heartbeat is left alone.
+Past maxRecoveries the ticket is alarm worker-died.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
@@ -1062,6 +1330,14 @@ def main() -> None:
     pe = sub.add_parser("eta")
     pe.add_argument("--beam", required=True)
 
+    phb = sub.add_parser("heartbeat")
+    phb.add_argument("--beam", required=True)
+    phb.add_argument("--id", required=True)
+    phb.add_argument("--agent", help="Shuttle agent id. Must match the claim when one is set.")
+
+    pw = sub.add_parser("watchdog")
+    pw.add_argument("--beam", required=True)
+
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
@@ -1112,6 +1388,11 @@ def main() -> None:
     elif args.cmd == "eta":
         beam = load_json(Path(args.beam))
         print(json.dumps(metrics(beam), indent=2))
+    elif args.cmd == "heartbeat":
+        cmd_heartbeat(Path(args.beam), args)
+    elif args.cmd == "watchdog":
+        for line in watchdog(Path(args.beam)):
+            print(line)
 
 
 if __name__ == "__main__":

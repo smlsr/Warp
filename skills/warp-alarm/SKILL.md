@@ -23,6 +23,7 @@ Herald posts id, reason, PR url, last Bugbot line, and `warp:retry <id>`.
 | `bugbot-failed` | AC still red after maxFixAttempts | Fix notes, then `warp:retry` |
 | `lock-escape` | Diff left the lock paths | Split a ticket or widen locks in the plan, then retry |
 | `stuck` | No beam update past stuckAfterMinutes | Reattach or retry |
+| `worker-died` | Shuttle heartbeat older than staleMinutes, and maxRecoveries is spent | Read the branch, then `warp:retry` |
 | `ci-red` | Pipeline red with no agent left | `warp:retry` after the cause is known |
 | `gate-red` | Gate checks failed | Fix on the member branch; do not retry dependents |
 

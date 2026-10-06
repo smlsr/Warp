@@ -92,6 +92,16 @@ bugbotManual: true
 # still covers auto-merge.
 maxFixAttempts: 3
 stuckAfterMinutes: 90
+staleMinutes: 15
+# A Shuttle or the one listener is dead when lastSeenAt is older than this,
+# or it never heartbeated and the claim or listener start is older than this.
+# The watchdog replaces a dead worker while the run is running. Pause and stop
+# do not. A fresh heartbeat is left alone. /warp-init appends this key when
+# the file does not have it yet.
+maxRecoveries: 3
+# Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
+# worker-died and no new Shuttle starts. Branch, pull request, and
+# jira.startedAt stay. Default 3.
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300

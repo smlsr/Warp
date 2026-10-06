@@ -13,9 +13,11 @@ One listener for the beam is tracked at beam["listener"]:
   agentId  the one sub-agent id. A second claim does not replace it while
            state is running.
   pid      optional process id. Cloud agents often have none.
-  startedAt, stoppedAt
+  startedAt, stoppedAt, lastSeenAt
+  recoveredAt, recoveries   set when the watchdog replaces a dead listener
 
   python3 scripts/inbound.py claim --beam .warp/beam.json --agent-id <id>
+  python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id <id>
   python3 scripts/inbound.py release --beam .warp/beam.json
   python3 scripts/inbound.py handle --beam .warp/beam.json --text "warp:proceed XV-01"
   python3 scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --message-id 1
@@ -100,16 +102,41 @@ def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None) -> str:
             data["listener"]["pid"] = str(pid)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
         return "listener: already running %s" % cur["agentId"]
+    now = beam.utcnow()
     data["listener"] = {
         "state": "running",
         "agentId": agent_id,
         "pid": str(pid) if pid else None,
-        "startedAt": beam.utcnow(),
+        "startedAt": now,
         "stoppedAt": None,
+        "lastSeenAt": now,
     }
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
     beam.journal(beam_path, {"type": "listener-start", "agentId": agent_id, "pid": data["listener"]["pid"]})
     return "listener: started %s" % agent_id
+
+
+def heartbeat(beam_path: Path, agent_id: str) -> str:
+    """Record lastSeenAt for the running listener. The agent id must own the slot."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return "listener: no beam at %s" % beam_path
+    if not agent_id or not str(agent_id).strip():
+        return "listener: heartbeat needs --agent-id"
+    agent_id = str(agent_id).strip()
+    data = beam.load_json(beam_path)
+    cur = listener_of(data)
+    if cur["state"] != "running" or not cur.get("agentId"):
+        return "listener: heartbeat refused (stopped)"
+    if cur["agentId"] != agent_id:
+        return "listener: heartbeat refused %s" % cur["agentId"]
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    raw["lastSeenAt"] = beam.utcnow()
+    raw["agentId"] = agent_id
+    raw["state"] = "running"
+    data["listener"] = raw
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    return "listener: heartbeat %s" % agent_id
 
 
 def release(beam_path: Path) -> str:
@@ -473,6 +500,7 @@ HELP = """
 examples:
   python3 scripts/inbound.py ?
   python3 scripts/inbound.py claim --beam .warp/beam.json --agent-id listener-1 --pid 4242
+  python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id listener-1
   python3 scripts/inbound.py release --beam .warp/beam.json
   python3 scripts/inbound.py status --beam .warp/beam.json
   python3 scripts/inbound.py parse --text "warp:proceed XV-01"
@@ -483,6 +511,9 @@ examples:
 claim is idempotent. `listener: already running <id>` means do not launch a second
 listener. release sets listener.state to stopped. The listener must not keep
 reading while paused or stopped. One listener for the beam, not one per ticket.
+heartbeat writes listener.lastSeenAt and the agent id. Call it at claim, on
+each pass of the read loop, and whenever the turn is still alive. A dead turn
+does not notify Warp. beam.py watchdog reads that timestamp.
 
 handle writes .warp/inbound-ack.json before it changes the beam. Herald posts
 that ack, then the action runs. A proceed id that is not awaiting approval
@@ -507,6 +538,10 @@ def main(argv: Optional[list] = None) -> int:
 
     pr = sub.add_parser("release")
     pr.add_argument("--beam", default=".warp/beam.json")
+
+    pb = sub.add_parser("heartbeat")
+    pb.add_argument("--beam", default=".warp/beam.json")
+    pb.add_argument("--agent-id", required=True)
 
     ps = sub.add_parser("status")
     ps.add_argument("--beam", default=".warp/beam.json")
@@ -542,6 +577,10 @@ def main(argv: Optional[list] = None) -> int:
         line = release(beam_path)
         print(line)
         return 1 if line.startswith("listener: no beam") else 0
+    if args.cmd == "heartbeat":
+        line = heartbeat(beam_path, args.agent_id)
+        print(line)
+        return 0 if line.startswith("listener: heartbeat ") and "refused" not in line and "needs" not in line else 1
     if args.cmd == "status":
         if not beam_path.is_file():
             print("listener: no beam at %s" % beam_path)

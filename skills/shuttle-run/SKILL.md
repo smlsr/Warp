@@ -12,8 +12,13 @@ You were started with `IMPLEMENT <id>` in this repo. Local and cloud are the sam
 1. Read `.cursor/rules/`, including every rule with `alwaysApply: true`. Read rules whose globs match the lock paths.
 2. Read `AGENTS.md` and `CLAUDE.md` at the repo root and under the ticket lock path, if they exist.
 3. Read the preamble the plan names.
-4. Read `.warp/config.yaml` and your claim in `.warp/beam.json`. Status must be `claimed` and `agent` must be you. Otherwise stop.
+4. Read `.warp/config.yaml` and your claim in `.warp/beam.json`. Status must be `claimed` or `recovering`, and `agent` must be you. Otherwise stop. If status is `recovering`, you are the replacement for a dead Shuttle. Keep the branch, the pull request, `jira.startedAt`, and the locks. Do not open a second pull request. After the heartbeat below, set status back to `recoveryPriorStatus` and continue that work.
 5. Fetch the Jira issue if a key is set. Otherwise read the ticket in `CURSOR_PLAN.md`. Read every acceptance criterion.
+6. Heartbeat. Your agent id is the ticket's `agent` field. A dead turn does not notify Warp. Cursor does not restart you. Plugin hooks do not run on cloud runners. There is no process table. Repeat this at each status change and at least every 5 minutes while you are working, always inside `staleMinutes` (default 15).
+
+```bash
+python3 <plugin>/scripts/beam.py heartbeat --beam .warp/beam.json --id <id> --agent <agent>
+```
 
 ## Then
 
@@ -31,7 +36,7 @@ The same flags work on `beam.py set`. If the run does not report usage, do not i
 5. If resolve says connected, push and open the pull request with the first method in `methods` (the named MCP server, or `gh` for GitHub). If it says local, or every method fails, do not push and do not error: `python3 <plugin>/scripts/provider.py note --id <id> --reason "<why>"` and hand Reed the branch name. Set `review` and, in connected mode, `--pr <url>`. That prints the Jira comment and the pull-request comment. Do both, then `record-comment`. Local mode comments on Jira only.
 6. If Reed returns fixes and attempts remain, set `fix` and push only in connected mode. Past `maxFixAttempts`, the ticket is `alarm`. Manual tickets use this same loop before `awaiting_approval`.
 
-If status is already `coding` or `fix` and the branch exists, continue that branch. Do not open a second pull request.
+If status is already `coding`, `fix`, or `recovering` and the branch exists, continue that branch. Do not open a second pull request. Heartbeat after every `beam.py set`.
 
 Every acceptance-criterion comment names the id and the command that passed.
 

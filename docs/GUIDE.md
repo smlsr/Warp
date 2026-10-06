@@ -33,7 +33,7 @@ The same steps, as a numbered tree, are in [RUNBOOK.md](RUNBOOK.md).
 
 The manual plan is 3 people, 6 Cursor windows each, merge windows at 08:30, 13:00, and 17:00. Warp keeps the caps and the gates, and drops the calendar as a blocker. Dispatch is continuous. Windows are digest times unless `respectMergeWindows` is true.
 
-The speed plan's lever still holds: an L ticket that gets a review within the hour does not wait for the next window. Reed polls APPROVED instead of waiting for a human to paste a preamble.
+The speed plan's lever still holds: an L ticket that is not in `autoMergeSizes`, and that gets a review within the hour, does not wait for the next window. Reed polls APPROVED instead of waiting for a human to paste a preamble. L and XL are not special. A size in `autoMergeSizes` auto-merges, including L and XL when they are listed.
 
 ## Graph
 
@@ -45,18 +45,22 @@ Sizes map to complexity:
 
 | Size | Hours | Class | Merge |
 |---|---|---|---|
-| S | 4 | LOW | auto after Bugbot + CI |
-| M | 7 | MEDIUM | auto after Bugbot + CI |
-| L | 11 | HIGH | wait for APPROVED |
-| XL | 16 | CRITICAL | wait for APPROVED |
+| S | 4 | LOW | auto after Bugbot + CI when listed in `autoMergeSizes` (the default) |
+| M | 7 | MEDIUM | auto after Bugbot + CI when listed (the default) |
+| L | 11 | HIGH | auto when listed in `autoMergeSizes`; otherwise wait for APPROVED |
+| XL | 16 | CRITICAL | same as L |
 
 Counts in the generated graph: S 73, M 109, L 111, XL 73.
 
 ## Tick
 
 ```
-reconcile in-flight → advance gates → ready() → claim → Shuttle → Reed → Herald if needed → board
+watchdog → reconcile in-flight → advance gates → ready() → claim → Shuttle → Reed → Herald if needed → board
 ```
+
+`beam.py watchdog` runs first. A Shuttle or the one listener is dead when `lastSeenAt` is older than `staleMinutes` (default 15), or it never heartbeated and the claim or listener start is older than that. The Shuttle writes that heartbeat with `beam.py heartbeat` at claim, at each status change, and at least every 5 minutes. The listener writes it with `inbound.py heartbeat` on every read. A fresh heartbeat is left alone. Pause and stop print `watchdog: skipped` and do not start a replacement.
+
+A dead listener is cleared and exactly one new `warp-listen` agent is launched (`listener: replace`). Herald posts `Listener died. A new one started.` A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`. Exactly one new Shuttle is dispatched (`shuttle: replace`). Herald posts `<id> worker died. A new Shuttle started.` It is not queued, so another ticket cannot take the files. A second tick does not start a second replacement. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no Shuttle starts. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
 
 `ready()` refuses a ticket when:
 
@@ -78,4 +82,4 @@ Coding steps use `config.model`, default `claude-sonnet-5-5-high` (Claude Sonnet
 
 ## 24/7 board
 
-`.warp/BOARD.md` and `.warp/board.html` regenerate every tick. Leave a cloud agent on `/warp` overnight, or run a tick from a scheduled Cursor automation. That tick is not a Slack reader. `/warp-start` and `/warp-resume` launch one `warp-listen` listener. `/warp-pause` and `/warp-stop` stop it. It must not keep reading while paused or stopped. Cursor cannot wake it from a Slack message, and there is no webhook. Plugin hooks do not run on cloud runners. Each tick runs `scripts/resume_hint.py` before dispatch and `scripts/session_note.py --type session-stop` when the turn ends. A Shuttle runs `scripts/session_note.py --type subagent-stop` when it finishes. MCP calls go through `scripts/mcp_allow.py`, which allows only Warp's list. The beam is local to the repo, so a second machine resumes by pulling `.warp/` (commit the beam and journal; they contain no secrets).
+`.warp/BOARD.md` and `.warp/board.html` regenerate every tick. Leave a cloud agent on `/warp` overnight, or run a tick from a scheduled Cursor automation. That tick is not a Slack reader, except when `beam.py watchdog` prints `listener: replace` because the one listener's heartbeat is older than `staleMinutes`. Then the tick launches exactly one replacement and does not launch a second on the next tick. `/warp-start` and `/warp-resume` launch one `warp-listen` listener, or that replacement when the watchdog already reserved the id. `/warp-pause` and `/warp-stop` stop it. It must not keep reading while paused or stopped. Cursor cannot wake it from a Slack message, and there is no webhook. Plugin hooks do not run on cloud runners. Each tick runs `scripts/resume_hint.py` before dispatch, `scripts/beam.py watchdog` before `ready()`, and `scripts/session_note.py --type session-stop` when the turn ends. A Shuttle runs `scripts/beam.py heartbeat` while it works and `scripts/session_note.py --type subagent-stop` when it finishes. MCP calls go through `scripts/mcp_allow.py`, which allows only Warp's list. The beam is local to the repo, so a second machine resumes by pulling `.warp/` (commit the beam and journal; they contain no secrets).

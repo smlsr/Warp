@@ -20,7 +20,8 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Bugbot pass or fail: id and one line of evidence.
 - Awaiting approval: id, url, Bugbot clean, `warp:proceed <id>`. Manual tickets reach this only after Bugbot and CI.
 - Merged: id, sha, and Jira status. Manual merges move to Done too, unless `jiraDoneOnManualMerge` is false. `proceed.py` writes `.warp/notify-post.json` for the reply. Post it, including the merge sha and the Jira status.
-- Alarm: id, reason, `warp:retry <id>`.
+- Alarm: id, reason, `warp:retry <id>`. `worker-died` means the Shuttle recovery cap was reached. Post it once.
+- Worker replaced: the one `herald:` line from `beam.py watchdog`. Listener: `Listener died. A new one started.` Shuttle: `<id> worker died. A new Shuttle started.` The same lines are in `.warp/recovery.json`. Post each once. Do not post a second line for the same recovery.
 - Gate green or red.
 - Tick digest: done / working / left, and the next ready ids. Point at `.warp/STATUS.md`.
 - Run complete: `report.py` or `beam.py set` writes `.warp/notify-post.json` with the headline totals and the path `.warp/warp-complete.html`. Post it even when notify is quiet. Say the file is gitignored and stays on the machine. Do not link it as if it were on the remote.

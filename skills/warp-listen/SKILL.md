@@ -9,22 +9,29 @@ One listener for the beam. Not one per awaiting_approval ticket, not one per Shu
 
 `/warp-start` and `/warp-resume` launch you when `inbound.py claim` prints `listener: started <id>`. `listener: already running <id>` means do not launch a second. `/warp-pause` and `/warp-stop` stop you. You must not keep reading while paused or stopped.
 
-Plugin hooks do not run on cloud runners. Do not wait for a hook to notice Slack. There is no webhook. Cursor cannot start this turn from a Slack message. Stay in this turn and re-read the channel every `pollSeconds` while `listener.state` is `running`. If this turn has already ended, the flag can still say running, and a later start will not launch a second listener. `inbound.py release` (or `/warp-pause`) clears it. `/warp-resume` launches one listener again.
+Plugin hooks do not run on cloud runners. Do not wait for a hook to notice Slack. There is no webhook. Cursor cannot start this turn from a Slack message. Stay in this turn and re-read the channel every `pollSeconds` while `listener.state` is `running`. If this turn has already ended, `lastSeenAt` goes stale. The next tick or `/warp-resume` runs `beam.py watchdog`. After `staleMinutes` it clears the stale `running` flag and starts one replacement. Until that heartbeat is stale, `listener: already running` means do not launch a second. `inbound.py release` (or `/warp-pause`) clears it immediately. Pause and stop do not start a replacement.
 
-The slot is `listener` on the beam: `state` (`running` or `stopped`), `agentId` (one id), and optional `pid`.
+The slot is `listener` on the beam: `state` (`running` or `stopped`), `agentId` (one id), optional `pid`, `startedAt`, and `lastSeenAt`.
+
+A dead turn does not notify Warp. Cursor does not restart you. Plugin hooks do not run on cloud runners. Write a heartbeat so the watchdog can see you. There is no process table.
 
 ## Claim
 
 ```bash
 python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <id> --pid <pid>
+python3 <plugin>/scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id <id>
 python3 <plugin>/scripts/inbound.py status --beam .warp/beam.json
 ```
 
-If status is `listener: running` for a different id, exit. Do not read the channel.
+Claim writes `lastSeenAt`. Heartbeat writes it again. If status is `listener: running` for a different id, exit. Do not read the channel.
 
 ## Loop
 
-While status prints `listener: running <your id>`:
+While status prints `listener: running <your id>`, heartbeat before you read. Repeat at least every 5 minutes, and always inside `staleMinutes` (default 15).
+
+```bash
+python3 <plugin>/scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id <id>
+```
 
 1. Read new messages in `slackChannel` with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. When `messenger` is `teams` or `both`, also read `teamsChannel` with `teams_read_channel`, `teams_read_thread`, and `teams_search_channels`. Call an MCP tool only when `scripts/mcp_allow.py` prints `allow`.
 2. Enqueue each new `warp:` message. A message id that was already written is skipped.

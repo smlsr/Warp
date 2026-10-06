@@ -7,7 +7,7 @@ description: "Compute the ready set and claim tickets under lock, gate, and agen
 
 `scripts/beam.py ready` is the only ready-set. Do not reimplement it in the chat.
 
-Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. When a Shuttle you spawned returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`, then reconcile that ticket from the beam before the next claim.
+Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. Run `python3 <plugin>/scripts/beam.py watchdog --beam .warp/beam.json` before `ready()`. For each `shuttle: replace <id>` line, start exactly one Shuttle for that same ticket. Status is `recovering`. Keep the branch, pull request, `jira.startedAt`, and locks. Do not queue a duplicate and do not release the lock. A second tick must not start a second Shuttle for that id. `shuttle: alive` and `shuttle: fresh` are not new work. `shuttle: alarm <id> worker-died` means `maxRecoveries` is spent: do not start another. `watchdog: skipped` means the run is paused or stopped: do not recover. When a Shuttle you spawned returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`, then reconcile that ticket from the beam before the next claim.
 
 ## Rules the script enforces
 
@@ -32,6 +32,8 @@ Use the real id. Do not paste the rules into the prompt. The Shuttle reads `.cur
 python3 <plugin>/scripts/beam.py set --beam .warp/beam.json \
   --id A-03 --status claimed --agent shuttle-A-03 --branch warp/A-03
 ```
+
+Then heartbeat that claim: `python3 <plugin>/scripts/beam.py heartbeat --beam .warp/beam.json --id A-03 --agent shuttle-A-03`. `beam.py set --status claimed` records `claimedAt`. The heartbeat records `lastSeenAt` and the agent id.
 
 `beam.py set` prints `jira: MUST DO` and writes `.warp/jira-todo.json` when the ticket has a Jira key (including one inferred from the id, summary, or branch). Do those actions, or leave them to the Shuttle, which checks `jira.startedAt` and `jira.comments` so the move and the claim comment happen once. A ticket with no key prints "no Jira move". Neither case blocks the claim. A failed Jira call is recorded and posted by Herald. It does not unclaim the ticket, except on the first claimed ticket of the run while `jiraTransition` is true. First ticket means no ticket has `jira.startedAt` yet (nothing in this run was linked and moved to In Progress). If Jira says the issue was not found, or no real issue key can be resolved, the script releases that claim and stops the run. Post only that Herald payload. Do not also say the claim still stands, and do not start the Shuttle. A later miss, after one ticket has `jira.startedAt`, stays a per-ticket alarm and does not stop the run. `jiraTransition: false` does not stop the run.
 
