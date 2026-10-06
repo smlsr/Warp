@@ -232,6 +232,16 @@ A dead listener, while the run is running, is cleared and exactly one replacemen
 
 A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`, and exactly one new Shuttle is dispatched for that same ticket. Herald posts `<id> worker died. A new Shuttle started.` It is not released, so another ticket cannot take the files. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
 
+## Alarms
+
+The one `warp-listen` listener repairs `lock-escape` and no other alarm. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop stop the listener, so they do not repair. Plugin hooks do not run on cloud runners. The listener calls `scripts/alarm_repair.py next`. A second call in the same moment does not start a second repair.
+
+The Shuttle that hits the alarm stores each path outside the lock with `beam.py set --alarm lock-escape --escaped <path>`. Those paths live on the ticket as `escaped`. The repair widens that ticket's locks to those paths, records them on `addedLocks`, and says which paths it added in the Herald line. It does not take a path an in-flight ticket currently holds. It waits, then widens and starts after that holder finishes. A queued ticket's overlapping lock can be widened. An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before any edit.
+
+One repair runs at a time, in plan order. If it alarms `lock-escape` again, or errors, the alarm stays, the attempt is recorded, and the next lock-escape ticket starts in that same call. The one that just failed is not retried in that pass. If it returns the ticket to the normal path with the alarm cleared, or the ticket merges, the listener waits for that completion, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm in place and later passes skip it. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired.
+
+`/warp-init` backfills `alarmRepairMinutes` and `maxAlarmRepairs` when `.warp/config.yaml` does not have them yet.
+
 ## Version
 
 The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`.
@@ -254,7 +264,7 @@ When `/warp-version` or init says the project copy is older than the source copy
 4. Reload Cursor.
 5. `/warp-init`. It copies the current plugin into `.cursor/plugins/warp` and writes config.
 
-A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
+A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
 ## Troubleshooting
 
@@ -466,6 +476,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. Separate from a dead worker. |
 | `staleMinutes` | `15` | Heartbeat older than this, or no heartbeat and a claim or listener start older than this, means the worker is dead. The watchdog replaces it while the run is running. Pause and stop do not. `/warp-init` backfills this key. |
 | `maxRecoveries` | `3` | Shuttle replacements on one ticket. The next death is `alarm` / `worker-died` and does not start another. `/warp-init` backfills this key. |
+| `alarmRepairMinutes` | `15` | How often the one listener opens a lock-escape repair pass. Pause and stop do not. `/warp-init` backfills this key. |
+| `maxAlarmRepairs` | `3` | Repair attempts for one lock-escape ticket. The repair widens that ticket's locks to the paths that escaped. Past the cap the alarm stays. `/warp-init` backfills this key. |
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |
 | `pollSeconds` | `300` | How often the one listener re-reads the channel, and how often a running loop reconciles pull requests. |

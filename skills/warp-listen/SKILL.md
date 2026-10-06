@@ -47,5 +47,22 @@ python3 <plugin>/scripts/inbound.py drain --beam .warp/beam.json
 5. `warp:retry <id>` requeues that alarmed ticket. `warp:status` posts the digest after the ack. `warp:pause` and `warp:stop` have already stopped the listener. Exit the loop. Do not keep reading. `warp:resume` and `warp:start` leave you as the one listener. Do not launch a second.
 6. An unknown or malformed `warp:` command was acked with the accepted forms. Do nothing else.
 7. Wait `pollSeconds`, then read again.
+8. On each pass, while this listener is running and the run is not paused or stopped, ask for one lock-escape repair. `alarmRepairMinutes` (default 15) is how often a new pass opens. The script enforces that, so call it every pass. A second call is idempotent.
 
-`inbound.py ?` prints claim, release, handle, enqueue, and drain.
+```bash
+python3 <plugin>/scripts/alarm_repair.py next --beam .warp/beam.json
+```
+
+`alarm-repair: skipped` means paused or stopped. Do not launch. `alarm-repair: wait` means the interval has not elapsed. `alarm-repair: working` or `alarm-repair: waiting` means a repair Shuttle is still on that ticket. Do not launch another. `alarm-repair: naming` means the path-naming Shuttle is still out. Do not launch another.
+
+`alarm-repair: name <id>` means the alarm has no escaped paths. Launch one Shuttle for that id whose only job is to name them, then stop. It runs `alarm_repair.py paths --id <id> --path <path>` for each file or directory it needs outside the lock, and it does not edit. When it returns, run `next --returned <id>` before launching anyone else.
+
+`alarm-repair: locked <id> by <holder>` means an in-flight ticket holds a path this repair would take. Do not launch and do not widen. The next pass widens and starts after that holder finishes. A queued ticket does not block this.
+
+`alarm-repair: start <id>` means the script already widened that ticket's locks to the paths that escaped (`addedLocks`, and `Added ...` on the herald line). Launch exactly one Shuttle, `IMPLEMENT <id>`. It works inside those locks. It does not add more paths itself. The alarm is still `lock-escape` until the work is really on the normal path. Do not clear it.
+
+When that Shuttle returns, run `next --returned <id>` before launching another repair. A failure (`alarm` / `lock-escape` again, or `--error`) leaves the alarm, records the attempt, and the same output starts the next ticket. Do not retry the one that just failed in this pass. A pass that is still on the normal path with the alarm cleared, or merged, waits until that completion, then starts the next. `maxAlarmRepairs` (default 3) skips a ticket after that many attempts. Herald posts each `herald:` line once: a repair started (including the paths added), a failure that takes the next ticket, and a ticket given up. The same lines are in `.warp/alarm-repair.json`.
+
+Paused or stopped: you are not running, so you do not call this. Other alarm reasons are not repaired. `/warp` does not launch these Shuttles. You do.
+
+`inbound.py ?` prints claim, release, handle, enqueue, and drain. `alarm_repair.py ?` prints `next` and `paths`.

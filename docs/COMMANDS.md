@@ -443,7 +443,7 @@ python3 scripts/check_version.py --against origin/main
 
 ## Beam
 
-`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `usage`, `gate`, `pause`, `resume`, `board`, `check`, `eta`, `heartbeat`, `watchdog`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--approved-by`, `--proceeded-by`, `--merge-method`, `--bugbot pass|fail`, `--ci green`, `--alarm`, `--attempts`, `--force`. `--status awaiting_approval`, `merging`, and `merged` are refused until CI is green and, when Bugbot applies, `--bugbot pass`. A fail sets `fix` or, at `maxFixAttempts`, `alarm` / `bugbot-failed`. A new `--sha` during `awaiting_approval` sets `bugbot_running` and does not move Jira. Setting `merged` stores the sha, `mergedAt`, `via`, merge method, and who approved, releases locks, and prints one post-merge MUST DO. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
+`beam.py` subcommands: `ingest`, `ready`, `set`, `spend`, `usage`, `gate`, `pause`, `resume`, `board`, `check`, `eta`, `heartbeat`, `watchdog`. `set` takes `--status`, `--agent`, `--branch`, `--jira`, `--pr`, `--sha`, `--via local|connected`, `--approved-by`, `--proceeded-by`, `--merge-method`, `--bugbot pass|fail`, `--ci green`, `--alarm`, `--escaped`, `--attempts`, `--force`. `--escaped` is repeatable and stores each path outside the lock on the ticket with a `lock-escape` alarm. The listener's repair widens the lock to those paths. `--status awaiting_approval`, `merging`, and `merged` are refused until CI is green and, when Bugbot applies, `--bugbot pass`. A fail sets `fix` or, at `maxFixAttempts`, `alarm` / `bugbot-failed`. A new `--sha` during `awaiting_approval` sets `bugbot_running` and does not move Jira. Setting `merged` stores the sha, `mergedAt`, `via`, merge method, and who approved, releases locks, and prints one post-merge MUST DO. `--jira` is rejected when the prefix is not in `jiraProject` or `jiraKeyPrefixes` unless `--force` is set. A plan id is not a Jira key. Do not hand-edit `beam.json`.
 
 ## /warp-proceed
 
@@ -505,3 +505,30 @@ python3 <plugin>/scripts/inbound.py ?
 python3 <plugin>/scripts/beam.py heartbeat --beam .warp/beam.json --id WV-01 --agent shuttle-WV-01
 python3 <plugin>/scripts/beam.py watchdog --beam .warp/beam.json
 ```
+
+## Lock-escape repair
+
+The one listener runs this on each pass while the run is running. Pause and stop do not. A second call does not start a second repair. Only `lock-escape` is repaired. The repair widens that ticket's locks to the paths that escaped.
+
+```bash
+python3 <plugin>/scripts/alarm_repair.py next --beam .warp/beam.json
+python3 <plugin>/scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01
+python3 <plugin>/scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01 --error "boom"
+python3 <plugin>/scripts/alarm_repair.py paths --beam .warp/beam.json --id WV-01 --path src/extra
+python3 <plugin>/scripts/alarm_repair.py ?
+```
+
+| Flag | Effect |
+|---|---|
+| `--beam` | Beam file. Default `.warp/beam.json`. |
+| `--now` | Timestamp for a test clock, `YYYY-MM-DDTHH:MM:SSZ`. |
+| `--returned` | The repair Shuttle for this ticket id has returned. Settle it before starting another. |
+| `--error` | With `--returned`, the repair errored. The alarm stays `lock-escape`. |
+| `--id` | Ticket whose escaped paths `paths` stores. |
+| `--path` | One file or directory outside the lock. Repeat for each path. `paths` does not widen and does not start. |
+
+`next` prints `alarm-repair: start <id>` for one ticket, in plan order. It adds the `escaped` paths to that ticket's locks first and records them on `addedLocks`. The Herald line names the paths added. `alarm-repair: locked <id> by <holder>` means an in-flight ticket holds one of those paths, or one of the ticket's current locks. Nothing is widened and nothing starts until that holder finishes. A queued ticket does not block the widen. `alarm-repair: name <id>` means an older alarm has no path list. Launch one Shuttle to record the paths, then `next --returned`. `alarm-repair: working` and `alarm-repair: waiting` mean a repair is still in flight. Do not launch another.
+
+A failure leaves the alarm and starts the next lock-escape ticket in that same call. The failed ticket is not retried in that pass. Success waits until the ticket is merged, or back on the normal path with the alarm cleared and the repair Shuttle finished, then starts the next. `maxAlarmRepairs` (default 3) skips a ticket after that many attempts. `alarmRepairMinutes` (default 15) is how often a new pass opens. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up.
+
+The Shuttle that first escapes stores the paths with `beam.py set --status alarm --alarm lock-escape --escaped <path>`. `--escaped` is repeatable. It does not widen the lock. The listener's repair does.

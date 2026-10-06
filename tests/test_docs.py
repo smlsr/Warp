@@ -177,6 +177,28 @@ class Since193DocTests(unittest.TestCase):
         self.assertIn(sentence, (ROOT / "docs/RUNBOOK.md").read_text())
         self.assertIn("jira.startedAt", (ROOT / "docs/CONNECTORS.md").read_text())
 
+    def test_lock_escape_repair_widens_the_lock(self):
+        files = (
+            "README.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIG.md",
+            "docs/GUIDE.md",
+            "docs/RUNBOOK.md",
+        )
+        for rel in files:
+            text = (ROOT / rel).read_text()
+            self.assertIn("alarmRepairMinutes", text, rel)
+            self.assertIn("maxAlarmRepairs", text, rel)
+            self.assertIn("lock-escape", text, rel)
+            self.assertIn("widens", text, rel)
+        readme = (ROOT / "README.md").read_text()
+        start = readme.find("## Alarms")
+        self.assertGreaterEqual(start, 0)
+        section = readme[start:].partition("\n## ")[0]
+        self.assertIn("escaped", section)
+        self.assertIn("in-flight", section)
+        self.assertIn("alarm_repair.py", section)
+
 
 class ConfigDocTests(unittest.TestCase):
     def test_every_example_key_is_in_config_doc(self):
@@ -327,6 +349,16 @@ class ScriptHelpTests(unittest.TestCase):
             "resume_hint.py": ("--root", "--beam", "Does not dispatch"),
             "session_note.py": ("--type", "session-stop", "subagent-stop", "--beam"),
             "mcp_allow.py": ("--server", "--tool", "--root", "--cursor-home", "ask"),
+            "alarm_repair.py": (
+                "--beam",
+                "--now",
+                "--returned",
+                "--error",
+                "--path",
+                "lock-escape",
+                "alarmRepairMinutes",
+                "maxAlarmRepairs",
+            ),
             "jira_external_id.py": (
                 "--apply",
                 "--yes",
@@ -369,6 +401,7 @@ class ScriptHelpTests(unittest.TestCase):
             "resume_hint.py",
             "session_note.py",
             "mcp_allow.py",
+            "alarm_repair.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

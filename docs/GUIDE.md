@@ -62,6 +62,8 @@ watchdog → reconcile in-flight → advance gates → ready() → claim → Shu
 
 A dead listener is cleared and exactly one new `warp-listen` agent is launched (`listener: replace`). Herald posts `Listener died. A new one started.` A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`. Exactly one new Shuttle is dispatched (`shuttle: replace`). Herald posts `<id> worker died. A new Shuttle started.` It is not queued, so another ticket cannot take the files. A second tick does not start a second replacement. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no Shuttle starts. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
 
+The same listener repairs `lock-escape` while the run is running. Every `alarmRepairMinutes` (default 15) it calls `alarm_repair.py next` and starts one repair. The repair widens that ticket's locks to the paths that escaped (`escaped` on the alarm). It does not take a path an in-flight ticket holds. It waits, then widens and starts. A queued ticket's overlapping lock can be widened. A failure moves to the next lock-escape ticket in that call. Success waits until the ticket is merged, or back on the normal path with the alarm cleared, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm and later passes skip it. Pause and stop do not repair. Other alarm reasons are left alone.
+
 `ready()` refuses a ticket when:
 
 - the beam is paused
