@@ -1,0 +1,16 @@
+{
+  "name": "warp",
+  "owner": {
+    "name": "HumanifyOS"
+  },
+  "metadata": {
+    "description": "Warp plans a repo, dispatches workers, and posts status to Slack and Teams."
+  },
+  "plugins": [
+    {
+      "name": "warp",
+      "source": ".",
+      "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, keep state out of git."
+    }
+  ]
+}

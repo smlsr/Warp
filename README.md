@@ -8,7 +8,7 @@ There is no per-person cap. The only concurrency cap is `maxAgents`.
 
 ## Quick start
 
-1. `/add-plugin https://github.com/smlsr/Warp`, then `/warp-init` in the repo you want built. Reload Cursor.
+1. Import `https://github.com/smlsr/Warp` (Install, below), install Warp from Customize, and reload. Then `/warp-init` in the repo you want built.
 2. Connect Jira, GitHub or Bitbucket if you want pull requests, and Slack or Teams. Create a lowercase `warp` channel, or set another name with `/warp-init --channel NAME`. Init writes the project allowlist for the Slack and Jira tools Warp calls. Set Run Mode to Auto-review, Allowlist, or Run Everything.
 3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
@@ -17,13 +17,20 @@ The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). E
 
 ## Install
 
-Type this in a Cursor agent chat. It will not show up in autocomplete, so enter the whole line.
+Customize installs a plugin that is already on the Cursor Marketplace or a team marketplace. Pasting `https://github.com/smlsr/Warp` into Customize does not add Warp, and Cursor shows no error.
 
-```text
-/add-plugin https://github.com/smlsr/Warp
-```
+A team admin on Teams or Enterprise imports the repository. People on that marketplace then install it from Customize:
 
-That works because the plugin manifest is at the root of that repo (.cursor-plugin/plugin.json), on main. You need Cursor 2.5 or later. Install it for yourself, or for the project, when Cursor asks.
+1. Open the Cursor dashboard, then Plugins & MCPs.
+2. Under Team Marketplaces, choose Add Marketplace, then Import from Repo.
+3. Paste `https://github.com/smlsr/Warp`. Cursor reads `.cursor-plugin/marketplace.json` on `main` and lists Warp. Add it, set who can see the marketplace, and save.
+4. In the Cursor app, open Customize in the sidebar, find Warp, and choose Install for yourself or for the project.
+5. Run Developer: Reload Window.
+
+The plugin manifest is `.cursor-plugin/plugin.json` at the root of that repo. The logo is `assets/logo.svg`, committed in the repo. Listing Warp on the public Cursor Marketplace is a separate review at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Until that review lands, Customize search does not find this repository on its own.
+
+Without a team marketplace, copy this repo to `~/.cursor/plugins/local/warp` so that folder contains `.cursor-plugin/plugin.json`, then reload. Local plugin imports have to be allowed (Dashboard, Settings, Security & Identity, Marketplace and Plugins). A marketplace plugin with the same name takes precedence.
+
 Then, in the repo you want Warp to build, type `/warp-init`. It does the manual steps below and is safe to run again: it checks each one and does only what is missing.
 
 | Step | Skipped when |
