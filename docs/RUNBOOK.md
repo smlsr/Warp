@@ -109,6 +109,18 @@ Two ticks close together reserve the replacement on the first write. The second 
 
 `maxRecoveries` (default 3) caps Shuttle replacements. Past the cap the ticket is `alarm` with reason `worker-died` and no new Shuttle starts. Herald posts `<id> worker died. Recovery cap reached.` Branch, pull request, and `jira.startedAt` stay. `/warp-retry` is the way back onto the queue. `/warp-init` appends `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
 
+## Lock-escape repair
+
+`lock-escape` means the diff needed a path outside the ticket's locks. The Shuttle stores each of those paths with `--escaped` when it sets the alarm. It does not widen the lock itself.
+
+The one listener, while the run is running, calls `alarm_repair.py next` about every `alarmRepairMinutes` (default 15). The repair widens that ticket's locks to the paths that escaped, records the added paths on `addedLocks`, and starts one Shuttle inside the widened lock. Herald's start line names the paths added.
+
+Do not start that repair when an in-flight ticket holds one of those paths, or holds one of the ticket's current locks. `alarm-repair: locked <id> by <holder>` means wait. When the holder finishes (it is no longer in flight), the next listener pass widens and starts. A queued ticket's overlapping lock can be widened. Nothing is stolen from work that is running.
+
+One repair at a time, in plan order. If the repair alarms `lock-escape` again, or the Shuttle errors, leave the alarm, record the attempt, and start the next lock-escape ticket in that same call. Do not retry the one that just failed in this pass. If the repair puts the ticket back on the normal path and clears the alarm, or the ticket merges, wait for that completion, then start the next. A second tick while a repair Shuttle is working does not start another.
+
+`maxAlarmRepairs` (default 3) is the cap. After that the alarm stays and later passes skip the ticket. Herald posts `<id> lock-escape repair given up.` An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before it edits. Pause and stop do not repair, because the listener is not running. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired this way. `/warp-init` appends `alarmRepairMinutes` and `maxAlarmRepairs` when the config does not have them yet.
+
 ## Cap change
 
 Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-reads yaml. Also set the copy inside the beam if a tick reads only the beam: re-ingest is wrong for a live run; edit `beam.config.maxAgents` with a journal note, or set it in both places.

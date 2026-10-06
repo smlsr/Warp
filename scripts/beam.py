@@ -637,6 +637,10 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         t.pop("lastSeenAt", None)
     if args.alarm is not None:
         t["alarm"] = None if args.alarm == "-" else args.alarm
+    if getattr(args, "escaped", None):
+        import alarm_repair
+
+        t["escaped"] = alarm_repair.normalize_paths(args.escaped)
     if args.status in {"coding", "claimed"} and not t["pr"]["openedAt"] and args.pr:
         t["pr"]["openedAt"] = utcnow()
     try:
@@ -1206,6 +1210,8 @@ def default_config() -> dict:
         "stuckAfterMinutes": 90,
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
+        "alarmRepairMinutes": 15,
+        "maxAlarmRepairs": 3,
         "respectMergeWindows": False,
         "mergeWindows": ["08:30", "13:00", "17:00"],
         "pollSeconds": 300,
@@ -1226,8 +1232,11 @@ examples:
 Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta, heartbeat, watchdog.
 set takes --status, --agent, --branch, --jira, --pr, --sha,
 --via local|connected, --approved-by, --proceeded-by, --merge-method,
---bugbot pass|fail, --ci green, --alarm, --attempts, --force,
+--bugbot pass|fail, --ci green, --alarm, --escaped, --attempts, --force,
 --tokens-in, --tokens-out, --tokens-cached, --cost.
+--escaped is a path outside the lock, repeatable, stored on the ticket
+with a lock-escape alarm. The listener's repair widens the lock to those
+paths. It does not clear the alarm by itself.
 usage records the same token and cost totals for one ticket, replacing the
 previous report. Pass the totals Cursor reported for this ticket. If the run
 did not report usage, do not call usage and do not invent numbers.
@@ -1288,6 +1297,11 @@ def main() -> None:
     ps.add_argument("--bugbot")
     ps.add_argument("--ci")
     ps.add_argument("--alarm")
+    ps.add_argument(
+        "--escaped",
+        action="append",
+        help="path outside the lock, stored with a lock-escape alarm; repeat for each path",
+    )
     ps.add_argument("--attempts", type=int)
     ps.add_argument("--tokens-in", type=int)
     ps.add_argument("--tokens-out", type=int)

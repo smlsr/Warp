@@ -44,6 +44,8 @@ A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never hea
 - `shuttle: replace <id>`: status is `recovering`. Branch, pull request, `jira.startedAt`, and locks stayed. Dispatch exactly one Shuttle for that same ticket. Do not queue a duplicate and do not release the lock. Herald posts one line: `<id> worker died. A new Shuttle started.`
 - `shuttle: alarm <id> worker-died`: `maxRecoveries` (default 3) is spent. Do not start another.
 
+Lock-escape repair is the listener's job, not this tick. Do not launch a repair Shuttle from `/warp`. The listener runs `alarm_repair.py next` and widens that ticket's locks to the paths that escaped.
+
 A second tick must not launch a second replacement for the same worker. The first write reserved it.
 
 ## One running tick

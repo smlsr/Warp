@@ -17,6 +17,7 @@
 .warp/notify-post.json     Last Herald payload (init, scan, a failed Jira move, or an inbound ack) and where to post it
 .warp/inbound-ack.json     Ack for the latest warp: command. Herald posts this before the action
 .warp/recovery.json        Herald lines when the watchdog replaces a dead listener or Shuttle
+.warp/alarm-repair.json    Herald lines when the listener starts, advances, or gives up a lock-escape repair
 .warp/pending-commands.jsonl  Channel lines waiting for inbound.py drain. A message id is applied once
 .warp/jira-map.json        plan id to issue key, with source and confidence. Wins over jiraKeyMap.
 .warp/jira-resolve.json    JQL for the external-id, label, and remote-link lookup
@@ -55,6 +56,10 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 - `lastSeenAt` — Shuttle heartbeat. `agent` is the agent id that owns it. Written by `beam.py heartbeat` at claim, at each status change, and on a short interval while that turn is alive (at least every 5 minutes, and always inside `staleMinutes`).
 - `claimedAt`, `workerStartedAt` — when this claim started, and when the current worker started. A recovery sets `workerStartedAt` and clears `lastSeenAt`. The original `claimedAt` stays.
 - `recoveries`, `recoveredAt`, `recoveryPriorStatus` — how many times this ticket's Shuttle was replaced, when, and the status to resume (`coding`, `fix`, and the other Shuttle statuses). Past `maxRecoveries` (default 3) the next death sets `alarm` to `worker-died` and does not start another.
+- `escaped` — paths outside the lock, stored with a `lock-escape` alarm (`beam.py set --escaped`, or `alarm_repair.py paths`). The listener's repair widens `locks` to these paths.
+- `addedLocks` — paths the current repair added. The Herald start line names the same paths.
+- `alarmRepairs` — how many lock-escape repairs have started. Past `maxAlarmRepairs` (default 3) later passes skip the ticket.
+- `alarmRepair` — `{state, attempts, added, agent, ...}` for the repair in flight. `state` `working` is the repair Shuttle. `naming` on the beam's `alarmRepair` record means an older alarm still needs its path list. The beam's `alarmRepair.active` is the one repair in flight. `alarmRepair.tried` is the tickets already taken in this pass.
 - `events` — append-only list on the ticket. Each row is `{at, type, ...}`. `type` is `status` (`from`, `to`), `bugbot`, `ci`, `alarm`, or `usage`. The same row, plus `id`, is appended to `.warp/events.jsonl`. Old beams without `events` still render. The timeline uses these rows and does not invent a claim time.
 - `usage` — `{tokensIn, tokensOut, tokensCached, cost}` from `beam.py usage` or the same flags on `set`. Each flag replaces that field. It is not added to the previous number. `tokens` and `minutes` from `spend` stay a separate additive total.
 - `pr.ciRetries` — how many times CI was recorded as something other than `green`.
@@ -74,6 +79,8 @@ Dead listener while `runState` is running: the watchdog clears the stale `runnin
 Dead Shuttle (`claimed`, `planning`, `coding`, `fix`, or already `recovering`): status becomes `recovering`. Branch, pull request, `jira.startedAt`, and locks stay. The ticket is not queued, so `ready()` will not hand the same files to someone else. Dispatch exactly one new Shuttle for that id (`shuttle: replace <id>`). Herald posts one line: `<id> worker died. A new Shuttle started.` The replacement heartbeats, then sets status back to `recoveryPriorStatus` and continues the branch. Past `maxRecoveries`, status is `alarm` and `alarm` is `worker-died`. Do not start another.
 
 `stuckAfterMinutes` is a different signal (no beam update, and not waiting on approval). It does not release a lock and it does not by itself start a Shuttle.
+
+Lock-escape repair is separate from worker death. The one listener calls `alarm_repair.py next` while the run is running. It widens that ticket's locks to the paths on `escaped` and starts one repair Shuttle. It does not start when an in-flight ticket holds one of those paths. Pause and stop do not repair. `.warp/alarm-repair.json` holds the Herald lines from the latest repair change.
 
 Pause sets `paused: true`. `ready()` returns nothing. The watchdog prints `watchdog: skipped (paused)` and changes nothing. In-flight status is kept.
 

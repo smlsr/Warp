@@ -102,6 +102,15 @@ maxRecoveries: 3
 # Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
 # worker-died and no new Shuttle starts. Branch, pull request, and
 # jira.startedAt stay. Default 3.
+alarmRepairMinutes: 15
+# How often the one listener looks for lock-escape alarms and starts one
+# repair. Only while the run is running. Pause and stop do not repair.
+# A repair already in flight is checked on each listener pass. /warp-init
+# appends this key when the file does not have it yet.
+maxAlarmRepairs: 3
+# Repair attempts for one lock-escape ticket. Past this cap the alarm stays
+# and later passes skip it. The repair widens that ticket's locks to the
+# paths that escaped. Default 3.
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+- The one `warp-listen` listener repairs `lock-escape` alarms, and no other reason, while the run is running. `alarmRepairMinutes` (default 15) opens a pass. `alarm_repair.py next` is idempotent if the listener ticks twice. Pause and stop do not repair.
+- The repair widens that ticket's locks to the paths stored on the alarm (`escaped`). It does not take a path an in-flight ticket holds. It waits, then widens and starts. A queued ticket's overlapping lock can be widened. The added paths are recorded on the ticket and in the Herald line.
+- One repair at a time, in plan order. A failure leaves the alarm and starts the next ticket in that call. Success waits until the ticket completes, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm and later passes skip it. `/warp-init` backfills both keys.
+
 ## 1.4.0
 
 - This marks 1.4.0.
