@@ -17,12 +17,20 @@ Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the 
 - Active lock paths must not overlap, including prefix (`internal/app` blocks `internal/app/stub`).
 - Cap is `maxAgents` minus active. There is no per-person cap.
 - Order is starred (including the critical path), then priority, then lowest `rank`. When the plan has no `rank`, a higher `rankDays` starts first.
-- The cap is `maxAgents`. A project may set 18. A green pull request does not hold a slot. It does hold its locks until merge or park.
-- One checkout per ticket. Cloud is its own VM. Local is its own git worktree. Never two agents in one working copy.
+- The cap is `maxAgents`. A project may set 18. A pull request keeps the slot until the provider check rollup is green. It keeps its locks until merge or park.
+- One checkout per ticket. Cloud is one cloud agent. Local is one git worktree. Never two agents in one working copy. Never two agents on one ticket.
+
+Before the first claim of a running cloud session, `prompt_gate.py check` must print `prompt-gate: ok`. A missing tool means do not claim. Skip that only when the beam has `promptForced` from `scan.py start --force`. A local runner does not block.
 
 ## Claim
 
-For each id `ready` prints, claim it, then start a Shuttle in its own checkout. `runner: cloud` is a cloud VM. `runner: local` is a git worktree. Never two agents in one working copy. The kickoff is only:
+For each id `ready` prints, claim it, then start that ticket in its own checkout. Do not implement it here.
+
+`runner: cloud`: run `checkout.py launch`. It prints a Task call (`environment: cloud`, `subagent_type: shuttle`, `cloud_base_branch`, prompt `IMPLEMENT <id>`). Launch that one cloud agent. Then `checkout.py bind --agent` with the id it returns. Do not use a local sub-agent. `checkout.py implement` must not be how the ticket gets built.
+
+`runner: local`: `checkout.py add` runs `git worktree add`. Remove it later with `checkout.py remove`.
+
+The kickoff is only:
 
 ```
 IMPLEMENT A-03

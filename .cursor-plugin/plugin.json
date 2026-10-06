@@ -1,8 +1,8 @@
 {
   "name": "warp",
   "displayName": "Warp",
-  "version": "1.4.2",
-  "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, keep state out of git.",
+  "version": "1.4.3",
+  "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, and commit the beam without secrets.",
   "author": { "name": "HumanifyOS" },
   "publisher": "HumanifyOS",
   "homepage": "https://github.com/smlsr/Warp",

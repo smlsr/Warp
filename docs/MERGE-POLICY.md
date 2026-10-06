@@ -1,6 +1,6 @@
 # Merge policy
 
-The orchestrator is the only merger. A size in `autoMergeSizes` enters the merge queue when checks are green. A size not in `autoMergeSizes` waits for `/warp-proceed` or `warp:proceed`. L and XL are not special. `checkCommand` empty means Bugbot and CI. `appendOnlyPaths` conflicts keep both sides.
+The orchestrator is the only merger. A size in `autoMergeSizes` enters the merge queue when the provider check rollup is green. A size not in `autoMergeSizes` waits for `/warp-proceed` or `warp:proceed`. L and XL are not special. `checkCommand` empty means Bugbot and CI. `appendOnlyPaths` conflicts keep both sides. `mergeQueue: true`, or a GitHub merge queue the provider can read, enqueues the pull request instead of merging it from the agent. A direct merge that branch protection rejects is not reported as merged. Bugbot runs on the pull request after push.
 
 | Size | Class | Auto | Required before the last step |
 |---|---|---|---|

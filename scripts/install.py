@@ -167,6 +167,57 @@ def has_ignore_entry(text: str) -> bool:
     return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
 
 
+def apply_gitignore(text: str, snippet: str) -> tuple[str, str]:
+    """Append the snippet, or replace an old ignore-all `.warp/` line.
+
+    Unrelated gitignore lines stay. Returns (text, skip|append|replace).
+    """
+    norm = text.replace("\r\n", "\n")
+    snip = snippet if snippet.endswith("\n") else snippet + "\n"
+    lines = norm.splitlines()
+    drop = set()
+    for index, line in enumerate(lines):
+        if line.strip() not in IGNORE_ENTRIES:
+            continue
+        drop.add(index)
+        cursor = index - 1
+        while cursor >= 0 and cursor not in drop:
+            raw = lines[cursor]
+            if not raw.strip() or (raw.lstrip().startswith("#") and "warp" in raw.lower()):
+                drop.add(cursor)
+                cursor -= 1
+                continue
+            break
+    present = snip.strip() in norm
+    if not drop and present:
+        return norm if norm.endswith("\n") or norm == "" else norm + "\n", "skip"
+    if not drop:
+        sep = ""
+        if norm and not norm.endswith("\n"):
+            sep = "\n"
+        if norm and not norm.endswith("\n\n"):
+            sep = ("" if norm.endswith("\n") else "\n") + "\n"
+        body = norm + sep + snip
+        if not body.endswith("\n"):
+            body += "\n"
+        return body, "append"
+    rebuilt = []
+    inserted = present
+    for index, line in enumerate(lines):
+        if index in drop:
+            if not inserted:
+                rebuilt.extend(snip.rstrip("\n").split("\n"))
+                inserted = True
+            continue
+        rebuilt.append(line)
+    if not inserted:
+        if rebuilt and rebuilt[-1] != "":
+            rebuilt.append("")
+        rebuilt.extend(snip.rstrip("\n").split("\n"))
+    body = "\n".join(rebuilt).rstrip("\n") + "\n"
+    return body, "replace"
+
+
 def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = []
     channel = channel or DEFAULT_CHANNEL
@@ -245,15 +296,16 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
         steps.append(("fail", "assets/gitignore-snippet.txt not found"))
     else:
         text = gi.read_text() if gi.exists() else ""
-        if snippet in text.replace("\r\n", "\n") or has_ignore_entry(text):
-            steps.append(("skip", ".gitignore already ignores .warp/"))
+        updated, action = apply_gitignore(text, snippet)
+        if action == "skip":
+            steps.append(("skip", ".gitignore already keeps Warp state and ignores secrets"))
         else:
-            sep = ""
-            if text:
-                sep = ("" if text.endswith("\n") else "\n") + "\n"
             if not dry:
-                gi.write_text(text + sep + snippet)
-            steps.append(("done", "appended Warp snippet to .gitignore"))
+                gi.write_text(updated)
+            if action == "replace":
+                steps.append(("done", "updated .gitignore so the beam, journal, and board are committed and secrets stay ignored"))
+            else:
+                steps.append(("done", "appended Warp snippet to .gitignore"))
 
     steps.extend(allow_steps(root, dry, allow))
     steps.append(record_version(root, dry))

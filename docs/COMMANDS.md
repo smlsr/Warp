@@ -10,7 +10,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 |---|---|---|
 | `/warp-init` | Copy the plugin, backfill config, and allow Warp's MCP tools | `install.py init` `--channel` `--dry-run` `--no-allow` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `scan.py scan` `--folder` |
-| `/warp-start` | Start dispatch, run the watchdog, and start the one channel listener | `scan.py start` `--reason` (runs `beam.py watchdog`), then `inbound.py claim` `--beam` `--agent-id` unless the watchdog printed `listener: replace` |
+| `/warp-start` | Start dispatch. Cloud refuses when required Jira or Slack tools are missing | `scan.py start` `--reason` `--force` (runs `beam.py watchdog`), then `inbound.py claim` `--beam` `--agent-id` unless the watchdog printed `listener: replace` |
 | `/warp-pause` | Stop new claims and the listener | `scan.py pause` or `beam.py pause` `--reason`, then `inbound.py release` |
 | `/warp-resume` | Resume a paused beam, run the watchdog, and start the listener if it is not running | `scan.py resume` `--reason` (runs `beam.py watchdog`), then `inbound.py claim` `--beam` `--agent-id` unless the watchdog printed `listener: replace` |
 | `/warp-stop` | Stay stopped until the next start. The listener stops | `scan.py stop` `--reason`, then `inbound.py release` |
@@ -29,6 +29,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-proceed <id>` | Merge one green manual ticket and move Jira to Done | `proceed.py` `--beam` `--by` |
 | `/warp-report` | Completion report, or a partial snapshot | `report.py` `--beam` `--out` `--open` `--partial` |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
+| `/warp-upgrade` | Replace the project plugin copy. Leaves config and the beam | `upgrade.py` `--root` `--source` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
 `jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
@@ -87,7 +88,7 @@ Idempotent. A second run on a complete install changes nothing.
 
 Steps: create `.cursor/plugins` and `.warp` if missing; copy plugin files that are not already there (existing files are never overwritten); copy `assets/config.example.yaml` on a fresh config, or append missing keys with their defaults and comments; set an empty `slackChannel` or `teamsChannel` (or the old `Warp` default) to `warp`; detect `gitProvider` from `origin` unless it is already `github` or `bitbucket`; set `pushMerge: false` when there is no remote; write the project MCP allowlist when `autoAllowTools` is true (Slack, Teams, Jira, and GitHub `add_issue_comment` when the provider is GitHub); append the gitignore snippet once; write `.warp/version` from the project plugin copy. User-level `~/.cursor` files are not written. Undo the allowlist with `/warp-allow-notify --revoke`.
 
-If `.cursor/plugins/warp` is older than the plugin this command ran from, it prints `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` and does not replace plugin files.
+If `.cursor/plugins/warp` is older than the plugin this command ran from, it prints `plugin is vOLD, repo copy is vNEW: run /warp-upgrade` and does not replace plugin files. `/warp-upgrade` is the command that replaces them. An old `.gitignore` line that is exactly `.warp/` is replaced with the snippet that commits the beam, journal, STATUS, and BOARD and still ignores `.warp/config.yaml` and token files. Other gitignore lines stay.
 
 Commented lines in the example (`# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, `# ghCli: false`) are hints. A line that starts with `#` is not a key.
 
@@ -429,6 +430,56 @@ Default tool names come from `scripts/mcp_tools.py`: `slack_post_message`, `slac
 IDE: `permissions.json` `mcpAllowlist` skips the prompt when Run Mode is Auto-review, Allowlist, or Run Everything. Ask Every Time ignores it. The key replaces the in-app MCP allowlist. CLI entries do not change the IDE button. Headless CLI uses those `Mcp(server:tool)` lines, or `agent -f` for one process. The local hook returns allow for this list only; a hook allow does not currently skip the prompt. Plugin hooks do not run on cloud runners. Cloud agents and automations do not prompt. They run `scripts/mcp_allow.py --server SERVER --tool TOOL` (`--root`, `--cursor-home`) and call the tool only when it prints `allow`. `ask` means do not call it. That is the same list, not every MCP tool, and it does not approve shell commands.
 
 A second run with the same flags writes nothing. Changed files get a `.bak`. `/warp-uninstall` removes the project entries only.
+
+## /warp-upgrade
+
+```bash
+python3 <plugin>/scripts/upgrade.py ?
+python3 <plugin>/scripts/upgrade.py --root .
+python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
+```
+
+Replaces `.cursor/plugins/warp` with the plugin tree this command is running from (`--source` names another tree). When that tree is a git checkout with an `origin` remote, the command fetches the default branch and copies that tree. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not write `.warp/config.yaml` or `.warp/beam.json`. It prints `Warp vX.Y.Z` and tells you to reload Cursor. A second run with the same source prints the same version.
+
+`/warp-init` still copies only missing plugin files. Upgrade is the command that replaces an existing copy.
+
+## /warp-start and the prompt gate
+
+On `runner: cloud`, or `runner: auto` when `CURSOR_CLOUD`, `CURSOR_CLOUD_AGENT`, or `WARP_CLOUD_SESSION` is set, `/warp-start` checks the MCP allow list before it sets `runState` to running and before it claims.
+
+When `jiraTransition` is on, `transitionJiraIssue` and `addOrEditJiraIssueComment` must be present. When Slack notify is on (`messenger` is `slack` or `both`), `slack_send_message` must be present. A missing tool is printed on stdout and handed to Herald. The run does not start and nothing is claimed. `scan.py start --force` starts anyway and later claims skip the check. A local runner does not block. The same check runs on a later claim while the run is running, unless it was force-started.
+
+```bash
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json --force
+python3 <plugin>/scripts/prompt_gate.py check --beam .warp/beam.json
+python3 <plugin>/scripts/prompt_gate.py ? 
+```
+
+## Checkouts, slots, and the committed beam
+
+One ticket, one checkout. Cloud is a Cursor cloud agent the Warp session launches with the Task tool: `environment: cloud`, `subagent_type: shuttle`, `cloud_base_branch` set to the base branch, prompt `IMPLEMENT <id>`. This plugin has no cloud-agent API. `checkout.py implement` exits 2. `checkout.py launch` prints that Task call. Local is `checkout.py add` and `checkout.py remove` (`git worktree add` / `git worktree remove`). The beam stores `agent` or `worktree`. Two agents never share a ticket, a VM, or a worktree.
+
+```bash
+python3 <plugin>/scripts/checkout.py ?
+python3 <plugin>/scripts/checkout.py launch --beam .warp/beam.json --id T-1
+python3 <plugin>/scripts/checkout.py add --beam .warp/beam.json --id T-1 --root .
+python3 <plugin>/scripts/checkout.py remove --beam .warp/beam.json --id T-1 --root .
+python3 <plugin>/scripts/checkout.py bind --beam .warp/beam.json --id T-1 --agent <agent-id>
+```
+
+A Shuttle that exits with a pull request records it (`orchestrator.py opened` or `beam.py set --pr`). That is the agent finishing. The slot stays occupied until the GitHub or Bitbucket check rollup is green (`provider.py rollup`, stored as `pr.rollup`, or `beam.py set --rollup green`). Bugbot runs on the pull request after the push, not inside the VM. Locks stay until merge or park.
+
+`mergeQueue: false` is the default. `true`, or a GitHub ruleset the provider can read, enqueues the pull request (`provider.py merge-pr`) instead of merging it from the agent. A direct merge that branch protection rejects is printed `not merged` and the ticket stays unmerged.
+
+`state_commit.py commit` commits the beam, journal, STATUS, and BOARD on the base branch (`--base` when that must be HEAD). Tokens, cost, API keys, and webhook URLs are removed first. `.warp/config.yaml` is not added.
+
+```bash
+python3 <plugin>/scripts/state_commit.py ?
+python3 <plugin>/scripts/state_commit.py commit --root . --beam .warp/beam.json
+python3 <plugin>/scripts/provider.py rollup --pr 36 --checks checks.json
+python3 <plugin>/scripts/provider.py merge-pr --id T-1 --pr 36
+```
 
 ## /warp-version
 

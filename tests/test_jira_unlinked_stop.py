@@ -44,7 +44,7 @@ class UnlinkedStopTests(unittest.TestCase):
         if not jira:
             text += "jiraTransition: false\n"
         (self.repo / ".warp" / "config.yaml").write_text(text)
-        started = run("scan.py", "start", "--beam", self.beam, cwd=self.repo)
+        started = run("scan.py", "start", "--force", "--beam", self.beam, cwd=self.repo)
         self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
         self.assertEqual(self.beam_json()["runState"], "running")
 

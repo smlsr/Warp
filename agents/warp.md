@@ -21,7 +21,7 @@ Spawn a Shuttle per ready ticket (`agents/shuttle.md` or the `/shuttle-run` skil
 
 Prefer the critical path. The beam sorts that way; do not reorder it.
 
-Runner: `config.runner`. `cloud` uses Cursor cloud/background agents. `local` uses subagents. Either way the beam is the source of truth, not the chat.
+Runner: `config.runner`. `cloud` means you launch one Cursor cloud agent per ticket with the Task tool (`environment: cloud`, `subagent_type: shuttle`, `cloud_base_branch` set to the base branch, prompt `IMPLEMENT <id>`). You cannot create that agent from a plugin API. Do not implement the ticket in this checkout. `local` means `checkout.py add` (a real git worktree) for that ticket only. Record `agent` or `worktree` on the beam. Never two tickets in one VM or one worktree, and never two agents on one ticket.
 
 ## Merge policy
 

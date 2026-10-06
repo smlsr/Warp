@@ -10,15 +10,16 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 
 | Key | Default | Meaning |
 |---|---|---|
-| stateDir | `.warp` | Where beam, status, and exports are written. Gitignore this. Absolute path keeps it outside the repo. |
+| stateDir | `.warp` | Where the beam, journal, STATUS, and BOARD are written. Those state files are committed. `.warp/config.yaml` stays gitignored. An absolute path keeps the directory outside the repo. |
 | model | `claude-sonnet-5-5-high` | Coding slug (Claude Sonnet 5.5 High). Must match the Cursor model picker. Overridden by this file. |
 | maxAgents | `18` | Concurrent Shuttles. Only cap. A project may set 18. The orchestrator reads this and does not assume a fixed cap. |
 | checkCommand | empty | Optional. The orchestrator runs this on a rebased head before merge. Empty: required checks are Bugbot and CI as configured (`bugbotRequired`, `bugbotManual`). Warp does not invent a build command. |
 | appendOnlyPaths | empty | Shared files a ticket may append to, besides its lock paths. Empty by default. A conflict in one of these files keeps both sides, every added line. Any other conflict is sent back to a sub-agent. The orchestrator is the only merger, and it does not hand-merge that other conflict. |
+| mergeQueue | `false` | `true`: enqueue the pull request instead of merging it from the agent. Warp also enqueues when the GitHub provider reports a merge queue. A direct merge that branch protection rejects is not marked merged. |
 | autoMergeSizes | `S, M` | Sizes that merge without a human approval. A size in this list auto-merges after Bugbot and CI, including L and XL. L and XL are not special. A size not in `autoMergeSizes` stays manual. The default leaves L and XL waiting. |
 | messenger | `both` | `slack`, `teams`, or `both`. |
 | notify | `verbose` | `verbose` posts every claim and tick, and the `/warp-init` and `/warp-scan` messages. `quiet` posts alarms, approval waits, a red gate, and pause/stop. A `warp:status` request is always answered. |
-| runner | `cloud` | `cloud` uses a Cursor cloud agent VM. `local` uses this machine. |
+| runner | `cloud` | `cloud` is one Cursor cloud agent VM per ticket. `local` is one git worktree per ticket. `auto` is cloud when `CURSOR_CLOUD`, `CURSOR_CLOUD_AGENT`, or `WARP_CLOUD_SESSION` is set, and local otherwise. The plugin cannot create that cloud agent. The Warp session launches it. |
 | jiraProject | empty | Jira project key, for example `WAR`. A plan id is sent to Jira only when its prefix matches this or `jiraKeyPrefixes`. `WV-01` is not `WAR-1`. `/warp-init` and `/warp-scan` write it when one prefix is clear from the plan, branches, or recent commits, when Jira shows one matching project, or when every stored issue key is in one project. A missing project-list tool does not skip that last write. A different value already set is left alone. |
 | jiraTransition | `true` | On claim, move the Jira issue to `jiraInProgressStatus`. Only tickets with a Jira key. No Jira connector, or no matching transition: a note goes to `.warp/outbox.md` and the claim goes on. `false` disables Jira moves, and the first-ticket unlink stop does not fire. When this is true, the first claimed ticket of a run (no ticket has `jira.startedAt` yet) that Jira cannot find, or that has no real issue key, is released back to `queued` and the run stops. A later miss stays a per-ticket alarm. |
 | jiraInProgressStatus | `In Progress` | Target status name. Warp reads the transitions Jira offers and matches the transition name, then the target status name, then an in-progress status category. It never uses a fixed transition id. |

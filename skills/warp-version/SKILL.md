@@ -15,6 +15,6 @@ Read the output to the user.
 
 - `Warp v<version>` means the project copy and the source copy match.
 - `installed:` is `.cursor/plugins/warp`. `source:` is the plugin tree this command ran from. `recorded:` is `.warp/version`, written by `/warp-init`.
-- `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init` means the project copy is older. Init does not overwrite plugin files, so a fresh install is the way to pick up the new copy. Do not uninstall unless the user asks.
+- `plugin is vOLD, repo copy is vNEW: run /warp-upgrade` means the project copy is older. Init does not overwrite plugin files. `/warp-upgrade` replaces the plugin copy and leaves `.warp/config.yaml` and the beam alone.
 
 The number in `VERSION` is the source of truth. `.cursor-plugin/plugin.json` must match it.

@@ -62,7 +62,7 @@ def label(version: Optional[str]) -> str:
 
 
 def upgrade_line(installed: str, source: str) -> str:
-    return f"plugin is v{installed}, repo copy is v{source}: run /warp-uninstall then /warp-init"
+    return f"plugin is v{installed}, repo copy is v{source}: run /warp-upgrade"
 
 
 def describe(root: Path) -> str:

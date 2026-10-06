@@ -344,6 +344,8 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
             "plannedMerge": t.get("mergeLabel"),
             "status": "queued",
             "agent": None,
+            "worktree": None,
+            "checkout": None,
             "branch": None,
             "attempts": 0,
             "tokens": 0,
@@ -616,6 +618,13 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     t = beam["tickets"].get(args.id)
     if not t:
         sys.exit(f"unknown ticket {args.id}")
+    if args.status == "claimed" and t.get("status") != "claimed":
+        import prompt_gate
+
+        missing = prompt_gate.claim_blocked(beam, beam_path)
+        if missing:
+            prompt_gate.announce(beam_path.parent.parent, missing)
+            sys.exit(2)
     if args.status and args.status not in STATUSES:
         sys.exit(f"bad status {args.status}; use {STATUSES}")
     pr = t.get("pr") or {}
@@ -653,6 +662,11 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         jira_sync.remember_map(beam_path, args.id, key)
     if args.pr is not None:
         t["pr"]["url"] = args.pr
+        import orchestrator
+
+        orchestrator.note_pr_opened(t, args.pr, utcnow())
+    if getattr(args, "rollup", None):
+        t.setdefault("pr", {})["rollup"] = args.rollup
     if getattr(args, "via", None) is not None:
         t["pr"]["via"] = args.via
     import jira_sync
@@ -1265,6 +1279,7 @@ def default_config() -> dict:
         "reportPath": ".warp/warp-complete.html",
         "checkCommand": "",
         "appendOnlyPaths": [],
+        "mergeQueue": False,
     }
 
 
@@ -1278,9 +1293,10 @@ examples:
   python3 scripts/beam.py watchdog --beam .warp/beam.json
 
 Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta, heartbeat, watchdog.
-set takes --status, --agent, --branch, --jira, --pr, --sha,
+set takes --status, --agent, --branch, --jira, --pr, --rollup, --sha,
 --via local|connected, --approved-by, --proceeded-by, --merge-method,
 --bugbot pass|fail, --ci green, --alarm, --escaped, --attempts, --force,
+--rollup green|red|pending is the provider check rollup. green frees the slot.
 --tokens-in, --tokens-out, --tokens-cached, --cost.
 --escaped is a path outside the lock, repeatable, stored on the ticket
 with a lock-escape alarm. The listener's repair widens the lock to those
@@ -1337,6 +1353,7 @@ def main() -> None:
     ps.add_argument("--jira")
     ps.add_argument("--force", action="store_true", help="store a Jira key whose project prefix is not configured")
     ps.add_argument("--pr")
+    ps.add_argument("--rollup", choices=["green", "red", "pending"], help="provider check rollup; green frees the slot")
     ps.add_argument("--sha", help="merge commit sha, stored on pr.sha and included in the Jira comment")
     ps.add_argument("--via", choices=["local", "connected"], help="how this merge happened; local skips pull-request comments")
     ps.add_argument("--approved-by", help="who approved the merge; stored on pr.approvedBy")

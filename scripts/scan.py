@@ -821,6 +821,7 @@ examples:
   python3 scripts/scan.py export --beam .warp/beam.json
   python3 scripts/scan.py import --plan path/to/WARP_PLAN.json
   python3 scripts/scan.py start --beam .warp/beam.json
+  python3 scripts/scan.py start --beam .warp/beam.json --force
   python3 scripts/scan.py pause --beam .warp/beam.json --reason "hold"
 
 scan looks for WARP_PLAN.json, schedule.json, CURSOR_PLAN.md, a Jira ticket
@@ -829,6 +830,8 @@ Several matches and no single folder with plan files exits 3 and scans
 nothing. No plan exits 2. --max-agents defaults to 18 and --model to
 claude-sonnet-5-5-high; the live cap and slug are maxAgents and model in
 config. start, stop, pause, and resume take --beam and --reason.
+start --force starts a cloud run even when the MCP allow list is missing
+the Jira or Slack tools. Without --force, that start does not claim.
 import --keep-status keeps status for ids that still exist (the default).
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
@@ -864,6 +867,8 @@ def main() -> None:
         sp = sub.add_parser(name)
         sp.add_argument("--beam", default=".warp/beam.json")
         sp.add_argument("--reason")
+        if name == "start":
+            sp.add_argument("--force", action="store_true", help="start even if a cloud run would prompt for MCP tools")
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
@@ -1023,8 +1028,12 @@ def main() -> None:
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
     elif args.cmd == "start":
+        import prompt_gate
         import resume_hint
 
+        gate = prompt_gate.gate_start(Path(args.beam), force=bool(getattr(args, "force", False)))
+        if gate != 0:
+            sys.exit(gate)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
     elif args.cmd == "resume":

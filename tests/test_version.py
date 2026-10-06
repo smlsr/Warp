@@ -165,10 +165,10 @@ class CommandTests(unittest.TestCase):
         data["version"] = "1.3.0"
         manifest.write_text(json.dumps(data, indent=2) + "\n")
         again = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
-        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-uninstall then /warp-init", again.stdout)
+        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-upgrade", again.stdout)
         self.assertEqual((self.repo / ".warp" / "version").read_text().strip(), "1.3.0")
         shown = run(VERSION_PY, "--root", str(self.repo), cwd=self.repo)
-        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-uninstall then /warp-init", shown.stdout)
+        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-upgrade", shown.stdout)
         self.assertEqual(data["version"], "1.3.0")
 
 

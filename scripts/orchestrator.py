@@ -21,6 +21,10 @@ checkCommand and appendOnlyPaths come from config. An empty checkCommand means
 Bugbot and CI as configured. appendOnlyPaths defaults to empty. send-back is
 the result when a conflict is outside that list. resolve takes --base, --ours,
 and --theirs. A third red parks the ticket (status parked).
+opened records a pull request when the Shuttle exits. That does not free the
+slot. merge records merged only for outcome merged. enqueue and rejected do
+not. mergeQueue defaults to false. A detected GitHub merge queue also enqueues.
+The orchestrator does not implement a ticket. checkout.py implement refuses.
 """
 
 from __future__ import annotations
@@ -151,13 +155,35 @@ def bugbot_applies(ticket: dict, config: Optional[dict]) -> bool:
     return True
 
 
+def provider_rollup(ticket: dict) -> str:
+    """GitHub or Bitbucket check rollup stored on the pull request.
+
+    Empty when the provider has not reported one yet. `green` is the only
+    value that frees a slot. Bugbot is one of those checks, after the push.
+    """
+    pr = ticket.get("pr") or {}
+    raw = str(pr.get("rollup") or "").strip().casefold()
+    if raw in {"success", "pass"}:
+        return "green"
+    if raw in {"failure", "failed", "fail"}:
+        return "red"
+    if raw in {"green", "red", "pending"}:
+        return raw
+    return ""
+
+
 def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     """Required checks for freeing a slot and for entering the merge queue.
 
-    When checkCommand is set, that result (pr.check green) is the check.
-    When it is unset, CI must be green and Bugbot must pass when it applies.
+    A provider rollup, when present, is the check. The slot stays occupied
+    until that rollup is green. When no rollup has been recorded, CI must be
+    green and Bugbot must pass when it applies, or `pr.check` when
+    checkCommand is set. Bugbot runs on the pull request after push.
     """
     pr = ticket.get("pr") or {}
+    rollup = provider_rollup(ticket)
+    if rollup:
+        return rollup == "green"
     if check_command(config):
         return str(pr.get("check") or "").strip().casefold() == "green"
     if str(pr.get("ci") or "").strip().casefold() != "green":
@@ -167,12 +193,28 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     return str(pr.get("bugbot") or "").strip().casefold() == "pass"
 
 
-def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
-    """True while the sub-agent still occupies a maxAgents slot.
+def bugbot_where() -> str:
+    """Bugbot runs on the pull request after push, not inside the VM."""
+    return "pull-request"
 
-    The slot frees when the sub-agent reports a PR whose required checks are
-    green. review with green checks, awaiting_approval, and merging do not
-    hold a slot.
+
+def note_pr_opened(ticket: dict, url: str, when: Optional[str] = None) -> None:
+    """The Shuttle exited with a pull request. That does not free the slot."""
+    pr = ticket.setdefault("pr", {})
+    if url:
+        pr["url"] = url
+    if when and not pr.get("openedAt"):
+        pr["openedAt"] = when
+    pr["agentFinished"] = True
+    pr["opened"] = True
+
+
+def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
+    """True while the ticket still occupies a maxAgents slot.
+
+    Opening a pull request means the Shuttle finished. The slot stays occupied
+    until the provider check rollup is green. review with a green rollup,
+    awaiting_approval, and merging do not hold a slot.
     """
     status = ticket.get("status")
     if status in SLOT_HELD:
@@ -570,6 +612,57 @@ def program_done(beam: dict) -> bool:
     return all((t.get("status") in SETTLED) for t in tickets)
 
 
+def merge_queue_configured(config: Optional[dict]) -> bool:
+    """config mergeQueue. Default false. Absent is false."""
+    return _flag((config or {}).get("mergeQueue"), False)
+
+
+def merge_queue_active(config: Optional[dict], detected: Optional[bool] = None) -> bool:
+    """Enqueue when config says so, or when the provider reports a merge queue."""
+    if merge_queue_configured(config):
+        return True
+    return detected is True
+
+
+def merge_report(config: Optional[dict], detected_queue: Optional[bool] = None, protection_reject: bool = False, succeeded: bool = False) -> str:
+    """What to record after a merge attempt.
+
+    enqueue and rejected do not count as merged. A direct merge that branch
+    protection rejects is rejected.
+    """
+    if merge_queue_active(config, detected_queue):
+        return "enqueue"
+    if protection_reject or not succeeded:
+        return "rejected"
+    return "merged"
+
+
+def apply_reported_merge(ticket: dict, outcome: str, sha: Optional[str] = None) -> bool:
+    """Set status merged only when the provider actually merged."""
+    pr = ticket.setdefault("pr", {})
+    if outcome != "merged":
+        pr["mergeAttempt"] = outcome
+        return False
+    ticket["status"] = "merged"
+    if sha:
+        pr["sha"] = sha
+    return True
+
+
+def launch_for(config: Optional[dict]) -> dict:
+    """How the Warp session starts one ticket. Never in this process."""
+    kind = checkout_kind(config)
+    if kind == "worktree":
+        return {"launch": "worktree", "refuseInProcess": True, "tool": "git-worktree"}
+    return {
+        "launch": "task-cloud",
+        "refuseInProcess": True,
+        "tool": "Task",
+        "environment": "cloud",
+        "subagent_type": "shuttle",
+    }
+
+
 def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) -> list:
     """What to start after a dispatch loop: base fix first, then ready tickets.
 
@@ -584,6 +677,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
     if cap is None:
         cap = agent_cap(cfg)
     actions = []
+    launch = launch_for(cfg)
     if needs_base_fix(beam) and cap is not None:
         used = sum(1 for t in (beam.get("tickets") or {}).values() if holds_slot(t, cfg))
         if used < cap:
@@ -592,6 +686,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                     "action": "dispatch-base-fix",
                     "aheadOfRank": True,
                     "checkout": checkout_kind(cfg),
+                    **launch,
                 }
             )
     for ticket in ready_rows:
@@ -602,6 +697,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                 "branch": branch_name(ticket, cfg),
                 "checkout": checkout_kind(cfg),
                 "base": (cfg.get("baseBranch") or "") or "base",
+                **launch,
             }
         )
     return actions
@@ -670,6 +766,17 @@ def main(argv: Optional[list] = None) -> int:
     prec.add_argument("--plan")
     prec.add_argument("--result")
 
+    pop = sub.add_parser("opened")
+    pop.add_argument("--beam", required=True)
+    pop.add_argument("--id", required=True)
+    pop.add_argument("--pr", required=True)
+
+    pm = sub.add_parser("merge")
+    pm.add_argument("--beam", required=True)
+    pm.add_argument("--id", required=True)
+    pm.add_argument("--outcome", required=True, choices=["merged", "enqueue", "rejected"])
+    pm.add_argument("--sha")
+
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
@@ -718,10 +825,13 @@ def main(argv: Optional[list] = None) -> int:
         rows = beam_mod.ready(data)
         cap = beam_mod.configured_cap(data.get("config") or {})
         for action in dispatch_actions(data, rows, cap=cap):
+            extra = " launch=%s" % action.get("launch")
+            if action.get("refuseInProcess"):
+                extra += " refuse-in-process"
             if action["action"] == "dispatch-base-fix":
-                print("dispatch-base-fix checkout=%s" % action["checkout"])
+                print("dispatch-base-fix checkout=%s%s" % (action["checkout"], extra))
             else:
-                print("start %s checkout=%s branch=%s" % (action["id"], action["checkout"], action["branch"]))
+                print("start %s checkout=%s branch=%s%s" % (action["id"], action["checkout"], action["branch"], extra))
         return 0
     if args.cmd == "record":
         path = Path(args.beam)
@@ -732,6 +842,36 @@ def main(argv: Optional[list] = None) -> int:
         record_notes(ticket, plan=args.plan, result=args.result)
         _save(path, data)
         print("%s recorded" % args.id)
+        return 0
+    if args.cmd == "opened":
+        path = Path(args.beam)
+        data = _load(path)
+        ticket = (data.get("tickets") or {}).get(args.id)
+        if not ticket:
+            sys.exit("unknown ticket %s" % args.id)
+        from datetime import datetime, timezone
+
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        note_pr_opened(ticket, args.pr, stamp)
+        if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
+            ticket["status"] = "review"
+        _save(path, data)
+        print("%s pr opened %s" % (args.id, args.pr))
+        print("slot: held until rollup green")
+        return 0
+    if args.cmd == "merge":
+        path = Path(args.beam)
+        data = _load(path)
+        ticket = (data.get("tickets") or {}).get(args.id)
+        if not ticket:
+            sys.exit("unknown ticket %s" % args.id)
+        applied = apply_reported_merge(ticket, args.outcome, sha=args.sha)
+        _save(path, data)
+        if applied:
+            print("%s merged" % args.id)
+            return 0
+        print("%s %s" % (args.id, args.outcome))
+        print("not merged")
         return 0
     return 2
 

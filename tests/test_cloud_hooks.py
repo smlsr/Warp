@@ -141,7 +141,7 @@ class CloudHookTests(unittest.TestCase):
         beam["runState"] = "stopped"
         beam["tickets"] = {}
         (self.warp / "beam.json").write_text(json.dumps(beam) + "\n")
-        proc = run("scan.py", "start", "--beam", str(self.warp / "beam.json"), cwd=self.repo)
+        proc = run("scan.py", "start", "--force", "--beam", str(self.warp / "beam.json"), cwd=self.repo)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WARP beam: paused=False done=2/9 eta_h=4 alarms=1", proc.stdout)
         self.assertIn("\nrunning\n", proc.stdout)
