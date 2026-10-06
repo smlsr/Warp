@@ -21,6 +21,11 @@ appendOnlyPaths: []
 # A conflict in one of these files keeps both sides, every added line.
 # Any other conflict is sent back to a sub-agent. Nothing here is a special filename.
 
+mergeQueue: false
+# true: enqueue the pull request instead of merging it from the agent.
+# false is the default. Warp also enqueues when GitHub says this repo uses a
+# merge queue. A direct merge that branch protection rejects is not marked merged.
+
 autoMergeSizes: [S, M]
 # Sizes in this list auto-merge after Bugbot and CI. Sizes not in autoMergeSizes wait.
 
@@ -29,9 +34,11 @@ messenger: both
 notify: verbose
 # verbose | quiet
 runner: cloud
-# cloud = Cursor cloud agent VM. local = this machine's agent.
+# cloud = one Cursor cloud agent VM per ticket. local = one git worktree per ticket.
+# auto = cloud when this session is a cloud agent, otherwise local.
 # To run on this machine, comment out the line above and uncomment the next.
 # runner: local
+# runner: auto
 
 jiraProject: ""
 # Jira project key, for example WAR. Leave this empty: /warp-init and /warp-scan

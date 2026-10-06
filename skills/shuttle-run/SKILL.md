@@ -1,6 +1,6 @@
 ---
 name: shuttle-run
-description: "Run one claimed ticket from Jira through PR and Bugbot. Use when a Shuttle is started with IMPLEMENT <id>. Does not merge."
+description: "Run one claimed ticket from Jira through an open pull request. Bugbot runs on that pull request, not in this VM. Use when a Shuttle is started with IMPLEMENT <id>. Does not merge."
 ---
 
 # Shuttle run
@@ -33,7 +33,7 @@ python3 <plugin>/scripts/beam.py usage --beam .warp/beam.json --id <id> \
 ```
 
 The same flags work on `beam.py set`. If the run does not report usage, do not invent numbers. The completion report shows n/a.
-5. If resolve says connected, push and open the pull request with the first method in `methods` (the named MCP server, or `gh` for GitHub). If it says local, or every method fails, do not push and do not error: `python3 <plugin>/scripts/provider.py note --id <id> --reason "<why>"` and hand Reed the branch name. Set `review` and, in connected mode, `--pr <url>`. That prints the Jira comment and the pull-request comment. Do both, then `record-comment`. Local mode comments on Jira only.
+5. If resolve says connected, push and open the pull request with the first method in `methods` (the named MCP server, or `gh` for GitHub). If it says local, or every method fails, do not push and do not error: `python3 <plugin>/scripts/provider.py note --id <id> --reason "<why>"` and hand the branch name back. Set `review` and, in connected mode, `--pr <url>`. That records the pull request as opened. The slot stays occupied until the check rollup is green. Do not run Bugbot in this VM. Bugbot runs on the pull request after the push. Do the Jira comment and the pull-request comment, then `record-comment`. Local mode comments on Jira only. Then stop.
 6. If Reed returns fixes and attempts remain, set `fix` and push only in connected mode. Past `maxFixAttempts`, the ticket is `alarm`. Manual tickets use this same loop before `awaiting_approval`.
 
 If status is already `coding`, `fix`, or `recovering` and the branch exists, continue that branch. Do not open a second pull request. Heartbeat after every `beam.py set`.

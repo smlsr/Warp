@@ -3,7 +3,7 @@ name: warp-start
 description: Start Warp dispatch after a scan
 ---
 
-Set runState to running with `scripts/scan.py start`, tell Herald, then claim the one channel listener. Refuse if there is no beam. `scan.py start` prints the resume hint and runs `beam.py watchdog`. Follow it. Do not dispatch when it says the beam is missing or paused. `watchdog: skipped` means do not recover and do not start a replacement.
+Set runState to running with `scripts/scan.py start`, tell Herald, then claim the one channel listener. Refuse if there is no beam. If start prints `refuse:` and names missing MCP tools, do not start and do not claim. Post that list (Herald already has it). `scan.py start --force` starts anyway. A local runner does not block. `scan.py start` prints the resume hint and runs `beam.py watchdog`. Follow it. Do not dispatch when it says the beam is missing or paused. `watchdog: skipped` means do not recover and do not start a replacement. A later claim runs the same check unless this start was `--force`.
 
 One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The slot is `listener` on the beam: `state`, `agentId`, optional `pid`, and `lastSeenAt`.
 

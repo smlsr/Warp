@@ -4,6 +4,11 @@ The orchestrator is the only merger. It reads `maxAgents`, `checkCommand`, and `
 
 Every pull request bumps the patch version and adds a changelog entry.
 
+- One ticket, one checkout. On a cloud runner the Warp session launches one cloud agent per ticket (Task tool, `environment: cloud`). The plugin has no cloud-agent API and must not implement the ticket in-process. On a local runner each ticket gets its own git worktree. The beam stores the agent id or the worktree path. Never two tickets in one VM or one worktree, and never two agents on one ticket.
+- A Shuttle that exits with a pull request has finished. The slot stays occupied until the GitHub or Bitbucket check rollup is green. Bugbot runs on the pull request after push. Locks stay until merge or park. `mergeQueue` defaults to false. When it is true, or GitHub reports a merge queue, enqueue the pull request. A direct merge that branch protection rejects is not marked merged.
+- Commit the beam, journal, and STATUS/BOARD with `state_commit.py` so the next agent sees in-flight work, locks, and parked tickets. Strip tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. `/warp-init` replaces an old `.warp/` gitignore line and leaves other lines.
+- `/warp-start` on a cloud runner refuses when `transitionJiraIssue`, `addOrEditJiraIssueComment` (Jira transitions on), or `slack_send_message` (Slack notify on) is missing from the MCP allow list. It does not claim. `--force` starts anyway. A later claim repeats the check unless the run was force-started. A local runner does not block.
+- `/warp-upgrade` replaces `.cursor/plugins/warp` from the plugin this command is running from, fetching the default branch when that tree is a git checkout. A failed fetch keeps the installed copy. It does not touch `.warp/config.yaml` or the beam. `/warp-init` still does not replace an existing plugin copy.
 - The version lives in `VERSION`. `.cursor-plugin/plugin.json` must carry the same number.
 - `CHANGELOG.md` needs a `## <version>` heading for that number.
 - `python3 scripts/bump_version.py` bumps the patch and inserts a changelog stub. Use `--minor` or `--major` only when the change calls for it. Replace the stub with what changed.

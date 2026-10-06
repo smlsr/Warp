@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.3
+
+- One checkout per ticket. On `runner: cloud` the Warp session launches one Cursor cloud agent per ticket (`environment: cloud`, `subagent_type: shuttle`). The plugin has no cloud-agent API, so `checkout.py implement` refuses to write the ticket in the orchestrator checkout. On `runner: local`, `git worktree add` and `git worktree remove` give each ticket its own worktree and branch. The beam stores the agent id and worktree path. A second agent on the same ticket, or two occupied tickets in one worktree, is refused.
+- A Shuttle that exits with a pull request has finished. The slot stays occupied until the GitHub or Bitbucket check rollup is green. Bugbot runs on the pull request, not inside the VM. Locks stay until merge or park. `mergeQueue` (default false) or a detected GitHub merge queue enqueues the pull request. A merge that branch protection rejects is not marked merged.
+- The beam, journal, and board are committed so the next cloud agent sees in-flight work, locks, and parked tickets. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` stays gitignored. `/warp-init` replaces an old ignore-all `.warp/` line and leaves unrelated gitignore lines in place.
+- `/warp-start` on a cloud runner refuses to start or claim when Jira or Slack is enabled and the MCP allow-list is missing `transitionJiraIssue`, `addOrEditJiraIssueComment`, or `slack_send_message`. It names the missing tools and does not claim. `--force` starts anyway. A later claim stays blocked unless the run was force-started. A local runner does not block.
+- `/warp-upgrade` replaces `.cursor/plugins/warp` with the plugin this command is running from, fetching the default branch when that tree is a git checkout. A failed fetch keeps the installed copy. Config and the beam are left in place. It prints `Warp vX.Y.Z` and asks for a Cursor reload. `/warp-init` still does not replace an existing plugin copy.
+
 ## 1.4.2
 
 - The orchestrator is the only merger. It dispatches, merges, and tracks, and it writes no ticket product code. Shuttles and Reed do not merge. The cap is `maxAgents`. A project may set 18.

@@ -1,3 +1,16 @@
-# Warp live state. Do not commit. Hundreds of status writes are not source history.
-# Ticket work is committed on warp/<id> branches by Shuttles, not from this directory.
-.warp/
+# Warp state is committed so the next agent sees who is in flight.
+# .warp/config.yaml and other secrets stay ignored. The old ".warp/" line
+# ignored the beam, journal, and board; /warp-init replaces that line.
+.warp/config.yaml
+.warp/worktrees/
+.warp/outbox.md
+.warp/notify-post.json
+.warp/events.jsonl
+.warp/secrets.yaml
+.warp/*.token
+.warp/**/token
+.warp/**/tokens
+.warp/**/credentials*
+.warp/**/*webhook*
+.warp/**/*.pem
+.warp/**/*.key

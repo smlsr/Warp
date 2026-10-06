@@ -39,7 +39,7 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | Copy the plugin to `.cursor/plugins/warp` | every plugin file is already there. Existing files are never overwritten. |
 | Copy `assets/config.example.yaml` to `.warp/config.yaml` | the file exists and already has every key. A re-run appends missing keys (with their defaults and comments) and names them. Values you set are not changed. |
 | Set `slackChannel` and `teamsChannel` to `warp` | the channel already has a value. Only an empty channel (or the old `Warp` default) is filled; a custom name is kept. |
-| Append `assets/gitignore-snippet.txt` to `.gitignore` | `.gitignore` already ignores `.warp/`, so the snippet is never added twice |
+| Append `assets/gitignore-snippet.txt` to `.gitignore` | the snippet is already there. An old `.warp/` line that ignores the whole directory is replaced. Other lines stay. |
 
 After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
 
@@ -79,9 +79,10 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 
 | Command | What it does | Common flags |
 |---|---|---|
-| `/warp-init` | Copy the plugin, backfill missing config keys, gitignore `.warp/`, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
+| `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
+| `/warp-upgrade` | Replace `.cursor/plugins/warp` with the current plugin. Does not touch config or the beam | `--root`, `--source` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
-| `/warp-start` | Start dispatch, run the watchdog, and start the one channel listener | `--reason` |
+| `/warp-start` | Start dispatch. A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force` |
 | `/warp-pause` | Stop new claims and the listener. In-flight work finishes its step | `--reason` |
 | `/warp-resume` | Resume a paused beam, run the watchdog, and start the listener unless one is already running | `--reason` |
 | `/warp-stop` | Stay stopped until the next start. The listener stops | `--reason` |
@@ -244,7 +245,7 @@ One repair runs at a time, in plan order. If it alarms `lock-escape` again, or e
 
 ## Version
 
-The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`.
+The version lives in `VERSION`. `.cursor-plugin/plugin.json` carries the same number. What changed in each version is [CHANGELOG.md](CHANGELOG.md). `/warp-version` prints the installed copy (`.cursor/plugins/warp`) and the source copy this plugin was loaded from. `/warp-init` and `/warp-status` print it too. Init writes the installed version to `.warp/version`. When the project copy is older, init says `plugin is vOLD, repo copy is vNEW: run /warp-upgrade`. Init does not replace plugin files. `/warp-upgrade` does.
 
 ```bash
 python3 <plugin>/scripts/version.py
@@ -254,17 +255,16 @@ Every change bumps the patch version and adds a `CHANGELOG.md` entry. `python3 s
 
 ## Upgrade
 
-`/warp-init` does not overwrite plugin files or config values you already set. It does append config keys that are missing, with the defaults and comments from `assets/config.example.yaml`.
+`/warp-upgrade` replaces `.cursor/plugins/warp` with the plugin this command is running from. When that tree is a git checkout, it fetches the default branch first and copies that tree. If the fetch fails, it says so and keeps the installed copy. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor (Developer: Reload Window). Running it again is safe.
 
-When `/warp-version` or init says the project copy is older than the source copy:
+```bash
+python3 <plugin>/scripts/upgrade.py ?
+python3 <plugin>/scripts/upgrade.py --root .
+```
 
-1. `/warp-stop` if a beam is running.
-2. Copy `.warp/` aside if you need the journal. Uninstall deletes it.
-3. `/warp-uninstall`, read the list, then run it again with `--yes`. That deletes `.cursor/plugins/warp` and `.warp/`.
-4. Reload Cursor.
-5. `/warp-init`. It copies the current plugin into `.cursor/plugins/warp` and writes config.
+`/warp-init` still does not overwrite plugin files or config values you already set. It does append config keys that are missing, with the defaults and comments from `assets/config.example.yaml`. A config that is only missing new keys does not need an upgrade. Re-run `/warp-init`. It appends each missing key and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
-A config that is only missing new keys does not need that delete. Re-run `/warp-init`. It appends each missing key with the default from `assets/config.example.yaml` and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
+The plugin has no API that creates a Cursor cloud agent. On `runner: cloud`, the Warp session launches one Task per ticket with `environment: cloud`, `subagent_type: shuttle`, and `cloud_base_branch` set to the base branch. `checkout.py implement` refuses to do that work in the orchestrator checkout. `runner: local` is `git worktree add` and `git worktree remove`, one worktree per ticket.
 
 ## Troubleshooting
 
@@ -342,7 +342,7 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 ## Where the files are
 
-A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp writes `.warp/` in that working copy. It does not commit that directory, and it does not push it. Product code is the only commit: a Shuttle opens `warp/<id>` and a pull request. Status writes stay local. Hundreds of beam updates are not source history.
+A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>`.
 
 Review files from the Cursor file tree. On a cloud VM, download them before the VM is discarded. Ask for a bundle and Warp writes `.warp/warp-review.zip` (status, board, plan; no journal). Set `stateDir` to an absolute path to keep the beam outside the repo.
 

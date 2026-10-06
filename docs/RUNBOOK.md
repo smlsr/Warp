@@ -4,7 +4,7 @@
 
 The orchestrator is the only merger. It dispatches, merges, and tracks. It writes no ticket product code. Shuttles do not merge, do not push to the base branch, and do not ask mid-ticket. Reed reviews and does not merge.
 
-Ready work is a ticket whose dependency and `after` lists are merged on the base branch, and whose full lock list does not overlap a lock an in-flight ticket holds. Overlap includes a parent folder. An open or green pull request is not merged. The dispatch loop runs at start and after every merge, failure, and freed slot. Starred and priority tickets start first, then the lowest rank, until `maxAgents` are in flight. A project may set 18. A slot frees when the sub-agent reports a pull request whose required checks are green. Locks stay until that pull request is merged or the ticket is parked.
+Ready work is a ticket whose dependency and `after` lists are merged on the base branch, and whose full lock list does not overlap a lock an in-flight ticket holds. Overlap includes a parent folder. An open or green pull request is not merged. The dispatch loop runs at start and after every merge, failure, and freed slot. Starred and priority tickets start first, then the lowest rank, until `maxAgents` are in flight. A project may set 18. A slot stays occupied after the Shuttle opens the pull request, until the provider check rollup is green. Locks stay until that pull request is merged or the ticket is parked. Bugbot runs on the pull request after the push. `mergeQueue: true`, or a GitHub merge queue the provider reports, enqueues the pull request. A direct merge that branch protection rejects is not marked merged.
 
 The merge queue is serial and automatic for sizes in `autoMergeSizes`: rebase onto the current base, run `checkCommand` on that head, merge, delete the branch, dispatch. When `checkCommand` is empty, the check is Bugbot and CI as configured. Several green auto-merge pull requests may be stacked in rank order and checked once. A red stack falls back to one pull request at a time. Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed` before they enter the queue.
 
@@ -141,7 +141,7 @@ Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-read
 
 ## Reinstall or reset
 
-`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` values or existing plugin files, so it will not upgrade an installed copy. It does append config keys the file is missing, and it records the installed version in `.warp/version`. When that copy is older than the plugin you ran, it prints `plugin is vOLD, repo copy is vNEW: run /warp-uninstall then /warp-init`. To start clean, copy `.warp/` aside if you want the journal, run `/warp-stop`, then `/warp-uninstall` and confirm, reload Cursor, and run `/warp-init`. See the README upgrade section.
+`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` values or existing plugin files, so it will not upgrade an installed copy. It does append config keys the file is missing, and it records the installed version in `.warp/version`. When that copy is older than the plugin you ran, it prints `plugin is vOLD, repo copy is vNEW: run /warp-upgrade`. `/warp-upgrade` replaces the plugin copy and leaves `.warp/config.yaml` and the beam in place. See the README upgrade section.
 
 ## agents stop and ask to Run/Allow
 

@@ -55,6 +55,15 @@ def truthy(v: str) -> bool:
     return str(v).strip().lower() not in FALSE
 
 
+def github_slug(remote: str) -> Optional[str]:
+    if not remote:
+        return None
+    match = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?$", remote.strip())
+    if not match:
+        return None
+    return "%s/%s" % (match.group(1), match.group(2))
+
+
 def remote_host(remote: str) -> Optional[str]:
     if not remote:
         return None
@@ -218,6 +227,182 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
         _run(["git", "checkout", "-q", original], root)
 
 
+PROTECTION_MARKERS = (
+    "branch protection",
+    "required status check",
+    "required reviews",
+    "reviews are required",
+    "changes must be made through a pull request",
+    "failing checks",
+    "not mergeable",
+    "pull request is not mergeable",
+    "required status checks",
+)
+
+
+def protection_rejects(text: str) -> bool:
+    """True when a merge reply says branch protection would reject it."""
+    low = (text or "").lower()
+    return any(marker in low for marker in PROTECTION_MARKERS)
+
+
+def payload_has_merge_queue(doc) -> bool:
+    """True when a GitHub ruleset payload contains a merge_queue rule."""
+    found = []
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            kind = str(node.get("type") or "").replace("-", "_").lower()
+            if kind in {"merge_queue", "mergequeue"}:
+                found.append(True)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(doc)
+    return bool(found)
+
+
+def interpret_rollup(checks: list) -> str:
+    """GitHub statusCheckRollup or Bitbucket commit statuses.
+
+    green only when every check finished successfully. An empty list is pending.
+    """
+    if not checks:
+        return "pending"
+    bad = False
+    pending = False
+    success = {"success", "successful", "skipped", "neutral", "ok"}
+    failure = {
+        "failure",
+        "failed",
+        "cancelled",
+        "canceled",
+        "timed_out",
+        "action_required",
+        "error",
+        "startup_failure",
+    }
+    waiting = {"queued", "in_progress", "pending", "waiting", "requested", "inprogress"}
+    for item in checks:
+        if not isinstance(item, dict):
+            pending = True
+            continue
+        conclusion = str(item.get("conclusion") or item.get("state") or "").strip().casefold()
+        status = str(item.get("status") or "").strip().casefold()
+        if conclusion in success:
+            continue
+        if conclusion in failure:
+            bad = True
+            continue
+        if status in waiting or conclusion in waiting or not conclusion:
+            pending = True
+            continue
+        pending = True
+    if bad:
+        return "red"
+    if pending:
+        return "pending"
+    return "green"
+
+
+def detect_merge_queue(root: Path, cfg: Optional[dict] = None) -> Optional[bool]:
+    """True or false when GitHub rulesets can be read. None when they cannot."""
+    resolved = resolve(root, cfg)
+    if resolved.get("provider") != "github":
+        return None
+    slug = github_slug(resolved.get("remote") or "")
+    if not slug or not shutil.which("gh"):
+        return None
+    listing = _run(["gh", "api", "repos/%s/rulesets" % slug], root)
+    if listing.returncode != 0:
+        return None
+    try:
+        rows = json.loads(listing.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        one = _run(["gh", "api", "repos/%s/rulesets/%s" % (slug, row["id"])], root)
+        if one.returncode != 0:
+            continue
+        try:
+            doc = json.loads(one.stdout or "{}")
+        except json.JSONDecodeError:
+            continue
+        if payload_has_merge_queue(doc):
+            return True
+    return False
+
+
+def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:
+    """Ask the configured provider. Unknown or unreachable stays pending."""
+    if provider == "bitbucket":
+        return "pending"
+    if not shutil.which("gh"):
+        return "pending"
+    viewed = _run(["gh", "pr", "view", str(pr), "--json", "statusCheckRollup"], root)
+    if viewed.returncode != 0:
+        return "pending"
+    try:
+        doc = json.loads(viewed.stdout or "{}")
+    except json.JSONDecodeError:
+        return "pending"
+    checks = doc.get("statusCheckRollup") or []
+    return interpret_rollup(checks if isinstance(checks, list) else [])
+
+
+def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tuple[str, str]:
+    """Enqueue, or merge, or reject. Rejected is never a merged pull request."""
+    cfg = cfg or fmt.read_config(root)
+    resolved = resolve(root, cfg)
+    provider = resolved.get("provider")
+    detected = detect_merge_queue(root, cfg) if provider == "github" else None
+    if merge_queue_on(cfg, detected):
+        if provider == "github" and shutil.which("gh"):
+            queued = _run(["gh", "pr", "merge", str(number), "--auto", "--squash"], root)
+            detail = (queued.stdout or queued.stderr or "enqueued").strip()
+        else:
+            detail = "merge queue is on; the pull request was not merged from this agent"
+        return "enqueue", detail
+    if provider != "github" or not shutil.which("gh"):
+        return "rejected", "no merge command for this provider; not marked merged"
+    merged = _run(["gh", "pr", "merge", str(number), "--squash"], root)
+    text = ((merged.stderr or "") + "\n" + (merged.stdout or "")).strip()
+    if merged.returncode != 0 or protection_rejects(text):
+        return "rejected", text or "merge rejected"
+    viewed = _run(["gh", "pr", "view", str(number), "--json", "state,mergeCommit"], root)
+    if viewed.returncode != 0:
+        return "rejected", "could not confirm the pull request; not marked merged"
+    try:
+        doc = json.loads(viewed.stdout or "{}")
+    except json.JSONDecodeError:
+        return "rejected", "could not read the pull request; not marked merged"
+    if str(doc.get("state") or "").upper() != "MERGED":
+        return "rejected", "pull request is not merged"
+    commit = doc.get("mergeCommit") or {}
+    sha = commit.get("oid") if isinstance(commit, dict) else ""
+    return "merged", sha or "merged"
+
+
+def merge_queue_on(cfg: dict, detected: Optional[bool]) -> bool:
+    raw = (cfg or {}).get("mergeQueue")
+    if isinstance(raw, bool):
+        configured = raw
+    elif raw is None or str(raw).strip() == "":
+        configured = False
+    else:
+        configured = truthy(str(raw))
+    if configured:
+        return True
+    return detected is True
+
+
 def _mark_merged(beam_path: Path, tid: str, detail: str) -> None:
     """Record the local merge on a full beam ticket so the Jira move is printed."""
     if not beam_path.is_file():
@@ -323,6 +508,9 @@ resolve reads gitProvider (auto, github, bitbucket). auto uses the origin
 host. No origin, another host, or pushMerge false is local-only.
 merge-local squash-merges --branch into --base (default baseBranch) and
 requires --id and --branch. note requires --reason and writes the outbox line.
+merge-pr enqueues when mergeQueue is true or GitHub reports a merge queue.
+A direct merge that branch protection rejects is not marked merged.
+rollup reads statusCheckRollup (GitHub) or a --checks file (GitHub or Bitbucket).
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
@@ -350,6 +538,17 @@ def main() -> None:
     pn.add_argument("--beam", default=".warp/beam.json")
     pn.add_argument("--id")
     pn.add_argument("--reason", required=True)
+    pq = sub.add_parser("merge-pr")
+    pq.add_argument("--root", default=".")
+    pq.add_argument("--beam", default=".warp/beam.json")
+    pq.add_argument("--id", required=True)
+    pq.add_argument("--pr", required=True, help="pull request number or URL")
+    pru = sub.add_parser("rollup")
+    pru.add_argument("--root", default=".")
+    pru.add_argument("--beam", default=".warp/beam.json")
+    pru.add_argument("--id")
+    pru.add_argument("--pr", default="")
+    pru.add_argument("--checks", help="JSON list of provider check objects")
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
@@ -399,6 +598,58 @@ def main() -> None:
                 sys.exit(1)
         elif args.cmd == "note":
             print(note(root, Path(args.beam), args.id, args.reason))
+        elif args.cmd == "rollup":
+            if args.checks:
+                checks = json.loads(Path(args.checks).read_text())
+                result = interpret_rollup(checks if isinstance(checks, list) else [])
+            else:
+                loaded = {}
+                beam_path = Path(args.beam)
+                if beam_path.is_file():
+                    loaded = json.loads(beam_path.read_text())
+                provider_name = (loaded.get("config") or {}).get("gitProvider") or resolve(root).get("provider")
+                result = fetch_rollup(root, args.pr, provider_name)
+            print(result)
+            if args.id and Path(args.beam).is_file():
+                import beam as beam_mod
+
+                data = json.loads(Path(args.beam).read_text())
+                ticket = data["tickets"][args.id]
+                ticket.setdefault("pr", {})["rollup"] = result
+                beam_mod.atomic_write(Path(args.beam), json.dumps(data, indent=2) + "\n")
+                print("%s rollup %s" % (args.id, result))
+        elif args.cmd == "merge-pr":
+            beam_path = Path(args.beam)
+            data = json.loads(beam_path.read_text()) if beam_path.is_file() else {}
+            cfg = dict(data.get("config") or {})
+            cfg_file = root / ".warp" / "config.yaml"
+            if cfg_file.is_file():
+                import prompt_gate
+
+                cfg.update(prompt_gate.effective_config(data, root))
+            number = str(args.pr).rstrip("/").split("/")[-1]
+            outcome, detail = merge_connected(root, number, cfg)
+            ticket = (data.get("tickets") or {}).get(args.id)
+            if outcome == "merged" and ticket:
+                _mark_merged(beam_path, args.id, detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else "")
+                print("merged %s" % args.id)
+            elif ticket:
+                import orchestrator
+
+                orchestrator.apply_reported_merge(ticket, outcome, sha=None)
+                import beam as beam_mod
+
+                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                print("%s %s" % (args.id, outcome))
+                print("not merged")
+                print(detail)
+                if outcome == "rejected":
+                    sys.exit(1)
+            else:
+                print(outcome)
+                print(detail)
+                if outcome == "rejected":
+                    sys.exit(1)
     except SystemExit:
         raise
     except Exception as e:  # fail-soft for resolve and note

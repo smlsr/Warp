@@ -339,7 +339,7 @@ class CommandTests(unittest.TestCase):
         self.assertTrue((self.repo / ".warp" / "warp-complete.html").is_file())
         self.assertIn("Partial snapshot", (self.repo / ".warp" / "warp-complete.html").read_text())
         self.assertTrue(json.loads(self.beam.read_text()).get("runComplete"))
-        started = run(self.repo, "scan.py", "start", "--beam", ".warp/beam.json")
+        started = run(self.repo, "scan.py", "start", "--beam", ".warp/beam.json", "--force")
         self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
         self.assertFalse(json.loads(self.beam.read_text()).get("runComplete"))
 

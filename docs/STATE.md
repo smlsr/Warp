@@ -1,6 +1,6 @@
 # State
 
-`.warp/` is the checkpoint. `/warp-init` gitignores it. Warp does not commit it. Copy the folder aside if you need to keep it. Do not commit `.env` or MCP tokens; Warp never writes those.
+`.warp/` is the checkpoint. `/warp-init` gitignores `.warp/config.yaml` and token files. The beam, journal, STATUS, and BOARD are committed with `state_commit.py commit` so the next cloud agent sees who is in flight, which locks are held, and which tickets are parked. Tokens, cost, API keys, and webhook URLs are stripped from that commit. Do not commit `.env` or MCP tokens; Warp never writes those.
 
 ```
 .warp/config.yaml          caps, model, messenger, connector names
@@ -69,7 +69,7 @@ Jira keys: `jiraKey` is the real issue key (`WAR-1`), never the plan id (`WV-01`
 
 The orchestrator is the only merger. On start or resume it rebuilds from git before dispatch. `orchestrator.py rebuild --facts` classifies each ticket: `merged` when the work is on the base branch, `in-flight` when that ticket has an open branch or pull request, and `pending` otherwise. An explicit `parked` ticket stays parked. Then the dispatch loop runs.
 
-`checkCommand` (empty by default) is the rebase check. When it is empty, Bugbot and CI as configured are the required checks. `appendOnlyPaths` (empty by default) lists shared files whose conflicts keep both sides. A slot frees when required checks are green. Locks stay until merge or park. The cap is `maxAgents`. A project may set 18.
+`checkCommand` (empty by default) is the rebase check. When it is empty, Bugbot and CI as configured are the required checks. `appendOnlyPaths` (empty by default) lists shared files whose conflicts keep both sides. A Shuttle that exits with a pull request records `pr.opened`. The slot stays occupied until the GitHub or Bitbucket check rollup (`pr.rollup`) is green. Bugbot runs on the pull request after push, not inside the VM. Locks stay until merge or park. `mergeQueue` defaults to false. The cap is `maxAgents`. A project may set 18. `agent` is the cloud agent id. `worktree` is the local git worktree path. Never two agents on one ticket, and never two tickets in one VM or one worktree.
 
 1. `scripts/resume_hint.py` prints done/total and the pause flag. Cloud runners run this from the Warp commands. A local sessionStart hook only repeats it.
 2. `/warp-start` and `/warp-resume` run `beam.py watchdog` from `scan.py`. Every Warp tick runs it before `ready()`. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp, and Cursor does not restart it.

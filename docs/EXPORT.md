@@ -1,6 +1,6 @@
 # Export, edit, import
 
-Live state is not source control. Shuttles commit product code on `warp/<id>` branches. Warp does not commit `.warp/` on each tick. Add the snippet in `assets/gitignore-snippet.txt` (`/warp-init` does it) to the repo `.gitignore`.
+Shuttles commit product code on `warp/<id>` branches. Warp commits the beam, journal, STATUS, and BOARD with `state_commit.py`, and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. Add the snippet in `assets/gitignore-snippet.txt` (`/warp-init` does it) to the repo `.gitignore`. An old `.warp/` line is replaced.
 
 ## Where the files are
 

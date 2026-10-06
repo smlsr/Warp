@@ -42,7 +42,9 @@ class InitTests(Base):
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertIn("Nothing changed", r.stdout)
         self.assertEqual(gi, (self.repo / ".gitignore").read_text())
-        self.assertEqual(gi.count(".warp/"), 1)
+        self.assertIn(".warp/config.yaml", gi)
+        self.assertNotRegex(gi, r"(?m)^\.warp/?\s*$")
+        self.assertIn("dist/", gi)
         after = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
         self.assertEqual(before, after)
 
