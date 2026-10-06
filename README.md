@@ -243,7 +243,7 @@ One repair runs at a time, in plan order. If it alarms `lock-escape` again, or e
 
 `/warp-init` backfills `alarmRepairMinutes` and `maxAlarmRepairs` when `.warp/config.yaml` does not have them yet.
 
-When that pass opens and the ready set is empty, the listener recomputes every pending gate, and a red gate whose failure the beam can already disprove. A gate turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence stored is `members merged:` plus those ids, and the board is rewritten. Herald posts one line naming the condition that was cleared, `G1 pending cleared. Members merged. Tick ran.`, and that same pass runs the dispatch tick so work blocked only by that stale gate starts. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A ticket that is still alarmed does not. A green gate stays green. Every tick recomputes before `beam.py ready` and before `orchestrator.py dispatch`, so a merge does not wait for this pass. The pass is the backstop when no tick is running. Pause and stop do not recompute.
+When that pass opens and the ready set is empty, the listener recomputes every pending gate, and a red gate whose failure the beam can already disprove. A red `make ci` on a ticket is sent back in that pass (`send-back <id> fix` and a `start` line) even when other work is ready. Launch that Shuttle with the log. A second pass does not start it again while it is in `fix`. A gate turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence stored is `members merged:` plus those ids, and the board is rewritten. Herald posts one line naming the condition that was cleared, `G1 pending cleared. Members merged. Tick ran.`, and that same pass runs the dispatch tick so work blocked only by that stale gate starts. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A ticket that is still alarmed does not. A green gate stays green. Every tick recomputes before `beam.py ready` and before `orchestrator.py dispatch`, so a merge does not wait for this pass. The pass is the backstop when no tick is running. Pause and stop do not recompute.
 
 ## Version
 
@@ -454,7 +454,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
 | `maxAgents` | `18` | Concurrent Shuttles. The only cap. A project may set 18. |
-| `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. |
+| `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. `make ci` is a valid command. A red result is stored on `pr.check` and sent back to that ticket with the log. |
 | `appendOnlyPaths` | empty | Shared files a ticket may append to, besides its locks. Empty by default. A conflict there keeps both sides. |
 | `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI, including L and XL when they are listed. L and XL are not special. Sizes not in `autoMergeSizes` wait. The default leaves L and XL waiting. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |

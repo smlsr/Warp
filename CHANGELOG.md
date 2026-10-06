@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.5
+
+- A red `make ci` check command or CI check is stored on `pr.check` and sent back to that ticket with the log, so the run does not sit idle. The gate stays while that check is red. A green result is recorded and is not a failure. A stale gate whose members are merged and whose current checks are not red still clears. Evidence that is only the name `make ci` is not a red check.
+
 ## 1.4.4
 
 - A pending gate, or a stale red gate, turns green when every member is merged or done, or when every ticket on the beam is. The evidence is `members merged:` and those ids, and the board is rewritten. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A green gate stays green.

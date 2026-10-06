@@ -86,7 +86,7 @@ G0–G11 from the schedule. Members of a gate may still run; that is how G0 gets
 
 A pending gate, or a red gate whose failure the beam can disprove, turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence recorded is `members merged:` and those ids, and the board is rewritten. Every tick does this before `ready()`. The listener does it again when a pass opens (`alarmRepairMinutes`, default 15) and the ready set is empty, then runs the dispatch tick in that same pass. Herald posts one line, `G1 pending cleared. Members merged. Tick ran.` A stale red gate uses `red cleared` in that line. A second pass does not dispatch again. A green gate stays green.
 
-One member still not merged leaves the gate as it is. So does a ticket that is still alarmed or parked, and a check that is actually red: member CI, Bugbot, rollup, or checkCommand, or gate evidence that names a red check. A recovered ticket counts once it is merged or done. A ticket that is still alarmed does not.
+One member still not merged leaves the gate as it is. So does a ticket that is still alarmed or parked, and a check that is actually red: member CI, Bugbot, rollup, or checkCommand, or gate evidence that names a red check. A recovered ticket counts once it is merged or done. A ticket that is still alarmed does not. A red `make ci` (the check command, or a CI check of that name) is sent back to that ticket with the log so the run does not sit idle. The name `make ci` alone is not a red check. A green `make ci` is recorded on `pr.check` and does not keep the gate.
 
 ## Model
 

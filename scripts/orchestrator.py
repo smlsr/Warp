@@ -20,9 +20,12 @@ is merged or done, then this command prints the start lines.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 checkCommand and appendOnlyPaths come from config. An empty checkCommand means
-Bugbot and CI as configured. appendOnlyPaths defaults to empty. send-back is
-the result when a conflict is outside that list. resolve takes --base, --ours,
-and --theirs. A third red parks the ticket (status parked).
+Bugbot and CI as configured. `make ci` is a check command; the space stays.
+A red `make ci` is stored on pr.check and printed as send-back plus a start
+line, with the log. A green result is stored and is not a failure. The third
+red parks the ticket (status parked). appendOnlyPaths defaults to empty.
+send-back is also the result when a conflict is outside that list. resolve
+takes --base, --ours, and --theirs.
 opened records a pull request when the Shuttle exits. That does not free the
 slot. merge records merged only for outcome merged. enqueue and rejected do
 not. mergeQueue defaults to false. A detected GitHub merge queue also enqueues.
@@ -82,6 +85,203 @@ def check_command(config: Optional[dict]) -> str:
     if raw is None:
         return ""
     return str(raw).strip()
+
+
+MAKE_CI = "make ci"
+_CHECK_RED = {
+    "red",
+    "fail",
+    "failed",
+    "failure",
+    "cancelled",
+    "canceled",
+    "timed_out",
+    "action_required",
+    "error",
+    "startup_failure",
+}
+_CHECK_GREEN = {"green", "pass", "passed", "success", "successful", "ok", "neutral", "skipped"}
+# A Shuttle is already on the ticket. Do not send the same red check again.
+_CHECK_BUSY = {"fix", "claimed", "planning", "coding", "recovering", "merging"}
+# Nothing to send back to. A queued ticket has not run the check yet.
+_CHECK_SKIP = {"merged", "done", "parked", "skipped", "queued", "blocked"}
+
+
+def norm_check_name(value) -> str:
+    """Fold a check command or CI check name. `make ci` stays two words."""
+    return " ".join(str(value or "").strip().strip("\"'").casefold().split())
+
+
+def is_make_ci(value) -> bool:
+    return norm_check_name(value) == MAKE_CI
+
+
+def check_command_text(text: str) -> str:
+    """The checkCommand line from config yaml, including a two-word command.
+
+    `checkCommand: make ci` is the command `make ci`. The space is part of
+    the command. A comment on that line is not.
+    """
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not stripped.startswith("checkCommand:"):
+            continue
+        raw = stripped.split(":", 1)[1]
+        raw = raw.split("#", 1)[0].strip().strip("\"'")
+        return raw
+    return ""
+
+
+def resolve_check_command(config: Optional[dict], yaml_text: Optional[str] = None) -> str:
+    """Beam config, then the yaml line. An empty beam value does not hide `make ci`."""
+    cmd = check_command(config)
+    if cmd:
+        return cmd
+    return check_command_text(yaml_text or "")
+
+
+def conclusion_kind(value) -> str:
+    """`red`, `green`, or empty. The command name `make ci` is neither."""
+    raw = str(value or "").strip().casefold()
+    if raw in _CHECK_RED:
+        return "red"
+    if raw in _CHECK_GREEN:
+        return "green"
+    return ""
+
+
+def _check_rows(ticket: dict) -> list:
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    rows = pr.get("checks")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _row_name(item: dict) -> str:
+    return str(item.get("name") or item.get("context") or "").strip()
+
+
+def _row_log(item: dict, name: str) -> str:
+    for key in ("log", "output", "details"):
+        text = item.get(key)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return "%s red" % (name or MAKE_CI)
+
+
+def make_ci_result(ticket: dict, command: str) -> Optional[dict]:
+    """The current `make ci` result, or None when this ticket has no such check.
+
+    A provider check named `make ci`, or checkCommand `make ci`, counts.
+    The words `make ci` are the name, not a failure, until a conclusion is red.
+    """
+    if not isinstance(ticket, dict):
+        return None
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    command_is = is_make_ci(command) or is_make_ci(pr.get("checkName"))
+    matched = [item for item in _check_rows(ticket) if is_make_ci(_row_name(item))]
+    if matched:
+        reds = [item for item in matched if conclusion_kind(item.get("conclusion") or item.get("state")) == "red"]
+        if reds:
+            item = reds[-1]
+            name = _row_name(item) or MAKE_CI
+            return {"name": MAKE_CI, "kind": "red", "log": _row_log(item, name)}
+        greens = [item for item in matched if conclusion_kind(item.get("conclusion") or item.get("state")) == "green"]
+        if greens:
+            return {"name": MAKE_CI, "kind": "green", "log": ""}
+        return None
+    if not command_is:
+        return None
+    check_kind = conclusion_kind(pr.get("check"))
+    ci_kind = conclusion_kind(pr.get("ci"))
+    if check_kind == "red" or ci_kind == "red":
+        log = pr.get("checkLog") or pr.get("ciLog") or "make ci red"
+        return {"name": MAKE_CI, "kind": "red", "log": str(log)}
+    if check_kind == "green" or ci_kind == "green":
+        return {"name": MAKE_CI, "kind": "green", "log": ""}
+    if conclusion_kind(pr.get("rollup")) == "red":
+        log = pr.get("checkLog") or "make ci red"
+        return {"name": MAKE_CI, "kind": "red", "log": str(log)}
+    return None
+
+
+def _store_make_ci(ticket: dict, result: dict, command: str) -> None:
+    pr = ticket.get("pr")
+    if not isinstance(pr, dict):
+        pr = {}
+        ticket["pr"] = pr
+    pr["checkName"] = result["name"]
+    if result["kind"] == "red":
+        pr["check"] = "red"
+        pr["checkLog"] = result["log"]
+        return
+    if result["kind"] == "green":
+        pr["check"] = "green"
+        pr.pop("checkLog", None)
+        # That command's CI field was the red `make ci` result. It is green now.
+        if is_make_ci(command) and conclusion_kind(pr.get("ci")) == "red":
+            pr["ci"] = "green"
+
+
+def send_back_red_checks(data: dict, yaml_text: str = "", only_id: Optional[str] = None) -> list:
+    """Send a red `make ci` back to that ticket's Shuttle. One attempt per return.
+
+    The log is the check output. Status `fix` keeps the slot and the locks.
+    The third red parks. A Shuttle already on the ticket is left alone.
+    A green `make ci` is recorded and is not a failure.
+    """
+    if not isinstance(data, dict):
+        return []
+    command = resolve_check_command(data.get("config") or {}, yaml_text)
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    actions = []
+    for tid in sorted(tickets):
+        if only_id and tid != only_id:
+            continue
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict):
+            continue
+        result = make_ci_result(ticket, command)
+        if not result or not result.get("kind"):
+            continue
+        status = ticket.get("status")
+        # Record green and red on merged tickets too. A green `make ci` clears
+        # the stale CI field so a gate can advance. Merged work is not sent back.
+        _store_make_ci(ticket, result, command)
+        if result["kind"] != "red":
+            continue
+        if status in _CHECK_SKIP or status in _CHECK_BUSY:
+            continue
+        if status == "alarm" and str(ticket.get("alarm") or "") not in {"", "ci-red", "gate-red"}:
+            continue
+        outcome = note_failure(ticket, result["log"], data.get("config") or {})
+        if outcome == "fix":
+            ticket["agent"] = None
+            ticket["alarm"] = None
+        actions.append({"id": ticket.get("id") or tid, "outcome": outcome, "log": result["log"]})
+    return actions
+
+
+def format_send_back(actions: list, beam: dict) -> list:
+    """`send-back <id> fix` and the start line for that Shuttle. Parked does not start."""
+    cfg = (beam or {}).get("config") or {}
+    tickets = (beam or {}).get("tickets") or {}
+    launch = launch_for(cfg)
+    extra = " launch=%s" % launch.get("launch")
+    if launch.get("refuseInProcess"):
+        extra += " refuse-in-process"
+    kind = checkout_kind(cfg)
+    lines = []
+    for action in actions or []:
+        tid = action.get("id")
+        outcome = action.get("outcome")
+        lines.append("send-back %s %s" % (tid, outcome))
+        if outcome != "fix":
+            continue
+        ticket = tickets.get(tid) or {}
+        lines.append("start %s checkout=%s branch=%s%s" % (tid, kind, branch_name(ticket, cfg), extra))
+    return lines
 
 
 def required_checks(config: Optional[dict]) -> dict:

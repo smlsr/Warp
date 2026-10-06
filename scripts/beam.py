@@ -502,11 +502,27 @@ def _actually_red(value) -> bool:
 
 
 def _member_check_red(ticket) -> bool:
-    """A CI, Bugbot, rollup, or checkCommand result that is red on this ticket."""
+    """A CI, Bugbot, rollup, or checkCommand result that is red on this ticket.
+
+    A provider check named `make ci` with a red conclusion is that CI check.
+    The name alone is not a failure.
+    """
     if not isinstance(ticket, dict):
         return False
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-    return any(_actually_red(pr.get(key)) for key in ("ci", "bugbot", "rollup", "check"))
+    if any(_actually_red(pr.get(key)) for key in ("ci", "bugbot", "rollup", "check")):
+        return True
+    rows = pr.get("checks")
+    if not isinstance(rows, list):
+        return False
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if not orchestrator.is_make_ci(item.get("name") or item.get("context")):
+            continue
+        if orchestrator.conclusion_kind(item.get("conclusion") or item.get("state")) == "red":
+            return True
+    return False
 
 
 def _gate_evidence_red(gate) -> bool:
@@ -589,9 +605,12 @@ def write_board_files(beam_path: Path, data: dict) -> None:
 def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False) -> tuple:
     """Recompute pending gates on a live run. Returns (lines, beam).
 
-    A flip is saved with evidence and the board. No flip writes nothing.
-    Paused and stopped runs change nothing. Callers that already hold the
-    alarm-repair lock use advance_pending_gates instead of this.
+    A flip is saved with evidence and the board. A red `make ci` is sent
+    back to that ticket's Shuttle in the same pass, before the gate is
+    recomputed, so a green result can clear a stale red CI field first.
+    No flip, no send-back, and no new check result writes nothing. Paused
+    and stopped runs change nothing. Callers that already hold the
+    alarm-repair lock use advance_pending_gates instead.
     """
     beam_path = Path(beam_path)
     if not beam_path.is_file():
@@ -606,12 +625,36 @@ def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False)
             if not live:
                 return [], data
             _dt, now_s = coerce_now(now)
+            yaml_text = ""
+            cfg_path = config_yaml_path(beam_path)
+            if cfg_path.is_file():
+                try:
+                    yaml_text = cfg_path.read_text()
+                except OSError:
+                    yaml_text = ""
+            # Store the current `make ci` result before the gate looks at it.
+            # A green result clears a stale red CI field in this same pass.
+            before = json.dumps(data, sort_keys=True, default=str)
+            sent = orchestrator.send_back_red_checks(data, yaml_text)
+            stored = json.dumps(data, sort_keys=True, default=str) != before
             flipped = advance_pending_gates(data, now_s)
-            if not flipped:
+            if not flipped and not sent and not stored:
                 return [], data
-            lines = gate_flip_lines(flipped, data, run_dispatch)
+            lines = orchestrator.format_send_back(sent, data)
+            if flipped:
+                lines.extend(gate_flip_lines(flipped, data, run_dispatch))
             data["metrics"] = metrics(data)
             atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            for action in sent:
+                journal(
+                    beam_path,
+                    {
+                        "type": "send-back",
+                        "id": action.get("id"),
+                        "outcome": action.get("outcome"),
+                        "check": "make ci",
+                    },
+                )
             for gate in flipped:
                 journal(
                     beam_path,
@@ -801,8 +844,6 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         jira_sync.remember_map(beam_path, args.id, key)
     if args.pr is not None:
         t["pr"]["url"] = args.pr
-        import orchestrator
-
         orchestrator.note_pr_opened(t, args.pr, utcnow())
     if getattr(args, "rollup", None):
         t.setdefault("pr", {})["rollup"] = args.rollup
@@ -852,6 +893,21 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
                 t["jiraMapping"] = "mapped"
     except Exception:
         jira_sync = None
+    pr = t.setdefault("pr", {})
+    if getattr(args, "check_result", None):
+        pr["check"] = args.check_result
+    if getattr(args, "check_log", None):
+        pr["checkLog"] = args.check_log
+    if getattr(args, "check_name", None):
+        pr["checkName"] = args.check_name
+    yaml_text = ""
+    cfg_path = config_yaml_path(beam_path)
+    if cfg_path.is_file():
+        try:
+            yaml_text = cfg_path.read_text()
+        except OSError:
+            yaml_text = ""
+    sent = orchestrator.send_back_red_checks(beam, yaml_text, only_id=args.id)
     _record_set_events(beam_path, beam, t, before, args)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
@@ -862,6 +918,8 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     )
     extra = f" ({note})" if note else ""
     print(f"{args.id} {prev} -> {t['status']}{extra}")
+    for line in orchestrator.format_send_back(sent, beam):
+        print(line)
     if t["status"] in {"merged", "done"} and prev not in {"merged", "done"}:
         refresh_outputs(beam_path, beam)
     try:
@@ -1434,7 +1492,8 @@ examples:
 Subcommands: ingest, ready, set, spend, usage, gate, pause, resume, board, check, eta, heartbeat, watchdog.
 set takes --status, --agent, --branch, --jira, --pr, --rollup, --sha,
 --via local|connected, --approved-by, --proceeded-by, --merge-method,
---bugbot pass|fail, --ci green, --alarm, --escaped, --attempts, --force,
+--bugbot pass|fail, --ci green, --check-result green|red|pending,
+--check-name, --check-log, --alarm, --escaped, --attempts, --force,
 --rollup green|red|pending is the provider check rollup. green frees the slot.
 --tokens-in, --tokens-out, --tokens-cached, --cost.
 --escaped is a path outside the lock, repeatable, stored on the ticket
@@ -1458,7 +1517,13 @@ evidence is those member ids, and the board is rewritten. Herald prints
 tickets that just became ready. A second call does not flip a green gate
 and does not print those start lines again. A member that is not merged, a
 ticket that is still alarmed or parked, or a check that is actually red
-leaves the gate as it is. Paused and stopped runs do not recompute.
+leaves the gate as it is. A check command or CI check named `make ci`
+is recorded on pr.check. A red result prints `send-back <id> fix` and a
+start line; launch that Shuttle with the log. A Shuttle already in fix
+is not sent again. The third red parks and does not start. A green
+`make ci` is recorded and is not a failure. Evidence that is only the
+name `make ci` is not a red check. Paused and stopped runs do not
+recompute.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
 uses inbound.py heartbeat. watchdog runs on every Warp tick and on start
@@ -1509,6 +1574,9 @@ def main() -> None:
     ps.add_argument("--merge-method", help="merge method, default squash once status is merged")
     ps.add_argument("--bugbot")
     ps.add_argument("--ci")
+    ps.add_argument("--check-result", choices=["green", "red", "pending"], help="checkCommand result, stored on pr.check")
+    ps.add_argument("--check-name", help="CI check name, for example make ci")
+    ps.add_argument("--check-log", help="failing check output, sent back with a red make ci")
     ps.add_argument("--alarm")
     ps.add_argument(
         "--escaped",

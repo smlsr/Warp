@@ -599,6 +599,7 @@ def main() -> None:
         elif args.cmd == "note":
             print(note(root, Path(args.beam), args.id, args.reason))
         elif args.cmd == "rollup":
+            checks = None
             if args.checks:
                 checks = json.loads(Path(args.checks).read_text())
                 result = interpret_rollup(checks if isinstance(checks, list) else [])
@@ -612,12 +613,27 @@ def main() -> None:
             print(result)
             if args.id and Path(args.beam).is_file():
                 import beam as beam_mod
+                import orchestrator
 
-                data = json.loads(Path(args.beam).read_text())
+                beam_path = Path(args.beam)
+                data = json.loads(beam_path.read_text())
                 ticket = data["tickets"][args.id]
-                ticket.setdefault("pr", {})["rollup"] = result
-                beam_mod.atomic_write(Path(args.beam), json.dumps(data, indent=2) + "\n")
+                pr = ticket.setdefault("pr", {})
+                pr["rollup"] = result
+                if args.checks and isinstance(checks, list):
+                    pr["checks"] = checks
+                yaml_text = ""
+                cfg_path = beam_mod.config_yaml_path(beam_path)
+                if cfg_path.is_file():
+                    try:
+                        yaml_text = cfg_path.read_text()
+                    except OSError:
+                        yaml_text = ""
+                sent = orchestrator.send_back_red_checks(data, yaml_text, only_id=args.id)
+                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
                 print("%s rollup %s" % (args.id, result))
+                for line in orchestrator.format_send_back(sent, data):
+                    print(line)
         elif args.cmd == "merge-pr":
             beam_path = Path(args.beam)
             data = json.loads(beam_path.read_text()) if beam_path.is_file() else {}
