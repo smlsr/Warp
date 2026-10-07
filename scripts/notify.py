@@ -128,7 +128,10 @@ def scan_message(root: Path, info: dict) -> dict:
     links = [(f"{label}: {rel}", file_url(rel, web, branch, kind)) for label, rel in refs[:MAX_LINKS]]
     if len(refs) > MAX_LINKS:
         bullets.append(f"... {len(refs) - MAX_LINKS} more in .warp/scan.json")
-    footer = fmt.version_label() + ". Next: /warp-start. Status files are in .warp/ (not committed)."
+    footer = (
+        fmt.version_label()
+        + ". Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored."
+    )
     if any(u for _, u in links):
         footer = f"Links point at branch {branch}; they work once it is pushed. " + footer
     return fmt.message(root, "Scan finished", facts=facts, bullets=bullets, links=links, footer=footer)

@@ -100,6 +100,18 @@ Post alarms, approval requests, gate flips, pause/resume, digests, and the one-l
 
 The proceed ack looks like `Received warp:proceed XV-01. Merging and moving Jira to Done.` Unknown `warp:` lines ack the accepted forms. A PR comment with the same verb counts. Record the source.
 
+## Dispatch, repair, and upgrade
+
+The orchestrator is the only merger. The cap is `maxAgents`. A project may set 18. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. The slot frees when the GitHub or Bitbucket check rollup is green. Locks stay until merge or park. The merge queue is serial. `mergeQueue` (default false), or a GitHub merge queue, enqueues the pull request. `checkCommand` empty means Bugbot and CI. `make ci` is kept as the full check command. A red result is stored on `pr.check` and the ticket is sent back (`send-back <id> fix` and a `start` line). The third red parks. The name alone is not a red check. `appendOnlyPaths` conflicts keep both sides. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. A red base branch stops merging. Restart classifies merged, in flight, and pending from git.
+
+One checkout per ticket. Cloud is one cloud agent. Local is one git worktree. `state_commit.py commit` commits the beam, journal, STATUS, and BOARD and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. On a cloud runner, `/warp-start` refuses when `transitionJiraIssue`, `addOrEditJiraIssueComment`, or `slack_send_message` is missing from the MCP allow list. `--force` starts anyway. A local runner does not block.
+
+The one listener repairs `lock-escape` only, one ticket at a time, every `alarmRepairMinutes` (default 15). The repair widens that ticket's locks to the escaped paths. It waits when an in-flight ticket holds a path. Past `maxAlarmRepairs` (default 3) the alarm stays. `bugbot-failed`, `worker-died`, `stuck`, `ci-red`, and `gate-red` are left alone. Pause and stop do not repair.
+
+A pending or stale-red gate clears when every member is merged or done and no check is actually red, then the tick runs. G1 with members P-002, P-003, P-004, and P-018 stores `members merged: P-002, P-003, P-004, P-018`. Herald posts `G1 pending cleared. Members merged. Tick ran.`
+
+`/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`.
+
 ## Bugbot
 
 Use Cursor Bugbot on the PR. Reed stores pass/fail and the evidence string. A pass with no AC ids is not a pass.

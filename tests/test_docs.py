@@ -310,6 +310,102 @@ class CloudHookDocTests(unittest.TestCase):
             self.assertIn(needle, section, needle)
 
 
+class Since140DocTests(unittest.TestCase):
+    """1.4.1 through 1.4.5 behavior, and the /warp-upgrade steps, stay in the user docs."""
+
+    USER_DOCS = (
+        "README.md",
+        "docs/COMMANDS.md",
+        "docs/CONFIG.md",
+        "docs/GUIDE.md",
+        "docs/RUNBOOK.md",
+        "docs/STATE.md",
+        "docs/CONNECTORS.md",
+        "docs/MERGE-POLICY.md",
+        "AGENTS.md",
+        "rules/warp-operating.mdc",
+    )
+
+    def test_readme_install_update_lists_upgrade_steps_in_order(self):
+        readme = (ROOT / "README.md").read_text()
+        install = readme[readme.find("## Install"):].partition("\n## ")[0]
+        self.assertIn("### Update", install)
+        self.assertIn("*slack*:slack_send_message", install)
+        update = install.split("### Update", 1)[1].split("After install, these entries", 1)[0]
+        steps = (
+            "in the repo that has Warp installed",
+            "replaces `.cursor/plugins/warp`",
+            "fetches the default branch",
+            "git checkout",
+            "does not overwrite `.warp/config.yaml`",
+            "or the beam",
+            "`Warp vX.Y.Z`",
+            "Reload Cursor",
+            "/warp-version",
+            "`fetch failed`",
+            "`keeping the installed copy`",
+            "/warp-init` does not upgrade an existing copy",
+            "This command does",
+            "`--force` is not an upgrade flag",
+            "`--root`",
+            "`--source`",
+        )
+        positions = []
+        for step in steps:
+            at = update.find(step)
+            self.assertGreaterEqual(at, 0, step)
+            positions.append(at)
+        self.assertEqual(positions, sorted(positions))
+        help_text = subprocess.run(
+            [sys.executable, "-B", str(SCRIPTS / "upgrade.py"), "?"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        help_flags = set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", help_text))
+        self.assertEqual(help_flags, {"--root", "--source", "--help"})
+        advertised = set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", update)) - {"--force"}
+        self.assertEqual(advertised, {"--root", "--source"})
+        self.assertNotIn("--force", help_flags)
+
+    def test_new_commands_and_config_keys_stay_required(self):
+        keys = (
+            "alarmRepairMinutes",
+            "maxAlarmRepairs",
+            "checkCommand",
+            "appendOnlyPaths",
+            "mergeQueue",
+            "maxAgents",
+        )
+        phrases = (
+            "/warp-upgrade",
+            "lock-escape",
+            "make ci",
+            "P-002",
+            "P-003",
+            "P-004",
+            "P-018",
+            "members merged: P-002, P-003, P-004, P-018",
+            "G1 pending cleared. Members merged. Tick ran.",
+            "`bugbot-failed`",
+            "`worker-died`",
+            "`stuck`",
+            "`ci-red`",
+            "`gate-red`",
+            "name alone",
+            "one ticket at a time",
+            "parent folder",
+            "serial",
+        )
+        for rel in self.USER_DOCS:
+            text = (ROOT / rel).read_text()
+            for key in keys:
+                self.assertIn(key, text, "%s missing %s" % (rel, key))
+            for phrase in phrases:
+                self.assertIn(phrase, text, "%s missing %s" % (rel, phrase))
+
+
 class HelpTokenTests(unittest.TestCase):
     def test_question_mark_is_always_help_and_help_can_be_a_value(self):
         self.assertEqual(usage.normalize_argv(["?"]), ["--help"])
