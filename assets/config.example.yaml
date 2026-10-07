@@ -143,7 +143,7 @@ bugbotManual: true
 # Manual tickets (autoMerge false) only. true: Bugbot must pass before QA Ready,
 # the same gate as auto-merge. false: skip Bugbot on that path. bugbotRequired
 # still covers auto-merge.
-maxFixAttempts: 3
+maxFixAttempts: 5
 stuckAfterMinutes: 90
 # Minutes with no progress before supervise marks that state stalled.
 # A newer heartbeat is progress and clears the stall.
@@ -160,28 +160,33 @@ stallMinutes: 45
 statusDigestMinutes: 60
 # How often supervise posts one short Slack digest of alarms, stalls, and counts.
 # A new stall or alarm posts once and is not posted again.
-maxStallFixes: 3
+maxStallFixes: 5
 # Fixer attempts for one stalled or alarmed ticket. Past this cap the ticket
-# parks and Slack gets one alarm. Default 3.
+# parks and Slack gets one alarm. Default 5.
+repairSweepMinutes: 15
+# How often supervise sweeps the whole run for broken tickets, pull requests,
+# CI on main, locks, gates, the listener, and the beam. It skips a fix that
+# is already queued or running, and starts what it can inside the slot cap.
+# Slack posts only when the sweep starts something new or escalates. Default 15.
 staleMinutes: 15
 # A Shuttle or the one listener is dead when lastSeenAt is older than this,
 # or it never heartbeated and the claim or listener start is older than this.
 # The watchdog replaces a dead worker while the run is running. Pause and stop
 # do not. A fresh heartbeat is left alone. /warp-init appends this key when
 # the file does not have it yet.
-maxRecoveries: 3
+maxRecoveries: 5
 # Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
 # worker-died and no new Shuttle starts. Branch, pull request, and
-# jira.startedAt stay. Default 3.
+# jira.startedAt stay. Default 5.
 alarmRepairMinutes: 15
 # How often the one listener looks for lock-escape alarms and starts one
 # repair. Only while the run is running. Pause and stop do not repair.
 # A repair already in flight is checked on each listener pass. /warp-init
 # appends this key when the file does not have it yet.
-maxAlarmRepairs: 3
+maxAlarmRepairs: 5
 # Repair attempts for one lock-escape ticket. Past this cap the alarm stays
 # and later passes skip it. The repair widens that ticket's locks to the
-# paths that escaped. Default 3.
+# paths that escaped. Default 5.
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300

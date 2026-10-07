@@ -215,7 +215,7 @@ def _phase(ticket: dict, name: str, lines: list) -> None:
 
 
 def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
-    """One red round. The third parks the ticket and does not start a Shuttle."""
+    """One red round. Past maxFixAttempts (default 5) the ticket parks and does not start a Shuttle."""
     if pending(ticket) and _shuttle(ticket).get("step") == "fix":
         lines.append("shuttle: hold %s" % ticket.get("id"))
         return
@@ -261,7 +261,7 @@ def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str
 
 def _recover_worker(data: dict, ticket: dict, lines: list, already_counted: bool = False) -> None:
     """Restart the step while recoveries is inside maxRecoveries."""
-    cap = _int((data.get("config") or {}).get("maxRecoveries"), 3)
+    cap = _int((data.get("config") or {}).get("maxRecoveries"), 5)
     used = int(ticket.get("recoveries") or 0)
     if not already_counted and used < 1:
         ticket["recoveries"] = 1
@@ -283,7 +283,7 @@ def _recover_worker(data: dict, ticket: dict, lines: list, already_counted: bool
 
 
 def _recover_stuck(data: dict, ticket: dict, lines: list) -> None:
-    cap = _int((data.get("config") or {}).get("maxRecoveries"), 3)
+    cap = _int((data.get("config") or {}).get("maxRecoveries"), 5)
     used = int(ticket.get("stuckRestarts") or 0)
     if used >= cap:
         lines.append("stuck: cap %s" % ticket.get("id"))

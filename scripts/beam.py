@@ -39,7 +39,7 @@ ACTIVE = {"claimed", "recovering", "planning", "coding", "review", "bugbot_runni
 # is the visible status while a replacement Shuttle is being started.
 SHUTTLE_WORK = {"claimed", "planning", "coding", "fix", "recovering"}
 DEFAULT_STALE_MINUTES = 15
-DEFAULT_MAX_RECOVERIES = 3
+DEFAULT_MAX_RECOVERIES = 5
 STATUSES = [
     "queued",
     "claimed",
@@ -1465,7 +1465,7 @@ def default_config() -> dict:
         "jiraSite": "",
         "bugbotRequired": True,
         "bugbotManual": True,
-        "maxFixAttempts": 3,
+        "maxFixAttempts": 5,
         "stuckAfterMinutes": 90,
         "stallImplementingMinutes": 90,
         "stallPrOpenMinutes": 20,
@@ -1477,13 +1477,14 @@ def default_config() -> dict:
         "stallApprovalMinutes": 240,
         "stallMinutes": 45,
         "statusDigestMinutes": 60,
-        "maxStallFixes": 3,
+        "maxStallFixes": 5,
+        "repairSweepMinutes": 15,
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "listenerStaleMinutes": 15,
         "listenerRestartNote": 3,
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "alarmRepairMinutes": 15,
-        "maxAlarmRepairs": 3,
+        "maxAlarmRepairs": 5,
         "respectMergeWindows": False,
         "mergeWindows": ["08:30", "13:00", "17:00"],
         "pollSeconds": 300,
@@ -1535,7 +1536,8 @@ ticket that is still alarmed or parked, or a check that is actually red
 leaves the gate as it is. A check command or CI check named `make ci`
 is recorded on pr.check. A red result prints `send-back <id> fix` and a
 start line; launch that Shuttle with the log. A Shuttle already in fix
-is not sent again. The third red parks and does not start. A green
+is not sent again. Past maxFixAttempts (default 5) the ticket parks and
+does not start. A green
 `make ci` is recorded and is not a failure. Evidence that is only the
 name `make ci` is not a red check. Paused and stopped runs do not
 recompute.

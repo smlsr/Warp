@@ -245,7 +245,7 @@ def send_back_red_checks(data: dict, yaml_text: str = "", only_id: Optional[str]
     """Send a red `make ci` back to that ticket's Shuttle. One attempt per return.
 
     The log is the check output. Status `fix` keeps the slot and the locks.
-    The third red parks. A Shuttle already on the ticket is left alone.
+    Past maxFixAttempts (default 5) the ticket parks. A Shuttle already on the ticket is left alone.
     A green `make ci` is recorded and is not a failure.
     """
     if not isinstance(data, dict):
@@ -759,18 +759,18 @@ def ensure_plan(ticket: dict) -> dict:
 
 
 def note_failure(ticket: dict, output: str, config: Optional[dict] = None) -> str:
-    """Red PR or red after rebase. The third failure parks the ticket.
+    """Red PR or red after rebase. Past maxFixAttempts (default 5) the ticket parks.
 
-    Attempts 1 and 2 go back to that ticket's Agent on the same branch (status fix)
-    and keep the locks. The third releases the locks by leaving the active
-    set, leaves the branch and the pull request open, and writes the blocker
-    on the plan record.
+    Earlier attempts go back to that ticket's Agent on the same branch (status fix)
+    and keep the locks. The attempt that reaches the cap releases the locks by
+    leaving the active set, leaves the branch and the pull request open, and
+    writes the blocker on the plan record.
     """
     cfg = config or {}
     try:
-        cap = int(cfg.get("maxFixAttempts") or 3)
+        cap = int(cfg.get("maxFixAttempts") or 5)
     except (TypeError, ValueError):
-        cap = 3
+        cap = 5
     if cap < 1:
         cap = 1
     ticket["attempts"] = int(ticket.get("attempts") or 0) + 1

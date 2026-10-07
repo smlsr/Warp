@@ -319,7 +319,7 @@ class RemoteDirectoryTests(GitBeam):
         self.assertEqual(self.load()["tickets"]["T-1"]["attempts"], 1)
         saved = self.load()
         saved["tickets"]["T-1"]["status"] = "review"
-        saved["tickets"]["T-1"]["attempts"] = 2
+        saved["tickets"]["T-1"]["attempts"] = 4
         self.beam_path.write_text(json.dumps(saved, indent=2) + "\n")
         parked_line = {
             "seq": 3,
@@ -337,8 +337,8 @@ class RemoteDirectoryTests(GitBeam):
         self.assertEqual(committed.returncode, 0, committed.stderr)
         git(self.repo, "push", "origin", "warp/T-1")
         git(self.repo, "checkout", "main")
-        # The live beam's seen-set does not include the new line. attempts is already 2,
-        # so this red is the third and parks. Rewrite seen by leaving the beam as edited.
+        # The live beam's seen-set does not include the new line. attempts is already 4,
+        # so this red is the fifth and parks. Rewrite seen by leaving the beam as edited.
         third = ticket_state.observe(self.beam_path, now="2026-10-06T12:05:00Z")
         self.assertTrue(any(line.startswith("send-back T-1 parked") for line in third), third)
         self.assertEqual(self.load()["tickets"]["T-1"]["status"], "parked")

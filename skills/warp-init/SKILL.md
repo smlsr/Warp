@@ -33,7 +33,7 @@ python3 <plugin>/scripts/install.py init
 
 The example includes commented lines such as `# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, and `# ghCli: false`. They are hints. Uncommenting one does not by itself turn the active line off; comment out the active line too. Init treats a line that starts with `#` as a comment, not as the key, so those hints never block adding the real key.
 
-Re-run `/warp-init` to pick up new keys after a plugin upgrade, including `staleMinutes` (default 15), `maxRecoveries` (default 3), `alarmRepairMinutes` (default 15), and `maxAlarmRepairs` (default 3). Init still does not overwrite plugin files or replace a value you already set. A missing key in an old config still behaves as the default until you re-run: the scripts fill it in when they read.
+Re-run `/warp-init` to pick up new keys after a plugin upgrade, including `staleMinutes` (default 15), `maxRecoveries` (default 5), `alarmRepairMinutes` (default 15), `maxAlarmRepairs` (default 5), and `repairSweepMinutes` (default 15). Init still does not overwrite plugin files or replace a value you already set. A missing key in an old config still behaves as the default until you re-run: the scripts fill it in when they read.
 
 ## Jira project
 

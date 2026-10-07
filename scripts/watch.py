@@ -258,7 +258,7 @@ def _needs_queue(ticket: dict) -> bool:
 def _recovery_open(data: dict, ticket: dict) -> bool:
     """stuck and worker-died stop at maxRecoveries. Other alarms are open."""
     alarm = str(ticket.get("alarm") or "")
-    cap = _cfg_int(data, "maxRecoveries", 3)
+    cap = _cfg_int(data, "maxRecoveries", 5)
     if cap < 1:
         cap = 3
     if alarm == "stuck":
@@ -312,7 +312,7 @@ def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
 
 
 def _cap(data: dict) -> int:
-    return max(1, _cfg_int(data, "maxStallFixes", 3))
+    return max(1, _cfg_int(data, "maxStallFixes", 5))
 
 
 def _escalate(data: dict, ticket: dict, action: str, lines: list) -> None:
@@ -409,12 +409,14 @@ def _fix_globals(data: dict, lines: list, now: str) -> None:
     if used >= _cap(data):
         key = "base:base-red"
         posted = data.setdefault("postedAlarms", [])
+        watch["baseAnnouncedAt"] = now
         if key not in posted:
             posted.append(key)
             lines.append("slack: alarm base base-red")
             lines.append("herald: base base-red.")
         return
     watch["baseFixes"] = used + 1
+    watch["baseAnnouncedAt"] = now
     checkout = orchestrator.dispatch_checkout(data.get("config") or {}, data)
     lines.append("fixer: base red")
     lines.append("dispatch-base-fix checkout=%s" % checkout)
@@ -561,14 +563,29 @@ def status_lines(data: dict, now=None) -> list:
     lines.append("counts: %s" % count_text)
     lines.append("open-work:")
     lines.extend(_format_row(row) for row in rows)
+    lines.append(_sweep_status(data))
     data["openWork"] = {
         "at": stamp,
         "alarms": [row["id"] for row in alarms],
         "stalls": [row["id"] for row in rows if row["stalled"] == "yes"],
         "counts": counts,
         "tickets": rows,
+        "sweep": data.get("repairSweep") if isinstance(data.get("repairSweep"), dict) else None,
     }
     return lines
+
+
+def _sweep_status(data: dict) -> str:
+    raw = data.get("repairSweep")
+    if not isinstance(raw, dict) or not raw.get("at"):
+        return "sweep: none"
+    return "sweep: at=%s findings=%d actions=%d skipped=%d escalated=%d" % (
+        raw.get("at"),
+        len(raw.get("findings") or []),
+        len(raw.get("actions") or []),
+        len(raw.get("skipped") or []),
+        len(raw.get("escalated") or []),
+    )
 
 
 def snapshot(data: dict, now=None) -> list:
@@ -587,5 +604,8 @@ def apply(data: dict, provider: Optional[dict] = None, beam_path: Optional[Path]
     _fix_globals(data, lines, stamp)
     _fix_tickets(data, provider, lines, Path(beam_path) if beam_path else None, stamp)
     _digest(data, lines, stamp)
+    import sweep
+
+    lines.extend(sweep.run(data, provider=provider, beam_path=beam_path, now=stamp))
     lines.extend(status_lines(data, now=stamp))
     return lines
