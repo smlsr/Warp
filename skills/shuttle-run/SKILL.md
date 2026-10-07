@@ -5,7 +5,7 @@ description: "Run one claimed ticket from Jira through an open pull request. Bug
 
 # Shuttle run
 
-You were started with `IMPLEMENT <id>` in your own checkout. Cloud is your own VM. Local is your own git worktree. Do not share a working copy. The orchestrator is the only merger. Do not implement from chat memory. Edit only this ticket's locks and `appendOnlyPaths` (add your own lines at the end). Branch from the head of `baseBranch` using Warp's `warp/<id>` name. Do not force a `feature/` prefix. If you need work that is not on the base branch, record a blocker on the plan. Do not build another ticket. Do not ask. Before the pull request, `orchestrator.py record --plan --result`. Then stop. Do not merge, do not push to the base branch, and do not start a second ticket.
+You were started with `IMPLEMENT <id>` as an Agent: own conversation, own VM, own checkout. You are not a Subagent. Cloud is your own VM. Local is your own git worktree. The checkout is the ticket branch, which already has `.warp/beam.json`. Read your claim from that file. Do not ask the orchestrator for it. Do not share a working copy. The orchestrator is the only merger. Do not implement from chat memory. Edit only this ticket's locks and `appendOnlyPaths` (add your own lines at the end). Branch from the head of `baseBranch` using Warp's `warp/<id>` name. Do not force a `feature/` prefix. If you need work that is not on the base branch, record a blocker on the plan. Do not build another ticket. Do not ask. Before the pull request, `orchestrator.py record --plan --result`. Then stop. Do not merge, do not push to the base branch, and do not start a second ticket.
 
 ## Load the repo before editing
 

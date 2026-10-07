@@ -2,12 +2,16 @@
 """One checkout per ticket.
 
 Cloud: this plugin cannot create a Cursor cloud agent. There is no API to
-call. `launch` tells the Warp session to start one cloud agent per ticket
-with the Task tool (`environment: cloud`). `implement` refuses to do the
-ticket in this process. A sub-agent in the orchestrator checkout is forbidden.
+call. `launch` commits the beam, journal, board, and that ticket's claim
+onto the ticket branch, pushes the branch, then tells the Warp session to
+start one new Agent checked out on that branch. An Agent is a separate
+top-level cloud agent: own conversation, own VM, own checkout. Do not start
+a Subagent. Do not use the Task tool for a ticket. Do not start it on a
+fresh clone of main. `implement` refuses to do the ticket in this process.
 
-Local: `add` and `remove` run `git worktree add` and `git worktree remove`.
-One worktree, one branch, one ticket. The beam stores `agent` or `worktree`.
+Local: `add` and `remove` run `git worktree add` and `git worktree remove`
+on the ticket branch that already has .warp/beam.json. One worktree, one
+branch, one ticket. Not a Subagent inside the orchestrator checkout.
 
   python3 scripts/checkout.py ?
   python3 scripts/checkout.py launch --beam .warp/beam.json --id T-1
@@ -30,6 +34,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import orchestrator  # noqa: E402
+import state_commit  # noqa: E402
 
 HELP = __doc__
 
@@ -48,23 +53,73 @@ def worktree_rel(ticket_id: str) -> str:
 
 
 def launch_lines(ticket_id: str, base: str, branch: str) -> list:
-    """The Task call the Warp session can make. This script cannot make it."""
+    """Instruction for one new Agent. Printed only after the branch has a beam.
+
+    base is the branch the ticket branch was cut from. The Agent does not
+    check out base. This script cannot create the Agent.
+    """
+    del base
     return [
-        "launch: one cloud agent per ticket",
-        "tool: Task",
-        "subagent_type: shuttle",
-        "environment: cloud",
-        "cloud_base_branch: %s" % (base or "main"),
-        "run_in_background: true",
-        "description: Shuttle %s" % ticket_id,
-        "prompt: IMPLEMENT %s" % ticket_id,
+        orchestrator.TICKET_AGENT_INSTRUCTION,
+        "launch: one new Agent per ticket",
+        "checkout: %s" % branch,
         "branch: %s" % branch,
+        "prompt: IMPLEMENT %s" % ticket_id,
+        "beam: .warp/beam.json",
+        "claim: read it from that checkout",
         "refuse: in-process",
+        "refuse: Subagent",
+        "refuse: Task",
+        "refuse: clone of main",
         "The plugin has no cloud-agent API. Do not implement this ticket in the orchestrator checkout.",
-        "A Task without environment cloud shares that checkout and is forbidden.",
-        "After the agent id comes back, record it:",
+        "Do not start this Agent when the branch has no .warp beam.",
+        "After the Agent id comes back, record it:",
         "python3 scripts/checkout.py bind --beam .warp/beam.json --id %s --agent <agent-id>" % ticket_id,
     ]
+
+
+_CLAIM_STATUSES = {
+    "claimed",
+    "recovering",
+    "planning",
+    "coding",
+    "review",
+    "fix",
+    "bugbot_running",
+    "awaiting_approval",
+    "merging",
+}
+
+
+def has_claim(ticket: dict) -> bool:
+    """The ticket row the Agent must be able to read from its own checkout."""
+    if ticket.get("agent"):
+        return True
+    return ticket.get("status") in _CLAIM_STATUSES
+
+
+def _launch_cloud(root: Path, path: Path, data: dict, ticket: dict, branch: str, base: str, ticket_id: str) -> int:
+    """Publish the claim onto the ticket branch, then print the new Agent instruction.
+
+    The instruction is not printed when the branch has no .warp beam.
+    """
+    if not has_claim(ticket):
+        print("refuse: ticket %s has no claim; do not start the Agent" % ticket_id)
+        return 2
+    ticket["branch"] = branch
+    ticket["checkout"] = "cloud-vm"
+    _save(path, data)
+    published = state_commit.publish_ticket(root, str(path), ticket_id, push=True)
+    if published != 0:
+        return published
+    if not state_commit.branch_has_beam(root, branch):
+        print("refuse: branch %s has no .warp beam" % branch)
+        print("refuse: do not start the Agent")
+        return 2
+    shown_base = base if base != "HEAD" else "main"
+    for line in launch_lines(ticket_id, shown_base, branch):
+        print(line)
+    return 0
 
 
 def _load(path: Path) -> dict:
@@ -201,7 +256,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.cmd == "implement":
         print("refuse: the orchestrator does not implement tickets in this checkout")
         print("refuse: in-process")
-        print("launch: one cloud agent per ticket")
+        print(orchestrator.TICKET_AGENT_INSTRUCTION)
         return 2
     path = Path(args.beam)
     if not path.is_file():
@@ -215,23 +270,25 @@ def main(argv: Optional[list] = None) -> int:
     branch = orchestrator.branch_name(ticket, cfg)
     if args.cmd == "launch":
         if orchestrator.checkout_kind(cfg) == "worktree":
+            print(orchestrator.LOCAL_WORKTREE_INSTRUCTION)
             print("local: git worktree")
             print("python3 scripts/checkout.py add --beam %s --id %s --root ." % (args.beam, args.id))
             return 0
-        for line in launch_lines(args.id, base if base != "HEAD" else "main", branch):
-            print(line)
-        ticket["checkout"] = "cloud-vm"
-        ticket["branch"] = branch
-        _save(path, data)
-        return 0
+        return _launch_cloud(root, path, data, ticket, branch, base, args.id)
     if args.cmd == "add":
         if orchestrator.checkout_kind(cfg) != "worktree":
-            for line in launch_lines(args.id, base if base != "HEAD" else "main", branch):
-                print(line)
-            ticket["checkout"] = "cloud-vm"
-            ticket["branch"] = branch
-            _save(path, data)
-            return 0
+            return _launch_cloud(root, path, data, ticket, branch, base, args.id)
+        ticket["branch"] = branch
+        ticket["checkout"] = "worktree"
+        _save(path, data)
+        published = state_commit.publish_ticket(root, str(path), args.id, push=False)
+        if published != 0:
+            return published
+        if not state_commit.branch_has_beam(root, branch):
+            print("refuse: branch %s has no .warp beam" % branch)
+            print("refuse: do not start the Agent")
+            return 2
+        data = _load(path)
         rel = add_worktree(root, data, args.id, base)
         _save(path, data)
         print("worktree %s branch %s" % (rel, branch))

@@ -2,8 +2,8 @@
 """Warp orchestrator policy.
 
 One orchestrator dispatches, merges, and tracks. It writes no ticket product
-code. It is the only thing that merges to the base branch. Sub-agents never
-merge.
+code. It is the only thing that merges to the base branch. Ticket Agents never
+merge. A ticket is not a Subagent.
 
 The cap is config maxAgents. A project may set 18. This module does not treat
 any number as a built-in cap.
@@ -30,6 +30,10 @@ opened records a pull request when the Shuttle exits. That does not free the
 slot. merge records merged only for outcome merged. enqueue and rejected do
 not. mergeQueue defaults to false. A detected GitHub merge queue also enqueues.
 The orchestrator does not implement a ticket. checkout.py implement refuses.
+checkout.py launch commits the beam, journal, board, and that ticket's claim
+onto the ticket branch and pushes it before a new Agent may start. A branch
+with no .warp beam does not start. Do not start a ticket Agent on a fresh
+clone of main.
 """
 
 from __future__ import annotations
@@ -52,7 +56,7 @@ LOCK_HELD = {
     "awaiting_approval",
     "merging",
 }
-# The sub-agent is still in the slot. A green PR is not in this set.
+# The Agent is still in the slot. A green PR is not in this set.
 SLOT_HELD = {"claimed", "recovering", "planning", "coding", "bugbot_running", "fix"}
 MERGED_ON_BASE = {"merged", "done"}
 SETTLED = {"merged", "done", "parked", "skipped"}
@@ -69,7 +73,7 @@ def _flag(value, default: bool) -> bool:
 
 
 def agent_cap(config: Optional[dict]) -> Optional[int]:
-    """Concurrent sub-agents from config. None when maxAgents is unset.
+    """Concurrent Agents from config. None when maxAgents is unset.
 
     Callers that need a number use the product default from beam.default_config.
     Nothing here treats 18 as a special cap. A project may set 18.
@@ -273,6 +277,10 @@ def format_send_back(actions: list, beam: dict) -> list:
         extra += " refuse-in-process"
     kind = checkout_kind(cfg)
     lines = []
+    if any(action.get("outcome") == "fix" for action in actions or []):
+        instruction = (launch.get("instruction") or "").strip()
+        if instruction:
+            lines.append(instruction)
     for action in actions or []:
         tid = action.get("id")
         outcome = action.get("outcome")
@@ -554,7 +562,7 @@ def ensure_plan(ticket: dict) -> dict:
 def note_failure(ticket: dict, output: str, config: Optional[dict] = None) -> str:
     """Red PR or red after rebase. The third failure parks the ticket.
 
-    Attempts 1 and 2 go back to a sub-agent on the same branch (status fix)
+    Attempts 1 and 2 go back to that ticket's Agent on the same branch (status fix)
     and keep the locks. The third releases the locks by leaving the active
     set, leaves the branch and the pull request open, and writes the blocker
     on the plan record.
@@ -851,17 +859,45 @@ def apply_reported_merge(ticket: dict, outcome: str, sha: Optional[str] = None) 
     return True
 
 
+TICKET_AGENT_INSTRUCTION = (
+    "Start one new Agent for this ticket. "
+    "An Agent is a separate top-level cloud agent. "
+    "Own conversation, own VM, own checkout. "
+    "Check out the ticket branch. Do not start it on a fresh clone of main. "
+    "Read the claim from .warp/beam.json in that checkout. "
+    "Do not start a Subagent. "
+    "A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). "
+    "It shares the parent session and checkout. Forbidden for tickets. "
+    "Do not use the Task tool for a ticket. "
+    "Do not implement the ticket in this turn."
+)
+
+LOCAL_WORKTREE_INSTRUCTION = (
+    "One git worktree per ticket on the ticket branch that already has .warp/beam.json. "
+    "Do not start a Subagent inside the orchestrator checkout. "
+    "Do not use the Task tool for a ticket. "
+    "Do not implement the ticket in this turn."
+)
+
+
 def launch_for(config: Optional[dict]) -> dict:
-    """How the Warp session starts one ticket. Never in this process."""
+    """How the Warp session starts one ticket. Never in this process.
+
+    Cloud starts one new Agent on the ticket branch after that branch has
+    the beam. Local is one git worktree of that same branch. Neither path
+    is a Subagent or the Task tool.
+    """
     kind = checkout_kind(config)
     if kind == "worktree":
-        return {"launch": "worktree", "refuseInProcess": True, "tool": "git-worktree"}
+        return {
+            "launch": "worktree",
+            "refuseInProcess": True,
+            "instruction": LOCAL_WORKTREE_INSTRUCTION,
+        }
     return {
-        "launch": "task-cloud",
+        "launch": "new-agent",
         "refuseInProcess": True,
-        "tool": "Task",
-        "environment": "cloud",
-        "subagent_type": "shuttle",
+        "instruction": TICKET_AGENT_INSTRUCTION,
     }
 
 
@@ -871,8 +907,13 @@ def format_dispatch(data: dict) -> list:
 
     rows = beam_mod.ready(data)
     cap = beam_mod.configured_cap(data.get("config") or {})
+    actions = dispatch_actions(data, rows, cap=cap)
     lines = []
-    for action in dispatch_actions(data, rows, cap=cap):
+    if actions:
+        instruction = (actions[0].get("instruction") or "").strip()
+        if instruction:
+            lines.append(instruction)
+    for action in actions:
         extra = " launch=%s" % action.get("launch")
         if action.get("refuseInProcess"):
             extra += " refuse-in-process"

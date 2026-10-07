@@ -10,7 +10,7 @@ then the listener does the action.
 One listener for the beam is tracked at beam["listener"]:
   state    running or stopped. The flag. running means one listener owns
            the channel. stopped means it must not keep reading.
-  agentId  the one sub-agent id. A second claim does not replace it while
+  agentId  the one Agent id for the beam. A second claim does not replace it while
            state is running.
   pid      optional process id. Cloud agents often have none.
   startedAt, stoppedAt, lastSeenAt
