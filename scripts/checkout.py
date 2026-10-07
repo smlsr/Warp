@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """One checkout per ticket.
 
-Default (`subagentVm: true`): `launch` prints a subagent prompt that asks for
+Default (`subagentVm: false`): `launch` fetches the base branch and adds a
+git worktree at `<worktreeRoot>/<id>`. `worktreeRoot` defaults to
+`.warp/worktrees`, which `/warp-init` gitignores. `maxLocalSubagents`
+(default 18) is the only shared-machine cap. `memoryCheck` defaults to
+false, so `free -g` is not read. `true` lets `free -g` lower that cap.
+`runner: local` forces `subagentVm` false and `launch` back to `worktree`.
+
+`subagentVm: true` on a cloud runner prints a subagent prompt that asks for
 a dedicated VM. The sentence is fixed: run in your own cloud environment on
 a dedicated VM with its own clone and branch, not a git worktree on this
 machine. The subagent fetches the latest main, clones it, and creates
@@ -12,10 +19,7 @@ machine. A different hostname is a separate VM. The same hostname is a
 worktree on this machine: the ticket log records it, shared-machine rules
 apply, and one warning is posted per run.
 
-`subagentVm: false`, or that fallback, fetches the base branch and adds a
-git worktree at `<worktreeRoot>/<id>`. `worktreeRoot` defaults to
-`.warp/worktrees`, which `/warp-init` gitignores. `maxLocalSubagents`
-(default 4) and `free -g` cap how many of those run at once. The subagent
+That fallback fetches the base branch and adds the same git worktree. The subagent
 works only inside that path, commits, pushes, and opens the pull request.
 It never merges, never touches the parent checkout, and never calls Jira
 or Slack. It writes `.warp/tickets/<id>/state.json` and `log.jsonl` at the
@@ -770,12 +774,15 @@ def main(argv: Optional[list] = None) -> int:
         if orchestrator.launch_mode(cfg) == "agent":
             return _launch_agent(root, path, data, ticket, branch, base, args.id)
         if orchestrator.shared_machine(cfg, data):
-            room = orchestrator.local_room(data, cfg, skip_id=args.id)
-            cap = orchestrator.local_subagent_cap(cfg)
-            gib = orchestrator.available_gib()
-            if gib is not None:
-                print("memory: available %s GiB" % gib)
+            gib = None
+            if orchestrator.memory_check(cfg):
+                gib = orchestrator.available_gib()
+                if gib is not None:
+                    print("memory: available %s GiB" % gib)
                 cap = orchestrator.local_subagent_cap(cfg, gib)
+            else:
+                cap = orchestrator.max_local_subagents(cfg)
+            room = orchestrator.local_room(data, cfg, skip_id=args.id, available=gib)
             print("local-cap: %s" % cap)
             if room < 1:
                 print("refuse: local subagent cap %s" % cap)

@@ -318,7 +318,13 @@ class WorktreeTests(GitRepo):
             "version": 1,
             "runState": "running",
             "baseGreen": True,
-            "config": {"runner": "cloud", "maxAgents": 2, "baseBranch": "main", "launch": "worktree"},
+            "config": {
+                "runner": "cloud",
+                "maxAgents": 2,
+                "baseBranch": "main",
+                "launch": "worktree",
+                "subagentVm": True,
+            },
             "tickets": {
                 "T-1": {
                     "id": "T-1",
@@ -352,6 +358,11 @@ class WorktreeTests(GitRepo):
         local["config"] = dict(data["config"], subagentVm=False)
         local_text = "\n".join(orchestrator.format_dispatch(local))
         self.assertIn("checkout=worktree", local_text)
+        plain = dict(data)
+        plain["config"] = {"runner": "cloud", "maxAgents": 2, "baseBranch": "main", "launch": "worktree"}
+        plain_text = "\n".join(orchestrator.format_dispatch(plain))
+        self.assertIn("checkout=worktree", plain_text)
+        self.assertNotIn(orchestrator.VM_LINE, plain_text)
         self.assertIn("Run checkout.py launch", local_text)
         agent = dict(data)
         agent["config"] = dict(data["config"], launch="agent")
@@ -366,7 +377,7 @@ class VmLaunchTests(GitRepo):
         row = self.ticket(status="claimed", agent="shuttle-T-1")
         row["jiraKey"] = "WAR-1"
         row["acs"] = ["viewer serves the page"]
-        self.beam([row], runner="cloud", baseBranch="main")
+        self.beam([row], runner="cloud", baseBranch="main", subagentVm=True)
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
         self.assertIn(orchestrator.VM_LINE, launched.stdout)
@@ -433,10 +444,20 @@ class VmLaunchTests(GitRepo):
         self.assertIn("fallback: T-1", again.stdout)
 
     def test_local_cap_and_memory(self):
-        self.assertEqual(orchestrator.local_subagent_cap({}, available=None), 4)
+        self.assertEqual(orchestrator.local_subagent_cap({}, available=None), 18)
         self.assertEqual(orchestrator.local_subagent_cap({"maxLocalSubagents": 4}, available=16), 4)
-        self.assertEqual(orchestrator.local_subagent_cap({"maxLocalSubagents": 4}, available=3), 1)
-        self.assertEqual(orchestrator.local_subagent_cap({}, available=0), 1)
+        self.assertEqual(orchestrator.local_subagent_cap({"maxLocalSubagents": 4}, available=3), 4)
+        self.assertEqual(orchestrator.local_subagent_cap({}, available=0), 18)
+        self.assertFalse(orchestrator.memory_check({}))
+        self.assertEqual(
+            orchestrator.local_subagent_cap({"maxLocalSubagents": 4, "memoryCheck": True}, available=16),
+            4,
+        )
+        self.assertEqual(
+            orchestrator.local_subagent_cap({"maxLocalSubagents": 4, "memoryCheck": True}, available=3),
+            1,
+        )
+        self.assertEqual(orchestrator.local_subagent_cap({"memoryCheck": True}, available=0), 1)
         first = self.ticket("T-1", status="coding", agent="shuttle-T-1")
         second = self.ticket("T-2", status="claimed", agent="shuttle-T-2")
         self.beam([first, second], subagentVm=False, maxLocalSubagents=1, runner="local")
@@ -444,6 +465,53 @@ class VmLaunchTests(GitRepo):
         self.assertEqual(launched.returncode, 2, launched.stdout + launched.stderr)
         self.assertIn("refuse: local subagent cap", launched.stdout)
         self.assertIn("local-cap:", launched.stdout)
+
+    def test_local_runner_overrides_cloud_only_settings(self):
+        note = "note: runner local overrides cloud-only settings: subagentVm, launch"
+        effective = "effective: runner=local subagentVm=false memoryCheck=false maxLocalSubagents=18 launch=worktree"
+        cfg = {"runner": "local", "subagentVm": True, "launch": "agent"}
+        self.assertEqual(orchestrator.override_note(cfg), note)
+        self.assertEqual(orchestrator.effective_text(cfg), effective)
+        self.assertFalse(orchestrator.subagent_vm(cfg))
+        self.assertEqual(orchestrator.launch_mode(cfg), "worktree")
+        auto = {"runner": "auto", "subagentVm": True, "launch": "agent"}
+        self.assertEqual(orchestrator.override_note(auto, {}), note)
+        self.assertEqual(orchestrator.runner_name({"runner": "auto"}, {"CURSOR_CLOUD": "1"}), "cloud")
+        self.assertTrue(orchestrator.subagent_vm({"runner": "cloud", "subagentVm": True}))
+        self.assertEqual(orchestrator.override_note({"runner": "cloud", "subagentVm": True}), "")
+        row = self.ticket(status="claimed", agent="shuttle-T-1")
+        self.beam(
+            [row],
+            runner="local",
+            subagentVm=True,
+            launch="agent",
+            jiraTransition=False,
+            messenger="teams",
+            notify="off",
+        )
+        data = json.loads((self.repo / ".warp" / "beam.json").read_text())
+        data["runState"] = "stopped"
+        (self.repo / ".warp" / "beam.json").write_text(json.dumps(data) + "\n")
+        started = run("scan.py", "start", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+        self.assertEqual(started.stdout.count(note), 1)
+        self.assertIn(effective, started.stdout)
+        self.assertNotIn("no cloud environment", started.stdout)
+        shown = run("version.py", "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+        self.assertIn(note, shown.stdout)
+        self.assertIn(effective, shown.stdout)
+        status = run("scan.py", "status", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertIn(effective, status.stdout)
+        board = (self.repo / ".warp" / "STATUS.md").read_text()
+        self.assertIn(note, board)
+        self.assertIn(effective, board)
+        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+        self.assertNotIn(orchestrator.VM_LINE, launched.stdout)
+        self.assertIn("created: worktree", launched.stdout)
+        self.assertTrue((self.repo / ".warp" / "worktrees" / "T-1").is_dir())
 
 
 class ParentExitTests(unittest.TestCase):

@@ -38,7 +38,9 @@ notify: verbose
 runner: cloud
 # cloud = this session is a cloud agent. local = this machine.
 # auto = cloud when this session is a cloud agent, otherwise local.
-# The runner picks the prompt gate. It does not pick the ticket checkout.
+# The runner is the main driver. local forces subagentVm false and launch worktree,
+# skips the cloud-environment start check, and overrides other cloud-only settings.
+# Start, /warp-version, and status print the effective values after that override.
 # To run on this machine, comment out the line above and uncomment the next.
 # runner: local
 # runner: auto
@@ -50,21 +52,24 @@ launch: worktree
 # launch: agent
 worktreeRoot: .warp/worktrees
 # Parent of ticket worktrees: <worktreeRoot>/<id>. The default is gitignored.
-subagentVm: true
-# true: each ticket subagent is asked, in the prompt, to run in its own cloud
-# environment on a dedicated VM with its own clone and branch, not a git
-# worktree on this machine. The subagent config has no isolation field.
-# The subagent fetches latest main, clones it, and creates warp/<id>-<jira>.
-# Its first step is hostname and free -g. It writes .warp/tickets/<id>/ on
-# that branch and pushes. The parent patches the beam from that folder.
-# The same hostname is a worktree on this machine. One warning per run.
-# false: the worktree path, capped by maxLocalSubagents.
+subagentVm: false
+# false is the default: one git worktree per ticket on this machine.
+# true, on a cloud runner: the prompt asks for a dedicated VM with its own
+# clone and branch, not a git worktree on this machine. The subagent config
+# has no isolation field. It fetches latest main, creates warp/<id>-<jira>,
+# runs hostname and free -g first, and pushes .warp/tickets/<id>/ on that branch.
+# The parent patches the beam from that folder. The same hostname is a worktree
+# on this machine. One warning per run.
+# runner: local forces false even when this line is true.
 # Cloud subagents use the MCP servers at cursor.com/agents, not this session.
 # In the Agents Window, /in-cloud is the manual fallback, one ticket at a time.
-maxLocalSubagents: 4
+maxLocalSubagents: 18
 # Shared-machine cap when subagentVm is false or a subagent falls back here.
-# free -g lowers it when available memory is under 2 GiB per extra subagent.
-# At least one still runs. Nothing starts enough to crash the machine.
+# The default matches maxAgents. memoryCheck is what may lower it.
+memoryCheck: false
+# true: free -g lowers maxLocalSubagents when available memory is under 2 GiB
+# per extra subagent. At least one still runs. false: only maxLocalSubagents
+# limits how many run at once. free -g is not read.
 cloudSnapshot: ""
 # Snapshot id. With .cursor/environment.json, either one is a cloud environment.
 # On a cloud runner, subagentVm true with neither warns and refuses /warp-start.

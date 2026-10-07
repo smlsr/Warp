@@ -16,7 +16,9 @@ Jira transitions require transitionJiraIssue and addOrEditJiraIssueComment.
 Slack notify requires slack_send_message. --force starts anyway.
 When subagentVm is true on a cloud runner, a start with no cloud environment
 (.cursor/environment.json or cloudSnapshot) warns and refuses. --force allows
-that start and still warns. Cloud subagents use the MCP servers configured
+that start and still warns. runner: local forces subagentVm false and launch
+worktree, skips that check, and logs one note. Start prints the effective
+values after that override. Cloud subagents use the MCP servers configured
 at cursor.com/agents, not the local session's.
 --cursor-home stands in for ~/.cursor. A local runner does not block.
 """
@@ -196,7 +198,7 @@ def environment_blocked(beam: dict, beam_path: Path, env: Optional[dict] = None)
 
     root = beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent
     cfg = effective_config(beam, root)
-    if not orchestrator.subagent_vm(cfg) or not cloud_run(cfg, env):
+    if not orchestrator.subagent_vm(cfg, env) or not cloud_run(cfg, env):
         return False
     return not has_cloud_environment(root, cfg)
 
@@ -243,7 +245,11 @@ def gate_start(beam_path: Path, force: bool = False, env: Optional[dict] = None,
     gap = False
     import orchestrator
 
-    if orchestrator.subagent_vm(cfg) and cloud_run(cfg, env) and not has_cloud_environment(root, cfg):
+    note = orchestrator.override_note(cfg, env)
+    if note:
+        print(note)
+    print(orchestrator.effective_text(cfg, env))
+    if orchestrator.subagent_vm(cfg, env) and cloud_run(cfg, env) and not has_cloud_environment(root, cfg):
         gap = True
     if force:
         beam["promptForced"] = True

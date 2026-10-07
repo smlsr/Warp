@@ -277,11 +277,21 @@ class RestartTests(unittest.TestCase):
         data = beam_of([normal], baseGreen=False, config={"maxAgents": 2, "runner": "local"})
         actions = orchestrator.dispatch_actions(data, beam.ready(data), cap=2)
         self.assertEqual(actions[0]["action"], "dispatch-base-fix")
-        self.assertEqual(actions[0]["checkout"], "subagent-vm")
+        self.assertEqual(actions[0]["checkout"], "worktree")
         self.assertEqual(actions[1]["id"], "N")
-        data["config"]["subagentVm"] = False
-        local = orchestrator.dispatch_actions(data, beam.ready(data), cap=2)
-        self.assertEqual(local[0]["checkout"], "worktree")
+        data["config"]["subagentVm"] = True
+        data["config"]["launch"] = "agent"
+        forced = orchestrator.dispatch_actions(data, beam.ready(data), cap=2)
+        self.assertEqual(forced[0]["checkout"], "worktree")
+        self.assertIn("subagentVm", orchestrator.override_note(data["config"]))
+        self.assertIn("launch", orchestrator.override_note(data["config"]))
+        cloud = beam_of(
+            [normal],
+            baseGreen=False,
+            config={"maxAgents": 2, "runner": "cloud", "subagentVm": True},
+        )
+        cloud_actions = orchestrator.dispatch_actions(cloud, beam.ready(cloud), cap=2)
+        self.assertEqual(cloud_actions[0]["checkout"], "subagent-vm")
         parked = beam_of([ticket("Z", status="parked")], baseGreen=True)
         self.assertTrue(orchestrator.program_done(parked))
         parked["baseGreen"] = False

@@ -522,26 +522,80 @@ def checkout_kind(config: Optional[dict]) -> str:
     return "cloud-vm"
 
 
-def launch_mode(config: Optional[dict]) -> str:
-    """worktree is the plugin path. agent is the optional future API path."""
+def launch_mode(config: Optional[dict], env: Optional[dict] = None) -> str:
+    """worktree is the plugin path. agent is the optional future API path.
+
+    `runner: local` forces worktree. The agent path is cloud-only.
+    """
+    if runner_name(config, env) == "local":
+        return "worktree"
     raw = str((config or {}).get("launch") or "worktree").strip().casefold()
     if raw in {"agent", "cloud-agent", "implement"}:
         return "agent"
     return "worktree"
 
 
-def subagent_vm(config: Optional[dict]) -> bool:
+def override_note(config: Optional[dict], env: Optional[dict] = None) -> str:
+    """One line when a local runner turns cloud-only settings off. Empty otherwise."""
+    if runner_name(config, env) != "local":
+        return ""
+    changed = []
+    if _flag((config or {}).get("subagentVm"), False):
+        changed.append("subagentVm")
+    raw_launch = str((config or {}).get("launch") or "").strip().casefold()
+    if raw_launch in {"agent", "cloud-agent", "implement"}:
+        changed.append("launch")
+    if not changed:
+        return ""
+    return "note: runner local overrides cloud-only settings: %s" % ", ".join(changed)
+
+
+def effective_text(config: Optional[dict], env: Optional[dict] = None) -> str:
+    """Values after runner overrides. This is what start, version, and status print."""
+    return "effective: runner=%s subagentVm=%s memoryCheck=%s maxLocalSubagents=%s launch=%s" % (
+        runner_name(config, env),
+        "true" if subagent_vm(config, env) else "false",
+        "true" if memory_check(config) else "false",
+        max_local_subagents(config),
+        launch_mode(config, env),
+    )
+
+
+def _flag(value, default: bool) -> bool:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() not in {"0", "false", "no", "off"}
+
+
+def runner_name(config: Optional[dict], env: Optional[dict] = None) -> str:
+    """cloud or local. `auto` follows this session. local is the override."""
+    raw = str((config or {}).get("runner") or "cloud").strip().casefold()
+    if raw == "local":
+        return "local"
+    if raw == "auto":
+        import prompt_gate
+
+        return "cloud" if prompt_gate.session_is_cloud(env) else "local"
+    return "cloud"
+
+
+def subagent_vm(config: Optional[dict], env: Optional[dict] = None) -> bool:
     """True when each ticket subagent is asked for its own cloud VM.
 
-    The subagent config has no isolation field. The prompt asks for the VM.
-    False, or a same-hostname fallback, uses a git worktree on this machine.
+    The default is false: a git worktree on this machine. `runner: local`
+    forces false even when the file says true. The subagent config has no
+    isolation field. The prompt asks for the VM.
     """
-    raw = (config or {}).get("subagentVm")
-    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
-        return True
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+    if runner_name(config, env) == "local":
+        return False
+    return _flag((config or {}).get("subagentVm"), False)
+
+
+def memory_check(config: Optional[dict]) -> bool:
+    """True when `free -g` may lower the shared-machine cap. Default is false."""
+    return _flag((config or {}).get("memoryCheck"), False)
 
 
 def shared_machine(config: Optional[dict], beam: Optional[dict] = None) -> bool:
@@ -560,14 +614,14 @@ def worktree_root_name(config: Optional[dict]) -> str:
 
 
 def max_local_subagents(config: Optional[dict]) -> int:
-    """Cap for subagents that share this machine. Default is 4."""
+    """Cap for subagents that share this machine. Default is 18, the same as maxAgents."""
     raw = (config or {}).get("maxLocalSubagents")
     if raw is None or (isinstance(raw, str) and not str(raw).strip()):
-        return 4
+        return 18
     try:
         return max(1, int(raw))
     except (TypeError, ValueError):
-        return 4
+        return 18
 
 
 def available_gib(text: Optional[str] = None) -> Optional[int]:
@@ -592,9 +646,9 @@ def available_gib(text: Optional[str] = None) -> Optional[int]:
 
 
 def local_subagent_cap(config: Optional[dict], available: Optional[int] = None) -> int:
-    """Fewer local subagents when `free -g` shows little memory. At least one."""
+    """Shared-machine cap. `free -g` applies only when memoryCheck is true."""
     cap = max_local_subagents(config)
-    if available is None:
+    if not memory_check(config) or available is None:
         return cap
     # Two GiB each. A machine that reports 0 still runs one, and does not crash.
     mem_slots = 1 if available < 2 else available // 2
@@ -624,10 +678,16 @@ def local_in_use(beam: dict, config: Optional[dict], skip_id: Optional[str] = No
 
 
 def local_room(beam: dict, config: Optional[dict], skip_id: Optional[str] = None, available: Optional[int] = None) -> int:
-    """How many more shared-machine subagents may start."""
-    if available is None:
-        available = available_gib()
-    cap = local_subagent_cap(config, available)
+    """How many more shared-machine subagents may start.
+
+    memoryCheck false uses maxLocalSubagents alone and does not read `free -g`.
+    """
+    if memory_check(config):
+        if available is None:
+            available = available_gib()
+        cap = local_subagent_cap(config, available)
+    else:
+        cap = max_local_subagents(config)
     return max(0, cap - local_in_use(beam, config, skip_id=skip_id))
 
 

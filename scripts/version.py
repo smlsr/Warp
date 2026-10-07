@@ -88,6 +88,25 @@ def describe(root: Path) -> str:
     lines.append(f"source: {source or 'none'}")
     if recorded:
         lines.append(f"recorded: {recorded} ({RECORDED_REL})")
+    try:
+        import prompt_gate
+        import orchestrator
+
+        beam_path = root / ".warp" / "beam.json"
+        beam = {}
+        if beam_path.is_file():
+            try:
+                loaded = json.loads(beam_path.read_text())
+                beam = loaded if isinstance(loaded, dict) else {}
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                beam = {}
+        cfg = prompt_gate.effective_config(beam, root)
+        note = orchestrator.override_note(cfg)
+        if note:
+            lines.append(note)
+        lines.append(orchestrator.effective_text(cfg))
+    except Exception as exc:
+        lines.append("effective: unavailable (%s)" % exc)
     lines.append("If /warp-upgrade is not in the command list:")
     lines.append(upgrade_fallback())
     return "\n".join(lines)

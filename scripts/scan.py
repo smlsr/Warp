@@ -583,6 +583,20 @@ def to_schedule(graph: dict, auto_sizes=None) -> dict:
     }
 
 
+def _effective_status(beam: dict, root: Path) -> str:
+    """Effective runner values, after a local runner overrides cloud-only settings."""
+    try:
+        import orchestrator
+        import prompt_gate
+
+        cfg = prompt_gate.effective_config(beam if isinstance(beam, dict) else {}, root)
+        note = orchestrator.override_note(cfg)
+        line = orchestrator.effective_text(cfg)
+        return "%s\n%s" % (note, line) if note else line
+    except Exception as exc:
+        return "effective: unavailable (%s)" % exc
+
+
 def write_status(beam_path: Path) -> None:
     beam = load_json(beam_path)
     beam["metrics"] = metrics(beam)
@@ -634,6 +648,8 @@ def write_status(beam_path: Path) -> None:
         "# Warp status",
         "",
         ver,
+        "",
+        _effective_status(beam, beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent),
         "",
         f"Updated {payload['updatedAt']} · runState={payload['runState']}",
         "",

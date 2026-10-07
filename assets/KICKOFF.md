@@ -1,6 +1,6 @@
 # Kickoff
 
-Warp starts each ticket as one subagent. `subagentVm` defaults to true: the prompt asks for a dedicated VM with its own clone and branch, not a git worktree on this machine. The parent starts them in parallel up to `maxAgents`. A same hostname, or `subagentVm: false`, uses a git worktree and `maxLocalSubagents`.
+Warp starts each ticket as one subagent. `subagentVm` defaults to false: a git worktree, capped by `maxLocalSubagents` (default 18). `memoryCheck` defaults to false. `runner: local` forces `subagentVm` false. On a cloud runner, `true` asks for a dedicated VM with its own clone and branch, not a git worktree on this machine. The parent starts them in parallel up to `maxAgents`. A same hostname uses a git worktree and `maxLocalSubagents`.
 
 ```
 SUBAGENT API-01
