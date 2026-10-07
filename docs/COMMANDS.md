@@ -492,6 +492,21 @@ python3 <plugin>/scripts/provider.py rollup --pr 36 --checks checks.json
 python3 <plugin>/scripts/provider.py merge-pr --id T-1 --pr 36
 ```
 
+## Ticket status directory
+
+The Agent reads its claim from the launch snapshot of `.warp/beam.json` and does not commit updates to that file. It writes only `.warp/tickets/<id>/`.
+
+```bash
+python3 <plugin>/scripts/ticket_state.py ?
+python3 <plugin>/scripts/ticket_state.py append --id T-1 --state planning --root . --push
+python3 <plugin>/scripts/ticket_state.py append --id T-1 --state heartbeat --push
+python3 <plugin>/scripts/ticket_state.py append --id T-1 --state lock-escape --escaped src/extra --push
+python3 <plugin>/scripts/ticket_state.py append --id T-1 --state check-red --name "make ci" --error "boom" --push
+python3 <plugin>/scripts/ticket_state.py observe --beam .warp/beam.json --root .
+```
+
+`append` takes `--id`, `--state`, `--root`, `--push`, `--escaped`, `--pr`, `--name`, `--error`, `--alarm`, `--agent`, and `--at`. `--push` commits and pushes only `.warp/tickets/<id>/`. `observe` fetches each in-flight branch, reads that ticket's `state.json` and `log.jsonl`, and patches the live beam. It does not copy the branch beam. Paused and stopped runs print `observe: skipped` and do not fetch. `beam.py watchdog` runs `observe` before it decides an Agent has died.
+
 ## /warp-version
 
 ```bash

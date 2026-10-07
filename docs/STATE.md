@@ -4,7 +4,9 @@
 
 ```
 .warp/config.yaml          caps, model, messenger, connector names
-.warp/beam.json            tickets, gates, agents, metrics
+.warp/beam.json            tickets, gates, agents, metrics. The orchestrator is the only writer.
+.warp/tickets/<id>/state.json   one ticket's current state. That Agent writes it. It may merge.
+.warp/tickets/<id>/log.jsonl    one ticket's append-only mini log. That Agent writes it. It may merge.
 .warp/journal.jsonl        append-only events
 .warp/events.jsonl         one line per ticket status, bugbot, ci, alarm, or usage event
 .warp/warp-complete.html   completion report, written when the run finishes or is stopped
@@ -35,6 +37,28 @@
 `listener` on the beam is the one channel listener for the whole run, not one per ticket. `state` is `running` or `stopped` (the flag). `agentId` is the single Agent id. The listener is one Agent for the beam, not one Agent per ticket. Ticket workers are not Subagents of that listener. `pid` is optional. `startedAt` and `stoppedAt` are timestamps. `lastSeenAt` is the heartbeat. `recoveredAt`, `recoveries`, and `replacedAgentId` are set when the watchdog replaces a dead listener. `/warp-start` and `/warp-resume` call `inbound.py claim`. A second claim while `state` is `running` prints `listener: already running <id>` and does not replace the id. `/warp-pause` and `/warp-stop` call `inbound.py release`, which sets `state` to `stopped`. The listener must not keep reading while paused or stopped. Tickets do not grow their own listener fields. The listener writes `lastSeenAt` with `inbound.py heartbeat` at claim and on every pass of its read loop.
 
 Plugin hooks do not run on cloud runners, and they are not required there. `scripts/resume_hint.py` prints the resume hint (paused, done/total, ETA, alarms) and does not dispatch. `/warp-start`, `/warp-resume`, and `/warp-status` print it. `scripts/session_note.py` appends `session-stop` or `subagent-stop` to `.warp/journal.jsonl`. `/warp-stop` and `/warp-pause` append `session-stop`. A Shuttle appends `subagent-stop` when it finishes. A second note of the same type is skipped while it is still the last journal line. The beam stays the source of truth. Local hooks in `hooks/hooks.json` only repeat those scripts. `/warp-allow-notify` still installs a local `beforeMCPExecution` hook. Cloud agents run `scripts/mcp_allow.py` and call a tool only when it prints `allow`.
+
+## Remote status
+
+The claim goes in. The launch snapshot of `.warp/beam.json` is committed onto the ticket branch so the Agent can read its claim. That file is not a live feed. The Agent does not commit updates to it, and a merge onto the base branch does not take it. The orchestrator keeps the live beam.
+
+Status comes out in `.warp/tickets/<id>/`. Only that ticket's Agent writes that directory. Other tickets' directories are never touched, so committing and merging one does not interfere with another.
+
+`state.json` holds the current state and the timestamps: `startedAt`, `updatedAt`, and `heartbeatAt`. It also holds the pull request, the check result (`result`, `name`, `log`), the error text, the alarm reason, and `escaped` paths. `log.jsonl` is append-only. Each line has `at`, `state`, and `error`. States include `started`, `heartbeat`, `planning`, `coding`, `review`, `bugbot`, `fix`, `pr-opened`, `check-red`, `check-green`, `lock-escape`, `alarm`, `failed`, and `done`. A `lock-escape` line includes the escaped paths.
+
+The Agent commits and pushes only that directory when the state changes, and on a heartbeat at least every 5 minutes (`ticket_state.py append --push`).
+
+Every orchestrator tick fetches each in-flight branch and reads only that ticket's directory. `ticket_state.py observe` patches the live beam for that ticket id. Lines whose id is some other ticket are ignored. A second tick is idempotent. The branch beam is not copied over the live beam. An in-flight branch is not rebased. Paused and stopped runs do not fetch and do not relaunch.
+
+The parent reads three signals from that directory, plus the provider when the directory is silent:
+
+- Death: `heartbeatAt` (or the last `heartbeat` line). If there is no heartbeat, the launch time on the live beam (`workerStartedAt` or `claimedAt`). Older than `staleMinutes` means the Agent died. One new Agent starts on the same branch. Branch, pull request, locks, and `jira.startedAt` stay. Past `maxRecoveries` the alarm is `worker-died`.
+- Checks: a `check-red` or `check-green` line, or `check.result` on `state.json`. `make ci` and Bugbot show up here. Check-red sends the ticket back. The third red parks. If the directory never recorded a check, the provider pull-request rollup is used. A dead Agent that already opened a pull request still reports check-red or check-green.
+- While the Agent is alive: `planning`, `coding`, `review`, `bugbot`, and `fix` on `state.json` and in the log.
+
+A `lock-escape` line is an alarm with the escaped paths even though the Agent has exited. The repair pass widens the lock from `escaped`. The parent does not wait for the Agent to still be running.
+
+Herald posts one line when a remote event changes the live beam (`herald: <id> <state>`) and when an Agent is declared dead (`<id> worker died. A new Shuttle started.`).
 
 ## Ticket status
 

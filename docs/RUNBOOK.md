@@ -117,7 +117,7 @@ Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (defa
 
 Warp's background workers are the Shuttle on a claimed ticket (`claimed`, `planning`, `coding`, `fix`) and the one `warp-listen` listener (`listener` on the beam). A dead turn does not notify Warp. Cursor does not restart it. Plugin hooks do not run on cloud runners. There is no process table.
 
-Each worker writes a heartbeat on the beam: `lastSeenAt` and its agent id. A Shuttle runs `beam.py heartbeat` at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener runs `inbound.py heartbeat` at claim and on every pass of its read loop. Both stay inside `staleMinutes` (default 15).
+Each worker writes a heartbeat the parent can see. A remote Agent writes `.warp/tickets/<id>/state.json` (`heartbeatAt`) and a `heartbeat` line in `log.jsonl`, and pushes only that directory, at claim, at each status change, and at least every 5 minutes. The tick copies that onto `lastSeenAt`. It does not replace the live beam with the branch snapshot. `beam.py heartbeat` writes `lastSeenAt` directly when the worker is already on the live beam. The listener runs `inbound.py heartbeat` at claim and on every pass of its read loop. Both stay inside `staleMinutes` (default 15).
 
 `beam.py watchdog` runs on every Warp tick and from `/warp-start` and `/warp-resume` (`scan.py start` and `scan.py resume`). A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than `staleMinutes`. A fresh heartbeat is alive. Do not start a second worker. `watchdog: skipped (paused)` or `watchdog: skipped (stopped)` means do not recover and do not start a replacement.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.10
+
+- A ticket Agent writes only `.warp/tickets/<id>/`. `state.json` holds the current state, timestamps (started, last update, heartbeat), pull request, check result, error, alarm reason, and escaped paths. `log.jsonl` is an append-only line per event. The Agent commits and pushes that directory when the state changes and on a heartbeat. It does not commit updates to `.warp/beam.json`. The launch snapshot stays read-only.
+- Every tick fetches each in-flight branch and reads only that ticket's directory, then patches the live beam. It does not replace the beam. A missing heartbeat, a lock-escape line, and a check failure are read from that directory after the Agent has exited. Provider pull-request checks still count when the directory never recorded a check. Those directories may merge to main. The beam file may not.
+
 ## 1.4.9
 
 - Cursor's plugin command index lists every Warp command and skill except `commands/warp-upgrade.md` and `skills/warp-upgrade/SKILL.md`. Those files are in the plugin root. Their frontmatter (`name`, `description`), directory, and filename match `/warp-version`. They were added after every indexed command and skill. Replacing the `./commands/` and `./skills/` globs with an explicit list did not add them. The index keeps the paths it had when it was published.

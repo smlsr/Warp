@@ -197,6 +197,26 @@ def note(root: Path, beam_path: Optional[Path], tid: Optional[str], reason: str,
     return text
 
 
+def drop_ticket_beam(root: Path) -> None:
+    """Unstage `.warp/beam.json` from a squash that is about to be committed.
+
+    If the base already has a beam, that copy is restored into the index.
+    Ticket directories under `.warp/tickets/` are left staged.
+    """
+    name = ".warp/beam.json"
+    listed = _run(["git", "diff", "--cached", "--name-only", "--", name], root)
+    if listed.returncode != 0 or name not in (listed.stdout or "").splitlines():
+        return
+    on_base = _run(["git", "cat-file", "-e", "HEAD:%s" % name], root).returncode == 0
+    if on_base:
+        _run(["git", "checkout", "HEAD", "--", name], root)
+        return
+    _run(["git", "rm", "-r", "--cached", "--ignore-unmatch", "--", name], root)
+    path = root / name
+    if path.is_file():
+        path.unlink()
+
+
 def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool, str]:
     """Squash-merge `branch` into `base`. Leaves the repo as it found it on failure."""
     root = root.resolve()
@@ -216,6 +236,10 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
         if r.returncode != 0:
             _run(["git", "reset", "--merge"], root)
             return False, "merge conflict; nothing was merged. Resolve on the ticket branch and retry"
+        # The ticket branch carries a launch snapshot of the beam so the Agent
+        # can read its claim. That file is stale. Do not take it onto the base.
+        # .warp/tickets/<id>/ does not overlap other tickets and stays.
+        drop_ticket_beam(root)
         if not fmt.git(root, "diff", "--cached", "--name-only"):
             return True, f"{branch} has no changes beyond {base}; nothing to merge"
         c = _run(["git", "commit", "-q", "-m", message], root)
@@ -338,6 +362,43 @@ def detect_merge_queue(root: Path, cfg: Optional[dict] = None) -> Optional[bool]
         if payload_has_merge_queue(doc):
             return True
     return False
+
+
+def fetch_check_rows(root: Path, pr: str, provider_name: Optional[str] = None) -> Optional[list]:
+    """statusCheckRollup rows, or None when the provider cannot be asked.
+
+    Each row keeps name, conclusion, and log. A dead Agent's pull request still
+    reports make ci and Bugbot from here when the ticket directory has no check line.
+    """
+    if provider_name == "bitbucket" or not pr or not shutil.which("gh"):
+        return None
+    text = str(pr)
+    if "github.com" not in text and not text.isdigit():
+        return None
+    viewed = _run(["gh", "pr", "view", text, "--json", "statusCheckRollup"], root)
+    if viewed.returncode != 0:
+        return None
+    try:
+        doc = json.loads(viewed.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    checks = doc.get("statusCheckRollup") or []
+    if not isinstance(checks, list):
+        return None
+    rows = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("context") or "").strip()
+        rows.append(
+            {
+                "name": name,
+                "conclusion": item.get("conclusion") or item.get("state") or "",
+                "status": item.get("status") or "",
+                "log": item.get("details") or item.get("output") or "",
+            }
+        )
+    return rows
 
 
 def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:

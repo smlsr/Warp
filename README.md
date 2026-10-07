@@ -266,6 +266,33 @@ A dead listener, while the run is running, is cleared and exactly one replacemen
 
 A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`, and exactly one new Shuttle is dispatched for that same ticket. Herald posts `<id> worker died. A new Shuttle started.` It is not released, so another ticket cannot take the files. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
 
+## Remote status
+
+The claim goes in on the ticket branch. `.warp/beam.json` there is the launch snapshot. The Agent reads it and does not commit updates to it.
+
+Status comes back out in that ticket's own directory. Only that Agent writes it:
+
+```
+.warp/tickets/<id>/state.json
+.warp/tickets/<id>/log.jsonl
+```
+
+`state.json` is the current state: when it started, when it last changed, the last heartbeat, the pull request, the check result, the error text, the alarm reason, and any paths that escaped the lock. `log.jsonl` is an append-only mini log. Each line has a timestamp, a state, and the error text.
+
+The Agent commits and pushes only `.warp/tickets/<id>/` when the state changes, and on a heartbeat at least every 5 minutes. `ticket_state.py append --id <id> --state <state> --push` does that. It does not commit `.warp/beam.json`.
+
+Every tick fetches each in-flight branch and reads only that ticket's directory. It patches the live beam. It does not replace the live beam with the file on the branch. A second tick applies the same lines once. Paused and stopped runs do not fetch and do not relaunch.
+
+A missing heartbeat is the death signal. The parent uses `heartbeatAt` in `state.json`, or the last `heartbeat` line in the log. If the Agent never heartbeated, it uses the launch time already on the live beam. Older than `staleMinutes` means the Agent died. One new Agent starts on the same branch. The branch is not rebased. Branch, pull request, locks, and `jira.startedAt` stay. Past `maxRecoveries` the alarm is `worker-died`.
+
+A `lock-escape` line is an alarm with the escaped paths, even though the Agent has already exited. The repair pass can widen the lock and retry. The parent does not wait for the Agent to still be running.
+
+A `check-red` line is a failed check (`make ci`, Bugbot, or both). The ticket is sent back on the existing path. The third red parks. If the directory never recorded a check, the pull request's check rollup is used instead. A dead Agent that already opened a pull request still reports check-red or check-green from that rollup.
+
+`planning`, `coding`, `review`, `bugbot`, and `fix` are the transient states while the Agent is alive. Herald posts one line when one of these changes the live beam, and one line when an Agent is declared dead.
+
+Those directories can merge to main. They do not overlap. The beam file does not. A squash merge keeps `.warp/tickets/<id>/` and leaves the base beam in place.
+
 ## Alarms
 
 The one `warp-listen` listener repairs `lock-escape` and no other alarm. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop stop the listener, so they do not repair. Plugin hooks do not run on cloud runners. The listener calls `scripts/alarm_repair.py next`. A second call in the same moment does not start a second repair.
@@ -301,7 +328,7 @@ If `/warp-upgrade` is not in the command list, `/warp-version` prints `python3 .
 
 `/warp-init` still does not overwrite plugin files or config values you already set. It does append config keys that are missing, with the defaults and comments from `assets/config.example.yaml`. A config that is only missing new keys does not need an upgrade. Re-run `/warp-init`. It appends each missing key and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
-The plugin has no API that creates a Cursor cloud agent. On `runner: cloud`, the orchestrator starts one new Agent per ticket. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Check out the ticket branch. Do not start it on a fresh clone of main. `checkout.py launch` fetches origin and cuts a new ticket branch from the tip of the base branch, then commits the beam, journal, board, and that ticket's claim onto that branch and pushes it before the Agent starts. A ticket branch already in flight is not rebased. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed. The Agent reads the claim from `.warp/beam.json` in that checkout. Do not start a Subagent. A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). It shares the parent session and checkout. Forbidden for tickets. Do not use the Task tool for a ticket. Do not implement the ticket in this turn. `checkout.py implement` refuses to do that work in the orchestrator checkout. If the branch has no `.warp` beam, do not start the Agent. `runner: local` is `git worktree add` and `git worktree remove` of that same branch, one worktree per ticket, not a Subagent inside the orchestrator checkout.
+The plugin has no API that creates a Cursor cloud agent. On `runner: cloud`, the orchestrator starts one new Agent per ticket. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Check out the ticket branch. Do not start it on a fresh clone of main. `checkout.py launch` fetches origin and cuts a new ticket branch from the tip of the base branch, then commits the beam, journal, board, and that ticket's claim onto that branch and pushes it before the Agent starts. A ticket branch already in flight is not rebased. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed. The Agent reads the claim from `.warp/beam.json` in that checkout. That snapshot stays read-only. Status goes out in `.warp/tickets/<id>/`, and the orchestrator patches the live beam from it. Do not start a Subagent. A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). It shares the parent session and checkout. Forbidden for tickets. Do not use the Task tool for a ticket. Do not implement the ticket in this turn. `checkout.py implement` refuses to do that work in the orchestrator checkout. If the branch has no `.warp` beam, do not start the Agent. `runner: local` is `git worktree add` and `git worktree remove` of that same branch, one worktree per ticket, not a Subagent inside the orchestrator checkout.
 
 ## Troubleshooting
 
