@@ -709,13 +709,18 @@ def write_status(beam_path: Path) -> None:
 
 def export_plan(beam_path: Path, dest: Path) -> None:
     beam = load_json(beam_path)
-    nxt = ready({**beam, "runState": "running", "paused": False}, limit=25)
+    preview = json.loads(json.dumps(beam))
+    preview["runState"] = "running"
+    preview["paused"] = False
+    preview.setdefault("config", {})["maxInProgress"] = 10_000
+    nxt = ready(preview, limit=25)
     batches = []
     # suggest parallel waves by peeling a ready set with no cap
     shadow = json.loads(json.dumps(beam))
     shadow["runState"] = "running"
     shadow["paused"] = False
     shadow["config"]["maxAgents"] = 10_000
+    shadow["config"]["maxInProgress"] = 10_000
     for n in range(1, 40):
         wave = ready(shadow, limit=10_000)
         if not wave:

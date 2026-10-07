@@ -1543,6 +1543,9 @@ def format_dispatch(data: dict) -> list:
     cap = beam_mod.configured_cap(data.get("config") or {})
     actions = dispatch_actions(data, rows, cap=cap)
     lines = []
+    hold = beam_mod.take_launch_hold(data)
+    if hold:
+        lines.append(hold)
     seen = set()
     for action in actions:
         instruction = (action.get("instruction") or "").strip()

@@ -844,6 +844,9 @@ def _refill(data: dict, lines: list) -> None:
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
         return
     rows = beam_mod.ready(data)
+    hold = beam_mod.take_launch_hold(data)
+    if hold:
+        lines.append(hold)
     cap = beam_mod.configured_cap(data.get("config") or {})
     actions = orchestrator.dispatch_actions(data, rows, cap=cap)
     for action in actions:

@@ -513,7 +513,9 @@ def _digest(data: dict, lines: list, now: str) -> None:
     counts = _counts(rows)
     alarms = sum(1 for row in rows if row["alarm"] not in {"", "none"})
     stalls = sum(1 for row in rows if row["stalled"])
-    bits = ["alarms=%d" % alarms, "stalls=%d" % stalls, "open=%d" % len(rows)]
+    import beam as beam_mod
+
+    bits = ["alarms=%d" % alarms, "stalls=%d" % stalls, "open=%d" % len(rows), beam_mod.in_progress_label(data)]
     bits.extend("%s=%d" % (key, counts[key]) for key in sorted(counts))
     text = " ".join(bits)
     lines.append("digest: %s" % text)
@@ -615,7 +617,10 @@ def status_lines(data: dict, now=None) -> list:
     alarms = [row for row in rows if row["alarm"] not in {"", "none"}]
     stalls = [row for row in rows if row["stalled"] == "yes" and row["alarm"] in {"", "none"}]
     counts = _counts(rows)
-    lines = ["open: %d" % len(rows), "alarms: %d" % len(alarms)]
+    import beam as beam_mod
+
+    progress = beam_mod.in_progress_label(data)
+    lines = ["open: %d" % len(rows), progress, "alarms: %d" % len(alarms)]
     lines.extend(_format_row(row) for row in alarms)
     lines.append("stalls: %d" % len(stalls))
     lines.extend(_format_row(row) for row in stalls)
@@ -629,6 +634,7 @@ def status_lines(data: dict, now=None) -> list:
         "alarms": [row["id"] for row in alarms],
         "stalls": [row["id"] for row in rows if row["stalled"] == "yes"],
         "counts": counts,
+        "inProgress": progress,
         "tickets": rows,
         "sweep": data.get("repairSweep") if isinstance(data.get("repairSweep"), dict) else None,
     }

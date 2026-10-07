@@ -4,7 +4,7 @@ Warp is a Cursor plugin that scans a repo for a plan, builds a schedule, and dis
 
 Shuttle workers implement one ticket each. Reed reviews. The orchestrator is the only merger: the Warp master loop dispatches, merges, and tracks, and it writes no ticket product code. Herald posts to Slack and Teams. The beam survives a stop.
 
-There is no per-person cap. The only concurrency cap is `maxAgents`. A project may set 18. The orchestrator reads that config value.
+There is no per-person cap. `maxAgents` caps concurrent Shuttle slots. A project may set 18. `maxInProgress` (default 20) caps tickets that have started and are not merged or parked. The orchestrator reads both.
 
 ## Quick start
 
@@ -520,7 +520,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 |---|---|---|
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
-| `maxAgents` | `18` | Concurrent Shuttles. The only cap. A project may set 18. |
+| `maxAgents` | `18` | Concurrent Shuttle slots. A project may set 18. Separate from `maxInProgress`. |
+| `maxInProgress` | `20` | Started tickets that are not merged or parked. At the cap, nothing new leaves the ready queue. Fixes on tickets already in progress keep running. Parked tickets do not count. |
 | `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. `make ci` is kept as the full check command. A red result is stored on `pr.check` and the ticket is sent back with the log. Past `maxFixAttempts` (default 5) the ticket parks. The name alone is not a red check. |
 | `appendOnlyPaths` | empty | Shared files a ticket may append to, besides its locks. Empty by default. A conflict there keeps both sides. Any other conflict is sent back. |
 | `mergeQueue` | `false` | `true`, or a GitHub merge queue the provider reports, enqueues the pull request. A direct merge that branch protection rejects is not marked merged. |
@@ -587,7 +588,7 @@ The same pass watches every ticket that is not merged. A state that makes no pro
 
 ## Merge policy
 
-The orchestrator is the only merger. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. A green pull request frees the slot and keeps the locks until merge or park. The slot stays occupied until the provider check rollup is green. The merge queue is serial. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. Past `maxFixAttempts` (default 5) the ticket parks. A red base branch stops merging. On start or resume, restart classifies each ticket from git: merged, in flight, or pending. One worktree per ticket. Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`. `maxAgents` is the only cap.
+The orchestrator is the only merger. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. A green pull request frees the slot and keeps the locks until merge or park. The slot stays occupied until the provider check rollup is green. The merge queue is serial. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. Past `maxFixAttempts` (default 5) the ticket parks. A red base branch stops merging. On start or resume, restart classifies each ticket from git: merged, in flight, or pending. One worktree per ticket. Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`. `maxAgents` caps concurrent Shuttle slots. `maxInProgress` (default 20) caps tickets that have started and are not merged or parked. At that cap, nothing new is taken from the ready queue.
 
 L and XL are not special. `autoMergeSizes` is the cut. Sizes in `autoMergeSizes` (`autoMerge` true) and sizes not in `autoMergeSizes` (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. A listed size then auto-merges and Jira moves to Done. A size not in `autoMergeSizes` then moves to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 

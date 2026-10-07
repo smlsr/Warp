@@ -800,5 +800,137 @@ class LivePullRequestTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class InProgressCapTests(unittest.TestCase):
+    def test_parked_and_queued_do_not_count_and_the_default_is_20(self):
+        import beam as beam_mod
+
+        self.assertEqual(beam_mod.default_config()["maxInProgress"], 20)
+        self.assertFalse(beam_mod.ticket_in_progress(ticket("Q-1")))
+        parked = ticket("P-1", status="parked", phase="parked", stalled=True, alarm="stalled")
+        self.assertFalse(beam_mod.ticket_in_progress(parked))
+        self.assertTrue(
+            beam_mod.ticket_in_progress(ticket("R-1", status="review", phase="reviewing", stalled=True))
+        )
+        self.assertTrue(
+            beam_mod.ticket_in_progress(ticket("A-1", status="alarm", alarm="ci-red", phase="fixing"))
+        )
+
+    def test_at_the_cap_a_fix_runs_and_nothing_new_launches(self):
+        conflicted = ticket(
+            "R-1",
+            status="review",
+            phase="reviewing",
+            pr={
+                "url": "https://example.test/pull/1",
+                "bugbot": "pass",
+                "rollup": "pending",
+                "ci": "pending",
+                "conflict": ["cmd/qa-api/routes.go"],
+            },
+        )
+        quiet = ticket(
+            "R-2",
+            status="review",
+            phase="reviewing",
+            pr={"url": "https://example.test/pull/2", "bugbot": "pass", "rollup": "pending", "ci": "pending"},
+        )
+        data = beam([conflicted, quiet, ticket("Q-1")], maxInProgress=2, maxAgents=10)
+        lines = pipeline.advance(data, now=NOW)
+        blob = text(lines)
+        self.assertIn("fixer: R-1 rebase", blob)
+        self.assertEqual(data["tickets"]["R-1"]["phase"], "fixing")
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+        self.assertNotIn("start Q-1", blob)
+        self.assertIn("launch: hold in progress 2/2", blob)
+        for tid in ("R-1", "R-2", "Q-1"):
+            self.assertNotEqual(data["tickets"][tid]["status"], "parked")
+        again = pipeline.advance(data, now=NOW)
+        self.assertNotIn("launch: hold", text(again))
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+
+    def test_over_the_cap_parks_nothing(self):
+        rows = [
+            ticket(
+                "R-%d" % index,
+                status="review",
+                phase="reviewing",
+                pr={"url": "https://example.test/pull/%d" % index, "bugbot": "pass", "rollup": "pending"},
+            )
+            for index in range(1, 4)
+        ]
+        rows.append(ticket("Q-1"))
+        data = beam(rows, maxInProgress=2, maxAgents=10)
+        lines = pipeline.advance(data, now=NOW)
+        self.assertIn("launch: hold in progress 3/2", text(lines))
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+        self.assertTrue(all(row["status"] != "parked" for row in data["tickets"].values()))
+        self.assertNotIn("start Q-1", text(lines))
+
+    def test_parked_tickets_do_not_block_and_launching_resumes_below_the_cap(self):
+        parked = [ticket("P-%d" % index, status="parked", phase="parked") for index in range(3)]
+        data = beam(parked + [ticket("Q-1")], maxInProgress=2, maxAgents=10)
+        lines = pipeline.advance(data, now=NOW)
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "coding")
+        self.assertIn("start Q-1", text(lines))
+        self.assertNotIn("launch: hold", text(lines))
+        for index in range(3):
+            self.assertEqual(data["tickets"]["P-%d" % index]["status"], "parked")
+
+        held = beam(
+            [
+                ticket(
+                    "R-1",
+                    status="review",
+                    phase="reviewing",
+                    pr={"url": "https://example.test/pull/8", "bugbot": "pass", "rollup": "pending"},
+                ),
+                ticket(
+                    "R-2",
+                    status="review",
+                    phase="reviewing",
+                    pr={"url": "https://example.test/pull/9", "bugbot": "pass", "rollup": "pending"},
+                ),
+                ticket("Q-2"),
+            ],
+            maxInProgress=2,
+            maxAgents=10,
+        )
+        first = pipeline.advance(held, now=NOW)
+        self.assertEqual(held["tickets"]["Q-2"]["status"], "queued")
+        self.assertIn("launch: hold in progress 2/2", text(first))
+        held["tickets"]["R-2"]["status"] = "merged"
+        held["tickets"]["R-2"]["phase"] = "merged"
+        second = pipeline.advance(held, now=NOW)
+        self.assertEqual(held["tickets"]["Q-2"]["phase"], "implementing")
+        self.assertIn("start Q-2", text(second))
+        self.assertNotIn("launch: hold", text(second))
+
+    def test_the_shuttle_cap_and_the_in_progress_cap_both_apply(self):
+        agents = beam([ticket("Q-1"), ticket("Q-2")], maxAgents=1, maxInProgress=20)
+        pipeline.advance(agents, now=NOW)
+        self.assertEqual(sum(1 for row in agents["tickets"].values() if row["status"] != "queued"), 1)
+
+        progress = beam([ticket("A-1"), ticket("A-2")], maxAgents=5, maxInProgress=1)
+        lines = pipeline.advance(progress, now=NOW)
+        self.assertEqual(sum(1 for row in progress["tickets"].values() if row["status"] != "queued"), 1)
+        self.assertIn("launch: hold in progress 0/1", text(lines))
+
+    def test_status_and_the_digest_show_the_count(self):
+        import watch
+
+        data = beam(
+            [ticket("R-1", status="review", phase="reviewing", pr={"url": "https://example.test/pull/1", "bugbot": "pass"})],
+            maxInProgress=20,
+        )
+        shown = text(watch.snapshot(data, now=NOW))
+        self.assertIn("in progress 1/20", shown)
+        self.assertEqual(data["openWork"]["inProgress"], "in progress 1/20")
+        digest = []
+        watch._digest(data, digest, NOW)
+        blob = text(digest)
+        self.assertIn("in progress 1/20", blob)
+        self.assertIn("slack: digest", blob)
+
+
 if __name__ == "__main__":
     unittest.main()
