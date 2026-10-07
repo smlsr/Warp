@@ -167,6 +167,19 @@ maxAlarmRepairs: 3
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300
+# Seconds the one listener sleeps between channel reads. The sleep is the
+# shell command sleep, not a model pause. listenerStaleMinutes must cover
+# at least one of these polls.
+listenerStaleMinutes: 15
+# The parent restarts the listener when .warp/listener.json lastPollAt is
+# older than this many minutes. The window is also at least one poll plus
+# a minute, so a listener that is sleeping is not treated as dead. Pause
+# and stop do not restart. /warp-init appends this key when the file does
+# not have it yet.
+listenerRestartNote: 3
+# After this many listener restarts in one run, Herald posts one note:
+# Listener kept restarting. One listener is running. Later restarts are
+# logged and do not post again until pause or stop. Default 3.
 reportOnComplete: true
 # true: when every ticket is merged, done, skipped, blocked, or alarmed, or the run
 # is stopped, write .warp/warp-complete.html and ask Herald to post the totals.

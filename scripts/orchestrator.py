@@ -36,9 +36,14 @@ to maxAgents. The subagent writes .warp/tickets/<id>/ into the parent
 checkout by absolute path. It never merges and never calls Jira or Slack.
 launch: agent is the optional IMPLEMENT prompt for a future Cloud Agents
 API. This plugin does not call that API.
-parent-exit prints parent: stay while a ticket is claimed, in review,
-awaiting checks, or queued, and parent: exit when the run is paused or
-stopped, or when nothing is claimed, queued, or awaiting checks.
+parent-exit prints parent: stay while the listener is supposed to be
+running, and parent: exit when the run is paused or stopped. A running loop
+stays up even when nothing is claimed, queued, or awaiting checks.
+supervise prints listener: start when the listener returned or its heartbeat
+file is older than listenerStaleMinutes. listener: hold means one is alive.
+listener: idle means paused or stopped. A restart is logged. Herald gets one
+note when restarts repeat.
+  python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned recycle
 """
 
 from __future__ import annotations
@@ -1277,19 +1282,163 @@ def ticket_keeps_parent(ticket: dict) -> bool:
     return rollup in _CHECK_PENDING or ci in _CHECK_PENDING
 
 
-def parent_may_exit(beam: dict) -> bool:
-    """The parent may end the turn only when the listener is allowed to stop.
+DEFAULT_LISTENER_STALE_MINUTES = 15
+DEFAULT_LISTENER_RESTART_NOTE = 3
+LISTENER_RESTART_NOTE = "Listener kept restarting. One listener is running."
+_LISTENER_STOP = {"pause", "stop", "warp:pause", "warp:stop"}
 
-    Pause and stop may exit even if tickets are still claimed. A running beam
-    stays up while any ticket is claimed, in review, awaiting checks, or queued.
-    A launch refusal is not an idle beam.
-    """
+
+def listener_should_run(beam: dict) -> bool:
+    """The one listener stays up while the Warp loop is running."""
+    if not isinstance(beam, dict):
+        return False
     if beam.get("paused") or (beam.get("runState") or "running") in {"paused", "stopped"}:
-        return True
-    for ticket in (beam.get("tickets") or {}).values():
-        if ticket_keeps_parent(ticket):
-            return False
+        return False
     return True
+
+
+def parent_may_exit(beam: dict) -> bool:
+    """The parent stays up while a listener is supposed to be running.
+
+    Pause and stop may exit even if tickets are still claimed. A running loop
+    is not idle when every ticket is merged: the listener is still supposed
+    to be reading the channel. A launch refusal is not an idle beam.
+    """
+    return not listener_should_run(beam)
+
+
+def listener_stale_minutes(data: dict, beam_path: Path) -> int:
+    """Minutes before a quiet heartbeat means the listener died.
+
+    The window is at least `listenerStaleMinutes` and at least one poll plus
+    a minute, so a listener sleeping for `pollSeconds` is still alive.
+    """
+    import beam as beam_mod
+
+    configured = beam_mod.config_int(data, beam_path, "listenerStaleMinutes", DEFAULT_LISTENER_STALE_MINUTES)
+    poll = beam_mod.config_int(data, beam_path, "pollSeconds", 300)
+    poll_minutes = (max(int(poll), 0) + 59) // 60
+    return max(int(configured), poll_minutes + 1)
+
+
+def _read_listener_file(beam_path: Path) -> dict:
+    path = Path(beam_path).parent / "listener.json"
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _minutes_since(stamp, now_dt) -> Optional[float]:
+    import beam as beam_mod
+
+    seen = beam_mod.parse_ts(stamp) if stamp else None
+    if seen is None:
+        return None
+    return (now_dt - seen).total_seconds() / 60.0
+
+
+def _polled_since(last, pending) -> bool:
+    import beam as beam_mod
+
+    if not last or not pending:
+        return False
+    last_dt = beam_mod.parse_ts(str(last))
+    pending_dt = beam_mod.parse_ts(str(pending))
+    if last_dt is None or pending_dt is None:
+        return False
+    return last_dt > pending_dt
+
+
+def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None) -> list:
+    """Start exactly one listener, or hold the one that is already alive.
+
+    The parent calls this when the listener Subagent returns and on each
+    pass. A second call does not start a second listener.
+    """
+    import fcntl
+
+    import beam as beam_mod
+
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return ["listener: no beam at %s" % beam_path]
+    lock_path = beam_path.parent / ".listener.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            return _supervise_locked(beam_path, returned, now, beam_mod)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -> list:
+    data = beam_mod.load_json(beam_path)
+    now_dt, now_s = beam_mod.coerce_now(now)
+    if not listener_should_run(data):
+        return ["listener: idle"]
+    returned_text = (returned or "").strip()
+    folded = returned_text.casefold()
+    if folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
+        return ["listener: idle"]
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    file_body = _read_listener_file(beam_path)
+    last = file_body.get("lastPollAt") or raw.get("lastSeenAt")
+    stale = listener_stale_minutes(data, beam_path)
+    age = _minutes_since(last, now_dt)
+    fresh = age is not None and age <= stale
+    pending = raw.get("pendingStart")
+    pending_age = _minutes_since(pending, now_dt)
+    pending_fresh = pending_age is not None and pending_age <= stale
+    polled = _polled_since(last, pending)
+    agent = raw.get("agentId") or file_body.get("agentId") or ""
+    if pending_fresh and not polled:
+        return ["listener: hold %s" % agent] if agent else ["listener: hold"]
+    if pending and polled:
+        raw.pop("pendingStart", None)
+        data["listener"] = raw
+    if returned_text:
+        reason = "recycle" if folded == "recycle" else "returned"
+    elif not fresh:
+        reason = "missing" if age is None else "stale"
+    else:
+        if pending and polled:
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return ["listener: hold %s" % agent] if agent else ["listener: hold"]
+    note_after = beam_mod.config_int(data, beam_path, "listenerRestartNote", DEFAULT_LISTENER_RESTART_NOTE)
+    if note_after < 1:
+        note_after = DEFAULT_LISTENER_RESTART_NOTE
+    count = int(raw.get("restarts") or 0) + 1
+    raw["restarts"] = count
+    raw["pendingStart"] = now_s
+    raw["lastRestartReason"] = reason
+    lines = [
+        "listener: start reason=%s" % reason,
+        "listener: restart %s reason=%s" % (count, reason),
+    ]
+    if count >= note_after and not raw.get("restartNoted"):
+        raw["restartNoted"] = True
+        lines.append("herald: %s" % LISTENER_RESTART_NOTE)
+        beam_mod.atomic_write(
+            beam_path.parent / "listener-note.json",
+            json.dumps({"at": now_s, "lines": [LISTENER_RESTART_NOTE]}, indent=2) + "\n",
+        )
+    data["listener"] = raw
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.journal(
+        beam_path,
+        {
+            "type": "listener-restart",
+            "reason": reason,
+            "restarts": count,
+            "agentId": raw.get("agentId"),
+        },
+    )
+    return lines
 
 
 def note_subagent_failure(ticket: dict) -> str:
@@ -1490,6 +1639,11 @@ def main(argv: Optional[list] = None) -> int:
     px = sub.add_parser("parent-exit")
     px.add_argument("--beam", required=True)
 
+    ps = sub.add_parser("supervise")
+    ps.add_argument("--beam", required=True)
+    ps.add_argument("--returned", default=None, help="word the listener returned: recycle, pause, or stop")
+    ps.add_argument("--now", default=None, help="timestamp for tests")
+
     prec = sub.add_parser("record")
     prec.add_argument("--beam", required=True)
     prec.add_argument("--id", required=True)
@@ -1568,6 +1722,10 @@ def main(argv: Optional[list] = None) -> int:
             print("parent: exit")
         else:
             print("parent: stay")
+        return 0
+    if args.cmd == "supervise":
+        for line in supervise_listener(Path(args.beam), returned=args.returned, now=args.now):
+            print(line)
         return 0
     if args.cmd == "record":
         path = Path(args.beam)

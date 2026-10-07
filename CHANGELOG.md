@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.15
+
+- The listener skill told it to read the channel once and return, so the subagent exited after a single poll. It now loops until the Warp loop is paused or stopped: poll, post acks, write `.warp/listener.json`, shell `sleep` for `pollSeconds`, and repeat. It returns on pause or stop, or returns `recycle` when its context is large.
+- The parent runs `orchestrator.py supervise`. A returned listener, or a heartbeat older than `listenerStaleMinutes`, starts exactly one replacement straight away unless the loop is paused or stopped. Each restart is logged. Herald posts one note, `Listener kept restarting. One listener is running.`, after `listenerRestartNote` restarts.
+- `orchestrator.py parent-exit` prints `parent: stay` while that listener is supposed to be running, including when no ticket is claimed. `parent: exit` is paused or stopped.
+
 ## 1.4.14
 
 - Tickets start as one subagent per ticket in its own git worktree, in parallel up to `maxAgents`. `checkout.py launch` fetches origin and runs `git worktree add <worktreeRoot>/<id> -b warp/<id>-<jira> origin/main`. `worktreeRoot` defaults to `.warp/worktrees`, which is gitignored. The subagent works only inside that path, commits, pushes, and opens the pull request. It never merges, never touches the parent checkout, and never calls Jira or Slack. It writes `.warp/tickets/<id>/state.json` and `log.jsonl` into the parent checkout by absolute path and returns one line.

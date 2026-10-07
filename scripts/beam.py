@@ -1468,6 +1468,8 @@ def default_config() -> dict:
         "maxFixAttempts": 3,
         "stuckAfterMinutes": 90,
         "staleMinutes": DEFAULT_STALE_MINUTES,
+        "listenerStaleMinutes": 15,
+        "listenerRestartNote": 3,
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "alarmRepairMinutes": 15,
         "maxAlarmRepairs": 3,
