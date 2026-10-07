@@ -2,9 +2,11 @@
 """One checkout per ticket.
 
 Cloud: this plugin cannot create a Cursor cloud agent. There is no API to
-call. `launch` commits the beam, journal, board, and that ticket's claim
-onto the ticket branch, pushes the branch, then tells the Warp session to
-start one new Agent checked out on that branch. An Agent is a separate
+call. `launch` fetches origin and cuts a new ticket branch from the tip of
+the base branch. A ticket branch already in flight is not rebased. It then
+commits the beam, journal, board, and that ticket's claim onto the ticket
+branch, pushes the branch, and tells the Warp session to start one new Agent
+checked out on that branch. An Agent is a separate
 top-level cloud agent: own conversation, own VM, own checkout. Do not start
 a Subagent. Do not use the Task tool for a ticket. Do not start it on a
 fresh clone of main. `implement` refuses to do the ticket in this process.

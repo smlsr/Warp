@@ -52,7 +52,7 @@ A second tick must not launch a second replacement for the same worker. The firs
 
 The orchestrator is the only merger. This loop dispatches, merges, and tracks. It writes no ticket product code. The cap is `maxAgents`. A project may set 18. One ticket, one branch, one checkout. Do not implement a ticket in this session. `checkout.py implement` refuses.
 
-On `runner: cloud`, claim the ticket, then run `checkout.py launch`. It commits the beam, journal, board, and that claim onto the ticket branch, pushes the branch, and prints the instruction only when `.warp/beam.json` is on that branch. Follow that instruction. It is:
+On `runner: cloud`, claim the ticket, then run `checkout.py launch`. It fetches origin and cuts a new ticket branch from the tip of the base branch. A ticket branch already in flight is not rebased. It commits the beam, journal, board, and that claim onto the ticket branch, pushes the branch, and prints the instruction only when `.warp/beam.json` is on that branch. Follow that instruction. It is:
 
 Start one new Agent for this ticket. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Check out the ticket branch. Do not start it on a fresh clone of main. Read the claim from .warp/beam.json in that checkout. Do not start a Subagent. A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). It shares the parent session and checkout. Forbidden for tickets. Do not use the Task tool for a ticket. Do not implement the ticket in this turn.
 

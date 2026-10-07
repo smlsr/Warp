@@ -213,6 +213,56 @@ class WorktreeTests(GitRepo):
         self.assertEqual(cloned_main.returncode, 0, cloned_main.stderr)
         self.assertFalse((main_clone / ".warp" / "beam.json").exists())
 
+    def _advance_origin_main(self, bare):
+        other = self.tmp / "other"
+        cloned = git(self.tmp, "clone", "--branch", "main", str(bare), str(other))
+        self.assertEqual(cloned.returncode, 0, cloned.stderr)
+        git(other, "config", "user.email", "warp@example.com")
+        git(other, "config", "user.name", "Warp")
+        (other / "merged.txt").write_text("merged on main\n")
+        git(other, "add", "merged.txt")
+        committed = git(other, "commit", "-m", "merge onto main")
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        pushed = git(other, "push", "origin", "main")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        stale = git(self.repo, "cat-file", "-e", "main:merged.txt")
+        self.assertNotEqual(stale.returncode, 0)
+
+    def test_new_ticket_branch_is_cut_from_the_fetched_base_tip(self):
+        row = self.ticket(status="claimed", agent="shuttle-T-1")
+        self.beam([row], runner="cloud", baseBranch="main")
+        bare = self._origin()
+        self._advance_origin_main(bare)
+        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+        self.assertIn("base: origin/main", launched.stdout)
+        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:merged.txt").returncode, 0)
+        self.assertNotEqual(git(self.repo, "cat-file", "-e", "main:merged.txt").returncode, 0)
+        self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:.warp/beam.json").returncode, 0)
+
+    def test_in_flight_ticket_branch_is_not_rebased(self):
+        row = self.ticket(status="claimed", agent="shuttle-T-1", branch="warp/T-1")
+        self.beam([row], runner="cloud", baseBranch="main")
+        bare = self._origin()
+        git(self.repo, "checkout", "-b", "warp/T-1")
+        (self.repo / "ticket-only.txt").write_text("keep\n")
+        git(self.repo, "add", "ticket-only.txt")
+        committed = git(self.repo, "commit", "-m", "ticket work")
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        ticket_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        git(self.repo, "checkout", "main")
+        self._advance_origin_main(bare)
+        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+        self.assertIn("branch: warp/T-1 kept", launched.stdout)
+        self.assertNotIn("base: origin/main", launched.stdout)
+        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:ticket-only.txt").returncode, 0)
+        self.assertNotEqual(git(self.repo, "cat-file", "-e", "warp/T-1:merged.txt").returncode, 0)
+        self.assertEqual(git(self.repo, "merge-base", "--is-ancestor", ticket_tip, "warp/T-1").returncode, 0)
+        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:.warp/beam.json").returncode, 0)
+        self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+
     def test_dispatch_text_requires_a_new_agent_and_forbids_subagent_and_task(self):
         data = {
             "version": 1,

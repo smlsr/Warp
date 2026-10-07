@@ -3,7 +3,7 @@
 ## 1.4.7
 
 - Each ticket starts as one new Agent: its own conversation, VM, and checkout. Do not start a Subagent. Do not use the Task tool. Do not implement the ticket in the orchestrator's turn.
-- Before that Agent starts, `checkout.py launch` commits the beam, journal, board, and that ticket's claim onto the ticket branch and pushes it. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed. The Agent reads the claim from `.warp/beam.json` on that branch. A fresh clone of main is not started. If the branch has no beam, the Agent does not start.
+- Before that Agent starts, `checkout.py launch` fetches origin and cuts a new ticket branch from the tip of the base branch, then commits the beam, journal, board, and that ticket's claim onto the ticket branch and pushes it. A ticket branch already in flight is not rebased. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed. The Agent reads the claim from `.warp/beam.json` on that branch. A fresh clone of main is not started. If the branch has no beam, the Agent does not start.
 - The Slack listener stays one Agent for the beam. Ticket workers are not Subagents of that listener. A local runner is still one git worktree of the ticket branch.
 
 ## 1.4.6

@@ -7,10 +7,12 @@ Tokens, cost, API keys, and webhook URLs are stripped before the commit.
 `commit` lands on the current branch. Pass --base when that branch must be
 the configured base branch.
 
-`publish` puts the beam, journal, board, and that ticket's claim on the
-ticket branch, then pushes it. A new Agent checks out that branch. It does
-not clone main. If the branch has no .warp beam, publish refuses and the
-Agent must not start.
+`publish` fetches origin immediately before it creates a ticket branch, and
+cuts that branch from the tip of the base branch. A ticket branch already in
+flight is not rebased. Then it puts the beam, journal, board, and that
+ticket's claim on the branch and pushes it. A new Agent checks out that
+branch. It does not clone main. If the branch has no .warp beam, publish
+refuses and the Agent must not start.
 
   python3 scripts/state_commit.py ?
   python3 scripts/state_commit.py commit --root . --beam .warp/beam.json
@@ -197,33 +199,70 @@ def _show_beam(root: Path, branch: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _resolve_base(root: Path, config: dict) -> str:
+def _base_name(root: Path, config: dict) -> str:
     name = str((config or {}).get("baseBranch") or "").strip()
     if name:
-        have = _git(root, "rev-parse", "--verify", "-q", "refs/heads/%s" % name)
-        if have.returncode == 0:
-            return name
-        have = _git(root, "rev-parse", "--verify", "-q", name)
-        if have.returncode == 0:
-            return name
-        print("refuse: base branch %s does not exist" % name)
-        return ""
+        return name
     head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     current = head.stdout.strip()
     if head.returncode == 0 and current:
         return current
-    return "HEAD"
+    return "main"
 
 
-def _ensure_branch(root: Path, branch: str, base: str) -> int:
-    have = _git(root, "rev-parse", "--verify", "-q", "refs/heads/%s" % branch)
-    if have.returncode == 0:
+def _remote_names(root: Path) -> list:
+    return [line.strip() for line in _git(root, "remote").stdout.splitlines() if line.strip()]
+
+
+def _ref_exists(root: Path, ref: str) -> bool:
+    return _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0
+
+
+def _prepare_branch(root: Path, branch: str, base_name: str, remote: str) -> int:
+    """Create a new ticket branch from the fetched tip of the base.
+
+    A branch that already exists locally, or already exists on the remote,
+    is kept. It is not rebased. That rebase belongs to the merge queue.
+    """
+    if _ref_exists(root, "refs/heads/%s" % branch):
+        print("branch: %s kept" % branch)
         return 0
-    made = _git(root, "branch", branch, base)
+    if remote not in _remote_names(root):
+        if not _ref_exists(root, "refs/heads/%s" % base_name) and not _ref_exists(root, base_name):
+            print("refuse: base branch %s does not exist" % base_name)
+            return 2
+        made = _git(root, "branch", branch, base_name)
+        if made.returncode != 0:
+            print("refuse: could not create %s from %s" % (branch, base_name))
+            print((made.stderr or made.stdout).strip())
+            return 2
+        print("base: %s" % base_name)
+        return 0
+    fetched = _git(root, "fetch", remote)
+    if fetched.returncode != 0:
+        print("refuse: fetch %s failed; do not cut the ticket branch from a stale base" % remote)
+        print((fetched.stderr or fetched.stdout).strip())
+        return 2
+    remote_branch = "refs/remotes/%s/%s" % (remote, branch)
+    if _ref_exists(root, remote_branch):
+        made = _git(root, "branch", branch, "%s/%s" % (remote, branch))
+        if made.returncode != 0:
+            print("refuse: could not create %s from %s/%s" % (branch, remote, branch))
+            print((made.stderr or made.stdout).strip())
+            return 2
+        print("branch: %s kept" % branch)
+        return 0
+    remote_base = "refs/remotes/%s/%s" % (remote, base_name)
+    if not _ref_exists(root, remote_base):
+        print("refuse: %s has no %s after fetch; do not cut the ticket branch" % (remote, base_name))
+        return 2
+    tip = _git(root, "rev-parse", "%s/%s" % (remote, base_name))
+    made = _git(root, "branch", branch, "%s/%s" % (remote, base_name))
     if made.returncode != 0:
-        print("refuse: could not create %s from %s" % (branch, base))
+        print("refuse: could not create %s from %s/%s" % (branch, remote, base_name))
         print((made.stderr or made.stdout).strip())
         return 2
+    print("base: %s/%s %s" % (remote, base_name, tip.stdout.strip()))
     return 0
 
 
@@ -296,7 +335,7 @@ def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) 
 
 
 def _push_branch(root: Path, branch: str, remote: str) -> int:
-    names = [line.strip() for line in _git(root, "remote").stdout.splitlines() if line.strip()]
+    names = _remote_names(root)
     if remote not in names:
         print("refuse: no remote %s; do not start the Agent on a fresh clone of main" % remote)
         return 2
@@ -341,9 +380,7 @@ def publish_ticket(
         return 2
     cfg = data.get("config") or {}
     branch = orchestrator.branch_name(ticket, cfg)
-    base = _resolve_base(root, cfg)
-    if not base:
-        return 2
+    base_name = _base_name(root, cfg)
     payload = state_payload(warp)
     if ".warp/beam.json" not in payload:
         print("refuse: no beam to publish; do not start the Agent")
@@ -351,7 +388,7 @@ def publish_ticket(
     if ".warp/config.yaml" in payload:
         print("refuse: .warp/config.yaml must not be committed")
         return 2
-    if _ensure_branch(root, branch, base) != 0:
+    if _prepare_branch(root, branch, base_name, remote) != 0:
         return 2
     code = _commit_files_on_branch(
         root,
