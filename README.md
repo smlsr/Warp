@@ -41,6 +41,28 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 | Set `slackChannel` and `teamsChannel` to `warp` | the channel already has a value. Only an empty channel (or the old `Warp` default) is filled; a custom name is kept. |
 | Append `assets/gitignore-snippet.txt` to `.gitignore` | the snippet is already there. An old `.warp/` line that ignores the whole directory is replaced. Other lines stay. |
 
+### Update
+
+`/warp-upgrade` replaces an installed copy. Run it in the repo that has Warp installed.
+
+1. Run `/warp-upgrade` in the repo that has Warp installed.
+2. It replaces `.cursor/plugins/warp` with the plugin this command is running from.
+3. It fetches the default branch when the source is a git checkout, and copies that tree.
+4. It does not overwrite `.warp/config.yaml` or the beam.
+5. It prints `Warp vX.Y.Z`.
+6. Reload Cursor after (Developer: Reload Window).
+7. Confirm the version with `/warp-version`. That prints the installed copy (`.cursor/plugins/warp`), the source copy, and `.warp/version`.
+8. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. The installed copy stays.
+9. `/warp-init` does not upgrade an existing copy. This command does.
+
+`--force` is not an upgrade flag. `python3 <plugin>/scripts/upgrade.py ?` prints `--root` and `--source`.
+
+```bash
+python3 <plugin>/scripts/upgrade.py ?
+python3 <plugin>/scripts/upgrade.py --root .
+python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
+```
+
 After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
 
 Required for the Jira and Slack prompts:
@@ -139,7 +161,7 @@ Gates: 2
 Run: stopped
 Estimate: agent 60.0h, human 2.5h, elapsed 43.5h
 - Plan used: spec/CURSOR_PLAN.md (https://github.com/acme/Demo-App/blob/main/spec/CURSOR_PLAN.md)
-Links point at branch main; they work once it is pushed. Warp v<version>. Next: /warp-start. Status files are in .warp/ (not committed).
+Links point at branch main; they work once it is pushed. Warp v<version>. Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored.
 ```
 
 - `/warp-init` posts only if it changed something. A second run posts nothing.
@@ -239,11 +261,11 @@ The one `warp-listen` listener repairs `lock-escape` and no other alarm. It chec
 
 The Shuttle that hits the alarm stores each path outside the lock with `beam.py set --alarm lock-escape --escaped <path>`. Those paths live on the ticket as `escaped`. The repair widens that ticket's locks to those paths, records them on `addedLocks`, and says which paths it added in the Herald line. It does not take a path an in-flight ticket currently holds. It waits, then widens and starts after that holder finishes. A queued ticket's overlapping lock can be widened. An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before any edit.
 
-One repair runs at a time, in plan order. If it alarms `lock-escape` again, or errors, the alarm stays, the attempt is recorded, and the next lock-escape ticket starts in that same call. The one that just failed is not retried in that pass. If it returns the ticket to the normal path with the alarm cleared, or the ticket merges, the listener waits for that completion, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm in place and later passes skip it. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired.
+One repair runs at a time, one ticket at a time, in plan order. If it alarms `lock-escape` again, or errors, the alarm stays, the attempt is recorded, and the next lock-escape ticket starts in that same call. The one that just failed is not retried in that pass. If it returns the ticket to the normal path with the alarm cleared, or the ticket merges, the listener waits for that completion, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm in place and later passes skip it. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are left alone.
 
 `/warp-init` backfills `alarmRepairMinutes` and `maxAlarmRepairs` when `.warp/config.yaml` does not have them yet.
 
-When that pass opens and the ready set is empty, the listener recomputes every pending gate, and a red gate whose failure the beam can already disprove. A red `make ci` on a ticket is sent back in that pass (`send-back <id> fix` and a `start` line) even when other work is ready. Launch that Shuttle with the log. A second pass does not start it again while it is in `fix`. A gate turns green when every member is merged or done, or when every ticket on the beam is merged or done. The evidence stored is `members merged:` plus those ids, and the board is rewritten. Herald posts one line naming the condition that was cleared, `G1 pending cleared. Members merged. Tick ran.`, and that same pass runs the dispatch tick so work blocked only by that stale gate starts. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A ticket that is still alarmed does not. A green gate stays green. Every tick recomputes before `beam.py ready` and before `orchestrator.py dispatch`, so a merge does not wait for this pass. The pass is the backstop when no tick is running. Pause and stop do not recompute.
+When that pass opens and the ready set is empty, the listener recomputes every pending gate, and a red gate whose failure the beam can already disprove. A red `make ci` on a ticket is sent back in that pass (`send-back <id> fix` and a `start` line) even when other work is ready. The command is the full string `make ci`. The result is stored on `pr.check`. The third red parks the ticket. The name alone is not a red check. Launch that Shuttle with the log. A second pass does not start it again while it is in `fix`. A pending gate, or a stale red gate, turns green when every member is merged or done and no check is actually red, or when every ticket on the beam is merged or done. Then that pass runs the tick. G1 with members P-002, P-003, P-004, and P-018 stores evidence `members merged: P-002, P-003, P-004, P-018` and the board is rewritten. Herald posts `G1 pending cleared. Members merged. Tick ran.` A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A ticket that is still alarmed does not. A green gate stays green. Every tick recomputes before `beam.py ready` and before `orchestrator.py dispatch`, so a merge does not wait for this pass. The pass is the backstop when no tick is running. Pause and stop do not recompute.
 
 ## Version
 
@@ -257,7 +279,7 @@ Every change bumps the patch version and adds a `CHANGELOG.md` entry. `python3 s
 
 ## Upgrade
 
-`/warp-upgrade` replaces `.cursor/plugins/warp` with the plugin this command is running from. When that tree is a git checkout, it fetches the default branch first and copies that tree. If the fetch fails, it says so and keeps the installed copy. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor (Developer: Reload Window). Running it again is safe.
+The steps are in [Install](#install), under Update. `/warp-upgrade` replaces `.cursor/plugins/warp`. When the source is a git checkout, it fetches the default branch and copies that tree. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `--force` is not an upgrade flag. The flags are `--root` and `--source`. Running it again is safe.
 
 ```bash
 python3 <plugin>/scripts/upgrade.py ?
@@ -411,7 +433,7 @@ Upload by dragging the file into the agent chat, or saving it in the workspace. 
 | `.warp/config.yaml` | Yes | Model, cap, messenger. Survives import. |
 | `.warp/beam.json` | No | Live status. Scripts write it. |
 | `.warp/STATUS.md` | No | Done, working, left. Download to review. |
-| `.warp/journal.jsonl` | No | Append-only log. Leave it out of git. |
+| `.warp/journal.jsonl` | No | Append-only log. `state_commit.py` commits it with tokens stripped. Do not hand-edit it. |
 
 ## Status
 
@@ -454,8 +476,9 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stateDir` | `.warp` | Beam and exports. Gitignore it. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
 | `maxAgents` | `18` | Concurrent Shuttles. The only cap. A project may set 18. |
-| `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. `make ci` is a valid command. A red result is stored on `pr.check` and sent back to that ticket with the log. |
-| `appendOnlyPaths` | empty | Shared files a ticket may append to, besides its locks. Empty by default. A conflict there keeps both sides. |
+| `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. `make ci` is kept as the full check command. A red result is stored on `pr.check` and the ticket is sent back with the log. The third red parks. The name alone is not a red check. |
+| `appendOnlyPaths` | empty | Shared files a ticket may append to, besides its locks. Empty by default. A conflict there keeps both sides. Any other conflict is sent back. |
+| `mergeQueue` | `false` | `true`, or a GitHub merge queue the provider reports, enqueues the pull request. A direct merge that branch protection rejects is not marked merged. |
 | `autoMergeSizes` | `S, M` | Auto-merge after Bugbot and CI, including L and XL when they are listed. L and XL are not special. Sizes not in `autoMergeSizes` wait. The default leaves L and XL waiting. |
 | `messenger` | `both` | `slack`, `teams`, or `both`. |
 | `notify` | `verbose` | Every claim and tick, plus init and scan. `quiet` posts alarms, approval waits, a red gate, and pause/stop. `warp:status` is always answered. |
@@ -501,6 +524,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `autoAllowTools` | `true` | `/warp-init` writes the project MCP allowlist. `false` or `--no-allow` skips it. |
 
 ## Merge policy
+
+The orchestrator is the only merger. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. A green pull request frees the slot and keeps the locks until merge or park. The slot stays occupied until the provider check rollup is green. The merge queue is serial. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. The third red parks the ticket. A red base branch stops merging. On start or resume, restart classifies each ticket from git: merged, in flight, or pending. One checkout per ticket: a cloud agent, or a local git worktree. `maxAgents` is the only cap.
 
 L and XL are not special. `autoMergeSizes` is the cut. Sizes in `autoMergeSizes` (`autoMerge` true) and sizes not in `autoMergeSizes` (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. A listed size then auto-merges and Jira moves to Done. A size not in `autoMergeSizes` then moves to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 

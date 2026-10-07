@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.6
+
+- User docs and the README cover 1.4.1 through 1.4.5: lock-escape repair, orchestrator merge rules, one checkout per ticket, stale gates (G1 members P-002, P-003, P-004, P-018), and `make ci`. The Install section lists every `/warp-upgrade` step. The scan footer says the beam, journal, and board are committed.
+
 ## 1.4.5
 
 - A red `make ci` check command or CI check is stored on `pr.check` and sent back to that ticket with the log, so the run does not sit idle. The gate stays while that check is red. A green result is recorded and is not a failure. A stale gate whose members are merged and whose current checks are not red still clears. Evidence that is only the name `make ci` is not a red check.
