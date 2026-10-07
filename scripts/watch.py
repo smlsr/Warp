@@ -494,6 +494,11 @@ def _fix_tickets(data: dict, provider: Optional[dict], lines: list, beam_path: O
         if int(watch.get("fixerAttempts") or 0) >= _cap(data):
             _escalate(data, ticket, action, lines)
             continue
+        if action in {"rebase", "ci-start", "shuttle"}:
+            import beam as beam_mod
+
+            if beam_mod.fix_worker_room(data) < 1:
+                continue
         _run_action(data, ticket, action, lines, beam_path, now)
 
 

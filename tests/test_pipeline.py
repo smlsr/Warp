@@ -805,6 +805,7 @@ class InProgressCapTests(unittest.TestCase):
         import beam as beam_mod
 
         self.assertEqual(beam_mod.default_config()["maxInProgress"], 20)
+        self.assertEqual(beam_mod.default_config()["maxFixWorkers"], 5)
         self.assertFalse(beam_mod.ticket_in_progress(ticket("Q-1")))
         parked = ticket("P-1", status="parked", phase="parked", stalled=True, alarm="stalled")
         self.assertFalse(beam_mod.ticket_in_progress(parked))
@@ -841,12 +842,15 @@ class InProgressCapTests(unittest.TestCase):
         self.assertEqual(data["tickets"]["R-1"]["phase"], "fixing")
         self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
         self.assertNotIn("start Q-1", blob)
-        self.assertIn("launch: hold in progress 2/2", blob)
+        self.assertIn("holding new launches (2/2), 1 fix workers running", blob)
+        self.assertNotIn("launch: hold", blob)
         for tid in ("R-1", "R-2", "Q-1"):
             self.assertNotEqual(data["tickets"][tid]["status"], "parked")
         again = pipeline.advance(data, now=NOW)
         self.assertNotIn("launch: hold", text(again))
+        self.assertNotIn("start Q-1", text(again))
         self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+        self.assertEqual(text(again).count("holding new launches (2/2)"), 1)
 
     def test_over_the_cap_parks_nothing(self):
         rows = [
@@ -861,7 +865,8 @@ class InProgressCapTests(unittest.TestCase):
         rows.append(ticket("Q-1"))
         data = beam(rows, maxInProgress=2, maxAgents=10)
         lines = pipeline.advance(data, now=NOW)
-        self.assertIn("launch: hold in progress 3/2", text(lines))
+        self.assertIn("holding new launches (3/2), 0 fix workers running", text(lines))
+        self.assertNotIn("launch: hold", text(lines))
         self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
         self.assertTrue(all(row["status"] != "parked" for row in data["tickets"].values()))
         self.assertNotIn("start Q-1", text(lines))
@@ -897,7 +902,8 @@ class InProgressCapTests(unittest.TestCase):
         )
         first = pipeline.advance(held, now=NOW)
         self.assertEqual(held["tickets"]["Q-2"]["status"], "queued")
-        self.assertIn("launch: hold in progress 2/2", text(first))
+        self.assertIn("holding new launches (2/2), 0 fix workers running", text(first))
+        self.assertNotIn("launch: hold", text(first))
         held["tickets"]["R-2"]["status"] = "merged"
         held["tickets"]["R-2"]["phase"] = "merged"
         second = pipeline.advance(held, now=NOW)
@@ -913,7 +919,117 @@ class InProgressCapTests(unittest.TestCase):
         progress = beam([ticket("A-1"), ticket("A-2")], maxAgents=5, maxInProgress=1)
         lines = pipeline.advance(progress, now=NOW)
         self.assertEqual(sum(1 for row in progress["tickets"].values() if row["status"] != "queued"), 1)
-        self.assertIn("launch: hold in progress 0/1", text(lines))
+        self.assertIn("holding new launches (0/1), 0 fix workers running", text(lines))
+        self.assertNotIn("launch: hold", text(lines))
+
+    def _review(self, tid, **pr):
+        body = {
+            "url": "https://example.test/pull/%s" % tid,
+            "bugbot": "pass",
+            "rollup": "green",
+            "ci": "green",
+        }
+        body.update(pr)
+        return ticket(tid, status="review", phase="reviewing", pr=body)
+
+    def test_cold_start_over_the_cap_dispatches_fixes_in_priority_order(self):
+        def rows():
+            built = [
+                self._review("R-1", ci="red", rollup="red"),
+                self._review("B-1", bugbot="fail", bugbotFindings=["leak"]),
+                self._review("I-1", ciAbsent=True, rollup="absent", ci="pending"),
+                self._review("C-1", conflict=["cmd/qa-api/routes.go"]),
+            ]
+            for index in range(20):
+                built.append(self._review("H-%02d" % index, rollup="pending", ci="pending"))
+            built.append(ticket("N-1"))
+            return built
+
+        cfg = dict(maxInProgress=20, maxFixWorkers=2, maxAgents=18, maxLocalSubagents=18)
+        data = beam(rows(), **cfg)
+        import beam as beam_mod
+
+        self.assertEqual(beam_mod.in_progress_count(data), 24)
+        lines = pipeline.advance(data, now=NOW)
+        blob = text(lines)
+        pending = sorted(
+            tid for tid, row in data["tickets"].items() if (row.get("shuttle") or {}).get("pending")
+        )
+        self.assertEqual(pending, ["C-1", "I-1"])
+        self.assertNotIn("start B-1", blob)
+        self.assertNotIn("start R-1", blob)
+        self.assertEqual(data["tickets"]["N-1"]["status"], "queued")
+        self.assertIn("holding new launches (24/20), 2 fix workers running", blob)
+        self.assertNotIn("launch: hold", blob)
+        self.assertIn("fixer: C-1 rebase", blob)
+        self.assertIn("ci: start I-1", blob)
+
+        folder = Path(tempfile.mkdtemp())
+        path = folder / "beam.json"
+        fresh = beam(rows(), **cfg)
+        path.write_text(json.dumps(fresh))
+        cold = text(pipeline.cold_start(path))
+        saved = json.loads(path.read_text())
+        cold_pending = sorted(
+            tid for tid, row in saved["tickets"].items() if (row.get("shuttle") or {}).get("pending")
+        )
+        self.assertEqual(cold_pending, ["C-1", "I-1"])
+        import watch
+
+        self.assertIn("holding new launches (24/20), 2 fix workers running", text(watch.snapshot(saved, now=NOW)))
+        self.assertIn("start C-1", cold)
+        self.assertNotIn("start N-1", cold)
+        self.assertEqual(pipeline.cold_start(path), [])
+        shutil.rmtree(folder)
+
+    def test_max_fix_workers_is_respected_and_the_fixer_still_runs_over_the_cap(self):
+        import sweep
+        import watch
+
+        conflicts = [
+            self._review("C-%d" % index, conflict=True, rollup="green", ci="green")
+            for index in range(6)
+        ]
+        data = beam(
+            conflicts + [ticket("Q-1")],
+            maxInProgress=1,
+            maxFixWorkers=2,
+            maxAgents=10,
+            maxLocalSubagents=10,
+        )
+        pipeline.advance(data, now=NOW)
+        pending = [tid for tid, row in data["tickets"].items() if (row.get("shuttle") or {}).get("pending")]
+        self.assertEqual(len(pending), 2)
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+        pipeline.advance(data, now=NOW)
+        still = [tid for tid, row in data["tickets"].items() if (row.get("shuttle") or {}).get("pending")]
+        self.assertEqual(sorted(still), sorted(pending))
+        done = pending[0]
+        data["tickets"][done]["shuttle"]["pending"] = False
+        data["tickets"][done]["status"] = "review"
+        data["tickets"][done]["phase"] = "reviewing"
+        data["tickets"][done]["pr"]["conflict"] = False
+        pipeline.advance(data, now=NOW)
+        again = [tid for tid, row in data["tickets"].items() if (row.get("shuttle") or {}).get("pending")]
+        self.assertEqual(len(again), 2)
+        self.assertNotIn(done, again)
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+
+        def held_rows():
+            built = [
+                self._review("H-%d" % index, rollup="pending", ci="pending")
+                for index in range(6)
+            ]
+            built.append(self._review("C-9", conflict=True))
+            return built
+
+        fixer = beam(held_rows(), maxInProgress=2, maxAgents=3, maxLocalSubagents=3, maxFixWorkers=5)
+        watched = text(watch.apply(fixer, now=NOW))
+        self.assertIn("fixer: C-9 rebase", watched)
+        swept = beam(held_rows(), maxInProgress=2, maxAgents=3, maxLocalSubagents=3, maxFixWorkers=5)
+        sweep_lines = text(sweep.run(swept, now=NOW))
+        self.assertIn("fixer: C-9 rebase", sweep_lines)
+        self.assertNotIn("sweep: skip C-9 slot", sweep_lines)
 
     def test_status_and_the_digest_show_the_count(self):
         import watch

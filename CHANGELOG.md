@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.18
+
+- `maxInProgress` only holds new launches from the ready queue. A fix, a rebase, a CI rerun, a Bugbot re-request, and a merge on a ticket already in progress are not held. `maxFixWorkers` (default 5) caps the fix, rebase, and rerun Shuttles that are actually running. It still applies when in progress is at or above the cap, and it stays within `maxAgents` and `maxLocalSubagents`. On start or resume with no Shuttle out, Warp dispatches those workers immediately: conflicts and CI that never started, then Bugbot findings, then red CI. Status says `holding new launches (N/maxInProgress), N fix workers running`.
+
 ## 1.4.17
 
 - Cursor's plugin command index still omits slash commands added after it was published. `commands/warp-update-state.md` was already in `.cursor-plugin/plugin.json`, and `marketplace.json` does not list individual commands for any command. Init and upgrade wrote only `.cursor/commands/warp-upgrade.md`. They now write every `commands/*.md` file to `.cursor/commands/`, including `/warp-update-state` and `/warp-status`. Reload Cursor so those project commands show up.

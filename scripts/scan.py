@@ -1091,6 +1091,10 @@ def main() -> None:
             sys.exit(gate)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
+        import pipeline
+
+        for line in pipeline.cold_start(Path(args.beam)):
+            print(line)
         print_open_work(Path(args.beam))
     elif args.cmd == "resume":
         import resume_hint
@@ -1100,6 +1104,10 @@ def main() -> None:
             print(line)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
+        import pipeline
+
+        for line in pipeline.cold_start(Path(args.beam)):
+            print(line)
         print_open_work(Path(args.beam))
     elif args.cmd == "pause":
         set_run(Path(args.beam), "paused", args.reason)

@@ -14,9 +14,17 @@ maxAgents: 18
 
 maxInProgress: 20
 # Tickets that have started and are not merged or parked. At this count,
-# nothing new is taken from the ready queue. Fixes, rebases, reruns, and
-# merges on tickets already in progress keep running. Parked tickets do not
+# nothing new is taken from the ready queue. This does not stop a fix, a
+# rebase, a CI rerun, a Bugbot re-request, or a merge. Parked tickets do not
 # count. Already being over the cap does not park or cancel anyone. Default 20.
+# Status then says: holding new launches (N/maxInProgress), N fix workers running.
+
+maxFixWorkers: 5
+# Fix, rebase, and rerun Shuttles that are actually running. Default 5.
+# Still applies when in progress is at or above maxInProgress, and it stays
+# within maxAgents and maxLocalSubagents. A cold start or resume with no
+# Shuttle out dispatches these immediately: conflicts and CI that never
+# started, then Bugbot findings, then red CI.
 
 checkCommand: ""
 # Optional. The orchestrator runs this on a rebased head before it merges.

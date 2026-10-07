@@ -67,7 +67,7 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
 2. `beam.py watchdog`. Launch the replacements above. Herald posts each `herald:` line once.
 3. Reconcile in-flight PRs and Jira.
 4. `beam.py ready` recomputes every pending gate. A gate turns green when every member is merged or done. Post `herald: <gate> pending cleared. Members merged. Tick ran.` when it prints that line.
-5. Claim the ready list only. No person cap. A `recovering` ticket is not in this list. `start` lines are the same ids. Claim each id once.
+5. Claim the ready list only. No person cap. A `recovering` ticket is not in this list. `start` lines are the same ids. Claim each id once. `holding new launches (N/M), N fix workers running` means the ready queue waits. It does not stop a fix, a rebase, a CI rerun, a Bugbot re-request, or a merge. On start or resume with no Shuttle out, launch the `start <id> ... step=fix` lines immediately, up to `maxFixWorkers`.
 6. Claim each id, run `checkout.py launch`, and start one subagent in that worktree with the prompt it prints. Start those subagents in parallel up to `maxAgents`. Then `beam.py heartbeat` for that id. Herald posts each claim. When the subagent returns, run `checkout.py verify`. A failure line raises `worker-died`.
 7. `scan.py status` and `beam.py board`.
 8. Herald posts the tick digest: done, working, left, next ready.

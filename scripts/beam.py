@@ -530,7 +530,108 @@ def in_progress_count(beam: dict) -> int:
 
 def in_progress_label(beam: dict) -> str:
     cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
-    return "in progress %d/%d" % (in_progress_count(beam), max_in_progress(cfg))
+    count = in_progress_count(beam)
+    cap = max_in_progress(cfg)
+    if count >= cap:
+        return holding_launches_label(beam, count, cap)
+    return "in progress %d/%d" % (count, cap)
+
+
+def max_fix_workers(cfg: Optional[dict]) -> int:
+    """How many fix, rebase, and rerun Shuttles may run at once. Default 5.
+
+    Zero is a real cap. A negative or junk value falls back to the default.
+    This cap is not maxInProgress: it still applies when that count is full.
+    """
+    default = int(default_config()["maxFixWorkers"])
+    raw = (cfg or {}).get("maxFixWorkers")
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
+        return default
+    return number
+
+
+def _shuttle_pending(ticket: dict) -> bool:
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    return bool(shuttle.get("pending"))
+
+
+def ticket_fix_worker(ticket: dict) -> bool:
+    """A Shuttle that is out doing a fix, a rebase, or a rerun.
+
+    An in-progress ticket that is only waiting does not count. An implement
+    Shuttle does not count.
+    """
+    if not isinstance(ticket, dict) or not _shuttle_pending(ticket):
+        return False
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "")
+    if step == "fix":
+        return True
+    return step == "restart" and ticket.get("phase") == "fixing"
+
+
+def fix_worker_count(beam: dict) -> int:
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    return sum(1 for ticket in tickets.values() if ticket_fix_worker(ticket))
+
+
+def holding_launches_label(beam: dict, count: Optional[int] = None, cap: Optional[int] = None) -> str:
+    """Status when new ready-queue launches wait. Fix workers are named apart from that."""
+    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+    if count is None:
+        count = in_progress_count(beam)
+    if cap is None:
+        cap = max_in_progress(cfg)
+    return "holding new launches (%d/%d), %d fix workers running" % (count, cap, fix_worker_count(beam))
+
+
+def running_shuttle_count(beam: dict) -> int:
+    """Shuttles that are actually out. A waiting review does not count."""
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and _shuttle_pending(ticket))
+
+
+def _local_shuttle_count(beam: dict) -> int:
+    """Pending Shuttles on this machine. A confirmed other VM does not count."""
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    used = 0
+    for ticket in tickets.values():
+        if not isinstance(ticket, dict) or not _shuttle_pending(ticket):
+            continue
+        remote = ticket.get("isolation") == "vm" and ticket.get("checkout") == "subagent-vm"
+        if remote:
+            continue
+        used += 1
+    return used
+
+
+def fix_worker_room(beam: dict) -> int:
+    """How many more fix, rebase, or rerun Shuttles may start.
+
+    maxInProgress does not reduce this. The room is maxFixWorkers minus the
+    fix workers already running, and it also stays inside maxAgents and
+    maxLocalSubagents counted by Shuttles that are actually out.
+    """
+    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+    room = max(0, max_fix_workers(cfg) - fix_worker_count(beam))
+    if room < 1:
+        return 0
+    running = running_shuttle_count(beam)
+    room = min(room, max(0, configured_cap(cfg) - running))
+    if room < 1:
+        return 0
+    if orchestrator.shared_machine(cfg, beam):
+        local_cap = orchestrator.max_local_subagents(cfg)
+        if orchestrator.memory_check(cfg):
+            local_cap = orchestrator.local_subagent_cap(cfg)
+        room = min(room, max(0, local_cap - _local_shuttle_count(beam)))
+    return room
 
 
 def _watch_slot(beam: dict) -> dict:
@@ -550,7 +651,7 @@ def _sync_launch_hold(beam: dict, suppressed: bool, count: int, cap: int) -> Non
             watch.pop("inProgressHoldPending", None)
         return
     if not watch.get("inProgressHeld") and not watch.get("inProgressHoldPending"):
-        watch["inProgressHoldPending"] = "launch: hold in progress %d/%d" % (count, cap)
+        watch["inProgressHoldPending"] = holding_launches_label(beam, count, cap)
 
 
 def take_launch_hold(beam: dict) -> str:
@@ -777,8 +878,9 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     green pull request does not. Lock overlap uses each ticket's full lock
     list, including a parent folder. The Shuttle cap is maxAgents minus slots still
     held. maxInProgress
-    (default 20) is separate: at that many started tickets, nothing new is
-    taken. A green pull request has already freed its slot. A red base branch
+    (default 20) gates only this ready queue: at that many started tickets,
+    nothing new is taken. It does not stop a fix, rebase, rerun, or merge.
+    A green pull request has already freed its slot. A red base branch
     reserves one slot for a fix when no fix ticket exists yet. Ready tickets
     fill the remaining slots. Nothing is held back for a ticket that is not
     ready, and a later ticket does not wait for an unrelated dependency level.
@@ -1532,6 +1634,7 @@ def default_config() -> dict:
         "model": "claude-sonnet-5-5-high",
         "maxAgents": 18,
         "maxInProgress": 20,
+        "maxFixWorkers": 5,
         "autoMergeSizes": list(DEFAULT_AUTO_MERGE_SIZES),
         "messenger": "both",
         "notify": "verbose",
@@ -1638,8 +1741,12 @@ does not start. A green
 name `make ci` is not a red check. Paused and stopped runs do not
 recompute.
 ready's Shuttle cap is maxAgents. maxInProgress (default 20) is how many
-started tickets may be open. At that cap, ready takes nothing new. Parked
-tickets do not count. Do not hand-edit beam.json.
+started tickets may be open. At that cap, ready takes nothing new. That
+hold is only the ready queue. Fixes, rebases, reruns, and merges keep
+going. maxFixWorkers (default 5) caps the fix, rebase, and rerun Shuttles
+that are actually running, including when in progress is already over the
+cap, and it stays within maxAgents and maxLocalSubagents. Parked tickets
+do not count. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
 uses inbound.py heartbeat during its parent turn. watchdog runs on every
 Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is
