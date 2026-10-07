@@ -1476,6 +1476,7 @@ def default_config() -> dict:
         "stallQueuedMinutes": 180,
         "stallApprovalMinutes": 240,
         "stallMinutes": 45,
+        "ciStartGraceMinutes": 5,
         "statusDigestMinutes": 60,
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,

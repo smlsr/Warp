@@ -378,19 +378,29 @@ def bugbot_applies(ticket: dict, config: Optional[dict]) -> bool:
     return True
 
 
+def _for_head(pr: dict, field: str, sha_field: str) -> str:
+    """A stored result for the current head. A result tied to an older sha is ignored."""
+    head = str(pr.get("headSha") or "").strip()
+    tied = str(pr.get(sha_field) or "").strip()
+    if head and tied and tied != head:
+        return ""
+    return str(pr.get(field) or "").strip().casefold()
+
+
 def provider_rollup(ticket: dict) -> str:
     """GitHub or Bitbucket check rollup stored on the pull request.
 
-    Empty when the provider has not reported one yet. `green` is the only
-    value that frees a slot. Bugbot is one of those checks, after the push.
+    Empty when the provider has not reported one yet, or the stored rollup
+    belongs to an older head. `green` is the only value that frees a slot.
+    Bugbot is one of those checks, after the push.
     """
-    pr = ticket.get("pr") or {}
-    raw = str(pr.get("rollup") or "").strip().casefold()
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    raw = _for_head(pr, "rollup", "rollupSha")
     if raw in {"success", "pass"}:
         return "green"
     if raw in {"failure", "failed", "fail"}:
         return "red"
-    if raw in {"green", "red", "pending"}:
+    if raw in {"green", "red", "pending", "absent"}:
         return raw
     return ""
 
@@ -398,22 +408,29 @@ def provider_rollup(ticket: dict) -> str:
 def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     """Required checks for freeing a slot and for entering the merge queue.
 
-    A provider rollup, when present, is the check. The slot stays occupied
-    until that rollup is green. When no rollup has been recorded, CI must be
-    green and Bugbot must pass when it applies, or `pr.check` when
-    checkCommand is set. Bugbot runs on the pull request after push.
+    A green provider rollup or a green `pr.check` for the current head counts.
+    A stored pending rollup, including one left over from an older sha, does
+    not override that green. A red result for the current head still fails.
+    When neither is green, CI must be green and Bugbot must pass when it
+    applies, or `pr.check` when checkCommand is set.
     """
-    pr = ticket.get("pr") or {}
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     rollup = provider_rollup(ticket)
-    if rollup:
-        return rollup == "green"
+    check = _for_head(pr, "check", "checkSha")
+    ci = _for_head(pr, "ci", "ciSha")
+    if rollup == "red" or check == "red" or ci == "red":
+        return False
+    if rollup == "green" or check == "green":
+        return True
+    if rollup in {"pending", "absent"}:
+        return False
     if check_command(config):
-        return str(pr.get("check") or "").strip().casefold() == "green"
-    if str(pr.get("ci") or "").strip().casefold() != "green":
+        return check == "green"
+    if ci != "green":
         return False
     if not bugbot_applies(ticket, config):
         return True
-    return str(pr.get("bugbot") or "").strip().casefold() == "pass"
+    return _for_head(pr, "bugbot", "bugbotSha") == "pass"
 
 
 def bugbot_where() -> str:
@@ -1385,6 +1402,8 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     data = _load(path)
     if not listener_should_run(data):
         return lines
+    if provider is None:
+        provider = pipeline.live_provider(data, path)
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
     _save(path, data)
     return lines

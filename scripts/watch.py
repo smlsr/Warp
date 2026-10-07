@@ -156,22 +156,56 @@ def _open_tickets(data: dict) -> list:
     return rows
 
 
+def _progress_token(ticket: dict) -> str:
+    """A new commit, a phase change, or a check result. A heartbeat is not one."""
+    pr = _pr(ticket)
+    conflict = pr.get("conflict")
+    if isinstance(conflict, list):
+        conflict_text = ",".join(str(path) for path in conflict)
+    else:
+        conflict_text = "1" if conflict else ""
+    return "|".join(
+        [
+            _state_of(ticket),
+            str(pr.get("headSha") or ""),
+            str(pr.get("rollup") or ""),
+            str(pr.get("ci") or ""),
+            str(pr.get("check") or ""),
+            str(pr.get("bugbot") or ""),
+            conflict_text,
+            "1" if pr.get("behind") else "",
+            "1" if pr.get("ciAbsent") else "",
+        ]
+    )
+
+
 def _touch(ticket: dict, now: str) -> None:
-    """Remember when this state started. A newer heartbeat is progress."""
+    """Remember the last real change. A start or a heartbeat does not reset it.
+
+    The first look keeps an existing clock. A later commit, phase, or check
+    result moves it. The stall timer is only for a stall that is not already
+    classified.
+    """
     watch = _watch(ticket)
+    token = _progress_token(ticket)
+    previous = watch.get("progressToken")
     state = _state_of(ticket)
-    if watch.get("state") != state:
-        watch["state"] = state
+    changed = False
+    if previous is None:
+        watch["progressToken"] = token
+        recorded = watch.get("state")
+        if recorded is not None and recorded != state:
+            changed = True
+    elif previous != token:
+        watch["progressToken"] = token
+        changed = True
+    if changed:
         watch["since"] = now
         watch["progressAt"] = now
         watch["stalled"] = False
         ticket["stalled"] = False
+    watch["state"] = state
     last = ticket.get("lastSeenAt") or ticket.get("updatedAt") or ""
-    progress = str(watch.get("progressAt") or "")
-    if last and (not progress or str(last) > progress):
-        watch["progressAt"] = last
-        watch["stalled"] = False
-        ticket["stalled"] = False
     if not watch.get("since"):
         watch["since"] = now
     if not watch.get("progressAt"):
@@ -268,6 +302,29 @@ def _recovery_open(data: dict, ticket: dict) -> bool:
     return True
 
 
+def _merge_conflict(ticket: dict, snap: Optional[dict]) -> bool:
+    """GitHub CONFLICTING or DIRTY, or a conflict flag already on the ticket."""
+    snap = snap or {}
+    pr = _pr(ticket)
+    if pr.get("conflict") or snap.get("conflict"):
+        return True
+    for source in (snap, pr):
+        mergeable = str(source.get("mergeable") or "").upper()
+        state = str(source.get("mergeStateStatus") or "").upper()
+        if mergeable == "CONFLICTING" or state in {"DIRTY", "CONFLICTING"}:
+            return True
+    return False
+
+
+def _ci_never_started(ticket: dict, snap: Optional[dict]) -> bool:
+    snap = snap or {}
+    if _merge_conflict(ticket, snap) or _pr(ticket).get("behind") or snap.get("behind"):
+        return False
+    if _pr(ticket).get("ciAbsent") or snap.get("ciAbsent"):
+        return True
+    return False
+
+
 def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
     """One fixer action, or empty when this ticket should wait."""
     snap = snap or {}
@@ -284,8 +341,10 @@ def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
             return ""
     if alarm == "lock-escape" or snap.get("lockEscape"):
         return "lock-escape"
-    if snap.get("conflict") or snap.get("behind") or pr.get("conflict") or pr.get("behind"):
+    if _merge_conflict(ticket, snap) or snap.get("behind") or pr.get("behind"):
         return "rebase"
+    if _ci_never_started(ticket, snap):
+        return "ci-start"
     if phase in _SHUTTLE_PHASES and _recovery_open(data, ticket) and (stalled or alarm in {"worker-died", "stuck"}):
         return "shuttle"
     bugbot = _bugbot_label(ticket)
@@ -350,12 +409,11 @@ def _run_action(data: dict, ticket: dict, action: str, lines: list, beam_path: O
         lines.append("ci: rerun %s" % tid)
         lines.append("fixer: %s ci" % tid)
         return
+    if action == "ci-start":
+        pipeline.start_ci(data, ticket, lines)
+        return
     if action == "rebase":
-        ticket["status"] = "fix"
-        ticket["phase"] = "fixing"
-        pipeline.mark_shuttle(ticket, "fix")
-        lines.extend(pipeline._start_lines(data, ticket, "fix", "rebase onto main"))
-        lines.append("fixer: %s rebase" % tid)
+        pipeline.start_rebase(data, ticket, lines)
         return
     if action == "shuttle":
         phase = "fixing" if _pr(ticket).get("url") else "implementing"
@@ -496,8 +554,10 @@ def next_action(ticket: dict) -> str:
         return "wait for the Shuttle"
     if str(ticket.get("alarm") or "") == "lock-escape":
         return "widen locks and rerun"
-    if _pr(ticket).get("conflict") or _pr(ticket).get("behind"):
+    if _merge_conflict(ticket, {}) or _pr(ticket).get("behind"):
         return "rebase onto main"
+    if _pr(ticket).get("ciAbsent"):
+        return "start CI"
     if _needs_queue(ticket):
         return "return to the merge queue"
     phase = _state_of(ticket)

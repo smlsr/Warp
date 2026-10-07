@@ -362,10 +362,11 @@ def payload_has_merge_queue(doc) -> bool:
 def interpret_rollup(checks: list) -> str:
     """GitHub statusCheckRollup or Bitbucket commit statuses.
 
-    green only when every check finished successfully. An empty list is pending.
+    green only when every check finished successfully. An empty list is
+    absent: the workflow never started, which is not an ordinary pending run.
     """
     if not checks:
-        return "pending"
+        return "absent"
     bad = False
     pending = False
     success = {"success", "successful", "skipped", "neutral", "ok"}
@@ -471,21 +472,111 @@ def fetch_check_rows(root: Path, pr: str, provider_name: Optional[str] = None) -
     return rows
 
 
+def _bugbot_check(item: dict) -> bool:
+    name = str(item.get("name") or item.get("context") or "").casefold()
+    return "bugbot" in name
+
+
+def _bugbot_from_checks(checks: list) -> str:
+    rows = [item for item in checks if isinstance(item, dict) and _bugbot_check(item)]
+    if not rows:
+        return ""
+    rollup = interpret_rollup(rows)
+    if rollup == "green":
+        return "pass"
+    if rollup == "red":
+        return "fail"
+    if rollup == "absent":
+        return ""
+    return "pending"
+
+
+def _ci_from_checks(checks: list) -> str:
+    rows = [item for item in checks if isinstance(item, dict) and not _bugbot_check(item)]
+    if not checks:
+        return "absent"
+    if not rows:
+        return "absent"
+    return interpret_rollup(rows)
+
+
+def _head_committed_at(doc: dict) -> str:
+    commits = doc.get("commits")
+    if not isinstance(commits, list) or not commits:
+        return ""
+    last = commits[-1]
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("committedDate") or last.get("authoredDate") or "")
+
+
+def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
+    """Live GitHub pull request state, or None when gh cannot be asked.
+
+    The snapshot carries the head sha, check rollup, CI, Bugbot, mergeable,
+    mergeStateStatus, and conflicting files when the view includes them.
+    """
+    if not pr or not shutil.which("gh"):
+        return None
+    text = str(pr)
+    if "github.com" not in text and not text.isdigit():
+        return None
+    viewed = _run(
+        [
+            "gh",
+            "pr",
+            "view",
+            text,
+            "--json",
+            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits",
+        ],
+        root,
+    )
+    if viewed.returncode != 0:
+        return None
+    try:
+        doc = json.loads(viewed.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    checks = doc.get("statusCheckRollup") or []
+    if not isinstance(checks, list):
+        checks = []
+    mergeable = str(doc.get("mergeable") or "")
+    state = str(doc.get("mergeStateStatus") or "")
+    conflicted = mergeable.upper() == "CONFLICTING" or state.upper() in {"DIRTY", "CONFLICTING"}
+    files = doc.get("conflictFiles") if isinstance(doc.get("conflictFiles"), list) else []
+    files = [str(path) for path in files if str(path).strip()]
+    sha = str(doc.get("headRefOid") or "")
+    bugbot = _bugbot_from_checks(checks)
+    snap = {
+        "sha": sha,
+        "headSha": sha,
+        "headAt": _head_committed_at(doc),
+        "rollup": interpret_rollup(checks),
+        "ci": _ci_from_checks(checks),
+        "checks": checks,
+        "checkCount": len(checks),
+        "mergeable": mergeable,
+        "mergeStateStatus": state,
+        "behind": state.upper() == "BEHIND",
+        "conflict": files or True if conflicted else False,
+        "conflictFiles": files,
+    }
+    if bugbot:
+        snap["bugbot"] = bugbot
+    return snap
+
+
 def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:
     """Ask the configured provider. Unknown or unreachable stays pending."""
     if provider == "bitbucket":
         return "pending"
-    if not shutil.which("gh"):
+    state = fetch_pr_state(root, pr)
+    if not state:
         return "pending"
-    viewed = _run(["gh", "pr", "view", str(pr), "--json", "statusCheckRollup"], root)
-    if viewed.returncode != 0:
-        return "pending"
-    try:
-        doc = json.loads(viewed.stdout or "{}")
-    except json.JSONDecodeError:
-        return "pending"
-    checks = doc.get("statusCheckRollup") or []
-    return interpret_rollup(checks if isinstance(checks, list) else [])
+    return str(state.get("rollup") or "pending")
 
 
 def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tuple[str, str]:

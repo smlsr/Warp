@@ -455,5 +455,350 @@ class FindingsTests(unittest.TestCase):
         )
 
 
+ROUTES = ["cmd/qa-api/routes.go", "pkg/lib/auth/routes.go"]
+SHA = "a" * 40
+SHA2 = "b" * 40
+
+
+def reviewing(tid, **pr):
+    base = {
+        "url": "https://example.test/pull/%s" % tid,
+        "bugbot": "pass",
+        "rollup": "pending",
+        "ci": "pending",
+        "check": "green",
+    }
+    base.update(pr)
+    return ticket(tid, status="review", phase="reviewing", pr=base)
+
+
+class LivePullRequestTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        warp = self.tmp / ".warp"
+        warp.mkdir()
+        self.path = warp / "beam.json"
+
+    def _result(self, tid, doc):
+        folder = self.tmp / "tasks" / tid
+        folder.mkdir(parents=True)
+        (folder / "RESULT.json").write_text(json.dumps(doc) + "\n")
+
+    def test_green_conflicted_pull_request_rebases_then_merges(self):
+        self._result("A-001", {"acResults": {"routes": "pass"}})
+        data = beam([reviewing("A-001")])
+        self.path.write_text(json.dumps(data) + "\n")
+        first = pipeline.advance(
+            data,
+            {
+                "A-001": {
+                    "headSha": SHA,
+                    "headAgeMinutes": 30,
+                    "rollup": "green",
+                    "ci": "green",
+                    "check": "green",
+                    "checkCount": 12,
+                    "bugbot": "pass",
+                    "findings": [],
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "conflictFiles": ROUTES,
+                }
+            },
+            beam_path=self.path,
+            now=NOW,
+        )
+        blob = text(first)
+        row = data["tickets"]["A-001"]
+        self.assertNotIn("review: wait", blob)
+        self.assertIn("fixer: A-001 rebase", blob)
+        self.assertIn("cmd/qa-api/routes.go", blob)
+        self.assertIn("pkg/lib/auth/routes.go", blob)
+        self.assertIn("route registration files keep both sides", blob)
+        self.assertIn("run checkCommand and push", blob)
+        self.assertEqual(row["status"], "fix")
+        self.assertEqual(row["phase"], "fixing")
+        self.assertEqual(row["pr"]["conflict"], ROUTES)
+        self.assertEqual(row["pr"]["mergeable"], "CONFLICTING")
+        self.assertEqual(row["pr"]["headSha"], SHA)
+        self.assertEqual(row["pr"]["rollup"], "green")
+        self.assertEqual(row["pr"]["rollupSha"], SHA)
+        self.assertEqual(row["pr"]["acResults"], {"routes": "pass"})
+        self.assertNotEqual(row["status"], "merged")
+        self.assertNotIn("_repoRoot", data)
+
+        second = pipeline.advance(
+            data,
+            {
+                "A-001": {
+                    "returned": True,
+                    "headSha": SHA2,
+                    "rollup": "green",
+                    "ci": "green",
+                    "check": "green",
+                    "checkCount": 12,
+                    "bugbot": "pass",
+                    "findings": [],
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "conflict": False,
+                    "conflictFiles": [],
+                }
+            },
+            beam_path=self.path,
+            now=NOW,
+        )
+        self.assertIn("bugbot: request A-001", text(second))
+        self.assertNotIn("review: wait", text(second))
+        self.assertNotEqual(row["status"], "merged")
+        self.assertFalse(row["pr"].get("conflict"))
+        self.assertEqual(row["pr"]["bugbot"], "")
+
+        third = pipeline.advance(
+            data,
+            {
+                "A-001": {
+                    "headSha": SHA2,
+                    "bugbot": "pass",
+                    "findings": [],
+                    "rollup": "green",
+                    "ci": "green",
+                    "check": "green",
+                    "checkCount": 12,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "conflict": False,
+                    "acs": {"routes": "pass"},
+                    "merge": "merged",
+                    "sha": SHA2,
+                }
+            },
+            beam_path=self.path,
+            now=NOW,
+        )
+        done = text(third)
+        self.assertNotIn("review: wait", done)
+        self.assertIn("merge: A-001 merged", done)
+        self.assertEqual(row["status"], "merged")
+        self.assertEqual(row["phase"], "merged")
+
+    def test_no_checks_and_a_stale_finding_rebase_instead_of_waiting(self):
+        data = beam(
+            [
+                reviewing(
+                    "A-004",
+                    bugbot="fail",
+                    bugbotFindings=1,
+                    check="pending",
+                    rollup="pending",
+                    ci="pending",
+                )
+            ]
+        )
+        data["tickets"]["A-004"]["pr"]["bugbotFindings"] = "routes registered twice"
+        lines = pipeline.advance(
+            data,
+            {
+                "A-004": {
+                    "headSha": SHA2,
+                    "headAgeMinutes": 10,
+                    "rollup": "absent",
+                    "ci": "absent",
+                    "checkCount": 0,
+                    "checks": [],
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "conflictFiles": ROUTES,
+                }
+            },
+            now=NOW,
+        )
+        blob = text(lines)
+        row = data["tickets"]["A-004"]
+        self.assertNotIn("review: wait", blob)
+        self.assertNotIn("ci: start", blob)
+        self.assertNotIn("routes registered twice", blob)
+        self.assertIn("fixer: A-004 rebase", blob)
+        self.assertEqual(pipeline.findings_of(row), [])
+        self.assertEqual(row["pr"]["bugbotFindings"], [])
+        self.assertTrue(row["pr"]["ciAbsent"])
+        self.assertEqual(row["pr"]["conflict"], ROUTES)
+        self.assertNotEqual(row["status"], "merged")
+
+    def test_a_stale_sha_drops_green_results_and_requests_bugbot(self):
+        old = "c" * 40
+        row = reviewing(
+            "S-9",
+            headSha=old,
+            rollup="green",
+            rollupSha=old,
+            ci="green",
+            ciSha=old,
+            check="green",
+            checkSha=old,
+            bugbot="pass",
+            bugbotSha=old,
+            bugbotFindings=["old race"],
+            bugbotFindingsSha=old,
+            acResults={"builds": "pass"},
+        )
+        data = beam([row])
+        lines = pipeline.advance(
+            data,
+            {
+                "S-9": {
+                    "headSha": SHA,
+                    "rollup": "green",
+                    "ci": "green",
+                    "check": "green",
+                    "checkCount": 12,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "conflict": False,
+                }
+            },
+            now=NOW,
+        )
+        saved = data["tickets"]["S-9"]
+        self.assertEqual(saved["pr"]["rollup"], "green")
+        self.assertEqual(saved["pr"]["rollupSha"], SHA)
+        self.assertEqual(saved["pr"]["bugbot"], "pending")
+        self.assertEqual(saved["pr"]["bugbotFindings"], [])
+        self.assertEqual(pipeline.findings_of(saved), [])
+        self.assertIn("bugbot: request S-9", text(lines))
+        self.assertNotIn("old race", text(lines))
+        self.assertNotEqual(saved["status"], "merged")
+
+    def test_a_green_check_beats_a_pending_rollup_for_the_same_head(self):
+        same = {
+            "id": "C-1",
+            "status": "review",
+            "pr": {
+                "headSha": SHA,
+                "rollup": "pending",
+                "rollupSha": SHA,
+                "check": "green",
+                "checkSha": SHA,
+                "ci": "pending",
+                "ciSha": SHA,
+            },
+        }
+        self.assertTrue(orchestrator.checks_green(same, {"checkCommand": "make ci"}))
+        same["pr"]["rollup"] = "red"
+        self.assertFalse(orchestrator.checks_green(same, {"checkCommand": "make ci"}))
+        same["pr"]["rollup"] = "pending"
+        same["pr"]["rollupSha"] = "old"
+        same["pr"]["check"] = "green"
+        same["pr"]["checkSha"] = SHA
+        self.assertTrue(orchestrator.checks_green(same, {"checkCommand": "make ci"}))
+
+    def test_result_json_fills_empty_acceptance_results(self):
+        self._result("R-1", {"builds": "pass"})
+        row = reviewing("R-1")
+        self.assertTrue(pipeline.acs_pass(row, self.tmp))
+        self.assertEqual(row["pr"]["acResults"], {"builds": "pass"})
+
+        other = reviewing("R-2")
+        folder = self.tmp / ".warp" / "tickets" / "R-2"
+        folder.mkdir(parents=True)
+        (folder / "result.json").write_text(json.dumps({"acs": {"docs": "pass"}}) + "\n")
+        data = beam([other])
+        pipeline.advance(data, {"R-2": {"headSha": SHA}}, beam_path=self.path, now=NOW)
+        self.assertEqual(data["tickets"]["R-2"]["pr"]["acResults"], {"docs": "pass"})
+
+    def test_ci_inside_the_grace_period_waits_and_past_it_starts(self):
+        waiting = beam([reviewing("W-9", bugbot="pass", rollup="absent", ci="absent", check="")])
+        held = pipeline.advance(
+            waiting,
+            {"W-9": {"headSha": SHA, "headAgeMinutes": 1, "rollup": "absent", "ci": "absent", "checkCount": 0, "checks": []}},
+            now=NOW,
+        )
+        self.assertIn("review: wait W-9", text(held))
+        self.assertNotIn("ci: start", text(held))
+        self.assertFalse(waiting["tickets"]["W-9"]["pr"].get("ciAbsent"))
+
+        late = beam(
+            [reviewing("L-9", bugbot="pass", rollup="absent", ci="absent", check="")],
+            ciStartGraceMinutes=5,
+        )
+        started = pipeline.advance(
+            late,
+            {
+                "L-9": {
+                    "headSha": SHA,
+                    "headAgeMinutes": 5,
+                    "rollup": "absent",
+                    "ci": "absent",
+                    "checkCount": 0,
+                    "checks": [],
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                }
+            },
+            now=NOW,
+        )
+        self.assertIn("ci: start L-9", text(started))
+        self.assertNotIn("review: wait", text(started))
+        self.assertTrue(late["tickets"]["L-9"]["pr"]["ciAbsent"])
+
+    def test_supervise_fetches_github_when_no_provider_file_is_passed(self):
+        import provider
+
+        data = beam(
+            [
+                reviewing(
+                    "A-001",
+                    url="https://github.com/acme/app/pull/82",
+                    bugbot="",
+                    check="",
+                    rollup="",
+                    ci="",
+                )
+            ]
+        )
+        self.path.write_text(json.dumps(data) + "\n")
+        calls = []
+
+        def fake(root, pr):
+            calls.append(str(pr))
+            return {
+                "headSha": SHA,
+                "rollup": "green",
+                "ci": "green",
+                "check": "green",
+                "checkCount": 12,
+                "mergeable": "MERGEABLE",
+                "mergeStateStatus": "CLEAN",
+                "bugbot": "pass",
+                "conflict": False,
+                "conflictFiles": [],
+            }
+
+        original = provider.fetch_pr_state
+        provider.fetch_pr_state = fake
+        try:
+            orchestrator.supervise(self.path, now=NOW)
+        finally:
+            provider.fetch_pr_state = original
+        self.assertEqual(calls, ["https://github.com/acme/app/pull/82"])
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved["tickets"]["A-001"]["pr"]["headSha"], SHA)
+        self.assertEqual(saved["tickets"]["A-001"]["pr"]["rollup"], "green")
+        self.assertNotIn("_repoRoot", saved)
+
+        calls.clear()
+        provider.fetch_pr_state = fake
+        try:
+            orchestrator.supervise(
+                self.path,
+                now=NOW,
+                provider={"A-001": {"rollup": "pending", "headSha": SHA}},
+            )
+        finally:
+            provider.fetch_pr_state = original
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

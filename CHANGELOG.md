@@ -3,6 +3,7 @@
 ## 1.4.16
 
 - `pipeline.findings_of` crashed when `pr.bugbotFindings` was an int, a string, or another non-list. `jira_sync.mark_bugbot_fail` had stored a running count, and a shuttle snapshot passed a string through `list()`, which split it into characters. The field is now a list of finding strings. A count above 0 is stored as `N Bugbot findings (details not loaded)`, so the merge gate stays closed and a fix run starts. 0 and false are no findings. A dict finding stores its message, or else its body.
+- `orchestrator.py supervise` reads each open pull request from GitHub when it is started without a `--provider` file. It stores the head sha, rollup, CI, mergeable state, and conflicting files, and it drops a green rollup, CI, or Bugbot result that belongs to an older sha. A CONFLICTING or DIRTY pull request rebases in that same pass. Route registration files keep both sides. A head with no check runs after `ciStartGraceMinutes` (default 5) starts CI in that pass instead of waiting as ordinary pending. A green check for the current head beats a stored pending rollup. Acceptance results fall back to the Shuttle `RESULT.json` when `acResults` was never filled. Bugbot findings belong to the head sha, and a finding from an older sha re-requests Bugbot instead of blocking. A heartbeat, or a start that does not change the commit, the phase, or a check result, does not reset the stall clock. The stall timer is only for a stall that cannot be classified.
 
 ## 1.4.15
 

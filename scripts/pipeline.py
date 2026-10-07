@@ -67,8 +67,60 @@ def ac_map(ticket: dict) -> dict:
     return {str(key): str(value).strip().casefold() for key, value in raw.items()}
 
 
-def acs_pass(ticket: dict) -> bool:
+def _repo_root(root) -> Optional[Path]:
+    if not root:
+        return None
+    return Path(root)
+
+
+def _acs_from_doc(doc) -> dict:
+    if not isinstance(doc, dict):
+        return {}
+    for key in ("acResults", "acs", "results"):
+        raw = doc.get(key)
+        if isinstance(raw, dict) and raw:
+            return {str(name): str(value) for name, value in raw.items()}
+    values = list(doc.values())
+    if doc and all(isinstance(value, str) and value.strip().casefold() in _PASS | {"fail", "failed", "red"} for value in values):
+        return {str(name): str(value) for name, value in doc.items()}
+    return {}
+
+
+def load_shuttle_results(root, ticket_id) -> dict:
+    """Acceptance results from RESULT.json when the beam never got acResults."""
+    base = _repo_root(root)
+    if base is None or not ticket_id:
+        return {}
+    tid = str(ticket_id)
+    paths = [
+        base / "tasks" / tid / "RESULT.json",
+        base / ".warp" / "tickets" / tid / "RESULT.json",
+        base / ".warp" / "tickets" / tid / "result.json",
+    ]
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        found = _acs_from_doc(doc)
+        if found:
+            return found
+    return {}
+
+
+def acs_pass(ticket: dict, root=None) -> bool:
     results = ac_map(ticket)
+    if not results:
+        loaded = load_shuttle_results(root, ticket.get("id"))
+        if loaded:
+            pr = ticket.get("pr")
+            if not isinstance(pr, dict):
+                pr = {}
+                ticket["pr"] = pr
+            pr["acResults"] = loaded
+            results = ac_map(ticket)
     return bool(results) and all(value in _PASS for value in results.values())
 
 
@@ -131,6 +183,12 @@ def findings_of(ticket: dict) -> list:
     pr = ticket.get("pr") if isinstance(ticket, dict) else None
     if not isinstance(pr, dict):
         return []
+    head = str(pr.get("headSha") or "").strip()
+    tied = str(pr.get("bugbotFindingsSha") or "").strip()
+    if head and tied and tied != head:
+        return []
+    if head and not tied and pr.get("bugbotFindings") not in (None, [], "", 0, False):
+        return []
     return coerce_findings(pr.get("bugbotFindings"))
 
 
@@ -170,7 +228,12 @@ def next_findings(raw) -> list:
 
 
 def bugbot_state(ticket: dict) -> str:
-    return str((ticket.get("pr") or {}).get("bugbot") or "").strip().casefold()
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    head = str(pr.get("headSha") or "").strip()
+    tied = str(pr.get("bugbotSha") or "").strip()
+    if head and tied and tied != head:
+        return ""
+    return str(pr.get("bugbot") or "").strip().casefold()
 
 
 def bugbot_finished(ticket: dict, config: Optional[dict]) -> bool:
@@ -187,13 +250,13 @@ def red_reasons(ticket: dict, config: Optional[dict]) -> list:
         reasons.append("bugbot fail")
     for item in findings_of(ticket):
         reasons.append("bugbot: %s" % item)
-    if str(pr.get("ci") or "").strip().casefold() == "red":
+    ci = orchestrator._for_head(pr, "ci", "ciSha")
+    if ci == "red":
         reasons.append("ci red")
-    rollup = str(pr.get("rollup") or "").strip().casefold()
-    if rollup in _RED_WORD:
+    if orchestrator.provider_rollup(ticket) == "red":
         reasons.append("rollup red")
     if orchestrator.check_command(config):
-        if str(pr.get("check") or "").strip().casefold() in _RED_WORD:
+        if orchestrator._for_head(pr, "check", "checkSha") in _RED_WORD:
             reasons.append("check red")
     for name, value in ac_map(ticket).items():
         if value not in _PASS:
@@ -223,24 +286,207 @@ def gate_open(ticket: dict, config: Optional[dict]) -> bool:
     return False
 
 
-def _apply_snapshot(ticket: dict, snap: Optional[dict]) -> None:
+def _sha_of(snap: dict, pr: dict) -> str:
+    return str(snap.get("headSha") or snap.get("sha") or pr.get("headSha") or "").strip()
+
+
+def _drop_stale_results(pr: dict, new_sha: str) -> None:
+    """A green rollup, CI, check, or Bugbot result belongs to the sha that produced it."""
+    old = str(pr.get("headSha") or "").strip()
+    if not new_sha:
+        return
+    if old and old != new_sha:
+        for field, sha_field, pending in (
+            ("rollup", "rollupSha", "pending"),
+            ("ci", "ciSha", "pending"),
+            ("check", "checkSha", "pending"),
+            ("bugbot", "bugbotSha", "pending"),
+        ):
+            tied = str(pr.get(sha_field) or "").strip()
+            if tied != new_sha:
+                pr[field] = pending
+                pr[sha_field] = ""
+        tied_findings = str(pr.get("bugbotFindingsSha") or "").strip()
+        if tied_findings != new_sha:
+            pr["bugbotFindings"] = []
+            pr["bugbotFindingsSha"] = ""
+            pr["bugbotRequested"] = False
+        return
+    if not old and not str(pr.get("bugbotFindingsSha") or "").strip():
+        if pr.get("bugbotFindings") not in (None, [], "", 0, False):
+            pr["bugbotFindings"] = []
+            pr["bugbotRequested"] = False
+
+
+def _conflicted_value(snap: dict, pr: dict) -> bool:
+    mergeable = str(snap.get("mergeable") or pr.get("mergeable") or "").upper()
+    state = str(snap.get("mergeStateStatus") or pr.get("mergeStateStatus") or "").upper()
+    if mergeable == "CONFLICTING" or state in {"DIRTY", "CONFLICTING"}:
+        return True
+    if snap.get("conflict") not in (None, False, "", []):
+        return True
+    return False
+
+
+def _note_ci_absent(pr: dict, snap: dict, now, cfg: dict) -> None:
+    count = snap.get("checkCount")
+    if count is None and isinstance(snap.get("checks"), list):
+        count = len(snap["checks"])
+    rollup = str(snap.get("rollup") if "rollup" in snap else pr.get("rollup") or "").strip().casefold()
+    if count is None and rollup == "absent":
+        count = 0
+    if count is None:
+        return
+    pr["checkCount"] = count
+    if int(count) != 0:
+        pr["ciAbsent"] = False
+        return
+    try:
+        grace = int(cfg.get("ciStartGraceMinutes") if cfg.get("ciStartGraceMinutes") is not None else 5)
+    except (TypeError, ValueError):
+        grace = 5
+    if grace < 0:
+        grace = 5
+    age = snap.get("headAgeMinutes")
+    if age is None:
+        stamp = snap.get("headAt") or pr.get("headAt")
+        if stamp and now:
+            import beam as beam_mod
+
+            start = beam_mod.parse_ts(str(stamp))
+            end = beam_mod.parse_ts(str(now))
+            if start is not None and end is not None:
+                age = max(0.0, (end - start).total_seconds() / 60.0)
+    if age is None:
+        pr["ciAbsent"] = False
+        return
+    pr["headAgeMinutes"] = age
+    pr["ciAbsent"] = float(age) >= grace
+
+
+def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[dict] = None) -> None:
     if not snap:
         return
     pr = ticket.setdefault("pr", {})
+    cfg = cfg or {}
+    new_sha = _sha_of(snap, pr)
+    _drop_stale_results(pr, new_sha)
+    if new_sha:
+        pr["headSha"] = new_sha
+    if snap.get("headAt"):
+        pr["headAt"] = snap["headAt"]
     if snap.get("pr"):
         pr["url"] = snap["pr"]
         pr["opened"] = True
-    for key in ("rollup", "bugbot", "ci", "check", "checkLog"):
+    for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
+            if new_sha:
+                pr[sha_field] = new_sha
+    if "checkLog" in snap and snap["checkLog"] is not None:
+        pr["checkLog"] = snap["checkLog"]
     if "findings" in snap:
         pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
+        if new_sha:
+            pr["bugbotFindingsSha"] = new_sha
+    if snap.get("mergeable"):
+        pr["mergeable"] = snap["mergeable"]
+    if snap.get("mergeStateStatus"):
+        pr["mergeStateStatus"] = snap["mergeStateStatus"]
+    if _conflicted_value(snap, pr):
+        files = snap.get("conflictFiles")
+        if not isinstance(files, list):
+            raw = snap.get("conflict")
+            files = raw if isinstance(raw, list) else []
+        cleaned = [str(path) for path in files if str(path).strip()]
+        pr["conflict"] = cleaned or True
+        pr["behind"] = False
+    elif "conflict" in snap or "mergeable" in snap or "mergeStateStatus" in snap:
+        pr["conflict"] = False
+    if "behind" in snap or snap.get("mergeStateStatus"):
+        state = str(snap.get("mergeStateStatus") or "").upper()
+        pr["behind"] = bool(snap.get("behind") or state == "BEHIND") and not pr.get("conflict")
+    _note_ci_absent(pr, snap, now, cfg)
     if isinstance(snap.get("acs"), dict):
         pr["acResults"] = {str(key): str(value) for key, value in snap["acs"].items()}
     if snap.get("escaped"):
         ticket["escaped"] = [str(path) for path in snap["escaped"] if str(path).strip()]
         ticket["status"] = "alarm"
         ticket["alarm"] = "lock-escape"
+
+
+def rebase_detail(ticket: dict) -> str:
+    """What the rebase Shuttle does, including route files that must keep both sides."""
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    files = pr.get("conflict")
+    names = [str(path) for path in files] if isinstance(files, list) else []
+    detail = "rebase onto main"
+    if names:
+        detail += " files %s" % ", ".join(names)
+    detail += "; merge main and resolve the conflict"
+    if names and any(name.endswith("routes.go") or "route" in name.casefold() for name in names):
+        detail += "; route registration files keep both sides"
+    else:
+        detail += "; when both sides add entries in a route registration file, keep both"
+    detail += "; run checkCommand and push"
+    return detail
+
+
+def start_rebase(data: dict, ticket: dict, lines: list) -> None:
+    """Start a rebase Shuttle in this pass. A conflict does not wait for the stall timer."""
+    ticket["status"] = "fix"
+    ticket["phase"] = "fixing"
+    mark_shuttle(ticket, "fix")
+    lines.extend(_start_lines(data, ticket, "fix", rebase_detail(ticket)))
+    lines.append("fixer: %s rebase" % ticket.get("id"))
+
+
+def start_ci(data: dict, ticket: dict, lines: list) -> None:
+    """The head has no check runs past the grace period. Ask for the workflow now."""
+    tid = ticket.get("id")
+    ticket["status"] = "fix"
+    ticket["phase"] = "fixing"
+    mark_shuttle(ticket, "fix")
+    lines.append("ci: start %s" % tid)
+    lines.extend(
+        _start_lines(
+            data,
+            ticket,
+            "fix",
+            "ci never started; push an empty commit so pull_request workflows run",
+        )
+    )
+    lines.append("fixer: %s ci-start" % tid)
+
+
+def _conflicted(ticket: dict) -> bool:
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if pr.get("conflict"):
+        return True
+    mergeable = str(pr.get("mergeable") or "").upper()
+    state = str(pr.get("mergeStateStatus") or "").upper()
+    return mergeable == "CONFLICTING" or state in {"DIRTY", "CONFLICTING"}
+
+
+def live_provider(data: dict, beam_path) -> dict:
+    """Pull request state from GitHub when supervise was started without --provider."""
+    import provider as provider_mod
+
+    root = Path(beam_path).resolve().parent.parent
+    found = {}
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for ticket in tickets.values():
+        if not isinstance(ticket, dict):
+            continue
+        if ticket.get("status") in {"merged", "done", "parked", "skipped"}:
+            continue
+        url = (ticket.get("pr") or {}).get("url") if isinstance(ticket.get("pr"), dict) else ""
+        if not url:
+            continue
+        snap = provider_mod.fetch_pr_state(root, url)
+        if snap:
+            found[ticket.get("id")] = snap
+    return found
 
 
 def _returned(ticket: dict, snap: Optional[dict]) -> bool:
@@ -470,9 +716,28 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
     return "continue"
 
 
+def _ensure_acs(data: dict, ticket: dict) -> None:
+    if ac_map(ticket):
+        return
+    loaded = load_shuttle_results(data.get("_repoRoot"), ticket.get("id"))
+    if not loaded:
+        return
+    pr = ticket.get("pr")
+    if not isinstance(pr, dict):
+        pr = {}
+        ticket["pr"] = pr
+    pr["acResults"] = loaded
+
+
 def _follow(data: dict, ticket: dict, lines: list) -> None:
     cfg = data.get("config") or {}
     phase = ticket.get("phase")
+    if _conflicted(ticket):
+        start_rebase(data, ticket, lines)
+        return
+    if (ticket.get("pr") or {}).get("ciAbsent"):
+        start_ci(data, ticket, lines)
+        return
     if phase == "implementing":
         if pending(ticket):
             lines.append("shuttle: hold %s" % ticket.get("id"))
@@ -511,7 +776,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
         clean = (
             bugbot_finished(ticket, cfg)
             and orchestrator.checks_green(ticket, cfg)
-            and acs_pass(ticket)
+            and acs_pass(ticket, data.get("_repoRoot"))
             and not findings_of(ticket)
         )
         if clean:
@@ -522,6 +787,9 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
             _request_bugbot(ticket, lines)
+            return
+        if _conflicted(ticket):
+            start_rebase(data, ticket, lines)
             return
         lines.append("review: wait %s" % ticket.get("id"))
         return
@@ -543,7 +811,7 @@ def _hold_or_queue(ticket: dict, lines: list) -> None:
         lines.append("approve: wait %s" % ticket.get("id"))
 
 
-def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list) -> None:
+def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list, now=None) -> None:
     status = ticket.get("status")
     if status in orchestrator.SETTLED:
         if status == "parked":
@@ -553,7 +821,8 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
         else:
             ticket["phase"] = "merged"
         return
-    _apply_snapshot(ticket, snap)
+    _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
+    _ensure_acs(data, ticket)
     if _recover_alarm(data, ticket, lines, deferred):
         return
     _ensure_phase(ticket)
@@ -678,20 +947,28 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
     deferred: list = []
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
         return ["pipeline: idle"]
-    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    for ticket in list(tickets.values()):
-        if not isinstance(ticket, dict):
-            continue
-        tid = ticket.get("id")
-        _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred)
-    if deferred and beam_path is not None:
-        _run_repairs(data, beam_path, lines, now)
-    elif deferred:
-        lines.append("alarm-repair: no beam")
-    _refill(data, lines)
-    _merge_one(data, provider, lines)
-    _refill(data, lines)
-    import watch
+    owned_root = False
+    if beam_path is not None:
+        data["_repoRoot"] = str(Path(beam_path).resolve().parent.parent)
+        owned_root = True
+    try:
+        tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+        for ticket in list(tickets.values()):
+            if not isinstance(ticket, dict):
+                continue
+            tid = ticket.get("id")
+            _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
+        if deferred and beam_path is not None:
+            _run_repairs(data, beam_path, lines, now)
+        elif deferred:
+            lines.append("alarm-repair: no beam")
+        _refill(data, lines)
+        _merge_one(data, provider, lines)
+        _refill(data, lines)
+        import watch
 
-    lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
-    return lines
+        lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
+        return lines
+    finally:
+        if owned_root:
+            data.pop("_repoRoot", None)

@@ -76,10 +76,13 @@ def _repair_running(data: dict, ticket: dict) -> bool:
     return repair.get("active") == ticket.get("id")
 
 
-def _bugbot_findings(pr: dict) -> list:
+def _bugbot_findings(source: dict) -> list:
+    """Findings for this head. A pr dict or a ticket both honor the sha."""
     import pipeline
 
-    return pipeline.coerce_findings(pr.get("bugbotFindings"))
+    if isinstance(source, dict) and isinstance(source.get("pr"), dict):
+        return pipeline.findings_of(source)
+    return pipeline.findings_of({"pr": source if isinstance(source, dict) else {}})
 
 
 def _ticket_action(data: dict, ticket: dict, snap: dict) -> str:

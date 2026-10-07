@@ -47,7 +47,8 @@ Agents re-read the yaml. The beam keeps a copy taken at scan time; change the ya
 | stallMergingMinutes | `20` | No progress while the ticket is merging. |
 | stallQueuedMinutes | `180` | No progress while the ticket is queued. |
 | stallApprovalMinutes | `240` | No progress while waiting on approval or blocked. |
-| stallMinutes | `45` | Fallback for recovering and alarm, and for a state without its own limit. A newer heartbeat is progress and clears the stall. |
+| stallMinutes | `45` | Fallback for recovering and alarm, and for a state without its own limit. Progress is a new commit, a phase change, or a check result change. A heartbeat, or a start that does not change those, does not clear the stall. A conflict, CI that never started, a stale rollup, or a head sha mismatch is fixed on that pass. The stall timer is only for a stall that cannot be classified. |
+| ciStartGraceMinutes | `5` | Minutes to wait for the first check run on a pull request head. Zero check runs after this is not ordinary pending: supervise re-requests the workflow or pushes an empty commit in that pass. A CONFLICTING or DIRTY pull request is rebased first. |
 | statusDigestMinutes | `60` | How often supervise posts one short Slack digest of alarms, stalls, and state counts. A new stall or alarm posts once and is not posted again. |
 | maxStallFixes | `5` | Fixer attempts for one stalled or alarmed ticket. Past this cap the ticket parks and Slack gets one alarm. |
 | repairSweepMinutes | `15` | How often supervise sweeps the whole run for broken tickets, pull requests, CI on main, locks, gates, the listener, and the beam. It skips a fix that is already queued or running, reuses the fixer paths, and starts work up to the slot cap. Findings and actions are logged on `repairSweep` and in `.warp/sweep.jsonl`. `/warp-status` shows the last sweep. Slack is posted only when the sweep starts something new or escalates. |
