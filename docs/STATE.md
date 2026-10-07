@@ -5,6 +5,7 @@
 ```
 .warp/config.yaml          caps, model, messenger, connector names
 .warp/beam.json            tickets, gates, agents, metrics. The orchestrator is the only writer.
+.warp/agents.json          registry of Shuttle, listener, and Bugbot agents. Committed with the beam. No API key.
 .warp/tickets/<id>/state.json   one ticket's current state. That Agent writes it. It may merge.
 .warp/tickets/<id>/log.jsonl    one ticket's append-only mini log. That Agent writes it. It may merge.
 .warp/journal.jsonl        append-only events
@@ -41,6 +42,8 @@
 Plugin hooks do not run on cloud runners, and they are not required there. `scripts/resume_hint.py` prints the resume hint (paused, done/total, ETA, alarms) and does not dispatch. `/warp-start`, `/warp-resume`, and `/warp-status` print it. `scripts/session_note.py` appends `session-stop` or `subagent-stop` to `.warp/journal.jsonl`. `/warp-stop` and `/warp-pause` append `session-stop`. A Shuttle appends `subagent-stop` when it finishes. A second note of the same type is skipped while it is still the last journal line. The beam stays the source of truth. Local hooks in `hooks/hooks.json` only repeat those scripts. `/warp-allow-notify` still installs a local `beforeMCPExecution` hook. Cloud agents run `scripts/mcp_allow.py` and call a tool only when it prints `allow`.
 
 ## Remote status
+
+`.warp/agents.json` records every spawn and every exit: `id`, `ticket`, `role` (`shuttle`, `listener`, or `bugbot`), `session`, `started`, `ended`, and `state`. A ticket has one live Shuttle. The old row is `ended` before a replacement is recorded. `/warp-cleanup` lists the file. `/warp-stop` sets live rows to `stopped`. Merge and park end that ticket's rows. `CURSOR_API_KEY` is read from the environment only when cleanup archives a cloud agent. It is never written into this file. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders, including this registry when `state_commit.py` committed it.
 
 The claim goes in. The launch snapshot of `.warp/beam.json` is committed onto the ticket branch so the Agent can read its claim. That file is not a live feed. The Agent does not commit updates to it, and a merge onto the base branch does not take it. The orchestrator keeps the live beam.
 
@@ -110,7 +113,7 @@ A worker is dead when `lastSeenAt` is older than `staleMinutes` (default 15), or
 
 The listener is a Subagent of the parent turn. The watchdog prints `listener: subagent` and does not reserve a replacement id. A running flag from the previous turn does not block the next tick. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders. Every merge and the end of each parent tick commit the live beam onto main. The ticket branch's beam is not the copy that lands. `/warp-update-state` loads that beam from main, patches `.warp/tickets/<id>/` only, puts back pause, stop, claims, and runState the parent has that main does not, and pushes. `/warp-pause` and `/warp-stop` run that sync before they return. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true.
 
-Dead Shuttle (`claimed`, `planning`, `coding`, `fix`, or already `recovering`): the launch slot is released immediately. It does not count as a live Shuttle. Branch, pull request, `jira.startedAt`, and locks stay. The ticket is not queued, so `ready()` will not hand the same files to someone else. On start or resume, Warp marks Shuttles from the previous parent session as needing a replacement and starts as many as the live caps allow. Dispatch exactly one new Shuttle for each `shuttle: replace <id>` line. Status becomes `recovering` when that replacement starts. Herald posts one line: `<id> worker died. A new Shuttle started.` The replacement heartbeats, then sets status back to `recoveryPriorStatus` and continues the branch. Past `maxRecoveries`, status is `alarm` and `alarm` is `worker-died`. Do not start another.
+Dead Shuttle (`claimed`, `planning`, `coding`, `fix`, or already `recovering`): the launch slot is released immediately. It does not count as a live Shuttle. Branch, pull request, `jira.startedAt`, and locks stay. The ticket is not queued, so `ready()` will not hand the same files to someone else. On start or resume, a fresh heartbeat stays. A stale heartbeat needs a replacement, and Warp starts as many as the live caps allow. Dispatch exactly one new Shuttle for each `shuttle: replace <id>` line. Status becomes `recovering` when that replacement starts. Herald posts one line: `<id> worker died. A new Shuttle started.` The replacement heartbeats, then sets status back to `recoveryPriorStatus` and continues the branch. Past `maxRecoveries`, status is `alarm` and `alarm` is `worker-died`. Do not start another.
 
 `stuckAfterMinutes` is a different signal (no beam update, and not waiting on approval). It does not release a lock. `orchestrator.py supervise` restarts that step up to `maxRecoveries`.
 

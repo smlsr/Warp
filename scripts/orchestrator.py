@@ -714,25 +714,17 @@ def _stale_minutes(beam: Optional[dict]) -> int:
 
 
 def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
-    """A slot is one Shuttle started in this parent session that is still out.
+    """A slot is one Shuttle that is still out.
 
     It has a fresh heartbeat, or it has not returned and the heartbeat is not
-    stale yet. In subagent mode a Shuttle from an earlier parent session is
-    dead even when that heartbeat is fresh: it died with that parent. VM mode
-    keeps a Shuttle whose heartbeat or start is still inside staleMinutes.
-    A claim with no Shuttle out does not count.
+    stale yet. A new parent session does not make a fresh heartbeat dead.
+    VM mode and subagent mode use the same rule. A claim with no Shuttle out
+    does not count.
     """
     if not isinstance(ticket, dict):
         return False
     shuttle = _shuttle_row(ticket)
     if not shuttle.get("pending") or shuttle_returned(ticket):
-        return False
-    cfg = {}
-    session = ""
-    if isinstance(beam, dict):
-        cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
-        session = str(beam.get("parentSession") or "")
-    if session and not vm_mode(cfg, beam) and str(shuttle.get("session") or "") != session:
         return False
     import beam as beam_mod
 
@@ -1537,6 +1529,27 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         if pending and polled:
             beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
         return ["listener: hold %s" % agent] if agent else ["listener: hold"]
+    import agents as agents_mod
+
+    decision = agents_mod.listener_decision(
+        data,
+        now=now_dt,
+        beam_path=beam_path,
+        returned=returned_text,
+    )
+    if decision == "closed":
+        return ["listener: idle"]
+    if decision == "backoff":
+        return ["listener: backoff"]
+    if decision == "cap":
+        lines = ["listener: cap"]
+        if not raw.get("restartCapped"):
+            raw["restartCapped"] = True
+            data["listener"] = raw
+            lines.append("herald: Listener restart cap reached. No new listener.")
+            agents_mod.cap_listener(data, now=now_dt, beam_path=beam_path)
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return lines
     note_after = beam_mod.config_int(data, beam_path, "listenerRestartNote", DEFAULT_LISTENER_RESTART_NOTE)
     if note_after < 1:
         note_after = DEFAULT_LISTENER_RESTART_NOTE
@@ -1556,6 +1569,7 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
             json.dumps({"at": now_s, "lines": [LISTENER_RESTART_NOTE]}, indent=2) + "\n",
         )
     data["listener"] = raw
+    agents_mod.note_listener_restart(data, now=now_dt, beam_path=beam_path, previous=str(agent or ""))
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
     beam_mod.journal(
         beam_path,
@@ -1859,6 +1873,11 @@ def main(argv: Optional[list] = None) -> int:
         data = _load(Path(args.beam))
         if parent_may_exit(data):
             print("parent: exit")
+            import agents as agents_mod
+
+            path = Path(args.beam)
+            for line in agents_mod.cleanup(data, beam_path=path):
+                print(line)
         else:
             print("parent: stay")
         return 0

@@ -43,7 +43,7 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 
 ### Update
 
-`/warp-upgrade` replaces an installed copy. Run it in the repo that has Warp installed. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-status`, and the other commands when the plugin command index still omits that path.
+`/warp-upgrade` replaces an installed copy. Run it in the repo that has Warp installed. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md` and `.cursor/commands/warp-cleanup.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-cleanup`, `/warp-status`, and the other commands when the plugin command index still omits that path.
 
 1. Run `/warp-upgrade` in the repo that has Warp installed.
 2. It replaces `.cursor/plugins/warp` with the plugin this command is running from.
@@ -75,6 +75,8 @@ python3 .cursor/plugins/warp/scripts/upgrade.py ?
 If `.cursor/plugins/warp/scripts/upgrade.py` is not there, that copy is not a full 1.4.6 tree. From a git checkout of https://github.com/smlsr/Warp at main, run the script with `--source` pointing at that checkout and `--root` pointing at the project, then Developer: Reload Window, then `/warp-version`.
 
 After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
+
+`/warp-cleanup` lists `.warp/agents.json`. A Shuttle is replaced only after it is confirmed dead, and a fix round resumes that Shuttle instead of starting another. Bugbot is requested once per head commit. Nothing spawns while the run is paused or stopped, or every ticket is merged or parked. `/warp-stop` tells every registered agent to stop. Idle cloud agents from an older run, including a pile of about 199, are not in that file. Set `CURSOR_API_KEY` in the environment (never commit it) and run `agents.py cleanup --beam .warp/beam.json --cloud --apply`. That calls `POST /v1/agents/{id}/archive` for every IDLE agent the key can see. Without the key, the command prints `https://cursor.com/agents/<id>` for the Cursor UI. If that slash command is missing from the command list, run `python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json`.
 
 Required for the Jira and Slack prompts:
 
@@ -118,7 +120,8 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-start` | Start dispatch. A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force` |
 | `/warp-pause` | Stop new claims and the listener, then push that paused beam to main | `--reason` |
 | `/warp-resume` | Resume a paused beam, load main's beam on a fresh checkout, run the watchdog, and start one listener Subagent | `--reason` |
-| `/warp-stop` | Stay stopped until the next start, and push that stopped beam to main | `--reason` |
+| `/warp-stop` | Stay stopped until the next start, tell every registered agent to stop, and push that stopped beam to main | `--reason` |
+| `/warp-cleanup` | List `.warp/agents.json`. With `CURSOR_API_KEY`, archive idle cloud agents | `--beam`, `--cloud`, `--apply` |
 | `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | List open tickets, alarms and stalls first, and rewrite `.warp/STATUS.md` and the board | |

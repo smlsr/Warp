@@ -294,6 +294,10 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
     if not has_claim(ticket):
         print("refuse: ticket %s has no claim; do not start the subagent" % ticket_id)
         return 2
+    import agents
+
+    for line in agents.note_checkout(data, ticket, beam_path=path):
+        print(line)
     ticket["branch"] = branch
     ticket["checkout"] = "subagent-vm"
     ticket["worktree"] = None
@@ -317,6 +321,10 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     if not has_claim(ticket):
         print("refuse: ticket %s has no claim; do not start the subagent" % ticket_id)
         return 2
+    import agents
+
+    for line in agents.note_checkout(data, ticket, beam_path=path):
+        print(line)
     if not _is_git(root):
         sys.exit("refuse: %s is not a git checkout" % root)
     base_name = _base_name(data.get("config") or {}, base)
@@ -356,6 +364,10 @@ def _launch_agent(root: Path, path: Path, data: dict, ticket: dict, branch: str,
     if not has_claim(ticket):
         print("refuse: ticket %s has no claim; do not start the Agent" % ticket_id)
         return 2
+    import agents
+
+    for line in agents.note_checkout(data, ticket, beam_path=path):
+        print(line)
     ticket["branch"] = branch
     ticket["checkout"] = "cloud-vm"
     _note_live(data, ticket)

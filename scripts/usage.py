@@ -47,6 +47,8 @@ SWITCHES = {
     "--force-external-id",
     "--open",
     "--partial",
+    "--cloud",
+    "--apply",
 }
 
 

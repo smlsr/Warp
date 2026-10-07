@@ -30,7 +30,7 @@ If status is `listener: running` for a different id, return that fact to the par
 
 Repeat this until the loop is paused or stopped. Do not return in the middle of it.
 
-1. If `inbound.py status` prints `listener: stopped`, or the beam `runState` is paused or stopped, return. That is a stop. Do not keep reading.
+1. If `inbound.py status` prints `listener: stopped`, or the beam `runState` is paused or stopped, or `agents.py check` prints `spawn: closed`, return. That is a stop. Do not keep reading. Do not start another listener.
 2. Read new messages in `slackChannel` with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. When `messenger` is `teams` or `both`, also read `teamsChannel` with `teams_read_channel`, `teams_read_thread`, and `teams_search_channels`. Call an MCP tool only when `scripts/mcp_allow.py` prints `allow`.
 3. For each new `warp:` message, run `inbound.py accept`, post the `ack:` sentence from `.warp/inbound-ack.json` in that channel, then enqueue the command. You do not merge. You do not call `proceed.py`. The parent runs `inbound.py apply-pending` and merges a proceed.
 

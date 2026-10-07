@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.20
+
+- Shuttles, listeners, and Bugbot runs were piling up as unarchived cloud agents. A new parent session treated an earlier Shuttle as dead even when its heartbeat was fresh, so start and resume launched a replacement and left the old one running. The watchdog and the next pipeline pass could each launch one. Every fix, rebase, and CI start printed `start` and created another agent. Bugbot was requested again on the same head commit, including when a stalled review bumped the review cycle. Listener restarts had no hourly cap. Pause, stop, and a finished run did not tell those agents to exit.
+- `.warp/agents.json` records every spawn and every exit (`id`, `ticket`, `role`, `session`, `started`, `ended`, `state`). A ticket has one live Shuttle. A replacement starts only after the turn has returned or the heartbeat is older than `staleMinutes`, and the old row is ended first. A fresh heartbeat stays live across parent sessions. A fix round prints `resume` and continues that Shuttle. `start` is a new agent.
+- New spawns stop at `maxSpawnsPerTicket` (8) and `maxSpawnsPerHour` (40). Listener restarts stop at `maxListenerRestartsPerHour` (8) and back off, up to 30 minutes. The ticket becomes `alarm` / `spawn-cap`, or the listener prints `listener: cap`, and later passes do not spawn. Bugbot is requested once per head commit (`bugbot: hold` on the same sha).
+- Nothing spawns while the run is paused or stopped, or every ticket is merged or parked. The listener and each Shuttle read `runState` and exit. `/warp-stop` marks every registered agent stopped. Merge, park, and the end of the run run cleanup.
+- `/warp-cleanup` lists the registry. Cursor's Cloud Agents API archives with `POST /v1/agents/{id}/archive` when `CURSOR_API_KEY` is set (`GET /v1/agents` with `--cloud`). The key is an environment variable and is never written. Without it, cleanup prints `https://cursor.com/agents/<id>`. Idle agents left by an older run are not in the registry: `agents.py cleanup --beam .warp/beam.json --cloud --apply` archives every IDLE agent that key can see. Init and upgrade copy `commands/warp-cleanup.md` into `.cursor/commands/`. `/warp-version` prints the script when the slash command is missing.
+
 ## 1.4.19
 
 - A launch slot is a live Shuttle: one started in this parent session that has a fresh heartbeat or has not returned yet. Ticket status and a stale claim do not count against `maxAgents`, `maxLocalSubagents`, or `maxFixWorkers`. A dead Shuttle releases its slot immediately.

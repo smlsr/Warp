@@ -175,10 +175,10 @@ class FixerTests(unittest.TestCase):
         )
         data = beam([row])
         lines = watch.apply(data, now=NOW)
-        self.assertIn("bugbot: request T-1 https://example.test/pull/2", text(lines))
-        self.assertIn("fixer: T-1 bugbot", text(lines))
-        self.assertEqual(data["tickets"]["T-1"]["pr"]["reviewCycle"], 1)
-        self.assertEqual(data["tickets"]["T-1"]["watch"]["fixerAttempts"], 1)
+        self.assertIn("bugbot: hold T-1", text(lines))
+        self.assertNotIn("bugbot: request", text(lines))
+        self.assertEqual(data["tickets"]["T-1"]["pr"]["reviewCycle"], 0)
+        self.assertEqual(data["tickets"]["T-1"]["watch"].get("fixerAttempts", 0), 0)
 
     def test_bugbot_that_never_started_is_requested(self):
         row = ticket(
@@ -393,22 +393,19 @@ class EscalationTests(unittest.TestCase):
         row["watch"]["stalled"] = True
         data = beam([row], maxStallFixes=2)
         first = watch.apply(data, now=NOW)
-        self.assertEqual(data["tickets"]["T-1"]["watch"]["fixerAttempts"], 1)
+        self.assertEqual(data["tickets"]["T-1"]["watch"].get("fixerAttempts", 0), 0)
         self.assertNotEqual(data["tickets"]["T-1"]["status"], "parked")
-        self.assertIn("fixer: T-1 bugbot", text(first))
+        self.assertIn("bugbot: hold T-1", text(first))
+        self.assertNotIn("bugbot: request", text(first))
         second = watch.apply(data, now=NOW)
-        self.assertEqual(data["tickets"]["T-1"]["watch"]["fixerAttempts"], 2)
-        self.assertIn("fixer: T-1 bugbot", text(second))
-        parked = watch.apply(data, now=NOW)
-        blob = text(parked)
-        self.assertEqual(data["tickets"]["T-1"]["status"], "parked")
-        self.assertEqual(data["tickets"]["T-1"]["parkReason"], "fixer cap: bugbot")
-        self.assertEqual(data["tickets"]["T-1"]["watch"]["fixerAttempts"], 2)
-        self.assertEqual(blob.count("slack: alarm T-1 fixer cap: bugbot"), 1)
-        self.assertIn("park: T-1 fixer cap: bugbot", blob)
+        self.assertEqual(data["tickets"]["T-1"]["watch"].get("fixerAttempts", 0), 0)
+        self.assertIn("bugbot: hold T-1", text(second))
+        self.assertNotEqual(data["tickets"]["T-1"]["status"], "parked")
         later = watch.apply(data, now=NOW)
         self.assertNotIn("slack: alarm", text(later))
-        self.assertEqual(data["tickets"]["T-1"]["watch"]["fixerAttempts"], 2)
+        self.assertIn("bugbot: hold T-1", text(later))
+        self.assertEqual(data["tickets"]["T-1"]["watch"].get("fixerAttempts", 0), 0)
+        self.assertNotEqual(data["tickets"]["T-1"]["status"], "parked")
 
 
 class StatusTests(unittest.TestCase):

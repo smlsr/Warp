@@ -827,8 +827,12 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         import pipeline
 
         session_lines = pipeline.open_parent_session(beam)
+    stop_lines = []
     if state == "stopped":
         beam["stoppedAt"] = utcnow()
+        import agents
+
+        stop_lines = agents.stop_all(beam, beam_path=beam_path)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": state, "reason": reason})
     if state in {"paused", "stopped"}:
@@ -855,6 +859,12 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         for line in watchdog(beam_path):
             print(line)
     if state == "stopped":
+        for line in stop_lines:
+            print(line)
+        import agents
+
+        for line in agents.cleanup(beam, beam_path=beam_path):
+            print(line)
         try:
             import report
 

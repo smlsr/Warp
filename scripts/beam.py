@@ -1517,6 +1517,21 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
             continue
         number = count + 1
         new_agent, number = _unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
+        import agents as agents_mod
+
+        blocked = agents_mod.record_replacement(data, ticket, new_agent, now=now_s, beam_path=beam_path)
+        if blocked:
+            if blocked == "cap":
+                prev = ticket.get("status")
+                ticket["status"] = "alarm"
+                ticket["alarm"] = "spawn-cap"
+                ticket["spawnCapped"] = True
+                ticket["updatedAt"] = now_s
+                lines.append("spawn: cap %s" % tid)
+                lines.append("herald: %s spawn cap reached. No new Shuttle." % tid)
+                events.append({"type": "spawn-cap", "id": tid})
+                changed = True
+            continue
         prev = ticket.get("status")
         if prev != "recovering":
             ticket["recoveryPriorStatus"] = prev
@@ -1526,9 +1541,13 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
         ticket["recoveredAt"] = now_s
         ticket["workerStartedAt"] = now_s
         ticket.pop("lastSeenAt", None)
+        ticket["needsReplacement"] = False
         shuttle = ticket.get("shuttle")
-        if isinstance(shuttle, dict):
-            shuttle["pending"] = False
+        if not isinstance(shuttle, dict):
+            shuttle = {}
+            ticket["shuttle"] = shuttle
+        shuttle["pending"] = True
+        shuttle["step"] = "restart"
         ticket["updatedAt"] = now_s
         append_ticket_event(beam_path, ticket, {"at": now_s, "type": "status", "from": prev, "to": "recovering"})
         append_ticket_event(
@@ -1724,6 +1743,9 @@ def default_config() -> dict:
         "listenerStaleMinutes": 15,
         "listenerRestartNote": 3,
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
+        "maxSpawnsPerTicket": 8,
+        "maxSpawnsPerHour": 40,
+        "maxListenerRestartsPerHour": 8,
         "alarmRepairMinutes": 15,
         "maxAlarmRepairs": 5,
         "respectMergeWindows": False,
