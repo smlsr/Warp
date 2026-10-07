@@ -10,6 +10,32 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
+
+
+def _frontmatter_block(text: str) -> str:
+    if not text.startswith("---\n"):
+        raise AssertionError("missing frontmatter")
+    end = text.find("\n---\n", 3)
+    if end < 0:
+        raise AssertionError("unclosed frontmatter")
+    return text[4:end]
+
+
+def _frontmatter_keys(text: str) -> list:
+    keys = []
+    for line in _frontmatter_block(text).splitlines():
+        if not line or line.startswith(" "):
+            continue
+        keys.append(line.split(":", 1)[0])
+    return keys
+
+
+def _frontmatter_value(text: str, key: str) -> str:
+    for line in _frontmatter_block(text).splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name == key:
+            return value.strip().strip("\"'")
+    raise AssertionError(key)
 sys.path.insert(0, str(SCRIPTS))
 import check_version  # noqa: E402
 import version  # noqa: E402
@@ -76,15 +102,32 @@ class PluginManifestTests(unittest.TestCase):
 
     def test_warp_upgrade_command_is_registered_with_the_others(self):
         command = (ROOT / "commands" / "warp-upgrade.md").read_text()
-        self.assertTrue(command.startswith("---\nname: warp-upgrade\n"), command)
         version_cmd = (ROOT / "commands" / "warp-version.md").read_text()
-        self.assertTrue(version_cmd.startswith("---\nname: warp-version\n"))
+        self.assertEqual(_frontmatter_keys(command), _frontmatter_keys(version_cmd))
+        self.assertEqual(_frontmatter_keys(command), ["name", "description"])
+        self.assertEqual(_frontmatter_value(command, "name"), "warp-upgrade")
+        self.assertEqual(_frontmatter_value(version_cmd, "name"), "warp-version")
+        self.assertEqual(_frontmatter_value(command, "name"), (ROOT / "commands" / "warp-upgrade.md").stem)
+        self.assertEqual(_frontmatter_value(version_cmd, "name"), (ROOT / "commands" / "warp-version.md").stem)
+        self.assertTrue(_frontmatter_value(command, "description"))
+        self.assertTrue(_frontmatter_value(version_cmd, "description"))
+        upgrade_skill = (ROOT / "skills" / "warp-upgrade" / "SKILL.md").read_text()
+        version_skill = (ROOT / "skills" / "warp-version" / "SKILL.md").read_text()
+        self.assertEqual(_frontmatter_keys(upgrade_skill), _frontmatter_keys(version_skill))
+        self.assertEqual(_frontmatter_keys(upgrade_skill), ["name", "description"])
+        self.assertEqual(_frontmatter_value(upgrade_skill, "name"), "warp-upgrade")
+        self.assertEqual(_frontmatter_value(version_skill, "name"), "warp-version")
+        self.assertEqual(
+            _frontmatter_value(upgrade_skill, "name"),
+            (ROOT / "skills" / "warp-upgrade" / "SKILL.md").parent.name,
+        )
         manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
         listed = manifest["commands"]
         self.assertIsInstance(listed, list)
         on_disk = sorted("./commands/" + path.name for path in (ROOT / "commands").glob("*.md"))
         self.assertEqual(listed, on_disk)
         self.assertIn("./commands/warp-upgrade.md", listed)
+        self.assertIn("./commands/warp-version.md", listed)
         skills = manifest["skills"]
         self.assertIsInstance(skills, list)
         on_disk_skills = sorted(
@@ -92,6 +135,7 @@ class PluginManifestTests(unittest.TestCase):
         )
         self.assertEqual(skills, on_disk_skills)
         self.assertIn("./skills/warp-upgrade", skills)
+        self.assertIn("./skills/warp-version", skills)
         self.assertTrue((ROOT / "scripts" / "upgrade.py").is_file())
 
 

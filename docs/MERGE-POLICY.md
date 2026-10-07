@@ -10,7 +10,7 @@ A pending or stale-red gate clears when every member is merged or done and no ch
 
 The one listener repairs `lock-escape` only, one ticket at a time, every `alarmRepairMinutes` (default 15). The repair widens that ticket's locks to the escaped paths. It waits when an in-flight ticket holds a path. Past `maxAlarmRepairs` (default 3) the alarm stays. `bugbot-failed`, `worker-died`, `stuck`, `ci-red`, and `gate-red` are left alone. Pause and stop do not repair. That repair is not a merge.
 
-`/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`.
+`/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`. Init and upgrade write `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md` so a reload lists `/warp-upgrade` when the plugin command index still omits that path.
 
 | Size | Class | Auto | Required before the last step |
 |---|---|---|---|

@@ -37,6 +37,8 @@ class InitTests(Base):
         self.assertIn('slackChannel: "warp"', cfg)
         self.assertIn('teamsChannel: "warp"', cfg)
         self.assertTrue((self.repo / ".cursor/plugins/warp/.cursor-plugin/plugin.json").exists())
+        slash = self.repo / ".cursor/commands/warp-upgrade.md"
+        self.assertEqual(slash.read_text(), (ROOT / "commands" / "warp-upgrade.md").read_text())
         gi = (self.repo / ".gitignore").read_text()
         before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
         r = run(INSTALL, "init", "--root", ".", cwd=self.repo)

@@ -43,7 +43,7 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 
 ### Update
 
-`/warp-upgrade` replaces an installed copy. Run it in the repo that has Warp installed.
+`/warp-upgrade` replaces an installed copy. Run it in the repo that has Warp installed. Init and upgrade write `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md` so a reload lists `/warp-upgrade` when the plugin command index still omits that path.
 
 1. Run `/warp-upgrade` in the repo that has Warp installed.
 2. It replaces `.cursor/plugins/warp` with the plugin this command is running from.
@@ -63,7 +63,7 @@ python3 <plugin>/scripts/upgrade.py --root .
 python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
 ```
 
-`/warp-upgrade` is `commands/warp-upgrade.md` with `name: warp-upgrade`, listed in `.cursor-plugin/plugin.json` with the other commands. Reload Cursor (Developer: Reload Window) after installing this plugin so it shows up next to them.
+`/warp-upgrade` is `commands/warp-upgrade.md` with `name: warp-upgrade` and a `description`, the same shape as `commands/warp-version.md`, listed in `.cursor-plugin/plugin.json` with the other commands. Cursor's plugin command index keeps the paths it had when that index was published, so this file is in the plugin root and still omitted there. Init and upgrade write `.cursor/commands/warp-upgrade.md` from that file. Reload Cursor (Developer: Reload Window) so that project command shows up next to the others.
 
 `/warp-version` prints the script when that slash command is missing from an older palette. The script does not need the slash command. A 1.4.6 tree includes `scripts/upgrade.py`:
 

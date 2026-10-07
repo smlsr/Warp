@@ -443,7 +443,7 @@ Run it in the repo that has Warp installed. It replaces `.cursor/plugins/warp` w
 
 `/warp-init` does not upgrade an existing copy. This command does. Init still copies only missing plugin files.
 
-The command file is `commands/warp-upgrade.md` (`name: warp-upgrade`), listed in `.cursor-plugin/plugin.json` with the other command files. Reload Cursor after the plugin install so `/warp-upgrade` is in the command list.
+The command file is `commands/warp-upgrade.md` (`name: warp-upgrade`, plus `description`), the same shape as `commands/warp-version.md`, listed in `.cursor-plugin/plugin.json` with the other command files. The skill is `skills/warp-upgrade/SKILL.md` (`name: warp-upgrade`), the same shape as `skills/warp-version/SKILL.md`. Cursor's plugin command index keeps the paths it had when that index was published. Those two files were added after every indexed command and skill, they are in the plugin root, and listing them did not add them to that index. Init and upgrade write `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md`. Reload Cursor so that project command shows up next to the others.
 
 The script does not need that slash command. `/warp-version` prints it when an older palette leaves the command out. A 1.4.6 tree includes `scripts/upgrade.py`:
 

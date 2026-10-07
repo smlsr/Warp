@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.9
+
+- Cursor's plugin command index lists every Warp command and skill except `commands/warp-upgrade.md` and `skills/warp-upgrade/SKILL.md`. Those files are in the plugin root. Their frontmatter (`name`, `description`), directory, and filename match `/warp-version`. They were added after every indexed command and skill. Replacing the `./commands/` and `./skills/` globs with an explicit list did not add them. The index keeps the paths it had when it was published.
+- `/warp-upgrade` stays `commands/warp-upgrade.md` with `name: warp-upgrade`, packaged the same way as `commands/warp-version.md`. Init and upgrade write that file to `.cursor/commands/warp-upgrade.md` so a reload lists it. The script is still `python3 .cursor/plugins/warp/scripts/upgrade.py`.
+
 ## 1.4.8
 
 - `/warp-upgrade` is `commands/warp-upgrade.md` with `name: warp-upgrade`. `.cursor-plugin/plugin.json` now lists that file, and the `warp-upgrade` skill, with the other commands and skills. Reload Cursor (Developer: Reload Window) so it shows up next to them.
