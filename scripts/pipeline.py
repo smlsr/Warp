@@ -461,11 +461,144 @@ def start_ci(data: dict, ticket: dict, lines: list) -> None:
 
 def _conflicted(ticket: dict) -> bool:
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-    if pr.get("conflict"):
+    if pr.get("conflict") or pr.get("behind"):
         return True
     mergeable = str(pr.get("mergeable") or "").upper()
     state = str(pr.get("mergeStateStatus") or "").upper()
     return mergeable == "CONFLICTING" or state in {"DIRTY", "CONFLICTING"}
+
+
+_FIX_SKIP = {"queued", "blocked", "merged", "done", "parked", "skipped"}
+_FIX_REVIEW = {"reviewing", "fixing"}
+
+
+def _defer_fix(data: dict, ticket: dict) -> None:
+    """Leave this ticket for the priority dispatch. Do not print review: wait."""
+    ids = data.setdefault("_fixDefer", [])
+    tid = str(ticket.get("id") or "")
+    if tid and tid not in ids:
+        ids.append(tid)
+
+
+def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
+    """Rank a fix the cold start and the supervise pass can launch.
+
+    1 is a conflict, a behind branch, or CI that never started.
+    2 is Bugbot findings. 3 is red CI or a failed acceptance criterion.
+    A ticket already in fixing with no Shuttle out is launched with the
+    conflicts. Ready and merging tickets are left for the merge queue.
+    """
+    if not isinstance(ticket, dict):
+        return None
+    if ticket.get("status") in _FIX_SKIP or pending(ticket):
+        return None
+    phase = ticket.get("phase")
+    if not phase and ticket.get("status") in {"review", "bugbot_running"}:
+        phase = "reviewing"
+    elif not phase and ticket.get("status") == "fix":
+        phase = "fixing"
+    if phase in {"ready", "merging", "merged", "parked"}:
+        return None
+    import beam as beam_mod
+
+    if not beam_mod.ticket_in_progress(ticket) and ticket.get("status") != "alarm":
+        return None
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    tid = str(ticket.get("id") or "")
+    if _conflicted(ticket):
+        return {"id": tid, "rank": 1, "sub": 0, "kind": "rebase"}
+    if pr.get("ciAbsent"):
+        return {"id": tid, "rank": 1, "sub": 1, "kind": "ci-start"}
+    if phase == "fixing" and ticket.get("status") != "alarm":
+        return {"id": tid, "rank": 1, "sub": 2, "kind": "continue"}
+    if phase not in _FIX_REVIEW and ticket.get("status") != "alarm":
+        return None
+    reasons = red_reasons(ticket, config or {})
+    alarm = str(ticket.get("alarm") or "")
+    if ticket.get("status") == "alarm" and alarm in {"ci-red", "bugbot-failed"}:
+        reasons = list(reasons or [alarm])
+        if alarm not in reasons:
+            reasons.insert(0, alarm)
+    if not reasons:
+        return None
+    bugbot = any(str(item).startswith("bugbot") for item in reasons)
+    if bugbot:
+        return {"id": tid, "rank": 2, "sub": 0, "kind": "bugbot", "reasons": reasons}
+    return {"id": tid, "rank": 3, "sub": 0, "kind": "ci", "reasons": reasons}
+
+
+def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
+    if pending(ticket):
+        return
+    kind = item.get("kind")
+    if kind == "rebase":
+        start_rebase(data, ticket, lines)
+        return
+    if kind == "ci-start":
+        start_ci(data, ticket, lines)
+        return
+    if kind == "continue":
+        mark_shuttle(ticket, "fix")
+        detail = orchestrator._latest_blocker(ticket) or "fix"
+        lines.extend(_start_lines(data, ticket, "fix", str(detail)))
+        return
+    reasons = list(item.get("reasons") or []) or red_reasons(ticket, data.get("config") or {}) or ["fix"]
+    begin_fix(data, ticket, reasons, lines)
+
+
+def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
+    """Start fix Shuttles up to the fix-worker cap, highest priority first.
+
+    maxInProgress is not consulted. Conflicts and CI that never started go
+    first, then Bugbot findings, then red CI. A supervise pass launches only
+    the tickets this pass already decided need a fix. A cold start scans.
+    """
+    deferred = {str(tid) for tid in (data.pop("_fixDefer", []) or [])}
+    if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
+        return
+    import beam as beam_mod
+
+    chosen = []
+    seen = set()
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for ticket in tickets.values():
+        if not isinstance(ticket, dict):
+            continue
+        tid = str(ticket.get("id") or "")
+        if not scan and tid not in deferred:
+            continue
+        item = _fix_class(ticket, data.get("config") or {})
+        if not item or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        chosen.append(item)
+    chosen.sort(key=lambda item: (item["rank"], item["sub"], item["id"]))
+    for item in chosen:
+        if beam_mod.fix_worker_room(data) < 1:
+            break
+        ticket = tickets.get(item["id"])
+        if not isinstance(ticket, dict):
+            continue
+        _launch_fix(data, ticket, item, lines)
+
+
+def cold_start(beam_path) -> list:
+    """Start or resume with no Shuttle out. Dispatch fix workers immediately."""
+    import beam as beam_mod
+
+    path = Path(beam_path)
+    if not path.is_file():
+        return []
+    data = beam_mod.load_json(path)
+    if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
+        return []
+    if beam_mod.running_shuttle_count(data) > 0:
+        return []
+    lines: list = []
+    dispatch_fix_workers(data, lines, scan=True)
+    if lines:
+        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+    return lines
 
 
 def live_provider(data: dict, beam_path) -> dict:
@@ -648,10 +781,7 @@ def _recover_alarm(data: dict, ticket: dict, lines: list, deferred: list) -> boo
         return True
     if alarm in _ALARM_FIX:
         ticket["phase"] = "reviewing"
-        reasons = red_reasons(ticket, data.get("config") or {}) or [alarm]
-        if alarm not in reasons:
-            reasons.insert(0, alarm)
-        begin_fix(data, ticket, reasons, lines)
+        _defer_fix(data, ticket)
         return True
     if alarm == "gate-red":
         lines.append("alarm: hold %s gate-red" % ticket.get("id"))
@@ -733,10 +863,10 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
     cfg = data.get("config") or {}
     phase = ticket.get("phase")
     if _conflicted(ticket):
-        start_rebase(data, ticket, lines)
+        _defer_fix(data, ticket)
         return
     if (ticket.get("pr") or {}).get("ciAbsent"):
-        start_ci(data, ticket, lines)
+        _defer_fix(data, ticket)
         return
     if phase == "implementing":
         if pending(ticket):
@@ -754,9 +884,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
         if pending(ticket):
             lines.append("shuttle: hold %s" % ticket.get("id"))
             return
-        mark_shuttle(ticket, "fix")
-        detail = orchestrator._latest_blocker(ticket) or "fix"
-        lines.extend(_start_lines(data, ticket, "fix", str(detail)))
+        _defer_fix(data, ticket)
         return
     if phase == "pr-open":
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
@@ -771,7 +899,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
             ticket["status"] = "review"
         reasons = red_reasons(ticket, cfg)
         if reasons:
-            begin_fix(data, ticket, reasons, lines)
+            _defer_fix(data, ticket)
             return
         clean = (
             bugbot_finished(ticket, cfg)
@@ -961,6 +1089,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
                 continue
             tid = ticket.get("id")
             _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
+        dispatch_fix_workers(data, lines)
         if deferred and beam_path is not None:
             _run_repairs(data, beam_path, lines, now)
         elif deferred:
@@ -973,5 +1102,6 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
         return lines
     finally:
+        data.pop("_fixDefer", None)
         if owned_root:
             data.pop("_repoRoot", None)

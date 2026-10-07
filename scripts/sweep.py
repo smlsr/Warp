@@ -126,16 +126,23 @@ def _detail(ticket: dict, action: str, snap: dict) -> str:
 
 
 def _room(data: dict) -> int:
+    """Slots left for a new Shuttle. Waiting reviews do not fill them.
+
+    maxInProgress is not a slot. Only Shuttles that are actually out count,
+    and the same count stays inside maxLocalSubagents on a shared machine.
+    """
     import beam as beam_mod
     import orchestrator
 
     cfg = data.get("config") or {}
-    cap = beam_mod.configured_cap(cfg)
-    used = 0
-    for ticket in (data.get("tickets") or {}).values():
-        if isinstance(ticket, dict) and orchestrator.holds_slot(ticket, cfg):
-            used += 1
-    return max(0, cap - used)
+    running = beam_mod.running_shuttle_count(data)
+    room = max(0, beam_mod.configured_cap(cfg) - running)
+    if not orchestrator.shared_machine(cfg, data):
+        return room
+    local_cap = orchestrator.max_local_subagents(cfg)
+    if orchestrator.memory_check(cfg):
+        local_cap = orchestrator.local_subagent_cap(cfg)
+    return min(room, max(0, local_cap - beam_mod._local_shuttle_count(data)))
 
 
 def _orphan_locks(data: dict, findings: list, actions: list, lines: list) -> None:
@@ -345,12 +352,13 @@ def _tickets(data: dict, provider: Optional[dict], beam_path: Optional[Path], no
             escalated.append({"kind": action, "id": tid, "detail": "fixer cap: %s" % action})
             lines.append("sweep: escalate %s fixer cap: %s" % (tid, action))
             continue
-        if action in _SLOT_ACTIONS and room[0] < 1:
-            skipped.append({"kind": action, "id": tid, "reason": "slot"})
-            lines.append("sweep: skip %s slot" % tid)
-            continue
         if action in _SLOT_ACTIONS:
-            room[0] -= 1
+            import beam as beam_mod
+
+            if beam_mod.fix_worker_room(data) < 1:
+                skipped.append({"kind": action, "id": tid, "reason": "slot"})
+                lines.append("sweep: skip %s slot" % tid)
+                continue
         _act_ticket(data, ticket, action, lines, beam_path, now)
         if ticket.get("status") == "parked":
             escalated.append({"kind": action, "id": tid, "detail": ticket.get("parkReason") or "parked"})
