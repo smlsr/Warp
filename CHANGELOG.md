@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.12
+
+- The listener is a Subagent of the parent; each ticket is a new Agent. One listener Subagent per parent turn. It reads Slack and Teams, acknowledges `warp:` commands, and returns them. The parent applies them. It does not merge and does not implement tickets. A running flag from the previous turn does not block the next tick.
+- On every merge the parent commits the live `.warp/beam.json`, journal, and board onto main. The ticket branch's beam is dropped. The same beam is pushed at the end of each parent tick. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed.
+- Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders. `/warp-start` and `/warp-resume` fetch origin/main, load that beam when the checkout is empty, then patch each in-flight ticket from `.warp/tickets/<id>/`.
+- `/warp-update-state` is the insurance sync. It loads main, patches `.warp/tickets/<id>/` only, puts back pause, stop, claims, and runState the parent has that main does not, and pushes the beam. `/warp-pause` and `/warp-stop` run that sync before they return.
+
 ## 1.4.11
 
 - 1.4.11 version bump, no functional changes.

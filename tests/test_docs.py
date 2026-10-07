@@ -56,7 +56,8 @@ class WorkerRecoveryDocTests(unittest.TestCase):
         for rel in ("README.md", "docs/CONFIG.md", "docs/RUNBOOK.md", "docs/STATE.md", "docs/COMMANDS.md", "docs/GUIDE.md"):
             self.assertIn("maxRecoveries", blobs[rel], rel)
             self.assertIn("worker-died", blobs[rel], rel)
-        self.assertIn("Listener died. A new one started.", blobs["docs/RUNBOOK.md"])
+        self.assertIn("Subagent of the parent", blobs["docs/RUNBOOK.md"])
+        self.assertIn("Close the window, open a new one", blobs["docs/RUNBOOK.md"])
         self.assertIn("worker died. A new Shuttle started.", blobs["docs/RUNBOOK.md"])
         self.assertIn("beam.py heartbeat", blobs["docs/COMMANDS.md"])
         self.assertIn("inbound.py heartbeat", blobs["docs/COMMANDS.md"])
@@ -74,7 +75,9 @@ class WorkerRecoveryDocTests(unittest.TestCase):
             "maxRecoveries",
             "worker-died",
             "recovering",
-            "Listener died. A new one started.",
+            "Subagent of the parent",
+            "Close the window, open a new one",
+            "ticket folders",
             "worker died. A new Shuttle started.",
             "beam.py heartbeat",
             "inbound.py heartbeat",
@@ -140,7 +143,8 @@ class Since193DocTests(unittest.TestCase):
             "worker-died",
             "inbound.py heartbeat",
             "not one per",
-            "Listener died. A new one started.",
+            "Subagent of the parent",
+            "Close the window, open a new one",
             "set jiraProject to WAR (every stored key is in project WAR)",
             "Do not run `project --set`",
             "the run stops",
@@ -602,6 +606,36 @@ class ScriptHelpTests(unittest.TestCase):
         missing_commands = [name for name in names if not mentioned(name, commands)]
         self.assertEqual(missing_readme, [], "command files missing from README")
         self.assertEqual(missing_commands, [], "command files missing from COMMANDS.md")
+
+    def test_update_state_is_documented(self):
+        files = (
+            "README.md",
+            "docs/COMMANDS.md",
+            "docs/CONFIG.md",
+            "docs/GUIDE.md",
+            "docs/RUNBOOK.md",
+            "docs/STATE.md",
+            "AGENTS.md",
+        )
+        phrases = (
+            "/warp-update-state",
+            "new Agent",
+            "Subagent of the parent",
+            ".warp/tickets/",
+            "Close the window, open a new one",
+            "end of each parent tick",
+            "/warp-pause",
+            "/warp-stop",
+        )
+        for rel in files:
+            text = (ROOT / rel).read_text()
+            for phrase in phrases:
+                self.assertIn(phrase, text, "%s missing %s" % (rel, phrase))
+        help_text = self.help_text("update_state.py", "?")
+        for needle in ("--beam", "--root", ".warp/tickets/", "config.yaml"):
+            self.assertIn(needle, help_text, needle)
+        self.assertIn("./commands/warp-update-state.md", (ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        self.assertIn("./skills/warp-update-state", (ROOT / ".cursor-plugin" / "plugin.json").read_text())
 
     def test_every_jira_sync_subcommand_is_documented(self):
         source = (SCRIPTS / "jira_sync.py").read_text()

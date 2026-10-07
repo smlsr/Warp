@@ -55,6 +55,33 @@ def last_type(path: Path) -> Optional[str]:
     return None
 
 
+def _release_listener(state_dir: Path) -> None:
+    """The listener subagent ends with the parent turn. Clear a running flag."""
+    beam_path = state_dir / "beam.json"
+    if not beam_path.is_file():
+        return
+    try:
+        import inbound
+
+        inbound.release(beam_path)
+    except Exception:
+        return
+
+
+def _publish_beam(state_dir: Path) -> None:
+    """Push the live beam to the base branch so the next window can resume."""
+    beam_path = state_dir / "beam.json"
+    if not beam_path.is_file():
+        return
+    try:
+        import state_commit
+
+        root = state_dir.parent
+        state_commit.publish_base(root, str(beam_path))
+    except Exception as exc:
+        print("state: not published (%s)" % exc)
+
+
 def note(state_dir: Path, kind: str) -> str:
     """Append kind to state_dir/journal.jsonl. Return noted, already, or absent."""
     if kind not in TYPES:
@@ -63,8 +90,12 @@ def note(state_dir: Path, kind: str) -> str:
         message = "no .warp — session-stop not recorded"
         print(message)
         return "absent"
+    if kind == "session-stop":
+        _release_listener(state_dir)
     journal_path = state_dir / "journal.jsonl"
     if last_type(journal_path) == kind:
+        if kind == "session-stop":
+            _publish_beam(state_dir)
         message = "already noted %s" % kind
         print(message)
         return "already"
@@ -72,6 +103,8 @@ def note(state_dir: Path, kind: str) -> str:
         state_dir.mkdir(parents=True, exist_ok=True)
     # beam.journal writes beside the beam file, so point it at state_dir/beam.json.
     beam.journal(state_dir / "beam.json", {"type": kind})
+    if kind == "session-stop":
+        _publish_beam(state_dir)
     message = "noted %s" % kind
     print(message)
     return "noted"

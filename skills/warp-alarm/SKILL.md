@@ -21,7 +21,7 @@ Herald posts id, reason, PR url, last Bugbot line, and `warp:retry <id>`.
 | Reason | Typical cause | Human move |
 |---|---|---|
 | `bugbot-failed` | AC still red after maxFixAttempts | Fix notes, then `warp:retry` |
-| `lock-escape` | Diff left the lock paths. The Shuttle stores those paths on `escaped`. | The listener repairs this one. It widens that ticket's locks to the escaped paths, one ticket at a time. It does not take a path an in-flight ticket holds. |
+| `lock-escape` | Diff left the lock paths. The Shuttle stores those paths on `escaped`. | The parent tick repairs this one. It widens that ticket's locks to the escaped paths, one ticket at a time. The listener does not start the repair Agent. It does not take a path an in-flight ticket holds. |
 | `stuck` | No beam update past stuckAfterMinutes | Reattach or retry |
 | `worker-died` | Shuttle heartbeat older than staleMinutes, and maxRecoveries is spent | Read the branch, then `warp:retry` |
 | `ci-red` | Pipeline red with no agent left | `warp:retry` after the cause is known |

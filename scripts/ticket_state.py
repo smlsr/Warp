@@ -690,19 +690,22 @@ def observe_locked(
     fetch: Optional[Callable] = None,
     reader: Optional[Callable] = None,
     provider_checks: Optional[Callable] = None,
+    require_live: bool = True,
 ) -> list:
     """Fetch in-flight branches and patch the live beam from each ticket directory.
 
-    Paused and stopped runs return before any fetch. A missing git repo returns
-    nothing, so a beam that is not in a checkout is left to the heartbeat already
-    stored on it.
+    Paused and stopped runs return before any fetch when `require_live` is true.
+    `/warp-update-state` passes false so a pause still picks up ticket folders.
+    A missing git repo returns nothing, so a beam that is not in a checkout is
+    left to the heartbeat already stored on it.
     """
     beam_path = Path(beam_path)
     data = beam.load_json(beam_path)
     _now_dt, now_s = beam.coerce_now(now)
-    live, why = beam._run_live(data)
-    if not live:
-        return ["observe: skipped (%s)" % why]
+    if require_live:
+        live, why = beam._run_live(data)
+        if not live:
+            return ["observe: skipped (%s)" % why]
     root = _repo_root(beam_path)
     if root is None and fetch is None and reader is None:
         return []

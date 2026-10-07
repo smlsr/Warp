@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Queue the next lock-escape repair. One at a time. Idempotent.
 
-The one warp-listen listener calls this while the run is running. Plugin
-hooks do not run on cloud runners. Pause and stop do not repair, because
-the listener is not running.
+The parent tick calls this while the run is running. The listener Subagent
+does not. Plugin hooks do not run on cloud runners. Pause and stop do not
+repair, because the run is not running.
 
 Only alarm reason lock-escape is repaired. Other reasons stay alarmed.
 

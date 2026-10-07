@@ -82,7 +82,7 @@ class WatchdogTests(unittest.TestCase):
     def lines(self, now=NOW):
         return beam.watchdog(self.beam_path, now=now)
 
-    def test_stale_listener_is_replaced_once(self):
+    def test_stale_listener_flag_is_not_reserved_by_the_watchdog(self):
         self.write(
             tickets={},
             listener={
@@ -94,31 +94,17 @@ class WatchdogTests(unittest.TestCase):
             },
         )
         first = self.lines()
-        self.assertIn("listener: died listener-1", first)
-        self.assertIn("listener: replace listener-r1", first)
-        self.assertIn("herald: Listener died. A new one started.", first)
-        self.assertEqual(first.count("listener: replace listener-r1"), 1)
-        data = self.load()
-        listener = data["listener"]
+        self.assertIn("listener: subagent", first)
+        self.assertNotIn("listener: replace", "\n".join(first))
+        self.assertNotIn("Listener died", "\n".join(first))
+        listener = self.load()["listener"]
         self.assertEqual(listener["state"], "running")
-        self.assertEqual(listener["agentId"], "listener-r1")
-        self.assertNotIn("lastSeenAt", listener)
-        self.assertEqual(listener["startedAt"], NOW)
-        self.assertEqual(listener["replacedAgentId"], "listener-1")
-        self.assertEqual(listener["recoveries"], 1)
-        self.assertEqual(listener["recoveredAt"], NOW)
-        ack = json.loads((self.repo / ".warp" / "recovery.json").read_text())
-        self.assertEqual(ack["lines"], ["Listener died. A new one started."])
-        journal = (self.repo / ".warp" / "journal.jsonl").read_text()
-        self.assertIn("listener-died", journal)
-        self.assertIn("listener-replace", journal)
-
+        self.assertEqual(listener["agentId"], "listener-1")
+        self.assertEqual(listener["lastSeenAt"], STALE)
+        self.assertFalse((self.repo / ".warp" / "recovery.json").exists())
         second = self.lines()
-        self.assertIn("listener: fresh listener-r1", second)
-        self.assertNotIn("listener: replace", "\n".join(second))
-        self.assertNotIn("herald:", "\n".join(second))
-        self.assertEqual(self.load()["listener"]["agentId"], "listener-r1")
-        self.assertEqual(self.load()["listener"]["recoveries"], 1)
+        self.assertIn("listener: subagent", second)
+        self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
 
     def test_fresh_heartbeat_is_left_alone(self):
         self.write(
@@ -131,8 +117,9 @@ class WatchdogTests(unittest.TestCase):
             },
         )
         got = self.lines()
-        self.assertEqual(got, ["listener: alive listener-1"])
+        self.assertEqual(got, ["listener: subagent"])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
+        self.assertEqual(self.load()["listener"]["lastSeenAt"], FRESH)
         self.assertFalse((self.repo / ".warp" / "recovery.json").exists())
 
     def test_never_heartbeated_old_start_is_dead_and_fresh_start_is_not(self):
@@ -140,12 +127,13 @@ class WatchdogTests(unittest.TestCase):
             tickets={},
             listener={"state": "running", "agentId": "listener-1", "startedAt": STALE},
         )
-        self.assertIn("listener: replace listener-r1", self.lines())
+        self.assertEqual(self.lines(), ["listener: subagent"])
+        self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
         self.write(
             tickets={},
             listener={"state": "running", "agentId": "listener-9", "startedAt": FRESH},
         )
-        self.assertEqual(self.lines(), ["listener: fresh listener-9"])
+        self.assertEqual(self.lines(), ["listener: subagent"])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-9")
 
     def test_paused_and_stopped_do_not_replace(self):
@@ -216,12 +204,12 @@ class WatchdogTests(unittest.TestCase):
         self.lines()
         self.lines()
         data = self.load()
-        self.assertEqual(data["listener"]["agentId"], "listener-r1")
-        self.assertEqual(data["listener"]["recoveries"], 1)
+        self.assertEqual(data["listener"]["agentId"], "listener-1")
+        self.assertNotIn("recoveries", data["listener"])
         self.assertEqual(data["tickets"]["WV-01"]["agent"], "shuttle-WV-01-r1")
         self.assertEqual(data["tickets"]["WV-01"]["recoveries"], 1)
         text = (self.repo / ".warp" / "journal.jsonl").read_text()
-        self.assertEqual(text.count("listener-replace"), 1)
+        self.assertNotIn("listener-replace", text)
         self.assertEqual(text.count("shuttle-recover"), 1)
 
     def test_cap_trips_alarm_and_does_not_start_another(self):
@@ -251,15 +239,13 @@ class WatchdogTests(unittest.TestCase):
     def test_yaml_stale_minutes_overrides_the_beam(self):
         (self.repo / ".warp" / "config.yaml").write_text("staleMinutes: 90\nmaxRecoveries: 3\n")
         self.write(
-            tickets={},
-            listener={
-                "state": "running",
-                "agentId": "listener-1",
-                "startedAt": STALE,
-                "lastSeenAt": STALE,
-            },
+            tickets={"WV-01": ticket(lastSeenAt=STALE)},
+            listener={"state": "stopped"},
         )
-        self.assertEqual(self.lines(), ["listener: alive listener-1"])
+        got = self.lines()
+        self.assertIn("listener: subagent", got)
+        self.assertNotIn("shuttle: replace", "\n".join(got))
+        self.assertEqual(self.load()["tickets"]["WV-01"]["status"], "coding")
 
     def test_heartbeat_refreshes_last_seen_and_claim_sets_it(self):
         self.write(tickets={"WV-01": ticket(lastSeenAt=STALE)}, listener={"state": "stopped"})
@@ -304,8 +290,9 @@ class WatchdogTests(unittest.TestCase):
         scan.set_run(self.beam_path, "running", "go")
         data = self.load()
         self.assertEqual(data["runState"], "running")
-        self.assertEqual(data["listener"]["agentId"], "listener-r1")
-        self.assertNotIn("lastSeenAt", data["listener"])
+        self.assertEqual(data["listener"]["agentId"], "listener-1")
+        self.assertEqual(data["listener"]["lastSeenAt"], old)
+        self.assertEqual(data["listener"]["state"], "running")
 
 
 if __name__ == "__main__":

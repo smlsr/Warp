@@ -116,9 +116,10 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-upgrade` | Replace `.cursor/plugins/warp` with the current plugin. Does not touch config or the beam | `--root`, `--source` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
 | `/warp-start` | Start dispatch. A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force` |
-| `/warp-pause` | Stop new claims and the listener. In-flight work finishes its step | `--reason` |
-| `/warp-resume` | Resume a paused beam, run the watchdog, and start the listener unless one is already running | `--reason` |
-| `/warp-stop` | Stay stopped until the next start. The listener stops | `--reason` |
+| `/warp-pause` | Stop new claims and the listener, then push that paused beam to main | `--reason` |
+| `/warp-resume` | Resume a paused beam, load main's beam on a fresh checkout, run the watchdog, and start one listener Subagent | `--reason` |
+| `/warp-stop` | Stay stopped until the next start, and push that stopped beam to main | `--reason` |
+| `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | Rewrite `.warp/STATUS.md` and the board | |
 | `/warp-status-post` | Post that digest to Slack or Teams | |
@@ -262,7 +263,7 @@ Each worker writes a heartbeat on the beam: `lastSeenAt` and its agent id. A Shu
 
 `beam.py watchdog` runs on every `/warp` tick and on `/warp-start` and `/warp-resume`. A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than that. A fresh heartbeat is left alone. Do not start a second worker. Pause and stop do not replace anyone.
 
-A dead listener, while the run is running, is cleared and exactly one replacement is reserved. Herald posts `Listener died. A new one started.` A second tick does not start another.
+The listener is a Subagent of the parent; each ticket is a new Agent. It ends when the parent turn ends. The next tick starts one listener Subagent again. A `running` flag left by the previous turn does not block that start. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders.
 
 A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`, and exactly one new Shuttle is dispatched for that same ticket. Herald posts `<id> worker died. A new Shuttle started.` It is not released, so another ticket cannot take the files. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
 
@@ -295,11 +296,11 @@ Those directories can merge to main. They do not overlap. The beam file does not
 
 ## Alarms
 
-The one `warp-listen` listener repairs `lock-escape` and no other alarm. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop stop the listener, so they do not repair. Plugin hooks do not run on cloud runners. The listener calls `scripts/alarm_repair.py next`. A second call in the same moment does not start a second repair.
+The parent tick repairs `lock-escape` and no other alarm, one ticket at a time. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop do not repair. Plugin hooks do not run on cloud runners. The tick calls `scripts/alarm_repair.py next` and starts one new Agent for that ticket. The listener Subagent does not. A second call in the same moment does not start a second repair.
 
 The Shuttle that hits the alarm stores each path outside the lock with `beam.py set --alarm lock-escape --escaped <path>`. Those paths live on the ticket as `escaped`. The repair widens that ticket's locks to those paths, records them on `addedLocks`, and says which paths it added in the Herald line. It does not take a path an in-flight ticket currently holds. It waits, then widens and starts after that holder finishes. A queued ticket's overlapping lock can be widened. An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before any edit.
 
-One repair runs at a time, one ticket at a time, in plan order. If it alarms `lock-escape` again, or errors, the alarm stays, the attempt is recorded, and the next lock-escape ticket starts in that same call. The one that just failed is not retried in that pass. If it returns the ticket to the normal path with the alarm cleared, or the ticket merges, the listener waits for that completion, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm in place and later passes skip it. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are left alone.
+One repair runs at a time, one ticket at a time, in plan order. If it alarms `lock-escape` again, or errors, the alarm stays, the attempt is recorded, and the next lock-escape ticket starts in that same call. The one that just failed is not retried in that pass. If it returns the ticket to the normal path with the alarm cleared, or the ticket merges, the parent waits for that completion, then starts the next. `maxAlarmRepairs` (default 3) leaves the alarm in place and later passes skip it. Herald posts one line when a repair starts, when a failure takes the next ticket, and when a ticket is given up. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are left alone.
 
 `/warp-init` backfills `alarmRepairMinutes` and `maxAlarmRepairs` when `.warp/config.yaml` does not have them yet.
 
@@ -493,11 +494,13 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 
 ## Status in Teams or Slack
 
-One listener Agent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the whole run. It is one Agent for the beam: not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. Ticket workers are not Subagents of that listener. `/warp-start` and `/warp-resume` launch the `warp-listen` skill when `inbound.py claim` prints `listener: started`. `listener: already running` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
+The listener is a Subagent of the parent; each ticket is a new Agent. One listener Subagent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the parent turn. It is not a separate Agent. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. It shares the parent's session and checkout, acknowledges `warp:` commands, and returns them. The parent applies them and patches the live beam. The listener does not merge and does not implement tickets. `/warp-start` and `/warp-resume` launch it when `inbound.py claim --turn` prints `listener: started`. `listener: already running` means this turn already started it: do not start a second. A running flag from the previous turn does not block the next tick. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
 
-The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the one Agent id. `pid` is optional and is often empty on a cloud runner. `lastSeenAt` is the heartbeat, written by `inbound.py heartbeat` at claim and on every read.
+The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the subagent id for this turn. `pid` is optional and is often empty on a cloud runner. `lastSeenAt` is the heartbeat, written by `inbound.py heartbeat` at claim.
 
-Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The listener stays in its turn and re-reads the channel every `pollSeconds`. If that turn dies, [Dead workers](#dead-workers) is how Warp notices and starts one replacement. Pause and stop do not.
+Cursor cannot start that listener from a Slack message. There is no webhook, and plugin hooks do not run on cloud runners. The subagent ends when the parent turn ends. The next tick starts one again. Pause and stop do not.
+
+On every merge the parent commits the live `.warp/beam.json`, journal, and board onto main. The ticket branch's copy of the beam is dropped. The same beam is pushed at the end of each parent tick. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` is not committed. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders. `/warp-start` and `/warp-resume` fetch origin/main, load that beam when the checkout's beam is missing or empty, then fetch each in-flight ticket branch and patch from `.warp/tickets/<id>/`. `/warp-update-state` is the insurance sync: it always loads main, patches `.warp/tickets/<id>/` only, puts back pause, stop, claims, and runState the parent has that main does not, and pushes that beam. `/warp-pause` and `/warp-stop` run that sync after they set the state, so main shows paused or stopped before the command returns.
 
 Every recognized `warp:` command is acknowledged in the channel before it runs. The ack names the command and, when there is one, the ticket id. Unknown or malformed commands get an ack that says they were not understood and lists the accepted forms.
 
@@ -543,7 +546,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. Separate from a dead worker. |
 | `staleMinutes` | `15` | Heartbeat older than this, or no heartbeat and a claim or listener start older than this, means the worker is dead. The watchdog replaces it while the run is running. Pause and stop do not. `/warp-init` backfills this key. |
 | `maxRecoveries` | `3` | Shuttle replacements on one ticket. The next death is `alarm` / `worker-died` and does not start another. `/warp-init` backfills this key. |
-| `alarmRepairMinutes` | `15` | How often the one listener opens a lock-escape repair pass. Pause and stop do not. `/warp-init` backfills this key. |
+| `alarmRepairMinutes` | `15` | How often the parent tick opens a lock-escape repair pass. The listener does not start the repair Agent. Pause and stop do not. `/warp-init` backfills this key. |
 | `maxAlarmRepairs` | `3` | Repair attempts for one lock-escape ticket. The repair widens that ticket's locks to the paths that escaped. Past the cap the alarm stays. `/warp-init` backfills this key. |
 | `respectMergeWindows` | `false` | True makes new claims wait for a window. |
 | `mergeWindows` | `08:30, 13:00, 17:00` | Digest times, or claim gates if the flag is true. |

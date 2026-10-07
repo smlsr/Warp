@@ -217,8 +217,63 @@ def drop_ticket_beam(root: Path) -> None:
         path.unlink()
 
 
+def _live_payload(root: Path) -> dict:
+    """Sanitized live beam, journal, and board. Does not rewrite the working files."""
+    warp = root / ".warp"
+    if not (warp / "beam.json").is_file():
+        return {}
+    import state_commit
+
+    return state_commit.state_payload(warp)
+
+
+def _clean_state_edits(root: Path) -> Optional[str]:
+    """Refuse product dirt. A dirty live beam is set aside; the caller snapshotted it."""
+    import state_commit
+
+    listed = _run(["git", "status", "--porcelain", "--untracked-files=no"], root)
+    if listed.returncode != 0:
+        return "could not read git status"
+    allowed = {".warp/%s" % name for name in state_commit.STATE_NAMES}
+    dirty = []
+    blocked = []
+    for line in (listed.stdout or "").splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        if path in allowed:
+            dirty.append(path)
+        else:
+            blocked.append(path)
+    if blocked:
+        return "working tree has uncommitted changes; commit or stash them, then retry"
+    if dirty:
+        restored = _run(["git", "checkout", "--", *dirty], root)
+        if restored.returncode != 0:
+            return "could not set aside the live beam before merge"
+    return None
+
+
+def _stage_live(root: Path, payload: dict) -> None:
+    """Put the parent's live state into the index. Never stages config.yaml."""
+    for rel, text in payload.items():
+        if rel == ".warp/config.yaml" or rel.endswith("/config.yaml"):
+            continue
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        _run(["git", "add", "--", rel], root)
+
+
 def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool, str]:
-    """Squash-merge `branch` into `base`. Leaves the repo as it found it on failure."""
+    """Squash-merge `branch` into `base`. Leaves the repo as it found it on failure.
+
+    The ticket branch's beam is dropped. The parent's live beam, journal, and
+    board are what land on the base. Secrets are stripped. config.yaml is not
+    committed. When origin exists, the base branch is pushed.
+    """
     root = root.resolve()
     if not fmt.git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
         return False, f"branch {branch} does not exist"
@@ -226,8 +281,10 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
         return False, f"base branch {base} does not exist"
     if branch == base:
         return False, "branch and base are the same"
-    if fmt.git(root, "status", "--porcelain", "--untracked-files=no"):
-        return False, "working tree has uncommitted changes; commit or stash them, then retry"
+    live = _live_payload(root)
+    blocked = _clean_state_edits(root)
+    if blocked:
+        return False, blocked
     original = fmt.git(root, "symbolic-ref", "--short", "-q", "HEAD") or fmt.git(root, "rev-parse", "HEAD")
     if _run(["git", "checkout", "-q", base], root).returncode != 0:
         return False, f"could not check out {base}"
@@ -238,14 +295,18 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
             return False, "merge conflict; nothing was merged. Resolve on the ticket branch and retry"
         # The ticket branch carries a launch snapshot of the beam so the Agent
         # can read its claim. That file is stale. Do not take it onto the base.
-        # .warp/tickets/<id>/ does not overlap other tickets and stays.
+        # The parent's live beam is staged instead. .warp/tickets/<id>/ stays.
         drop_ticket_beam(root)
+        _stage_live(root, live)
         if not fmt.git(root, "diff", "--cached", "--name-only"):
             return True, f"{branch} has no changes beyond {base}; nothing to merge"
         c = _run(["git", "commit", "-q", "-m", message], root)
         if c.returncode != 0:
             _run(["git", "reset", "--merge"], root)
             return False, "commit failed: " + (c.stderr.strip() or c.stdout.strip() or "unknown error")
+        import state_commit
+
+        state_commit.push_ref(root, base)
         return True, fmt.git(root, "rev-parse", "--short", "HEAD")
     finally:
         _run(["git", "checkout", "-q", original], root)
@@ -653,6 +714,9 @@ def main() -> None:
                 print(f"merged {args.branch} into {base} locally ({detail}). Not pushed.")
                 note(root, beam_path, args.id, f"merged {args.branch} into {base} locally ({detail})", what="a local merge")
                 _mark_merged(beam_path, args.id, detail)
+                import state_commit
+
+                state_commit.publish_base(root, str(beam_path))
             else:
                 print(f"local merge failed: {detail}")
                 print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")

@@ -1013,6 +1013,12 @@ def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
             print(inbound.release(beam_path))
         except Exception as e:
             print("listener: not stopped (%s)" % e)
+        try:
+            import update_state
+
+            update_state.update_state(beam_path)
+        except Exception as e:
+            print("state: not synced (%s)" % e)
     print("paused" if paused else "resumed")
     if not paused:
         for line in watchdog(beam_path):
@@ -1232,37 +1238,15 @@ def _unique_id(prefix: str, number: int, current: Optional[str]) -> tuple:
 
 
 def _recover_listener(data: dict, beam_path: Path, now: datetime, now_s: str, stale: int, lines: list, events: list) -> bool:
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    state = raw.get("state") if raw.get("state") in {"running", "stopped"} else "stopped"
-    agent = raw.get("agentId") or None
-    if state != "running" or not agent:
-        lines.append("listener: stopped")
-        return False
-    if not worker_is_dead(raw.get("lastSeenAt"), raw.get("startedAt"), now, stale):
-        kind = "alive" if raw.get("lastSeenAt") else "fresh"
-        lines.append("listener: %s %s" % (kind, agent))
-        return False
-    number = int(raw.get("recoveries") or 0) + 1
-    new_id, number = _unique_id("listener", number, agent)
-    # Replace the record in one write. The old running flag is gone, so it
-    # cannot block a new listener, and the new id is already reserved so a
-    # second tick sees a fresh start instead of launching another.
-    data["listener"] = {
-        "state": "running",
-        "agentId": new_id,
-        "pid": None,
-        "startedAt": now_s,
-        "stoppedAt": None,
-        "recoveredAt": now_s,
-        "recoveries": number,
-        "replacedAgentId": agent,
-    }
-    lines.append("listener: died %s" % agent)
-    lines.append("listener: replace %s" % new_id)
-    lines.append("herald: Listener died. A new one started.")
-    events.append({"type": "listener-died", "agentId": agent, "replacedBy": new_id})
-    events.append({"type": "listener-replace", "agentId": new_id, "replaced": agent, "recoveries": number})
-    return True
+    """The listener is a subagent of this parent turn. Do not reserve a replacement.
+
+    A `running` flag left by the previous turn is not a live Agent. This does
+    not clear it and does not set a new id: the parent claims with a new turn
+    id, and that claim takes the slot. Shuttle recovery is unchanged.
+    """
+    del data, beam_path, now, now_s, stale, events
+    lines.append("listener: subagent")
+    return False
 
 
 def _shuttle_anchor(ticket: dict) -> Optional[str]:
@@ -1329,11 +1313,13 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
 
 
 def watchdog(beam_path: Path, now=None) -> list:
-    """Detect dead Shuttles and the listener. Reserve at most one replacement each.
+    """Detect dead Shuttles. Reserve at most one replacement each.
 
-    Paused and stopped runs change nothing. A fresh heartbeat, or a start newer
-    than staleMinutes, is left alone. The caller launches the agent named on
-    each `replace` line. This does not look at a process table.
+    The listener is a subagent of the parent turn. This prints `listener: subagent`
+    and does not reserve a listener id. A running flag does not block the next tick.
+    Paused and stopped runs change nothing. A fresh Shuttle heartbeat is left alone.
+    The caller launches the Shuttle named on each `shuttle: replace` line.
+    This does not look at a process table.
     """
     beam_path = Path(beam_path)
     if not beam_path.is_file():
@@ -1533,11 +1519,13 @@ name `make ci` is not a red check. Paused and stopped runs do not
 recompute.
 ready's only cap is maxAgents. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
-uses inbound.py heartbeat. watchdog runs on every Warp tick and on start
-and resume. A worker is dead when lastSeenAt is older than staleMinutes,
-or it never heartbeated and the claim or listener start is older than that.
-It replaces a dead listener once and re-dispatches a dead Shuttle once.
-Paused and stopped runs do nothing. A fresh heartbeat is left alone.
+uses inbound.py heartbeat during its parent turn. watchdog runs on every
+Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is
+older than staleMinutes, or it never heartbeated and the claim is older
+than that. watchdog re-dispatches a dead Shuttle once. It does not replace
+the listener. The listener is a Subagent of the parent turn. A running flag
+from the previous turn does not block the next tick. Paused and stopped
+runs do nothing. A fresh Shuttle heartbeat is left alone.
 Past maxRecoveries the ticket is alarm worker-died.
 A remote Agent does not write this beam. It writes .warp/tickets/<id>/
 on its branch. watchdog fetches that directory first and patches this beam.
