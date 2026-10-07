@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""Commit the beam, journal, and board so the next agent can see them.
+"""Commit the beam, journal, and board so the next Agent can see them.
 
 Tokens, cost, API keys, and webhook URLs are stripped before the commit.
 `.warp/config.yaml` stays gitignored and is not added.
 
+`commit` lands on the current branch. Pass --base when that branch must be
+the configured base branch.
+
+`publish` fetches origin immediately before it creates a ticket branch, and
+cuts that branch from the tip of the base branch. A ticket branch already in
+flight is not rebased. Then it puts the beam, journal, board, and that
+ticket's claim on the branch and pushes it. A new Agent checks out that
+branch. It does not clone main. If the branch has no .warp beam, publish
+refuses and the Agent must not start.
+
   python3 scripts/state_commit.py ?
   python3 scripts/state_commit.py commit --root . --beam .warp/beam.json
+  python3 scripts/state_commit.py publish --root . --beam .warp/beam.json --id T-1
+  python3 scripts/state_commit.py publish --id T-1 --no-push
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
-The commit lands on the current branch. Pass --base when that branch must
-be the configured base branch. The next cloud agent clones that branch.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -127,8 +139,294 @@ def prepare(warp: Path) -> list:
     return written
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+def _git(
+    root: Path,
+    *args: str,
+    input_text: Optional[str] = None,
+    env: Optional[dict] = None,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        input=input_text,
+        env=env,
+    )
+
+
+def state_payload(warp: Path) -> dict:
+    """Sanitized state file text, keyed by repo-relative path.
+
+    The live files are not rewritten. `.warp/config.yaml` is never included.
+    """
+    payload = {}
+    beam = warp / "beam.json"
+    if beam.is_file():
+        data = sanitize(json.loads(beam.read_text()))
+        payload[".warp/beam.json"] = json.dumps(data, indent=2) + "\n"
+    journal = warp / "journal.jsonl"
+    if journal.is_file():
+        text = sanitize_journal(journal.read_text())
+        if text:
+            payload[".warp/journal.jsonl"] = text
+    for name in STATE_NAMES:
+        if name in {"beam.json", "journal.jsonl"}:
+            continue
+        path = warp / name
+        if not path.is_file():
+            continue
+        if name.endswith(".json"):
+            payload[".warp/%s" % name] = json.dumps(sanitize(json.loads(path.read_text())), indent=2) + "\n"
+        else:
+            payload[".warp/%s" % name] = redact_text(path.read_text())
+    return payload
+
+
+def branch_has_beam(root: Path, branch: str) -> bool:
+    """True when that branch's tree contains .warp/beam.json."""
+    shown = _git(root, "cat-file", "-e", "%s:.warp/beam.json" % branch)
+    return shown.returncode == 0
+
+
+def _show_beam(root: Path, branch: str) -> Optional[dict]:
+    shown = _git(root, "show", "%s:.warp/beam.json" % branch)
+    if shown.returncode != 0:
+        return None
+    try:
+        data = json.loads(shown.stdout)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _base_name(root: Path, config: dict) -> str:
+    name = str((config or {}).get("baseBranch") or "").strip()
+    if name:
+        return name
+    head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    current = head.stdout.strip()
+    if head.returncode == 0 and current:
+        return current
+    return "main"
+
+
+def _remote_names(root: Path) -> list:
+    return [line.strip() for line in _git(root, "remote").stdout.splitlines() if line.strip()]
+
+
+def _ref_exists(root: Path, ref: str) -> bool:
+    return _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0
+
+
+def _prepare_branch(root: Path, branch: str, base_name: str, remote: str) -> int:
+    """Create a new ticket branch from the fetched tip of the base.
+
+    A branch that already exists locally, or already exists on the remote,
+    is kept. It is not rebased. That rebase belongs to the merge queue.
+    """
+    if _ref_exists(root, "refs/heads/%s" % branch):
+        print("branch: %s kept" % branch)
+        return 0
+    if remote not in _remote_names(root):
+        if not _ref_exists(root, "refs/heads/%s" % base_name) and not _ref_exists(root, base_name):
+            print("refuse: base branch %s does not exist" % base_name)
+            return 2
+        made = _git(root, "branch", branch, base_name)
+        if made.returncode != 0:
+            print("refuse: could not create %s from %s" % (branch, base_name))
+            print((made.stderr or made.stdout).strip())
+            return 2
+        print("base: %s" % base_name)
+        return 0
+    fetched = _git(root, "fetch", remote)
+    if fetched.returncode != 0:
+        print("refuse: fetch %s failed; do not cut the ticket branch from a stale base" % remote)
+        print((fetched.stderr or fetched.stdout).strip())
+        return 2
+    remote_branch = "refs/remotes/%s/%s" % (remote, branch)
+    if _ref_exists(root, remote_branch):
+        made = _git(root, "branch", branch, "%s/%s" % (remote, branch))
+        if made.returncode != 0:
+            print("refuse: could not create %s from %s/%s" % (branch, remote, branch))
+            print((made.stderr or made.stdout).strip())
+            return 2
+        print("branch: %s kept" % branch)
+        return 0
+    remote_base = "refs/remotes/%s/%s" % (remote, base_name)
+    if not _ref_exists(root, remote_base):
+        print("refuse: %s has no %s after fetch; do not cut the ticket branch" % (remote, base_name))
+        return 2
+    tip = _git(root, "rev-parse", "%s/%s" % (remote, base_name))
+    made = _git(root, "branch", branch, "%s/%s" % (remote, base_name))
+    if made.returncode != 0:
+        print("refuse: could not create %s from %s/%s" % (branch, remote, base_name))
+        print((made.stderr or made.stdout).strip())
+        return 2
+    print("base: %s/%s %s" % (remote, base_name, tip.stdout.strip()))
+    return 0
+
+
+def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) -> int:
+    """Commit files onto branch without moving HEAD or the working tree."""
+    tmp = Path(tempfile.mkdtemp(prefix="warp-publish-"))
+    index = tmp / "index"
+    env = os.environ.copy()
+    env["GIT_INDEX_FILE"] = str(index)
+    try:
+        read = _git(root, "read-tree", branch, env=env)
+        if read.returncode != 0:
+            print("refuse: could not read %s" % branch)
+            print((read.stderr or read.stdout).strip())
+            return 2
+        _git(root, "update-index", "--force-remove", ".warp/config.yaml", env=env)
+        for rel, text in files.items():
+            if rel == ".warp/config.yaml" or rel.endswith("/config.yaml"):
+                continue
+            blob = _git(root, "hash-object", "-w", "--stdin", input_text=text, env=env)
+            if blob.returncode != 0 or not blob.stdout.strip():
+                print("refuse: could not write %s" % rel)
+                return 2
+            cached = _git(
+                root,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "100644,%s,%s" % (blob.stdout.strip(), rel),
+                env=env,
+            )
+            if cached.returncode != 0:
+                print("refuse: could not stage %s" % rel)
+                print((cached.stderr or cached.stdout).strip())
+                return 2
+        tree = _git(root, "write-tree", env=env)
+        if tree.returncode != 0 or not tree.stdout.strip():
+            print("refuse: could not write the tree")
+            return 2
+        new_tree = tree.stdout.strip()
+        old = _git(root, "rev-parse", "%s^{tree}" % branch)
+        parent = _git(root, "rev-parse", branch)
+        if old.returncode == 0 and old.stdout.strip() == new_tree:
+            return 0
+        committed = _git(
+            root,
+            "commit-tree",
+            new_tree,
+            "-p",
+            parent.stdout.strip(),
+            "-m",
+            message,
+        )
+        if committed.returncode != 0 or not committed.stdout.strip():
+            print("refuse: could not commit the beam onto %s" % branch)
+            print((committed.stderr or committed.stdout).strip())
+            return 2
+        updated = _git(root, "update-ref", "refs/heads/%s" % branch, committed.stdout.strip())
+        if updated.returncode != 0:
+            print("refuse: could not update %s" % branch)
+            print((updated.stderr or updated.stdout).strip())
+            return 2
+        return 0
+    finally:
+        try:
+            index.unlink(missing_ok=True)
+            tmp.rmdir()
+        except OSError:
+            pass
+
+
+def _push_branch(root: Path, branch: str, remote: str) -> int:
+    names = _remote_names(root)
+    if remote not in names:
+        print("refuse: no remote %s; do not start the Agent on a fresh clone of main" % remote)
+        return 2
+    pushed = _git(root, "push", "-u", remote, "refs/heads/%s:refs/heads/%s" % (branch, branch))
+    if pushed.returncode != 0:
+        print("refuse: push of %s failed; do not start the Agent" % branch)
+        print((pushed.stderr or pushed.stdout).strip())
+        return 2
+    remote_beam = _git(root, "show", "%s/%s:.warp/beam.json" % (remote, branch))
+    if remote_beam.returncode != 0:
+        print("refuse: %s/%s has no .warp beam; do not start the Agent" % (remote, branch))
+        return 2
+    return 0
+
+
+def publish_ticket(
+    root: Path,
+    beam_name: str = ".warp/beam.json",
+    ticket_id: str = "",
+    remote: str = "origin",
+    push: bool = True,
+) -> int:
+    """Commit this ticket's beam, journal, board, and claim onto its branch.
+
+    Does not move the orchestrator checkout. Cloud pushes the branch before
+    an Agent may start. A missing .warp/beam.json refuses.
+    """
+    import orchestrator
+
+    root = root.resolve()
+    beam_path = Path(beam_name)
+    if not beam_path.is_absolute():
+        beam_path = root / beam_path
+    if not beam_path.is_file():
+        print("refuse: no beam at %s; do not start the Agent" % beam_path)
+        return 2
+    warp = beam_path.parent
+    data = json.loads(beam_path.read_text())
+    ticket = (data.get("tickets") or {}).get(ticket_id)
+    if not isinstance(ticket, dict):
+        print("refuse: unknown ticket %s; do not start the Agent" % ticket_id)
+        return 2
+    cfg = data.get("config") or {}
+    branch = orchestrator.branch_name(ticket, cfg)
+    base_name = _base_name(root, cfg)
+    payload = state_payload(warp)
+    if ".warp/beam.json" not in payload:
+        print("refuse: no beam to publish; do not start the Agent")
+        return 2
+    if ".warp/config.yaml" in payload:
+        print("refuse: .warp/config.yaml must not be committed")
+        return 2
+    if _prepare_branch(root, branch, base_name, remote) != 0:
+        return 2
+    code = _commit_files_on_branch(
+        root,
+        branch,
+        payload,
+        "Warp state: beam, journal, and board for %s" % ticket_id,
+    )
+    if code != 0:
+        return code
+    if not branch_has_beam(root, branch):
+        print("refuse: branch %s has no .warp beam; do not start the Agent" % branch)
+        return 2
+    published = _show_beam(root, branch)
+    claim = ((published or {}).get("tickets") or {}).get(ticket_id)
+    if not isinstance(claim, dict):
+        print("refuse: branch %s beam has no claim for %s; do not start the Agent" % (branch, ticket_id))
+        return 2
+    config_tracked = _git(root, "cat-file", "-e", "%s:.warp/config.yaml" % branch)
+    if config_tracked.returncode == 0:
+        print("refuse: branch %s commits .warp/config.yaml; do not start the Agent" % branch)
+        return 2
+    if push:
+        pushed = _push_branch(root, branch, remote)
+        if pushed != 0:
+            return pushed
+        remote_beam = _show_beam(root, "%s/%s" % (remote, branch))
+        remote_claim = ((remote_beam or {}).get("tickets") or {}).get(ticket_id)
+        if not isinstance(remote_claim, dict):
+            print("refuse: %s/%s has no claim for %s; do not start the Agent" % (remote, branch, ticket_id))
+            return 2
+    agent = claim.get("agent") or ""
+    print("published: %s" % branch)
+    print("beam: .warp/beam.json")
+    print("claim: %s status=%s agent=%s" % (ticket_id, claim.get("status") or "", agent))
+    if push:
+        print("pushed: %s %s" % (remote, branch))
+    print("checkout: %s" % branch)
+    return 0
 
 
 def commit_state(root: Path, beam_name: str = ".warp/beam.json", base: str = "") -> int:
@@ -181,9 +479,23 @@ def main(argv: Optional[list] = None) -> int:
     commit.add_argument("--root", default=".")
     commit.add_argument("--beam", default=".warp/beam.json")
     commit.add_argument("--base", default="", help="require HEAD to be this branch")
+    pub = sub.add_parser("publish")
+    pub.add_argument("--root", default=".")
+    pub.add_argument("--beam", default=".warp/beam.json")
+    pub.add_argument("--id", required=True)
+    pub.add_argument("--remote", default="origin")
+    pub.add_argument("--no-push", action="store_true", help="commit the branch and do not push")
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    if args.cmd == "publish":
+        return publish_ticket(
+            Path(args.root),
+            args.beam,
+            args.id,
+            remote=args.remote,
+            push=not args.no_push,
+        )
     return commit_state(Path(args.root), args.beam, args.base)
 
 

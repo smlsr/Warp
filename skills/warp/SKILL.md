@@ -7,7 +7,7 @@ description: "Run the Warp master loop on any repo that has a plan. Use when the
 
 Scan builds the plan. Start dispatches. Stop and pause do not.
 
-Plugin hooks do not run on cloud runners. Before this tick, run `python3 <plugin>/scripts/resume_hint.py --root .` and follow it. Do not dispatch from the hint. If it says there is no beam, tell the user to run `/warp-ingest`. At the end of the tick, run `python3 <plugin>/scripts/session_note.py --type session-stop --root .`. When a Shuttle returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --root .`, then reconcile that ticket from the beam. Call an MCP tool only when it is in `scripts/mcp_tools.py` (plus `notifyAllow`). For any other tool, `python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .` must print `allow`. `ask` means do not call it.
+Plugin hooks do not run on cloud runners. Before this tick, run `python3 <plugin>/scripts/resume_hint.py --root .` and follow it. Do not dispatch from the hint. If it says there is no beam, tell the user to run `/warp-ingest`. At the end of the tick, run `python3 <plugin>/scripts/session_note.py --type session-stop --root .`. When a ticket's Agent finishes, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --root .`, then reconcile that ticket from the beam. That journal line is not permission to start a Subagent. Call an MCP tool only when it is in `scripts/mcp_tools.py` (plus `notifyAllow`). For any other tool, `python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .` must print `allow`. `ask` means do not call it.
 
 ## Control
 
@@ -32,7 +32,7 @@ python3 <plugin>/scripts/scan.py stop --beam .warp/beam.json --reason "end of da
 
 ## Listener
 
-One `warp-listen` sub-agent for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. `/warp-start` and `/warp-resume` launch it when `inbound.py claim` prints `listener: started`, or when `beam.py watchdog` prints `listener: replace <id>` for a dead listener. `listener: already running` or `listener: alive` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. This tick does not read Slack. It launches a listener only for that one `listener: replace` line. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
+One `warp-listen` Agent for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. Ticket workers are not Subagents of that listener. `/warp-start` and `/warp-resume` launch it when `inbound.py claim` prints `listener: started`, or when `beam.py watchdog` prints `listener: replace <id>` for a dead listener. `listener: already running` or `listener: alive` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. This tick does not read Slack. It launches a listener only for that one `listener: replace` line. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
 
 ## Heartbeat and watchdog
 
@@ -52,11 +52,15 @@ A second tick must not launch a second replacement for the same worker. The firs
 
 The orchestrator is the only merger. This loop dispatches, merges, and tracks. It writes no ticket product code. The cap is `maxAgents`. A project may set 18. One ticket, one branch, one checkout. Do not implement a ticket in this session. `checkout.py implement` refuses.
 
-On `runner: cloud`, launch one cloud agent per ready ticket with the Task tool: `subagent_type: shuttle`, `environment: cloud`, `cloud_base_branch` set to the base branch, `run_in_background: true`, prompt `IMPLEMENT <id>`. This plugin has no cloud-agent API. A Task without `environment: cloud` shares this checkout and is forbidden. Record the agent id with `checkout.py bind --agent`. On `runner: local`, `checkout.py add` creates a git worktree and `checkout.py remove` deletes it. Never two tickets in one VM or one worktree. Never two agents on one ticket.
+On `runner: cloud`, claim the ticket, then run `checkout.py launch`. It fetches origin and cuts a new ticket branch from the tip of the base branch. A ticket branch already in flight is not rebased. It commits the beam, journal, board, and that claim onto the ticket branch, pushes the branch, and prints the instruction only when `.warp/beam.json` is on that branch. Follow that instruction. It is:
+
+Start one new Agent for this ticket. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Check out the ticket branch. Do not start it on a fresh clone of main. Read the claim from .warp/beam.json in that checkout. Do not start a Subagent. A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). It shares the parent session and checkout. Forbidden for tickets. Do not use the Task tool for a ticket. Do not implement the ticket in this turn.
+
+If `checkout.py launch` exits non-zero, or the branch has no `.warp` beam, do not start the Agent. Do not start it on a fresh clone of main. This plugin has no cloud-agent API. Record the Agent id with `checkout.py bind --agent`. On `runner: local`, `checkout.py add` commits that same beam onto the ticket branch, then creates a git worktree of that branch. `checkout.py remove` deletes the worktree. That worktree is not a Subagent inside the orchestrator checkout. Never two tickets in one VM or one worktree. Never two Agents on one ticket.
 
 On start, resume, and after every merge, failure, and freed slot: rebuild when the run is starting (`orchestrator.py rebuild --facts`), then `beam.py ready`, then start that list only. Starred and priority first, then lowest rank. Do not hold a slot for a ticket that is not ready. Do not wait for a dependency level. Record the pull request when the Shuttle exits (`orchestrator.py opened`). The slot stays occupied until `provider.py rollup` is green. Bugbot runs on the pull request after push, not in the VM. Locks stay until merge or park. If `mergeQueue` is true, or GitHub reports a merge queue, `provider.py merge-pr` enqueues and does not mark the ticket merged. A rejected direct merge is not merged. Then `state_commit.py commit` on the base branch.
 
-`checkCommand` empty means Bugbot and CI as configured. `make ci` is a valid command. A red result is stored on `pr.check` and sent back to that ticket with the log (`send-back <id> fix` and a `start` line). Launch that Shuttle. A green result is not a failure. The gate stays while that check is red. `appendOnlyPaths` is empty by default. Keep both sides of a conflict there. Send any other conflict back. Park on the third red (`orchestrator.py fail`). Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed`. If the base branch is red, stop merging and dispatch a fix ahead of every rank. Done means every ticket is merged or explicitly parked, and the base branch is green.
+`checkCommand` empty means Bugbot and CI as configured. `make ci` is a valid command. A red result is stored on `pr.check` and sent back to that ticket with the log (`send-back <id> fix` and a `start` line). Start that ticket as one new Agent (`checkout.py launch`). Do not start a Subagent. Do not use the Task tool. A green result is not a failure. The gate stays while that check is red. `appendOnlyPaths` is empty by default. Keep both sides of a conflict there. Send any other conflict back. Park on the third red (`orchestrator.py fail`). Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed`. If the base branch is red, stop merging and dispatch a fix ahead of every rank. Done means every ticket is merged or explicitly parked, and the base branch is green.
 
 ## One running tick
 
@@ -65,7 +69,7 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
 3. Reconcile in-flight PRs and Jira.
 4. `beam.py ready` recomputes every pending gate. A gate turns green when every member is merged or done. Post `herald: <gate> pending cleared. Members merged. Tick ran.` when it prints that line.
 5. Claim the ready list only. No person cap. A `recovering` ticket is not in this list. `start` lines are the same ids. Claim each id once.
-6. Claim and spawn a Shuttle per id. Then `beam.py heartbeat` for that id. Herald posts each claim.
+6. Claim each id, run `checkout.py launch`, and start one new Agent on that branch. Do not start a Subagent. Do not use the Task tool. Do not start it on a fresh clone of main. Then `beam.py heartbeat` for that id. Herald posts each claim.
 7. `scan.py status` and `beam.py board`.
 8. Herald posts the tick digest: done, working, left, next ready.
 

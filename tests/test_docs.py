@@ -406,6 +406,29 @@ class Since140DocTests(unittest.TestCase):
                 self.assertIn(phrase, text, "%s missing %s" % (rel, phrase))
 
 
+class TicketAgentDocTests(unittest.TestCase):
+    def test_docs_start_a_new_agent_and_not_a_subagent(self):
+        needles = (
+            "new Agent",
+            "Do not start a Subagent",
+            "Do not use the Task tool",
+            "fresh clone of main",
+            ".warp/beam.json",
+        )
+        banned = (
+            "sub-agent",
+            "subagent_type",
+            "with the Task tool",
+            "cloud_base_branch",
+        )
+        for rel in ("README.md", "docs/GUIDE.md", "AGENTS.md", "rules/warp-operating.mdc"):
+            text = (ROOT / rel).read_text()
+            for needle in needles:
+                self.assertIn(needle, text, "%s missing %s" % (rel, needle))
+            for bad in banned:
+                self.assertNotIn(bad, text, "%s still says %s" % (rel, bad))
+
+
 class HelpTokenTests(unittest.TestCase):
     def test_question_mark_is_always_help_and_help_can_be_a_value(self):
         self.assertEqual(usage.normalize_argv(["?"]), ["--help"])
@@ -454,7 +477,7 @@ class ScriptHelpTests(unittest.TestCase):
             "provider.py": ("merge-local", "--reason", "pushMerge"),
             "beam.py": ("--via", "maxAgents", "ingest", "heartbeat", "watchdog", "worker-died", "staleMinutes"),
             "orchestrator.py": ("checkCommand", "appendOnlyPaths", "--facts", "send-back", "parked", "--output"),
-            "checkout.py": ("--beam", "--id", "--root", "--agent", "implement", "environment: cloud"),
+            "checkout.py": ("--beam", "--id", "--root", "--agent", "implement", "new Agent"),
             "prompt_gate.py": ("--beam", "--force", "--cursor-home", "transitionJiraIssue", "slack_send_message"),
             "state_commit.py": ("--root", "--beam", "--base", "config.yaml"),
             "upgrade.py": ("--root", "--source", "Warp v", "reload Cursor"),

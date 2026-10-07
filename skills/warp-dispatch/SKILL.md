@@ -7,7 +7,7 @@ description: "Compute the ready set and claim tickets under lock, gate, and agen
 
 `scripts/beam.py ready` is the only ready-set. Do not reimplement it in the chat. It recomputes every pending gate first. A gate turns green when every member is merged or done. Post `herald: <gate> pending cleared. Members merged. Tick ran.` when that line is present. `start` lines are the same ids as the table. Claim each id once.
 
-Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. Run `python3 <plugin>/scripts/beam.py watchdog --beam .warp/beam.json` before `ready()`. For each `shuttle: replace <id>` line, start exactly one Shuttle for that same ticket. Status is `recovering`. Keep the branch, pull request, `jira.startedAt`, and locks. Do not queue a duplicate and do not release the lock. A second tick must not start a second Shuttle for that id. `shuttle: alive` and `shuttle: fresh` are not new work. `shuttle: alarm <id> worker-died` means `maxRecoveries` is spent: do not start another. `watchdog: skipped` means the run is paused or stopped: do not recover. When a Shuttle you spawned returns, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`, then reconcile that ticket from the beam before the next claim.
+Run `python3 <plugin>/scripts/resume_hint.py --beam .warp/beam.json` before the first claim. If the beam is paused or missing, do not claim. Run `python3 <plugin>/scripts/beam.py watchdog --beam .warp/beam.json` before `ready()`. For each `shuttle: replace <id>` line, start exactly one Shuttle for that same ticket. Status is `recovering`. Keep the branch, pull request, `jira.startedAt`, and locks. Do not queue a duplicate and do not release the lock. A second tick must not start a second Shuttle for that id. `shuttle: alive` and `shuttle: fresh` are not new work. `shuttle: alarm <id> worker-died` means `maxRecoveries` is spent: do not start another. `watchdog: skipped` means the run is paused or stopped: do not recover. When that ticket's Agent finishes, reconcile it from the beam before the next claim. `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json` records the finish. That journal line is not permission to start a Subagent.
 
 ## Rules the script enforces
 
@@ -26,9 +26,9 @@ Before the first claim of a running cloud session, `prompt_gate.py check` must p
 
 For each id `ready` prints, claim it, then start that ticket in its own checkout. Do not implement it here.
 
-`runner: cloud`: run `checkout.py launch`. It prints a Task call (`environment: cloud`, `subagent_type: shuttle`, `cloud_base_branch`, prompt `IMPLEMENT <id>`). Launch that one cloud agent. Then `checkout.py bind --agent` with the id it returns. Do not use a local sub-agent. `checkout.py implement` must not be how the ticket gets built.
+`runner: cloud`: claim the ticket first. Then run `checkout.py launch`. It fetches origin and cuts a new ticket branch from the tip of the base branch. A ticket branch already in flight is not rebased. It commits the beam, journal, board, and that claim onto the ticket branch, pushes the branch, and prints the instruction only when `.warp/beam.json` is on that branch. Start one new Agent checked out on that branch. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Do not start it on a fresh clone of main. The Agent reads the claim from `.warp/beam.json` in that checkout. Do not start a Subagent. Do not use the Task tool for a ticket. Do not implement the ticket in this turn. If launch exits non-zero, do not start the Agent. Then `checkout.py bind --agent` with the id it returns. `checkout.py implement` must not be how the ticket gets built.
 
-`runner: local`: `checkout.py add` runs `git worktree add`. Remove it later with `checkout.py remove`.
+`runner: local`: `checkout.py add` commits the beam onto the ticket branch, then runs `git worktree add` for that branch. That is one worktree, not a Subagent inside the orchestrator checkout. Remove it later with `checkout.py remove`.
 
 The kickoff is only:
 

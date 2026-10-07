@@ -21,7 +21,7 @@ checkCommand: ""
 appendOnlyPaths: []
 # Shared files a ticket may append to, besides its lock paths. Empty by default.
 # A conflict in one of these files keeps both sides, every added line.
-# Any other conflict is sent back to a sub-agent. Nothing here is a special filename.
+# Any other conflict is sent back to that ticket's Agent. Nothing here is a special filename.
 
 mergeQueue: false
 # true: enqueue the pull request instead of merging it from the agent.
