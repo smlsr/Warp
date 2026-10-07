@@ -299,6 +299,7 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
     ticket["worktree"] = None
     ticket["isolation"] = "vm"
     ticket["agent"] = ticket.get("agent") or ("subagent:%s" % ticket_id)
+    _note_live(data, ticket)
     _save(path, data)
     had = False
     if _is_git(root):
@@ -330,6 +331,7 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     ticket["checkout"] = "worktree"
     ticket["isolation"] = "worktree"
     ticket["agent"] = ticket.get("agent") or ("subagent:%s" % ticket_id)
+    _note_live(data, ticket)
     _save(path, data)
     if kind == "reused" or listed:
         print("reused: worktree %s" % wt)
@@ -356,6 +358,7 @@ def _launch_agent(root: Path, path: Path, data: dict, ticket: dict, branch: str,
         return 2
     ticket["branch"] = branch
     ticket["checkout"] = "cloud-vm"
+    _note_live(data, ticket)
     _save(path, data)
     state = branch_state(root, branch, base)
     for line in launch_lines(ticket, data.get("config") or {}, branch, state):
@@ -378,6 +381,23 @@ def _ticket(beam: dict, tid: str) -> dict:
     if not ticket:
         sys.exit("unknown ticket %s" % tid)
     return ticket
+
+
+def _note_live(data: dict, ticket: dict) -> None:
+    """The launch holds a slot: this parent session, out, not returned."""
+    import beam as beam_mod
+    import pipeline
+
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "")
+    if step not in {"implement", "fix", "restart", "repair"}:
+        if ticket.get("status") == "fix" or ticket.get("phase") == "fixing":
+            step = "fix"
+        else:
+            step = "implement"
+    pipeline.mark_shuttle(ticket, step, data)
+    if not ticket.get("workerStartedAt"):
+        ticket["workerStartedAt"] = beam_mod.utcnow()
 
 
 def _occupied(ticket: dict) -> bool:
@@ -783,9 +803,12 @@ def main(argv: Optional[list] = None) -> int:
             else:
                 cap = orchestrator.max_local_subagents(cfg)
             room = orchestrator.local_room(data, cfg, skip_id=args.id, available=gib)
+            holders = orchestrator.live_slot_holders(data, cfg, skip_id=args.id)
+            shown = ", ".join(holders) if holders else "none"
             print("local-cap: %s" % cap)
+            print("live shuttles %d/%d: %s" % (len(holders), cap, shown))
             if room < 1:
-                print("refuse: local subagent cap %s" % cap)
+                print("refuse: local subagent cap %s (live %d/%d: %s)" % (cap, len(holders), cap, shown))
                 return 2
             return _launch_worktree(root, path, data, ticket, branch, base, args.id)
         return _launch_vm(root, path, data, ticket, branch, args.id)

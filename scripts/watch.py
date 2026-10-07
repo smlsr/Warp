@@ -625,7 +625,8 @@ def status_lines(data: dict, now=None) -> list:
     import beam as beam_mod
 
     progress = beam_mod.in_progress_label(data)
-    lines = ["open: %d" % len(rows), progress, "alarms: %d" % len(alarms)]
+    live = beam_mod.live_shuttle_label(data)
+    lines = ["open: %d" % len(rows), progress, live, "alarms: %d" % len(alarms)]
     lines.extend(_format_row(row) for row in alarms)
     lines.append("stalls: %d" % len(stalls))
     lines.extend(_format_row(row) for row in stalls)
@@ -640,6 +641,7 @@ def status_lines(data: dict, now=None) -> list:
         "stalls": [row["id"] for row in rows if row["stalled"] == "yes"],
         "counts": counts,
         "inProgress": progress,
+        "liveShuttles": live,
         "tickets": rows,
         "sweep": data.get("repairSweep") if isinstance(data.get("repairSweep"), dict) else None,
     }

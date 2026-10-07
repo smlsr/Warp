@@ -303,35 +303,42 @@ class ParkAndRefillTests(unittest.TestCase):
         self.assertFalse(any(line.startswith("start ") for line in extra))
         self.assertEqual(data["tickets"]["P-1"]["attempts"], 3)
 
-    def test_green_rollup_frees_the_slot_and_starts_the_next_ticket(self):
+    def test_a_live_shuttle_holds_the_slot_and_a_review_does_not(self):
         data = beam(
             [
                 ticket(
                     "R-1",
-                    status="review",
-                    phase="reviewing",
+                    status="coding",
+                    phase="implementing",
                     locks=["src/a"],
-                    pr={"url": "https://example.test/pull/1", "rollup": "pending", "bugbot": "running"},
+                    shuttle={"pending": True, "step": "implement"},
                 ),
                 ticket("R-2", locks=["src/b"]),
             ],
             maxAgents=1,
             maxLocalSubagents=1,
         )
-        waiting = pipeline.advance(data, {"R-1": {"bugbot": "running", "rollup": "pending"}}, now=NOW)
+        waiting = pipeline.advance(data, now=NOW)
         self.assertNotIn("start R-2", text(waiting))
-        self.assertNotIn("step=implement", text(waiting))
         self.assertEqual(data["tickets"]["R-2"]["status"], "queued")
+        data["tickets"]["R-1"]["shuttle"]["pending"] = False
+        data["tickets"]["R-1"]["status"] = "review"
+        data["tickets"]["R-1"]["phase"] = "reviewing"
+        data["tickets"]["R-1"]["pr"] = {
+            "url": "https://example.test/pull/1",
+            "rollup": "pending",
+            "bugbot": "running",
+        }
         freed = pipeline.advance(
             data,
-            {"R-1": {"bugbot": "running", "rollup": "green", "ci": "green"}},
+            {"R-1": {"bugbot": "running", "rollup": "pending"}},
             now=NOW,
         )
         self.assertIn("step=implement", text(freed))
         self.assertIn("R-2", text(freed))
         self.assertEqual(data["tickets"]["R-2"]["status"], "coding")
         self.assertEqual(data["tickets"]["R-2"]["phase"], "implementing")
-        self.assertEqual(data["tickets"]["R-1"]["status"], "review")
+        self.assertIn(data["tickets"]["R-1"]["status"], {"review", "bugbot_running"})
         self.assertNotEqual(data["tickets"]["R-1"]["status"], "merged")
 
     def test_resume_adopts_an_open_pull_request(self):
@@ -1046,6 +1053,162 @@ class InProgressCapTests(unittest.TestCase):
         blob = text(digest)
         self.assertIn("in progress 1/20", blob)
         self.assertIn("slack: digest", blob)
+        self.assertIn("live shuttles 0/4, 0 fix workers running", shown)
+
+
+class LiveShuttleCapTests(unittest.TestCase):
+    def test_cold_start_with_stale_claims_launches_up_to_the_cap(self):
+        import beam as beam_mod
+        import watch
+
+        claims = []
+        for index in range(21):
+            tid = "A-%02d" % index
+            claims.append(
+                ticket(
+                    tid,
+                    status="coding",
+                    phase="implementing",
+                    agent="shuttle-%s" % tid,
+                    shuttle={"pending": True, "step": "implement", "session": "old"},
+                    lastSeenAt="2020-01-01T00:00:00Z",
+                    workerStartedAt="2020-01-01T00:00:00Z",
+                )
+            )
+        claims.append(self._review("C-1", conflict=["cmd/qa-api/routes.go"]))
+        data = beam(
+            claims,
+            maxAgents=18,
+            maxLocalSubagents=18,
+            maxFixWorkers=5,
+            maxInProgress=20,
+        )
+        data["parentSession"] = "previous"
+        self.assertEqual(beam_mod.running_shuttle_count(data), 0)
+        self.assertEqual(orchestrator.local_in_use(data, data["config"]), 0)
+        folder = Path(tempfile.mkdtemp())
+        path = folder / "beam.json"
+        path.write_text(json.dumps(data))
+        loaded = json.loads(path.read_text())
+        released = pipeline.open_parent_session(loaded)
+        self.assertEqual(len(released), 21)
+        self.assertNotIn("shuttle: release C-1", text(released))
+        path.write_text(json.dumps(loaded))
+        cold = pipeline.cold_start(path)
+        blob = text(cold)
+        saved = json.loads(path.read_text())
+        live = [
+            tid
+            for tid, row in saved["tickets"].items()
+            if orchestrator.shuttle_is_live(row, saved)
+        ]
+        self.assertEqual(len(live), 18)
+        self.assertIn("C-1", live)
+        self.assertLess(blob.index("start C-1"), blob.index("shuttle: replace"))
+        waiting = beam_mod.replacement_ids(saved)
+        self.assertEqual(len(waiting), 4)
+        self.assertEqual(beam_mod.running_shuttle_count(saved), 18)
+        self.assertEqual(beam_mod.shuttle_room(saved), 0)
+        self.assertEqual(orchestrator.local_in_use(saved, saved["config"]), 18)
+        shown = text(watch.snapshot(saved, now=NOW))
+        self.assertIn("live shuttles 18/18, 1 fix workers running", shown)
+        self.assertIn("replace: %s" % ", ".join(waiting), shown)
+        holders = orchestrator.live_slot_holders(saved)
+        self.assertEqual(holders, sorted(live))
+        self.assertEqual(orchestrator.local_room(saved, saved["config"], skip_id="A-99"), 0)
+        self.assertIn("C-1", holders)
+        again = pipeline.cold_start(path)
+        self.assertEqual(again, [])
+        shutil.rmtree(folder)
+
+    def test_a_dead_shuttle_frees_its_slot_and_the_cap_counts_live_ones(self):
+        import beam as beam_mod
+
+        live = ticket(
+            "L-1",
+            status="coding",
+            phase="implementing",
+            shuttle={"pending": True, "step": "implement", "session": "s"},
+        )
+        dead = ticket(
+            "D-1",
+            status="claimed",
+            agent="shuttle-D-1",
+            shuttle={"pending": True, "step": "implement", "session": "old"},
+            lastSeenAt="2020-01-01T00:00:00Z",
+            workerStartedAt="2020-01-01T00:00:00Z",
+        )
+        review = ticket(
+            "R-1",
+            status="review",
+            phase="reviewing",
+            pr={"url": "https://example.test/pull/1", "rollup": "pending", "bugbot": "pass", "ci": "pending"},
+        )
+        data = beam(
+            [live, dead, review, ticket("Q-1")],
+            maxAgents=2,
+            maxLocalSubagents=2,
+            maxFixWorkers=5,
+        )
+        data["parentSession"] = "s"
+        self.assertTrue(orchestrator.shuttle_is_live(live, data))
+        self.assertFalse(orchestrator.shuttle_is_live(dead, data))
+        self.assertEqual(beam_mod.running_shuttle_count(data), 1)
+        self.assertEqual(beam_mod.fix_worker_count(data), 0)
+        self.assertEqual(beam_mod.shuttle_room(data), 1)
+        self.assertEqual(orchestrator.local_in_use(data, data["config"]), 1)
+        self.assertEqual(orchestrator.live_slot_holders(data), ["L-1"])
+        lines = pipeline.advance(data, now=NOW)
+        self.assertIn("shuttle: replace D-1", text(lines))
+        self.assertNotIn("start Q-1", text(lines))
+        self.assertEqual(data["tickets"]["Q-1"]["status"], "queued")
+        self.assertTrue(orchestrator.shuttle_is_live(data["tickets"]["D-1"], data))
+        self.assertFalse(data["tickets"]["D-1"].get("needsReplacement"))
+        self.assertEqual(beam_mod.running_shuttle_count(data), 2)
+
+    def test_vm_mode_uses_the_heartbeat(self):
+        from datetime import datetime, timezone
+
+        fresh_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fresh = ticket(
+            "V-1",
+            status="coding",
+            phase="implementing",
+            shuttle={"pending": True, "step": "implement", "session": "old"},
+            lastSeenAt=fresh_at,
+            workerStartedAt=fresh_at,
+            isolation="vm",
+            checkout="subagent-vm",
+        )
+        stale = ticket(
+            "V-2",
+            status="coding",
+            phase="implementing",
+            shuttle={"pending": True, "step": "implement", "session": "old"},
+            lastSeenAt="2020-01-01T00:00:00Z",
+            workerStartedAt="2020-01-01T00:00:00Z",
+            isolation="vm",
+            checkout="subagent-vm",
+        )
+        data = beam([fresh, stale], maxAgents=18, maxLocalSubagents=18, subagentVm=True, runner="cloud")
+        self.assertTrue(orchestrator.vm_mode(data["config"], data))
+        released = text(pipeline.open_parent_session(data))
+        self.assertNotIn("shuttle: release V-1", released)
+        self.assertIn("shuttle: release V-2", released)
+        self.assertTrue(orchestrator.shuttle_is_live(data["tickets"]["V-1"], data))
+        self.assertFalse(data["tickets"]["V-2"]["shuttle"]["pending"])
+        self.assertTrue(data["tickets"]["V-2"]["needsReplacement"])
+        self.assertEqual(orchestrator.local_in_use(data, data["config"]), 0)
+
+    def _review(self, tid, **pr):
+        body = {
+            "url": "https://example.test/pull/%s" % tid,
+            "bugbot": "pass",
+            "rollup": "green",
+            "ci": "green",
+        }
+        body.update(pr)
+        return ticket(tid, status="review", phase="reviewing", pr=body)
 
 
 if __name__ == "__main__":

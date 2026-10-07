@@ -578,7 +578,11 @@ def ticket_fix_worker(ticket: dict) -> bool:
 
 def fix_worker_count(beam: dict) -> int:
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    return sum(1 for ticket in tickets.values() if ticket_fix_worker(ticket))
+    return sum(
+        1
+        for ticket in tickets.values()
+        if isinstance(ticket, dict) and ticket_fix_worker(ticket) and orchestrator.shuttle_is_live(ticket, beam)
+    )
 
 
 def holding_launches_label(beam: dict, count: Optional[int] = None, cap: Optional[int] = None) -> str:
@@ -592,23 +596,67 @@ def holding_launches_label(beam: dict, count: Optional[int] = None, cap: Optiona
 
 
 def running_shuttle_count(beam: dict) -> int:
-    """Shuttles that are actually out. A waiting review does not count."""
+    """Live Shuttles. A waiting review and a dead claim do not count."""
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and _shuttle_pending(ticket))
+    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and orchestrator.shuttle_is_live(ticket, beam))
 
 
 def _local_shuttle_count(beam: dict) -> int:
-    """Pending Shuttles on this machine. A confirmed other VM does not count."""
+    """Live Shuttles on this machine. A confirmed other VM does not count."""
+    return len(orchestrator.live_slot_holders(beam))
+
+
+def shuttle_cap(beam: dict) -> int:
+    """The cap a live Shuttle counts against. Shared machines use the lower one."""
+    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+    cap = configured_cap(cfg)
+    if orchestrator.shared_machine(cfg, beam):
+        local_cap = orchestrator.max_local_subagents(cfg)
+        if orchestrator.memory_check(cfg):
+            local_cap = orchestrator.local_subagent_cap(cfg)
+        cap = min(cap, local_cap)
+    return cap
+
+
+def shuttle_room(beam: dict) -> int:
+    """How many more live Shuttles may start. Dead claims do not take a slot."""
+    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+    room = max(0, configured_cap(cfg) - running_shuttle_count(beam))
+    if room < 1:
+        return 0
+    if not orchestrator.shared_machine(cfg, beam):
+        return room
+    local_cap = orchestrator.max_local_subagents(cfg)
+    if orchestrator.memory_check(cfg):
+        local_cap = orchestrator.local_subagent_cap(cfg)
+    return min(room, max(0, local_cap - _local_shuttle_count(beam)))
+
+
+def replacement_ids(beam: dict) -> list:
+    """Dead Shuttles waiting for a replacement. A live one is not in this list."""
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    used = 0
-    for ticket in tickets.values():
-        if not isinstance(ticket, dict) or not _shuttle_pending(ticket):
+    waiting = []
+    for tid in sorted(tickets, key=lambda item: str(item)):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict) or not ticket.get("needsReplacement"):
             continue
-        remote = ticket.get("isolation") == "vm" and ticket.get("checkout") == "subagent-vm"
-        if remote:
+        if orchestrator.shuttle_is_live(ticket, beam):
             continue
-        used += 1
-    return used
+        waiting.append(str(ticket.get("id") or tid))
+    return waiting
+
+
+def live_shuttle_label(beam: dict) -> str:
+    """Status: live shuttles N/cap, fix workers, and dead tickets still waiting."""
+    waiting = replacement_ids(beam)
+    label = "live shuttles %d/%d, %d fix workers running" % (
+        running_shuttle_count(beam),
+        shuttle_cap(beam),
+        fix_worker_count(beam),
+    )
+    if waiting:
+        label += ", replace: %s" % ", ".join(waiting)
+    return label
 
 
 def fix_worker_room(beam: dict) -> int:
@@ -616,22 +664,13 @@ def fix_worker_room(beam: dict) -> int:
 
     maxInProgress does not reduce this. The room is maxFixWorkers minus the
     fix workers already running, and it also stays inside maxAgents and
-    maxLocalSubagents counted by Shuttles that are actually out.
+    maxLocalSubagents counted by live Shuttles only.
     """
     cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
     room = max(0, max_fix_workers(cfg) - fix_worker_count(beam))
     if room < 1:
         return 0
-    running = running_shuttle_count(beam)
-    room = min(room, max(0, configured_cap(cfg) - running))
-    if room < 1:
-        return 0
-    if orchestrator.shared_machine(cfg, beam):
-        local_cap = orchestrator.max_local_subagents(cfg)
-        if orchestrator.memory_check(cfg):
-            local_cap = orchestrator.local_subagent_cap(cfg)
-        room = min(room, max(0, local_cap - _local_shuttle_count(beam)))
-    return room
+    return min(room, shuttle_room(beam))
 
 
 def _watch_slot(beam: dict) -> dict:
@@ -861,7 +900,7 @@ def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False)
 def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
     """A blocking gate that is not green blocks non-members that depend on a member."""
     anc = ancestors(beam["tickets"], tid, anc_cache)
-    for g in beam["gates"]:
+    for g in beam.get("gates") or []:
         if not g.get("blocking", True) or g.get("status") == "green":
             continue
         if tid in g["members"]:
@@ -876,8 +915,8 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
 
     A blocker counts only when it is merged to the base branch. An open or
     green pull request does not. Lock overlap uses each ticket's full lock
-    list, including a parent folder. The Shuttle cap is maxAgents minus slots still
-    held. maxInProgress
+    list, including a parent folder.     The Shuttle cap is maxAgents minus live Shuttles.
+    A dead claim does not hold a slot. maxInProgress
     (default 20) gates only this ready queue: at that many started tickets,
     nothing new is taken. It does not stop a fix, rebase, rerun, or merge.
     A green pull request has already freed its slot. A red base branch
@@ -890,9 +929,7 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     if beam.get("paused") or state in {"paused", "stopped"}:
         return []
     cfg = beam.get("config") or {}
-    cap = configured_cap(cfg)
-    running = sum(1 for t in beam["tickets"].values() if orchestrator.holds_slot(t, cfg))
-    agent_slots = max(0, cap - running)
+    agent_slots = shuttle_room(beam)
     if orchestrator.needs_base_fix(beam) and agent_slots > 0:
         agent_slots -= 1
     if limit is not None:
@@ -1459,6 +1496,8 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
         ticket = tickets[tid]
         if not isinstance(ticket, dict) or ticket.get("status") not in SHUTTLE_WORK:
             continue
+        if ticket.get("needsReplacement"):
+            continue
         if not worker_is_dead(ticket.get("lastSeenAt"), _shuttle_anchor(ticket), now, stale):
             kind = "alive" if ticket.get("lastSeenAt") else "fresh"
             lines.append("shuttle: %s %s" % (kind, tid))
@@ -1487,6 +1526,9 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
         ticket["recoveredAt"] = now_s
         ticket["workerStartedAt"] = now_s
         ticket.pop("lastSeenAt", None)
+        shuttle = ticket.get("shuttle")
+        if isinstance(shuttle, dict):
+            shuttle["pending"] = False
         ticket["updatedAt"] = now_s
         append_ticket_event(beam_path, ticket, {"at": now_s, "type": "status", "from": prev, "to": "recovering"})
         append_ticket_event(
