@@ -459,12 +459,25 @@ class VmLaunchTests(GitRepo):
         )
         self.assertEqual(orchestrator.local_subagent_cap({"memoryCheck": True}, available=0), 1)
         first = self.ticket("T-1", status="coding", agent="shuttle-T-1")
+        first["shuttle"] = {"pending": True, "step": "implement", "session": "sess"}
         second = self.ticket("T-2", status="claimed", agent="shuttle-T-2")
         self.beam([first, second], subagentVm=False, maxLocalSubagents=1, runner="local")
+        path = self.repo / ".warp" / "beam.json"
+        saved = json.loads(path.read_text())
+        saved["parentSession"] = "sess"
+        path.write_text(json.dumps(saved) + "\n")
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-2", cwd=self.repo)
         self.assertEqual(launched.returncode, 2, launched.stdout + launched.stderr)
         self.assertIn("refuse: local subagent cap", launched.stdout)
+        self.assertIn("live 1/1: T-1", launched.stdout)
         self.assertIn("local-cap:", launched.stdout)
+        claimed = self.ticket("T-3", status="coding", agent="shuttle-T-3")
+        idle = self.ticket("T-4", status="claimed", agent="shuttle-T-4")
+        self.beam([claimed, idle], subagentVm=False, maxLocalSubagents=1, runner="local")
+        opened = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-4", cwd=self.repo)
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        self.assertNotIn("refuse: local subagent cap", opened.stdout)
+        self.assertIn("live shuttles 0/1: none", opened.stdout)
 
     def test_local_runner_overrides_cloud_only_settings(self):
         note = "note: runner local overrides cloud-only settings: subagentVm, launch"

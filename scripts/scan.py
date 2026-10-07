@@ -820,9 +820,13 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
     beam["runState"] = state
     beam["paused"] = state != "running"
     beam["pauseReason"] = reason
+    session_lines = []
     if state == "running":
         beam["runComplete"] = False
         beam["stoppedAt"] = None
+        import pipeline
+
+        session_lines = pipeline.open_parent_session(beam)
     if state == "stopped":
         beam["stoppedAt"] = utcnow()
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
@@ -846,6 +850,8 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
     print(state)
     if state == "running":
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
+        for line in session_lines:
+            print(line)
         for line in watchdog(beam_path):
             print(line)
     if state == "stopped":

@@ -42,11 +42,15 @@ def pending(ticket: dict) -> bool:
     return bool(_shuttle(ticket).get("pending"))
 
 
-def mark_shuttle(ticket: dict, step: str) -> None:
+def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle = _shuttle(ticket)
     shuttle["pending"] = True
     shuttle["step"] = step
     shuttle["hadPr"] = bool((ticket.get("pr") or {}).get("url"))
+    shuttle.pop("returned", None)
+    if isinstance(data, dict) and data.get("parentSession"):
+        shuttle["session"] = data["parentSession"]
+    ticket["needsReplacement"] = False
 
 
 def clear_shuttle(ticket: dict) -> None:
@@ -436,7 +440,7 @@ def start_rebase(data: dict, ticket: dict, lines: list) -> None:
     """Start a rebase Shuttle in this pass. A conflict does not wait for the stall timer."""
     ticket["status"] = "fix"
     ticket["phase"] = "fixing"
-    mark_shuttle(ticket, "fix")
+    mark_shuttle(ticket, "fix", data)
     lines.extend(_start_lines(data, ticket, "fix", rebase_detail(ticket)))
     lines.append("fixer: %s rebase" % ticket.get("id"))
 
@@ -446,7 +450,7 @@ def start_ci(data: dict, ticket: dict, lines: list) -> None:
     tid = ticket.get("id")
     ticket["status"] = "fix"
     ticket["phase"] = "fixing"
-    mark_shuttle(ticket, "fix")
+    mark_shuttle(ticket, "fix", data)
     lines.append("ci: start %s" % tid)
     lines.extend(
         _start_lines(
@@ -483,10 +487,10 @@ def _defer_fix(data: dict, ticket: dict) -> None:
 def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
     """Rank a fix the cold start and the supervise pass can launch.
 
-    1 is a conflict, a behind branch, or CI that never started.
-    2 is Bugbot findings. 3 is red CI or a failed acceptance criterion.
-    A ticket already in fixing with no Shuttle out is launched with the
-    conflicts. Ready and merging tickets are left for the merge queue.
+    An open pull request that needs a fix comes first: a conflict, CI that
+    never started, red CI, then Bugbot findings. A ticket already in fixing
+    with no Shuttle out follows those. Ready and merging tickets are left
+    for the merge queue. Dead Shuttle replacements are a later pass.
     """
     if not isinstance(ticket, dict):
         return None
@@ -509,8 +513,6 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
         return {"id": tid, "rank": 1, "sub": 0, "kind": "rebase"}
     if pr.get("ciAbsent"):
         return {"id": tid, "rank": 1, "sub": 1, "kind": "ci-start"}
-    if phase == "fixing" and ticket.get("status") != "alarm":
-        return {"id": tid, "rank": 1, "sub": 2, "kind": "continue"}
     if phase not in _FIX_REVIEW and ticket.get("status") != "alarm":
         return None
     reasons = red_reasons(ticket, config or {})
@@ -519,12 +521,14 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
         reasons = list(reasons or [alarm])
         if alarm not in reasons:
             reasons.insert(0, alarm)
-    if not reasons:
-        return None
-    bugbot = any(str(item).startswith("bugbot") for item in reasons)
+    bugbot = any(str(item).startswith("bugbot") for item in reasons) if reasons else False
+    if reasons and not bugbot:
+        return {"id": tid, "rank": 1, "sub": 2, "kind": "ci", "reasons": reasons}
     if bugbot:
-        return {"id": tid, "rank": 2, "sub": 0, "kind": "bugbot", "reasons": reasons}
-    return {"id": tid, "rank": 3, "sub": 0, "kind": "ci", "reasons": reasons}
+        return {"id": tid, "rank": 1, "sub": 3, "kind": "bugbot", "reasons": reasons}
+    if phase == "fixing" and ticket.get("status") != "alarm":
+        return {"id": tid, "rank": 1, "sub": 4, "kind": "continue"}
+    return None
 
 
 def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
@@ -538,7 +542,7 @@ def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
         start_ci(data, ticket, lines)
         return
     if kind == "continue":
-        mark_shuttle(ticket, "fix")
+        mark_shuttle(ticket, "fix", data)
         detail = orchestrator._latest_blocker(ticket) or "fix"
         lines.extend(_start_lines(data, ticket, "fix", str(detail)))
         return
@@ -549,9 +553,10 @@ def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
 def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
     """Start fix Shuttles up to the fix-worker cap, highest priority first.
 
-    maxInProgress is not consulted. Conflicts and CI that never started go
-    first, then Bugbot findings, then red CI. A supervise pass launches only
-    the tickets this pass already decided need a fix. A cold start scans.
+    maxInProgress is not consulted. An open pull request that needs a fix
+    goes first: a conflict, CI that never started, red CI, then Bugbot
+    findings. A supervise pass launches only the tickets this pass already
+    decided need a fix. A cold start scans.
     """
     deferred = {str(tid) for tid in (data.pop("_fixDefer", []) or [])}
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
@@ -582,8 +587,128 @@ def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
         _launch_fix(data, ticket, item, lines)
 
 
+def _was_shuttle(ticket: dict) -> bool:
+    """A claim that had a Shuttle, or still says it is doing Shuttle work."""
+    import beam as beam_mod
+
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    if shuttle.get("pending") or ticket.get("needsReplacement"):
+        return True
+    return ticket.get("status") in beam_mod.SHUTTLE_WORK
+
+
+def _release_slot(ticket: dict) -> None:
+    shuttle = _shuttle(ticket)
+    shuttle["pending"] = False
+    ticket["needsReplacement"] = True
+
+
+def open_parent_session(data: dict, now=None) -> list:
+    """Start or resume. A new parent session. Earlier subagent Shuttles are dead.
+
+    VM mode keeps a Shuttle with a fresh heartbeat or a start that is not
+    stale. Every released ticket loses its slot and waits for a replacement.
+    This does not launch anything.
+    """
+    import uuid
+
+    import beam as beam_mod
+
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    data["parentSession"] = "%s-%s" % (now_s, uuid.uuid4().hex[:8])
+    lines = []
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for tid in sorted(tickets, key=lambda item: str(item)):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict):
+            continue
+        if orchestrator.shuttle_is_live(ticket, data, now=now):
+            continue
+        if not _was_shuttle(ticket):
+            continue
+        _release_slot(ticket)
+        lines.append("shuttle: release %s" % ticket.get("id"))
+    return lines
+
+
+def _replacement_step(ticket: dict) -> str:
+    phase = ticket.get("phase")
+    status = ticket.get("status")
+    shuttle = _shuttle(ticket)
+    if status == "fix" or phase == "fixing" or shuttle.get("step") == "fix":
+        return "fix"
+    if shuttle.get("step") == "restart" and phase == "fixing":
+        return "fix"
+    return "restart"
+
+
+def dispatch_replacements(data: dict, lines: list) -> None:
+    """Start dead Shuttle replacements after fix workers, up to the live caps.
+
+    maxInProgress does not apply. A fix replacement also stays inside
+    maxFixWorkers. Past maxRecoveries the ticket alarms and does not start.
+    """
+    if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
+        return
+    import beam as beam_mod
+
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    waiting = []
+    for tid in sorted(tickets, key=lambda item: str(item)):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict) or not ticket.get("needsReplacement"):
+            continue
+        if pending(ticket) or orchestrator.shuttle_is_live(ticket, data):
+            continue
+        waiting.append(ticket)
+    for ticket in waiting:
+        if beam_mod.shuttle_room(data) < 1:
+            break
+        step = _replacement_step(ticket)
+        if step == "fix" and beam_mod.fix_worker_room(data) < 1:
+            continue
+        _launch_replacement(data, ticket, lines, step)
+
+
+def _launch_replacement(data: dict, ticket: dict, lines: list, step: str) -> None:
+    import beam as beam_mod
+
+    cap = _int((data.get("config") or {}).get("maxRecoveries"), 5)
+    count = int(ticket.get("recoveries") or 0)
+    tid = ticket.get("id")
+    if count >= cap:
+        ticket["needsReplacement"] = False
+        clear_shuttle(ticket)
+        ticket["status"] = "alarm"
+        ticket["alarm"] = "worker-died"
+        lines.append("shuttle: alarm %s worker-died" % tid)
+        lines.append("herald: %s worker died. Recovery cap reached." % tid)
+        return
+    number = count + 1
+    new_agent, number = beam_mod._unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
+    prev = ticket.get("status")
+    if prev != "recovering":
+        ticket["recoveryPriorStatus"] = prev
+    ticket["status"] = "recovering"
+    ticket["agent"] = new_agent
+    ticket["recoveries"] = number
+    stamp = beam_mod.utcnow()
+    ticket["recoveredAt"] = stamp
+    ticket["workerStartedAt"] = stamp
+    ticket.pop("lastSeenAt", None)
+    mark_shuttle(ticket, step, data)
+    branch = ticket.get("branch") or ""
+    lines.append("shuttle: replace %s agent=%s branch=%s" % (tid, new_agent, branch))
+    lines.append("herald: %s worker died. A new Shuttle started." % tid)
+    lines.extend(_start_lines(data, ticket, step, "replace"))
+
+
 def cold_start(beam_path) -> list:
-    """Start or resume with no Shuttle out. Dispatch fix workers immediately."""
+    """Start or resume. Fill live slots: fixes, then dead Shuttle replacements.
+
+    A Shuttle already out keeps its slot. Room left under the caps is filled
+    immediately. maxInProgress does not hold either of these.
+    """
     import beam as beam_mod
 
     path = Path(beam_path)
@@ -592,10 +717,10 @@ def cold_start(beam_path) -> list:
     data = beam_mod.load_json(path)
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
         return []
-    if beam_mod.running_shuttle_count(data) > 0:
-        return []
     lines: list = []
     dispatch_fix_workers(data, lines, scan=True)
+    dispatch_replacements(data, lines)
+    _refill(data, lines)
     if lines:
         beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
     return lines
@@ -698,7 +823,7 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
         return
     ticket["alarm"] = None
     _phase(ticket, "fixing", lines)
-    mark_shuttle(ticket, "fix")
+    mark_shuttle(ticket, "fix", data)
     lines.extend(_start_lines(data, ticket, "fix", text))
 
 
@@ -722,7 +847,7 @@ def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str
     ticket["alarm"] = None
     ticket["status"] = "recovering"
     _phase(ticket, step_phase, lines)
-    mark_shuttle(ticket, "restart")
+    mark_shuttle(ticket, "restart", data)
     lines.extend(_start_lines(data, ticket, "restart"))
     if herald:
         lines.append(herald)
@@ -770,7 +895,7 @@ def _recover_alarm(data: dict, ticket: dict, lines: list, deferred: list) -> boo
     alarm = ticket.get("alarm")
     if alarm == "lock-escape":
         if not pending(ticket):
-            mark_shuttle(ticket, "repair")
+            mark_shuttle(ticket, "repair", data)
         deferred.append(ticket.get("id"))
         return True
     if alarm == "worker-died":
@@ -789,7 +914,7 @@ def _recover_alarm(data: dict, ticket: dict, lines: list, deferred: list) -> boo
     return False
 
 
-def _ensure_phase(ticket: dict) -> None:
+def _ensure_phase(ticket: dict, data: Optional[dict] = None) -> None:
     if ticket.get("phase"):
         return
     pr = ticket.get("pr") or {}
@@ -800,8 +925,12 @@ def _ensure_phase(ticket: dict) -> None:
         return
     if status == "fix":
         ticket["phase"] = "fixing"
-        if ticket.get("agent"):
-            mark_shuttle(ticket, "fix")
+        if ticket.get("needsReplacement"):
+            return
+        if pending(ticket) and isinstance(data, dict) and not orchestrator.shuttle_is_live(ticket, data):
+            return
+        if ticket.get("agent") and not pending(ticket):
+            ticket["needsReplacement"] = True
         return
     if status == "merging":
         ticket["phase"] = "merging"
@@ -814,8 +943,12 @@ def _ensure_phase(ticket: dict) -> None:
         return
     if status in {"claimed", "planning", "coding", "recovering"}:
         ticket["phase"] = "implementing"
-        if ticket.get("agent"):
-            mark_shuttle(ticket, "implement")
+        if ticket.get("needsReplacement"):
+            return
+        if pending(ticket) and isinstance(data, dict) and not orchestrator.shuttle_is_live(ticket, data):
+            return
+        if ticket.get("agent") and not pending(ticket):
+            ticket["needsReplacement"] = True
 
 
 def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> str:
@@ -862,6 +995,10 @@ def _ensure_acs(data: dict, ticket: dict) -> None:
 def _follow(data: dict, ticket: dict, lines: list) -> None:
     cfg = data.get("config") or {}
     phase = ticket.get("phase")
+    if ticket.get("needsReplacement") and not pending(ticket):
+        if _fix_class(ticket, cfg):
+            _defer_fix(data, ticket)
+        return
     if _conflicted(ticket):
         _defer_fix(data, ticket)
         return
@@ -875,7 +1012,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
         if not (ticket.get("pr") or {}).get("url"):
             ticket["status"] = "coding"
             _phase(ticket, "implementing", lines)
-            mark_shuttle(ticket, "implement")
+            mark_shuttle(ticket, "implement", data)
             lines.extend(_start_lines(data, ticket, "implement"))
             return
         _phase(ticket, "pr-open", lines)
@@ -953,10 +1090,12 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     _ensure_acs(data, ticket)
     if _recover_alarm(data, ticket, lines, deferred):
         return
-    _ensure_phase(ticket)
+    _ensure_phase(ticket, data)
     if not ticket.get("phase"):
         return
-    if pending(ticket):
+    if pending(ticket) and not orchestrator.shuttle_is_live(ticket, data, now=now):
+        _release_slot(ticket)
+    elif pending(ticket):
         if not _returned(ticket, snap):
             lines.append("shuttle: hold %s" % ticket.get("id"))
             return
@@ -998,7 +1137,7 @@ def _refill(data: dict, lines: list) -> None:
             continue
         ticket["status"] = "coding"
         _phase(ticket, "implementing", lines)
-        mark_shuttle(ticket, "implement")
+        mark_shuttle(ticket, "implement", data)
         lines.extend(_start_lines(data, ticket, "implement"))
 
 
@@ -1090,6 +1229,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
             tid = ticket.get("id")
             _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
         dispatch_fix_workers(data, lines)
+        dispatch_replacements(data, lines)
         if deferred and beam_path is not None:
             _run_repairs(data, beam_path, lines, now)
         elif deferred:

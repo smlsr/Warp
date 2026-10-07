@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.19
+
+- A launch slot is a live Shuttle: one started in this parent session that has a fresh heartbeat or has not returned yet. Ticket status and a stale claim do not count against `maxAgents`, `maxLocalSubagents`, or `maxFixWorkers`. A dead Shuttle releases its slot immediately.
+- On start or resume in subagent mode, a Shuttle from an earlier parent session is dead. Warp releases those slots and marks the tickets for replacement. VM mode keeps a Shuttle with a fresh heartbeat and releases one whose heartbeat is stale.
+- Start and resume then dispatch up to the caps: an open pull request that needs a fix (a conflict, CI that never started, red CI, then Bugbot findings), then dead Shuttle replacements, then other ready-queue work. `maxInProgress` still holds only that other work.
+- `checkout.py launch` counts live Shuttles. A refusal prints `live N/cap` and the ticket ids that hold the slots. `/warp-status`, start, and resume print `live shuttles N/cap`, how many fix workers are running, and the dead tickets waiting for a replacement.
+
 ## 1.4.18
 
 - `maxInProgress` only holds new launches from the ready queue. A fix, a rebase, a CI rerun, a Bugbot re-request, and a merge on a ticket already in progress are not held. `maxFixWorkers` (default 5) caps the fix, rebase, and rerun Shuttles that are actually running. It still applies when in progress is at or above the cap, and it stays within `maxAgents` and `maxLocalSubagents`. On start or resume with no Shuttle out, Warp dispatches those workers immediately: conflicts and CI that never started, then Bugbot findings, then red CI. Status says `holding new launches (N/maxInProgress), N fix workers running`.

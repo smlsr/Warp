@@ -450,11 +450,12 @@ def note_pr_opened(ticket: dict, url: str, when: Optional[str] = None) -> None:
 
 
 def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
-    """True while the ticket still occupies a maxAgents slot.
+    """True while a review is still waiting on the check rollup.
 
-    Opening a pull request means the Shuttle finished. The slot stays occupied
-    until the provider check rollup is green. review with a green rollup,
-    awaiting_approval, and merging do not hold a slot.
+    Launch caps do not use this. maxAgents, maxLocalSubagents, and
+    maxFixWorkers count live Shuttles only. Locks stay until merge or park.
+    Opening a pull request means the Shuttle finished. review with a green
+    rollup, awaiting_approval, and merging do not hold this review flag.
     """
     status = ticket.get("status")
     if status in SLOT_HELD:
@@ -679,26 +680,97 @@ def local_subagent_cap(config: Optional[dict], available: Optional[int] = None) 
     return max(1, min(cap, mem_slots))
 
 
-def local_in_use(beam: dict, config: Optional[dict], skip_id: Optional[str] = None) -> int:
-    """In-flight tickets already on this machine, aside from the one being started.
+def vm_mode(config: Optional[dict], beam: Optional[dict] = None) -> bool:
+    """Dedicated VM per ticket. A worktree on this machine is subagent mode."""
+    return subagent_vm(config) and not shared_machine(config, beam)
 
-    A confirmed other VM does not count. Everything else does once this run
-    is on the shared-machine path.
+
+def _shuttle_row(ticket: dict) -> dict:
+    raw = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    return raw
+
+
+def shuttle_returned(ticket: dict) -> bool:
+    """The Shuttle already came back. A missing report is still out."""
+    report = ticket.get("report")
+    if isinstance(report, dict) and report.get("returned"):
+        return True
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if pr.get("shuttleReturned"):
+        return True
+    if _shuttle_row(ticket).get("returned"):
+        return True
+    return False
+
+
+def _stale_minutes(beam: Optional[dict]) -> int:
+    cfg = (beam or {}).get("config") if isinstance(beam, dict) else {}
+    raw = (cfg or {}).get("staleMinutes")
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return 15
+    return number if number > 0 else 15
+
+
+def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
+    """A slot is one Shuttle started in this parent session that is still out.
+
+    It has a fresh heartbeat, or it has not returned and the heartbeat is not
+    stale yet. In subagent mode a Shuttle from an earlier parent session is
+    dead even when that heartbeat is fresh: it died with that parent. VM mode
+    keeps a Shuttle whose heartbeat or start is still inside staleMinutes.
+    A claim with no Shuttle out does not count.
     """
-    used = 0
-    sharing = shared_machine(config, beam)
-    for ticket in (beam.get("tickets") or {}).values():
-        if skip_id and str(ticket.get("id") or "") == str(skip_id):
+    if not isinstance(ticket, dict):
+        return False
+    shuttle = _shuttle_row(ticket)
+    if not shuttle.get("pending") or shuttle_returned(ticket):
+        return False
+    cfg = {}
+    session = ""
+    if isinstance(beam, dict):
+        cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+        session = str(beam.get("parentSession") or "")
+    if session and not vm_mode(cfg, beam) and str(shuttle.get("session") or "") != session:
+        return False
+    import beam as beam_mod
+
+    now_dt, _now_s = beam_mod.coerce_now(now)
+    started = ticket.get("workerStartedAt") or shuttle.get("startedAt")
+    if beam_mod.worker_is_dead(ticket.get("lastSeenAt"), started, now_dt, _stale_minutes(beam if isinstance(beam, dict) else {})):
+        return False
+    return True
+
+
+def live_slot_holders(beam: dict, config: Optional[dict] = None, skip_id: Optional[str] = None, now=None) -> list:
+    """Ticket ids whose live Shuttle holds a shared-machine slot."""
+    del config
+    holders = []
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    for tid in sorted(tickets, key=lambda item: str(item)):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict):
             continue
-        if not holds_slot(ticket, config):
+        if skip_id and str(ticket.get("id") or tid) == str(skip_id):
+            continue
+        if not shuttle_is_live(ticket, beam, now=now):
             continue
         remote = ticket.get("isolation") == "vm" and ticket.get("checkout") == "subagent-vm"
-        on_machine = ticket.get("checkout") == "worktree" or ticket.get("isolation") in {"fallback", "worktree"}
         if remote:
             continue
-        if sharing or on_machine:
-            used += 1
-    return used
+        holders.append(str(ticket.get("id") or tid))
+    return holders
+
+
+def local_in_use(beam: dict, config: Optional[dict], skip_id: Optional[str] = None, now=None) -> int:
+    """Live Shuttles already on this machine, aside from the one being started.
+
+    A confirmed other VM does not count. A dead Shuttle does not count.
+    Ticket status and a stale claim do not count.
+    """
+    del config
+    return len(live_slot_holders(beam, skip_id=skip_id, now=now))
 
 
 def local_room(beam: dict, config: Optional[dict], skip_id: Optional[str] = None, available: Optional[int] = None) -> int:
@@ -1584,7 +1656,11 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
     sharing = checkout == "worktree" and launch.get("launch") != "new-agent"
     room = local_room(beam, cfg) if sharing else None
     if needs_base_fix(beam) and cap is not None:
-        used = sum(1 for t in (beam.get("tickets") or {}).values() if holds_slot(t, cfg))
+        used = sum(
+            1
+            for t in (beam.get("tickets") or {}).values()
+            if isinstance(t, dict) and shuttle_is_live(t, beam)
+        )
         if used < cap and (room is None or room > 0):
             actions.append(
                 {
