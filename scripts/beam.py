@@ -1354,6 +1354,13 @@ def _watchdog_locked(beam_path: Path, now) -> list:
     live, why = _run_live(data)
     if not live:
         return ["watchdog: skipped (%s)" % why]
+    # Remote Agents do not write this beam. Read each ticket directory first so
+    # a heartbeat, a lock-escape, or a red check is on the beam before death
+    # recovery. Paused and stopped runs already returned and do not fetch.
+    import ticket_state
+
+    remote_lines = ticket_state.observe_locked(beam_path, now=now_s)
+    data = load_json(beam_path)
     stale = config_int(data, beam_path, "staleMinutes", DEFAULT_STALE_MINUTES)
     cap = config_int(data, beam_path, "maxRecoveries", DEFAULT_MAX_RECOVERIES)
     lines: list = []
@@ -1372,7 +1379,7 @@ def _watchdog_locked(beam_path: Path, now) -> list:
                 beam_path.parent / "recovery.json",
                 json.dumps({"at": now_s, "lines": herald}, indent=2) + "\n",
             )
-    return lines
+    return remote_lines + lines
 
 
 def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
@@ -1532,6 +1539,9 @@ or it never heartbeated and the claim or listener start is older than that.
 It replaces a dead listener once and re-dispatches a dead Shuttle once.
 Paused and stopped runs do nothing. A fresh heartbeat is left alone.
 Past maxRecoveries the ticket is alarm worker-died.
+A remote Agent does not write this beam. It writes .warp/tickets/<id>/
+on its branch. watchdog fetches that directory first and patches this beam.
+It does not copy the branch's beam.json. Paused and stopped runs do not fetch.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """

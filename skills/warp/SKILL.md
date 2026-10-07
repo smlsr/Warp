@@ -36,7 +36,7 @@ One `warp-listen` Agent for the beam. Not one per awaiting_approval ticket, not 
 
 ## Heartbeat and watchdog
 
-`beam.py watchdog` runs on this tick, before `ready()`. `scan.py start` and `scan.py resume` run it too. It does not look at a process table. A Shuttle records `lastSeenAt` and its agent id with `beam.py heartbeat` at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener does the same with `inbound.py heartbeat` on every read. Both stay inside `staleMinutes` (default 15).
+`beam.py watchdog` runs on this tick, before `ready()`. `scan.py start` and `scan.py resume` run it too. It does not look at a process table. First it fetches each in-flight ticket branch and reads only `.warp/tickets/<id>/`. It patches the live beam from `state.json` and `log.jsonl`. It does not copy the branch beam. A Shuttle writes that directory (`ticket_state.py append --push`) at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener writes the live beam with `inbound.py heartbeat` on every read. Both stay inside `staleMinutes` (default 15). Paused and stopped runs do not fetch and do not relaunch.
 
 A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than `staleMinutes`. A fresh heartbeat (`alive` or `fresh`) is left alone. `watchdog: skipped` means the run is paused or stopped: do not recover and do not start a replacement.
 
