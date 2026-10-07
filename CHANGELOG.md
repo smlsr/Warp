@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.17
+
+- Cursor's plugin command index still omits slash commands added after it was published. `commands/warp-update-state.md` was already in `.cursor-plugin/plugin.json`, and `marketplace.json` does not list individual commands for any command. Init and upgrade wrote only `.cursor/commands/warp-upgrade.md`. They now write every `commands/*.md` file to `.cursor/commands/`, including `/warp-update-state` and `/warp-status`. Reload Cursor so those project commands show up.
+- `/warp-update-state` does not need the slash command. A 1.4.12 install already has `python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json`. `?` prints the flags. `/warp-version` prints those lines when the slash command is missing.
+- `/warp-update-state` said each ticket is a new Agent. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true. The command, the skill, and the current docs say that. Optional `launch: agent` is still one new Agent, and this plugin does not call that API.
+
 ## 1.4.16
 
 - `pipeline.findings_of` crashed when `pr.bugbotFindings` was an int, a string, or another non-list. `jira_sync.mark_bugbot_fail` had stored a running count, and a shuttle snapshot passed a string through `list()`, which split it into characters. The field is now a list of finding strings. A count above 0 is stored as `N Bugbot findings (details not loaded)`, so the merge gate stays closed and a fix run starts. 0 and false are no findings. A dict finding stores its message, or else its body.

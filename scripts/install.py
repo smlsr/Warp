@@ -244,11 +244,12 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
 
     import upgrade
 
-    placed = upgrade.install_project_command(root, PLUGIN_ROOT, dry)
-    if placed == "wrote":
-        steps.append(("done", "wrote .cursor/commands/warp-upgrade.md"))
-    elif placed == "kept":
-        steps.append(("skip", ".cursor/commands/warp-upgrade.md already matches"))
+    rows = upgrade.install_project_commands(root, PLUGIN_ROOT, dry)
+    wrote = [name for status, name in rows if status == "wrote"]
+    if wrote:
+        steps.append(("done", "wrote .cursor/commands/ " + ", ".join(wrote)))
+    elif rows:
+        steps.append(("skip", ".cursor/commands/ already matches"))
 
     cfg = state / "config.yaml"
     if cfg.exists():
@@ -364,14 +365,15 @@ def record_version(root: Path, dry: bool) -> tuple[str, str]:
 
 
 def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
+    import upgrade
+
     plugin, state, gi = root / PLUGIN_REL, root / STATE_REL, root / ".gitignore"
     snippet = read_snippet(root)
     targets: list[tuple[str, Path]] = []
     for label, p in (("plugin copy", plugin), ("Warp state", state)):
         if p.is_symlink() or p.exists():
             targets.append((label, p))
-    slash = root / ".cursor" / "commands" / "warp-upgrade.md"
-    if slash.is_file() and slash.read_text(errors="replace").startswith("---\nname: warp-upgrade\n"):
+    for slash in upgrade.installed_project_commands(root):
         targets.append(("slash command", slash))
 
     block_found = False

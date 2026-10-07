@@ -15,6 +15,11 @@ the repo shows that state before the command returns.
   python3 scripts/update_state.py --beam .warp/beam.json
   python3 scripts/update_state.py --root . --beam .warp/beam.json
 
+From an installed copy, without the slash command:
+
+  python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json
+  python3 .cursor/plugins/warp/scripts/update_state.py ?
+
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
 

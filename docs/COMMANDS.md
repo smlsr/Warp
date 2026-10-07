@@ -444,7 +444,7 @@ Run it in the repo that has Warp installed. It replaces `.cursor/plugins/warp` w
 
 `/warp-init` does not upgrade an existing copy. This command does. Init still copies only missing plugin files.
 
-The command file is `commands/warp-upgrade.md` (`name: warp-upgrade`, plus `description`), the same shape as `commands/warp-version.md`, listed in `.cursor-plugin/plugin.json` with the other command files. The skill is `skills/warp-upgrade/SKILL.md` (`name: warp-upgrade`), the same shape as `skills/warp-version/SKILL.md`. Cursor's plugin command index keeps the paths it had when that index was published. Those two files were added after every indexed command and skill, they are in the plugin root, and listing them did not add them to that index. Init and upgrade write `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md`. Reload Cursor so that project command shows up next to the others.
+The command file is `commands/warp-upgrade.md` (`name: warp-upgrade`, plus `description`), the same shape as `commands/warp-version.md`, listed in `.cursor-plugin/plugin.json` with the other command files. The skill is `skills/warp-upgrade/SKILL.md` (`name: warp-upgrade`), the same shape as `skills/warp-version/SKILL.md`. Cursor's plugin command index keeps the paths it had when that index was published. Those two files were added after every indexed command and skill, they are in the plugin root, and listing them did not add them to that index. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-status`, and the other commands when the plugin command index still omits that path.
 
 The script does not need that slash command. `/warp-version` prints it when an older palette leaves the command out. A 1.4.6 tree includes `scripts/upgrade.py`:
 
@@ -521,11 +521,13 @@ python3 scripts/check_version.py
 python3 scripts/check_version.py --against origin/main
 ```
 
-The output includes the upgrade script when `/warp-upgrade` is not in the command list, and the effective runner values after a local override (`effective: runner=...`). Status prints the same line. That script does not need the slash command. `?` on it prints `--root` and `--source`.
+The output includes the upgrade script when `/warp-upgrade` is not in the command list, and the effective runner values after a local override (`effective: runner=...`). Status prints the same line. That script does not need the slash command. `?` on it prints `--root` and `--source`. The same output prints the insurance-sync script when `/warp-update-state` is not in the command list. That script is already on a 1.4.12 install and does not need the slash command.
 
 ```bash
 python3 .cursor/plugins/warp/scripts/upgrade.py
 python3 .cursor/plugins/warp/scripts/upgrade.py ?
+python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json
+python3 .cursor/plugins/warp/scripts/update_state.py ?
 ```
 
 `VERSION` is the source of truth. The manifest must match, and `CHANGELOG.md` must have a `## <version>` heading. Every pull request bumps the patch. `bump_version.py` updates all three and inserts a stub (`--note` sets the bullet). CI fails when the pull request version is not newer than `main`.

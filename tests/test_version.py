@@ -193,6 +193,11 @@ class CommandTests(unittest.TestCase):
         self.assertIn(f"source: {VER}", proc.stdout)
         self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py\n", proc.stdout)
         self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py ?\n", proc.stdout)
+        self.assertIn(
+            "python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n",
+            proc.stdout,
+        )
+        self.assertIn("python3 .cursor/plugins/warp/scripts/update_state.py ?\n", proc.stdout)
 
     def test_init_records_version_and_messages_include_it(self):
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)

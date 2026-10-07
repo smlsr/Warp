@@ -11,8 +11,10 @@ and the beam are not touched.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 Prints `Warp vX.Y.Z` and tells you to reload Cursor. Safe to run again.
-Also writes `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md`
-when the source has that file, so a reload lists `/warp-upgrade`.
+Also writes every `commands/*.md` file to `.cursor/commands/` when the source
+has that directory, so a reload lists those slash commands. Cursor's plugin
+command index keeps the paths it had when it was published, which left out
+`/warp-upgrade` and later `/warp-update-state`.
 """
 
 from __future__ import annotations
@@ -32,34 +34,69 @@ HELP = __doc__
 PLUGIN_REL = Path(".cursor/plugins/warp")
 COPY_IGNORE = {".git", ".cursor", ".warp", "__pycache__", "node_modules"}
 KEEP_STATE = ("config.yaml", "beam.json")
-PLUGIN_COMMAND = Path("commands/warp-upgrade.md")
-PROJECT_COMMAND = Path(".cursor/commands/warp-upgrade.md")
+COMMANDS_DIR = Path("commands")
+PROJECT_COMMANDS = Path(".cursor/commands")
+
+
+def project_command_sources(source: Path) -> list[Path]:
+    folder = source / COMMANDS_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(path for path in folder.glob("*.md") if path.is_file())
+
+
+def install_project_commands(root: Path, source: Path, dry: bool = False) -> list[tuple[str, str]]:
+    """Copy every commands/*.md file to .cursor/commands/.
+
+    Cursor's plugin command index keeps paths from when that index was
+    published and does not admit commands added later. A project command
+    at .cursor/commands/ is what a reload lists. Each row is (wrote|kept, filename).
+    An empty list means the source has no command files.
+    """
+    files = project_command_sources(source)
+    rows: list[tuple[str, str]] = []
+    for src in files:
+        dest = root / PROJECT_COMMANDS / src.name
+        data = src.read_bytes()
+        if dest.is_file() and dest.read_bytes() == data:
+            rows.append(("kept", src.name))
+            continue
+        if not dry:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        rows.append(("wrote", src.name))
+    return rows
 
 
 def install_project_command(root: Path, source: Path, dry: bool = False) -> str:
-    """Copy commands/warp-upgrade.md to .cursor/commands/warp-upgrade.md.
-
-    Cursor's plugin command index keeps paths from when that index was
-    published and does not admit commands/warp-upgrade.md. A project command
-    at .cursor/commands/ is what a reload lists. Returns wrote, kept, or missing.
-    """
-    src = source / PLUGIN_COMMAND
-    if not src.is_file():
+    """Install every project command. Returns wrote, kept, or missing."""
+    rows = install_project_commands(root, source, dry)
+    if not rows:
         return "missing"
-    dest = root / PROJECT_COMMAND
-    data = src.read_bytes()
-    if dest.is_file() and dest.read_bytes() == data:
-        return "kept"
-    if dry:
+    if any(status == "wrote" for status, _name in rows):
         return "wrote"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
-    return "wrote"
+    return "kept"
+
+
+def installed_project_commands(root: Path) -> list[Path]:
+    """Project slash commands this plugin installed, for uninstall."""
+    folder = root / PROJECT_COMMANDS
+    if not folder.is_dir():
+        return []
+    known = {path.stem for path in project_command_sources(version.PLUGIN_ROOT)}
+    found = []
+    for path in sorted(folder.glob("warp*.md")):
+        if known and path.stem not in known:
+            continue
+        text = path.read_text(errors="replace")
+        if text.startswith("---\nname: %s\n" % path.stem):
+            found.append(path)
+    return found
 
 
 def _report_project_command(root: Path, source: Path) -> None:
-    if install_project_command(root, source) in ("wrote", "kept"):
-        print("/warp-upgrade -> .cursor/commands/warp-upgrade.md")
+    for _status, name in install_project_commands(root, source):
+        print("/%s -> .cursor/commands/%s" % (Path(name).stem, name))
 
 
 def _git(root: Path, *args: str, timeout: int = 20) -> subprocess.CompletedProcess:

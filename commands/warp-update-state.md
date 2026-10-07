@@ -9,6 +9,13 @@ Insurance sync. Run it when the checkout and main may have diverged, and after `
 python3 <plugin>/scripts/update_state.py --beam .warp/beam.json
 ```
 
+The slash command can be missing from Cursor's plugin command index. This script is already on a 1.4.12 install and does not need it:
+
+```bash
+python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json
+python3 .cursor/plugins/warp/scripts/update_state.py ?
+```
+
 `update_state.py ?` prints the options. Quote `?` if the shell expands it.
 
 1. Fetch origin/main and load that beam.
@@ -18,4 +25,4 @@ python3 <plugin>/scripts/update_state.py --beam .warp/beam.json
 5. Push that beam to main.
 6. Read the short summary: `pulled:`, `local won:`, and `commit:`.
 
-The listener is a Subagent of the parent; each ticket is a new Agent. This command does not start a listener and does not dispatch.
+The listener is a Subagent of the parent. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true. This command does not start a listener and does not dispatch.
