@@ -349,6 +349,9 @@ class Since140DocTests(unittest.TestCase):
             "`--force` is not an upgrade flag",
             "`--root`",
             "`--source`",
+            "python3 .cursor/plugins/warp/scripts/upgrade.py",
+            "python3 .cursor/plugins/warp/scripts/upgrade.py ?",
+            "not a full 1.4.6 tree",
         )
         positions = []
         for step in steps:

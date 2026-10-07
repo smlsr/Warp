@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.8
+
+- `/warp-upgrade` is `commands/warp-upgrade.md` with `name: warp-upgrade`. `.cursor-plugin/plugin.json` now lists that file, and the `warp-upgrade` skill, with the other commands and skills. Reload Cursor (Developer: Reload Window) so it shows up next to them.
+- `/warp-version` prints `python3 .cursor/plugins/warp/scripts/upgrade.py` and the same command with `?` when that slash command is missing from an older palette. The script does not need the slash command. A 1.4.6 tree includes `scripts/upgrade.py`. If the project copy does not, run the script from a git checkout of smlsr/Warp at main with `--source` pointing at that checkout and `--root` pointing at the project, then reload and run `/warp-version`.
+
 ## 1.4.7
 
 - Each ticket starts as one new Agent: its own conversation, VM, and checkout. Do not start a Subagent. Do not use the Task tool. Do not implement the ticket in the orchestrator's turn.

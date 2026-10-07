@@ -63,6 +63,17 @@ python3 <plugin>/scripts/upgrade.py --root .
 python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
 ```
 
+`/warp-upgrade` is `commands/warp-upgrade.md` with `name: warp-upgrade`, listed in `.cursor-plugin/plugin.json` with the other commands. Reload Cursor (Developer: Reload Window) after installing this plugin so it shows up next to them.
+
+`/warp-version` prints the script when that slash command is missing from an older palette. The script does not need the slash command. A 1.4.6 tree includes `scripts/upgrade.py`:
+
+```bash
+python3 .cursor/plugins/warp/scripts/upgrade.py
+python3 .cursor/plugins/warp/scripts/upgrade.py ?
+```
+
+If `.cursor/plugins/warp/scripts/upgrade.py` is not there, that copy is not a full 1.4.6 tree. From a git checkout of https://github.com/smlsr/Warp at main, run the script with `--source` pointing at that checkout and `--root` pointing at the project, then Developer: Reload Window, then `/warp-version`.
+
 After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
 
 Required for the Jira and Slack prompts:
@@ -285,6 +296,8 @@ The steps are in [Install](#install), under Update. `/warp-upgrade` replaces `.c
 python3 <plugin>/scripts/upgrade.py ?
 python3 <plugin>/scripts/upgrade.py --root .
 ```
+
+If `/warp-upgrade` is not in the command list, `/warp-version` prints `python3 .cursor/plugins/warp/scripts/upgrade.py`. `?` prints the flags. The script does not need the slash command. The steps are the same as [Update](#update).
 
 `/warp-init` still does not overwrite plugin files or config values you already set. It does append config keys that are missing, with the defaults and comments from `assets/config.example.yaml`. A config that is only missing new keys does not need an upgrade. Re-run `/warp-init`. It appends each missing key and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 

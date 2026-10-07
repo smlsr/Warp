@@ -74,6 +74,26 @@ class PluginManifestTests(unittest.TestCase):
         self.assertEqual(plugin_dir, ROOT.resolve())
         self.assertTrue((plugin_dir / ".cursor-plugin" / "plugin.json").is_file())
 
+    def test_warp_upgrade_command_is_registered_with_the_others(self):
+        command = (ROOT / "commands" / "warp-upgrade.md").read_text()
+        self.assertTrue(command.startswith("---\nname: warp-upgrade\n"), command)
+        version_cmd = (ROOT / "commands" / "warp-version.md").read_text()
+        self.assertTrue(version_cmd.startswith("---\nname: warp-version\n"))
+        manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        listed = manifest["commands"]
+        self.assertIsInstance(listed, list)
+        on_disk = sorted("./commands/" + path.name for path in (ROOT / "commands").glob("*.md"))
+        self.assertEqual(listed, on_disk)
+        self.assertIn("./commands/warp-upgrade.md", listed)
+        skills = manifest["skills"]
+        self.assertIsInstance(skills, list)
+        on_disk_skills = sorted(
+            "./skills/" + path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")
+        )
+        self.assertEqual(skills, on_disk_skills)
+        self.assertIn("./skills/warp-upgrade", skills)
+        self.assertTrue((ROOT / "scripts" / "upgrade.py").is_file())
+
 
 class RepoVersionTests(unittest.TestCase):
     def test_version_files_and_changelog_agree(self):
@@ -127,6 +147,8 @@ class CommandTests(unittest.TestCase):
         self.assertIn(f"Warp v{VER}", proc.stdout)
         self.assertIn("installed: none", proc.stdout)
         self.assertIn(f"source: {VER}", proc.stdout)
+        self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py\n", proc.stdout)
+        self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py ?\n", proc.stdout)
 
     def test_init_records_version_and_messages_include_it(self):
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)

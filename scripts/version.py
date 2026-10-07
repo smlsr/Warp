@@ -65,6 +65,15 @@ def upgrade_line(installed: str, source: str) -> str:
     return f"plugin is v{installed}, repo copy is v{source}: run /warp-upgrade"
 
 
+# The project copy of the upgrade script. It runs without /warp-upgrade.
+UPGRADE_SCRIPT = "python3 .cursor/plugins/warp/scripts/upgrade.py"
+
+
+def upgrade_fallback() -> str:
+    """Script lines for a palette that does not list /warp-upgrade."""
+    return f"{UPGRADE_SCRIPT}\n{UPGRADE_SCRIPT} ?"
+
+
 def describe(root: Path) -> str:
     root = root.resolve()
     source = version_of(PLUGIN_ROOT)
@@ -79,6 +88,8 @@ def describe(root: Path) -> str:
     lines.append(f"source: {source or 'none'}")
     if recorded:
         lines.append(f"recorded: {recorded} ({RECORDED_REL})")
+    lines.append("If /warp-upgrade is not in the command list:")
+    lines.append(upgrade_fallback())
     return "\n".join(lines)
 
 
@@ -101,7 +112,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Print the Warp plugin version",
         epilog="examples:\n  python3 scripts/version.py ?\n  python3 scripts/version.py --root .\n\n"
         "Prints installed (.cursor/plugins/warp), source (this plugin tree), and recorded (.warp/version).\n"
-        "?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
+        "When /warp-upgrade is missing from an older command list, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/upgrade.py\n"
+        "  python3 .cursor/plugins/warp/scripts/upgrade.py ?\n"
+        "That script does not need the slash command. ? prints its flags. Quote ? if the shell expands it.\n"
+        "?, help, -h, and --help print this text.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--root", help="repo whose .cursor/plugins/warp copy to read")

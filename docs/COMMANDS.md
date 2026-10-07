@@ -443,6 +443,17 @@ Run it in the repo that has Warp installed. It replaces `.cursor/plugins/warp` w
 
 `/warp-init` does not upgrade an existing copy. This command does. Init still copies only missing plugin files.
 
+The command file is `commands/warp-upgrade.md` (`name: warp-upgrade`), listed in `.cursor-plugin/plugin.json` with the other command files. Reload Cursor after the plugin install so `/warp-upgrade` is in the command list.
+
+The script does not need that slash command. `/warp-version` prints it when an older palette leaves the command out. A 1.4.6 tree includes `scripts/upgrade.py`:
+
+```bash
+python3 .cursor/plugins/warp/scripts/upgrade.py
+python3 .cursor/plugins/warp/scripts/upgrade.py ?
+```
+
+If that file is missing, the project copy is not a full 1.4.6 tree. From a git checkout of https://github.com/smlsr/Warp at main, run the script with `--source` pointing at that checkout and `--root` pointing at the project, then Developer: Reload Window, then `/warp-version`.
+
 ## /warp-start and the prompt gate
 
 On `runner: cloud`, or `runner: auto` when `CURSOR_CLOUD`, `CURSOR_CLOUD_AGENT`, or `WARP_CLOUD_SESSION` is set, `/warp-start` checks the MCP allow list before it sets `runState` to running and before it claims.
@@ -490,6 +501,13 @@ python3 scripts/bump_version.py --minor
 python3 scripts/bump_version.py --major
 python3 scripts/check_version.py
 python3 scripts/check_version.py --against origin/main
+```
+
+The output includes the upgrade script when `/warp-upgrade` is not in the command list. That script does not need the slash command. `?` on it prints `--root` and `--source`.
+
+```bash
+python3 .cursor/plugins/warp/scripts/upgrade.py
+python3 .cursor/plugins/warp/scripts/upgrade.py ?
 ```
 
 `VERSION` is the source of truth. The manifest must match, and `CHANGELOG.md` must have a `## <version>` heading. Every pull request bumps the patch. `bump_version.py` updates all three and inserts a stub (`--note` sets the bullet). CI fails when the pull request version is not newer than `main`.
