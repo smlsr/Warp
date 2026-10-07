@@ -114,4 +114,4 @@ A pending or stale-red gate clears when every member is merged or done and no ch
 
 ## Bugbot
 
-Use Cursor Bugbot on the PR. Reed stores pass/fail and the evidence string. A pass with no AC ids is not a pass. Bugbot is requested once per head commit (`bugbot: request`). The same commit prints `bugbot: hold` and does not start another Bugbot agent. A new head sha may be requested once. `/warp-cleanup` lists those agents. With `CURSOR_API_KEY`, `agents.py cleanup --cloud --apply` archives idle ones. The key is not committed.
+Use Cursor Bugbot on the PR. Reed stores pass/fail and the evidence string. A pass with no AC ids is not a pass. Bugbot is requested once per head commit (`bugbot: request`). The same commit prints `bugbot: hold` and does not start another Bugbot agent. A new head sha may be requested once. `/warp-cleanup` lists those agents. With `CURSOR_API_KEY`, `agents.py cleanup --beam .warp/beam.json --cloud` is a dry run of idle Warp agents on this repo, and `--apply` archives that list. The agent running the command stays, and a RUNNING or ACTIVE agent stays. The key is not committed.

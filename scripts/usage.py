@@ -49,6 +49,8 @@ SWITCHES = {
     "--partial",
     "--cloud",
     "--apply",
+    "--all-idle",
+    "--any-repo",
 }
 
 

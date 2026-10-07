@@ -1,6 +1,7 @@
 """One Shuttle per ticket, spawn caps, and cleanup. No second agent while one is alive."""
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -16,6 +17,9 @@ import orchestrator  # noqa: E402
 NOW = "2026-10-06T12:00:00Z"
 FRESH = "2026-10-06T11:50:00Z"
 STALE = "2026-10-06T10:00:00Z"
+ORIGIN = "https://github.com/smlsr/Warp.git"
+OTHER = "https://github.com/acme/Other.git"
+UPDATED = "2026-10-06T11:00:00Z"
 
 
 def ticket(tid="T-1", **extra):
@@ -38,6 +42,41 @@ def ticket(tid="T-1", **extra):
     }
     row.update(extra)
     return row
+
+
+def cloud_item(ident, name, status="IDLE", repo=ORIGIN, prompt="", updated=UPDATED):
+    item = {
+        "id": ident,
+        "name": name,
+        "status": status,
+        "updatedAt": updated,
+        "url": "https://cursor.com/agents/%s" % ident,
+    }
+    if repo:
+        item["repos"] = [{"url": repo}]
+    if prompt:
+        item["prompt"] = {"text": prompt}
+    return item
+
+
+def recording_transport(items, details=None):
+    calls = []
+    details = details or {}
+
+    def transport(method, url, key, body=None):
+        calls.append((method, url, key))
+        if method == "POST":
+            return 200, {}
+        if "/v1/agents?" in url:
+            return 200, {"items": items}
+        ident = url.rstrip("/").rsplit("/", 1)[-1]
+        return 200, details.get(ident, {})
+
+    return calls, transport
+
+
+def posted_urls(calls):
+    return [url for method, url, _key in calls if method == "POST"]
 
 
 def beam_of(*rows, **config):
@@ -249,39 +288,159 @@ class RegistryTests(unittest.TestCase):
         )
         self.assertEqual(agents.check_line(done), "spawn: closed done")
 
-    def test_cleanup_prints_links_without_a_key_and_archives_idle_agents(self):
+    def write_registry(self, rows):
+        (self.tmp / "agents.json").write_text(json.dumps({"agents": rows, "spawns": []}) + "\n")
+
+    def sweep(self, items, apply=False, all_idle=False, any_repo=False, details=None, self_id="", rows=None):
+        data = beam_of(ticket())
+        self.save(data)
+        if rows:
+            self.write_registry(rows)
+        calls, transport = recording_transport(items, details)
+        lines = agents.cleanup(
+            data,
+            beam_path=self.path,
+            cloud=True,
+            apply=apply,
+            key="test-key",
+            transport=transport,
+            now=NOW,
+            all_idle=all_idle,
+            any_repo=any_repo,
+            origin=ORIGIN,
+            self_id=self_id,
+        )
+        return lines, posted_urls(calls)
+
+    def test_cleanup_prints_links_without_a_key(self):
         data = beam_of(ticket(agent="bc-old"))
         self.save(data)
         row = data["tickets"]["T-1"]
         agents.launch_lines(data, row, "implement", beam_path=self.path, now=NOW)
         agents.note_closed(data, row, "merged", now=NOW, beam_path=self.path)
-        calls = []
-
-        def transport(method, url, key, body=None):
-            calls.append((method, url, key))
-            if method == "GET":
-                return 200, {
-                    "items": [
-                        {"id": "bc-idle", "status": "IDLE", "url": "https://cursor.com/agents/bc-idle"},
-                        {"id": "bc-busy", "status": "ACTIVE", "url": "https://cursor.com/agents/bc-busy"},
-                    ]
-                }
-            return 200, {}
-
         listed = agents.cleanup(data, beam_path=self.path, now=NOW)
         self.assertTrue(any("cleanup: no CURSOR_API_KEY" in line for line in listed))
         self.assertTrue(any("https://cursor.com/agents/bc-old" in line for line in listed))
-        archived = agents.cleanup(
+        self.assertFalse(any(line.startswith("cleanup: archived") for line in listed))
+
+    def test_cleanup_repo_filter(self):
+        self.assertEqual(agents.repo_key(ORIGIN), agents.repo_key("git@github.com:smlsr/Warp.git"))
+        self.assertNotEqual(agents.repo_key(ORIGIN), agents.repo_key(OTHER))
+        here = cloud_item("bc-here", "Shuttle T-1", repo="git@github.com:smlsr/Warp.git")
+        other = cloud_item("bc-other", "Shuttle elsewhere", repo=OTHER)
+        stranger = cloud_item("bc-stranger", "garden notes")
+        bare = {"id": "bc-detail", "name": "", "status": "IDLE", "updatedAt": UPDATED, "url": "https://cursor.com/agents/bc-detail"}
+        detail = cloud_item("bc-detail", "Shuttle T-9")
+        items = [here, other, stranger, bare]
+        lines, posted = self.sweep(items, apply=True, details={"bc-detail": detail})
+        self.assertEqual(
+            posted,
+            [
+                "https://api.cursor.com/v1/agents/bc-here/archive",
+                "https://api.cursor.com/v1/agents/bc-detail/archive",
+            ],
+        )
+        self.assertTrue(any(line == "cleanup: count 2" for line in lines))
+        wider, wider_posted = self.sweep(items, apply=True, all_idle=True, details={"bc-detail": detail})
+        self.assertIn("https://api.cursor.com/v1/agents/bc-stranger/archive", wider_posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-other/archive", wider_posted)
+        self.assertTrue(any("repo=github.com/smlsr/warp" in line for line in wider))
+        both, both_posted = self.sweep(items, apply=True, all_idle=True, any_repo=True, details={"bc-detail": detail})
+        self.assertIn("https://api.cursor.com/v1/agents/bc-other/archive", both_posted)
+
+    def test_cleanup_role_match(self):
+        rows = [{"id": "bc-reg", "ticket": "T-1", "role": "shuttle", "state": "ended", "ended": NOW}]
+        prompt_only = cloud_item("bc-implement", "worker")
+        prompt_only.pop("prompt", None)
+        items = [
+            cloud_item("bc-shuttle", "Shuttle T-1"),
+            prompt_only,
+            cloud_item("bc-fix", "fix CI"),
+            cloud_item("bc-rebase", "rebase onto main"),
+            cloud_item("bc-listener", "Warp listener"),
+            cloud_item("bc-bugbot", "Warp-triggered Bugbot"),
+            cloud_item("bc-prefix", "prefix tool", prompt="leave the prefix alone"),
+            cloud_item("bc-reg", "garden notes"),
+        ]
+        detail = cloud_item("bc-implement", "worker", prompt="IMPLEMENT T-2 acceptance")
+        lines, posted = self.sweep(items, apply=True, details={"bc-implement": detail}, rows=rows)
+        archived = {url.rsplit("/", 2)[-2] for url in posted}
+        self.assertEqual(
+            archived,
+            {"bc-shuttle", "bc-implement", "bc-fix", "bc-rebase", "bc-listener", "bc-bugbot", "bc-reg"},
+        )
+        self.assertNotIn("bc-prefix", archived)
+        self.assertTrue(any(line == "cleanup: count 7" for line in lines))
+        self.assertFalse(agents.warp_role("prefix tool"))
+        self.assertTrue(agents.warp_role("IMPLEMENT T-1"))
+        self.assertTrue(agents.warp_role("Warp-triggered Bugbot"))
+
+    def test_cleanup_skips_self_and_running_agents(self):
+        items = [
+            cloud_item("bc-self", "Shuttle self"),
+            cloud_item("bc-run", "Shuttle running", status="RUNNING"),
+            cloud_item("bc-active", "Shuttle active", status="ACTIVE"),
+            cloud_item("bc-idle", "Shuttle idle"),
+            cloud_item("bc-foreign", "notes", status="RUNNING", repo=OTHER),
+        ]
+        previous = os.environ.get("CURSOR_AGENT_ID")
+        os.environ["CURSOR_AGENT_ID"] = "bc-self"
+        try:
+            data = beam_of(ticket())
+            self.save(data)
+            calls, transport = recording_transport(items)
+            lines = agents.cleanup(
+                data,
+                beam_path=self.path,
+                cloud=True,
+                apply=True,
+                key="test-key",
+                transport=transport,
+                now=NOW,
+                all_idle=True,
+                any_repo=True,
+                origin=ORIGIN,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("CURSOR_AGENT_ID", None)
+            else:
+                os.environ["CURSOR_AGENT_ID"] = previous
+        posted = posted_urls(calls)
+        self.assertEqual(posted, ["https://api.cursor.com/v1/agents/bc-idle/archive"])
+        self.assertTrue(any(line == "cleanup: skip bc-self reason=self" for line in lines))
+        self.assertTrue(any(line == "cleanup: skip bc-run reason=running" for line in lines))
+        self.assertTrue(any(line == "cleanup: skip bc-active reason=running" for line in lines))
+        self.assertTrue(any(line == "cleanup: skip bc-foreign reason=running" for line in lines))
+        self.assertTrue(any(line == "cleanup: count 1" for line in lines))
+
+    def test_cleanup_dry_run_is_the_default(self):
+        items = [cloud_item("bc-shuttle", "Shuttle T-1")]
+        lines, posted = self.sweep(items, apply=False)
+        self.assertEqual(posted, [])
+        self.assertTrue(any(line == "cleanup: dry-run" for line in lines))
+        self.assertTrue(any(line == "cleanup: count 1" for line in lines))
+        match = next(line for line in lines if line.startswith("cloud:"))
+        self.assertIn("id=bc-shuttle", match)
+        self.assertIn("name=Shuttle T-1", match)
+        self.assertIn("repo=github.com/smlsr/warp", match)
+        self.assertIn("status=IDLE", match)
+        self.assertIn("updated=%s" % UPDATED, match)
+        self.assertIn("https://cursor.com/agents/bc-shuttle", match)
+        self.assertFalse(any(line.startswith("cleanup: archived") for line in lines))
+        data = beam_of(ticket())
+        self.save(data)
+        calls, transport = recording_transport(items)
+        held = agents.cleanup(
             data,
             beam_path=self.path,
-            cloud=True,
+            cloud=False,
             apply=True,
             key="test-key",
             transport=transport,
             now=NOW,
+            origin=ORIGIN,
+            self_id="",
         )
-        posted = [url for method, url, _key in calls if method == "POST"]
-        self.assertIn("https://api.cursor.com/v1/agents/bc-old/archive", posted)
-        self.assertIn("https://api.cursor.com/v1/agents/bc-idle/archive", posted)
-        self.assertNotIn("https://api.cursor.com/v1/agents/bc-busy/archive", posted)
-        self.assertTrue(any(line == "cleanup: archived bc-idle" for line in archived))
+        self.assertTrue(any(line == "cleanup: cloud required to archive" for line in held))
+        self.assertEqual(posted_urls(calls), [])

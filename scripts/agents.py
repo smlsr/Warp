@@ -14,10 +14,18 @@ Cloud agents are archived with POST /v1/agents/{id}/archive when
 CURSOR_API_KEY is set. The key is read from the environment and is never
 written. Without the key, cleanup prints https://cursor.com/agents/<id>.
 
+`--cloud` without `--apply` is a dry run. It lists idle agents for this
+repo that are in the registry or whose name or prompt is a Warp role.
+It does not archive the agent running the command, or any RUNNING or
+ACTIVE agent. `--all-idle` drops the role check and stays on this repo.
+`--any-repo` drops the repo check and is only for use with `--all-idle`
+when you mean every idle agent the key can see.
+
   python3 scripts/agents.py ?
   python3 scripts/agents.py list --beam .warp/beam.json
   python3 scripts/agents.py check --beam .warp/beam.json
   python3 scripts/agents.py cleanup --beam .warp/beam.json
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply
 """
 
@@ -27,6 +35,8 @@ import argparse
 import base64
 import json
 import os
+import re
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -798,6 +808,220 @@ def list_lines(data: dict, beam_path: Optional[Path] = None) -> list:
     return [_row_line(row) for row in rows]
 
 
+_BUSY_STATUS = {"RUNNING", "ACTIVE", "CREATING"}
+_ROLE_WORDS = ("shuttle", "implement", "rebase", "listener", "bugbot")
+
+
+def repo_key(url: str) -> str:
+    """github.com/org/repo, from an https, ssh, or git@ remote."""
+    text = str(url or "").strip().casefold()
+    if not text:
+        return ""
+    text = text.split("?", 1)[0].split("#", 1)[0]
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    if text.startswith("git@"):
+        host, _, path = text[4:].partition(":")
+        text = "%s/%s" % (host, path)
+    else:
+        for prefix in ("ssh://", "https://", "http://"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+                break
+        if text.startswith("git@"):
+            host, _, path = text[4:].partition(":")
+            text = "%s/%s" % (host, path)
+    text = text.strip("/")
+    if ":" in text and "/" in text.split(":", 1)[0]:
+        text = text.split(":", 1)[0]
+    return text
+
+
+def origin_url(root: Optional[Path]) -> str:
+    """origin remote of the repo that holds the beam. Empty when git has none."""
+    if root is None:
+        return ""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.returncode != 0:
+        return ""
+    return out.stdout.strip()
+
+
+def current_agent_id() -> str:
+    """Cloud agent id of this process, when Cursor put one in the environment."""
+    for key in ("CURSOR_AGENT_ID", "CURSOR_CLOUD_AGENT_ID", "CURSOR_CONVERSATION_ID"):
+        value = os.environ.get(key, "").strip()
+        if value.startswith("bc-") or value.startswith("bc_"):
+            return value
+    return ""
+
+
+def cloud_repos(item: dict) -> list:
+    found = []
+    repos = item.get("repos")
+    if isinstance(repos, list):
+        for repo in repos:
+            if isinstance(repo, str) and repo.strip():
+                found.append(repo.strip())
+            elif isinstance(repo, dict):
+                url = str(repo.get("url") or repo.get("repoUrl") or "").strip()
+                if url:
+                    found.append(url)
+    for key in ("repository", "repo", "repoUrl"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            found.append(value)
+    source = item.get("source")
+    if isinstance(source, dict):
+        value = str(source.get("repository") or source.get("repoUrl") or "").strip()
+        if value:
+            found.append(value)
+    git = item.get("git")
+    if isinstance(git, dict):
+        branches = git.get("branches")
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict):
+                    url = str(branch.get("repoUrl") or "").strip()
+                    if url:
+                        found.append(url)
+    return found
+
+
+def cloud_prompt(item: dict) -> str:
+    prompt = item.get("prompt")
+    if isinstance(prompt, dict):
+        return str(prompt.get("text") or "")
+    if isinstance(prompt, str):
+        return prompt
+    return ""
+
+
+def warp_role(text: str) -> bool:
+    """True when a name or prompt is a Warp Shuttle, listener, fix, rebase, or Bugbot."""
+    folded = str(text or "").casefold()
+    if any(word in folded for word in _ROLE_WORDS):
+        return True
+    return re.search(r"\bfix\b", folded) is not None
+
+
+def _registry_cloud_ids(doc: dict) -> set:
+    found = set()
+    for row in _rows(doc):
+        if isinstance(row, dict) and _cloud_id(str(row.get("id") or "")):
+            found.add(str(row["id"]))
+    return found
+
+
+def _same_repo(item: dict, origin_key: str) -> bool:
+    if not origin_key:
+        return False
+    return any(repo_key(url) == origin_key for url in cloud_repos(item))
+
+
+def _display_repo(item: dict, origin_key: str) -> str:
+    urls = cloud_repos(item)
+    for url in urls:
+        if origin_key and repo_key(url) == origin_key:
+            return repo_key(url)
+    if urls:
+        return repo_key(urls[0]) or urls[0]
+    return ""
+
+
+def _updated(item: dict) -> str:
+    return str(item.get("updatedAt") or item.get("updated") or item.get("lastUpdatedAt") or "")
+
+
+def cloud_match_line(item: dict, origin_key: str) -> str:
+    ident = str(item.get("id") or "")
+    name = str(item.get("name") or "").replace("\n", " ").strip()
+    status = str(item.get("status") or "")
+    link = str(item.get("url") or agent_url(ident))
+    return "cloud: id=%s name=%s repo=%s status=%s updated=%s %s" % (
+        ident,
+        name,
+        _display_repo(item, origin_key),
+        status,
+        _updated(item),
+        link,
+    )
+
+
+def classify_cloud(
+    item: dict,
+    origin_key: str,
+    registry_ids: set,
+    all_idle: bool = False,
+    any_repo: bool = False,
+    self_id: str = "",
+) -> str:
+    """`archive`, `skip:<reason>`, or empty when the agent is out of scope.
+
+    In scope means this repo (unless `--any-repo`) and either a registry row
+    or a Warp role in the name or prompt (unless `--all-idle`). RUNNING,
+    ACTIVE, and this process are never archived.
+    """
+    if not isinstance(item, dict):
+        return ""
+    ident = str(item.get("id") or "")
+    if not _cloud_id(ident):
+        return ""
+    status = str(item.get("status") or "").strip().upper()
+    if status == "ARCHIVED":
+        return ""
+    if not any_repo and not _same_repo(item, origin_key):
+        return ""
+    in_registry = ident in registry_ids
+    role = warp_role("%s\n%s" % (item.get("name") or "", cloud_prompt(item)))
+    if not all_idle and not in_registry and not role:
+        return ""
+    if self_id and ident == self_id:
+        return "skip:self"
+    if status in _BUSY_STATUS:
+        return "skip:running"
+    if status != "IDLE":
+        return "skip:status"
+    return "archive"
+
+
+def fetch_agent(agent_id: str, key: str, transport: Optional[Callable] = None) -> dict:
+    """GET /v1/agents/{id}. List rows omit repos and the prompt."""
+    call = transport or default_transport
+    status, body = call("GET", "%s/v1/agents/%s" % (API_ROOT, agent_id), key, None)
+    if not (200 <= int(status) < 300) or not isinstance(body, dict):
+        return {}
+    return body
+
+
+def _needs_detail(item: dict, registry_ids: set, all_idle: bool, any_repo: bool) -> bool:
+    ident = str(item.get("id") or "")
+    if not any_repo and not cloud_repos(item):
+        return True
+    if all_idle or ident in registry_ids:
+        return False
+    if warp_role(str(item.get("name") or "")):
+        return False
+    return not cloud_prompt(item)
+
+
+def _merge_detail(item: dict, detail: dict) -> dict:
+    merged = dict(item)
+    for field in ("name", "status", "repos", "prompt", "url", "updatedAt", "repository", "repo", "git"):
+        value = detail.get(field)
+        if value not in (None, "", []):
+            merged[field] = value
+    return merged
+
+
 def cleanup(
     data: dict,
     beam_path: Optional[Path] = None,
@@ -806,55 +1030,97 @@ def cleanup(
     key: Optional[str] = None,
     transport: Optional[Callable] = None,
     now=None,
+    all_idle: bool = False,
+    any_repo: bool = False,
+    origin: Optional[str] = None,
+    self_id: Optional[str] = None,
 ) -> list:
-    """List registered agents. Archive idle or ended cloud agents when a key is set.
+    """List registered agents. `--cloud` without `--apply` is a dry run.
 
-    `--cloud` reads GET /v1/agents. `--apply` archives IDLE cloud agents and
-    ended registry rows whose id is a cloud agent id. Without a key, the same
-    rows are printed with links.
+    A cloud agent is in scope when its repository matches this repo's origin
+    and it is in `.warp/agents.json` or its name or prompt is a Warp role.
+    `--all-idle` drops the role check and stays on this repo. `--any-repo`
+    drops the repo check. RUNNING, ACTIVE, and this process are never archived.
     """
     doc = registry(data, beam_path)
     lines = list_lines(data, beam_path)
     secret = api_key() if key is None else key
-    targets = []
+    ended = []
     for row in _rows(doc):
         if not isinstance(row, dict) or not _cloud_id(str(row.get("id") or "")):
             continue
         if row.get("state") in {"ended", "stopped"} or row.get("ended"):
-            targets.append(str(row["id"]))
+            ended.append(str(row["id"]))
     if not secret:
         lines.append("cleanup: no %s; archive in the Cursor UI" % ENV_KEY)
-        for ident in targets:
+        for ident in ended:
             lines.append("cleanup: link %s" % agent_url(ident))
         if cloud:
             lines.append("cleanup: cloud list needs %s" % ENV_KEY)
         flush(data, beam_path)
         return lines
-    if cloud:
-        ok, items, err = list_cloud(secret, transport=transport)
-        if not ok:
-            lines.append("cleanup: %s" % err)
-        else:
-            lines.append("cleanup: cloud %d" % len(items))
-            for item in items:
-                ident = str(item.get("id") or "")
-                status = str(item.get("status") or "")
-                link = str(item.get("url") or agent_url(ident))
-                lines.append("cloud: %s status=%s %s" % (ident, status, link))
-                if status.upper() == "IDLE" and ident:
-                    targets.append(ident)
-    if not apply:
-        lines.append("cleanup: list only")
+    if not cloud:
+        lines.append("cleanup: dry-run" if not apply else "cleanup: cloud required to archive")
         flush(data, beam_path)
         return lines
-    seen = set()
+    root = None
+    if beam_path is not None:
+        root = Path(beam_path).resolve().parent.parent
+    remote = origin if origin is not None else origin_url(root)
+    origin_key = repo_key(remote)
+    mine = "" if self_id is None else self_id
+    if self_id is None:
+        mine = current_agent_id()
+    if not any_repo and not origin_key:
+        lines.append("cleanup: no origin; nothing matched")
+        lines.append("cleanup: count 0")
+        lines.append("cleanup: dry-run" if not apply else "cleanup: archived 0")
+        flush(data, beam_path)
+        return lines
+    ok, items, err = list_cloud(secret, transport=transport)
+    if not ok:
+        lines.append("cleanup: %s" % err)
+        flush(data, beam_path)
+        return lines
+    registry_ids = _registry_cloud_ids(doc)
+    chosen = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ident = str(item.get("id") or "")
+        if _needs_detail(item, registry_ids, all_idle, any_repo) and ident:
+            detail = fetch_agent(ident, secret, transport=transport)
+            if detail:
+                item = _merge_detail(item, detail)
+        kind = classify_cloud(
+            item,
+            origin_key,
+            registry_ids,
+            all_idle=all_idle,
+            any_repo=any_repo,
+            self_id=mine,
+        )
+        if not kind:
+            continue
+        lines.append(cloud_match_line(item, origin_key))
+        if kind == "archive":
+            chosen.append(item)
+        elif kind.startswith("skip:"):
+            lines.append("cleanup: skip %s reason=%s" % (ident, kind.split(":", 1)[1]))
+    lines.append("cleanup: count %d" % len(chosen))
+    if not apply:
+        lines.append("cleanup: dry-run")
+        flush(data, beam_path)
+        return lines
     archived = 0
-    for ident in targets:
-        if ident in seen:
+    seen = set()
+    for item in chosen:
+        ident = str(item.get("id") or "")
+        if not ident or ident in seen:
             continue
         seen.add(ident)
-        ok, status = archive_id(ident, secret, transport=transport)
-        if ok:
+        posted, status = archive_id(ident, secret, transport=transport)
+        if posted:
             archived += 1
             end_id(doc, ident, beam_mod.coerce_now(now)[1], "archived")
             for row in _rows(doc):
@@ -891,8 +1157,10 @@ def main(argv: Optional[list] = None) -> int:
         cmd = sub.add_parser(name)
         cmd.add_argument("--beam", default=".warp/beam.json")
         if name == "cleanup":
-            cmd.add_argument("--cloud", action="store_true")
-            cmd.add_argument("--apply", action="store_true")
+            cmd.add_argument("--cloud", action="store_true", help="Read GET /v1/agents. Without --apply this is a dry run.")
+            cmd.add_argument("--apply", action="store_true", help="Archive the dry-run matches. IDLE only.")
+            cmd.add_argument("--all-idle", action="store_true", help="Drop the Warp role check. Still this repo unless --any-repo.")
+            cmd.add_argument("--any-repo", action="store_true", help="Include other repositories. Use with --all-idle for every idle agent.")
     args = parser.parse_args(usage.normalize_argv(argv))
     path = Path(args.beam)
     if not path.is_file():
@@ -911,7 +1179,14 @@ def main(argv: Optional[list] = None) -> int:
             print(line)
         beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
         return 0
-    for line in cleanup(data, beam_path=path, cloud=args.cloud, apply=args.apply):
+    for line in cleanup(
+        data,
+        beam_path=path,
+        cloud=args.cloud,
+        apply=args.apply,
+        all_idle=args.all_idle,
+        any_repo=args.any_repo,
+    ):
         print(line)
     return 0
 

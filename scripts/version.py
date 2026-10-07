@@ -87,6 +87,7 @@ def cleanup_fallback() -> str:
     """Script lines for a palette that does not list /warp-cleanup."""
     return (
         f"{CLEANUP_SCRIPT} list --beam .warp/beam.json\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud\n"
         f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply\n"
         f"{CLEANUP_SCRIPT} ?"
     )
@@ -163,9 +164,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "That script is on a 1.4.12 install and does not need the slash command.\n"
         "When /warp-cleanup is missing, it also prints:\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py ?\n"
-        "That script lists .warp/agents.json and, with CURSOR_API_KEY, archives idle cloud agents.\n"
+        "The --cloud line is a dry run for this repo: registry rows or Warp roles, IDLE only.\n"
+        "It leaves the agent running the command, and every RUNNING or ACTIVE agent.\n"
+        "--apply archives that list. --all-idle stays on this repo. --any-repo is the wide sweep.\n"
         "?, help, -h, and --help print this text.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

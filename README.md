@@ -76,7 +76,14 @@ If `.cursor/plugins/warp/scripts/upgrade.py` is not there, that copy is not a fu
 
 After install, these entries belong in the Cursor MCP allow list (`mcpAllowlist` in `.cursor/permissions.json`). Run Mode must be Auto-review, Allowlist, or Run Everything, then reload Cursor. `/warp-init` and `/warp-allow-notify` write them. The globs are what to add because Cursor names the server differently per machine.
 
-`/warp-cleanup` lists `.warp/agents.json`. A Shuttle is replaced only after it is confirmed dead, and a fix round resumes that Shuttle instead of starting another. Bugbot is requested once per head commit. Nothing spawns while the run is paused or stopped, or every ticket is merged or parked. `/warp-stop` tells every registered agent to stop. Idle cloud agents from an older run, including a pile of about 199, are not in that file. Set `CURSOR_API_KEY` in the environment (never commit it) and run `agents.py cleanup --beam .warp/beam.json --cloud --apply`. That calls `POST /v1/agents/{id}/archive` for every IDLE agent the key can see. Without the key, the command prints `https://cursor.com/agents/<id>` for the Cursor UI. If that slash command is missing from the command list, run `python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json`.
+`/warp-cleanup` lists `.warp/agents.json`. A Shuttle is replaced only after it is confirmed dead, and a fix round resumes that Shuttle instead of starting another. Bugbot is requested once per head commit. Nothing spawns while the run is paused or stopped, or every ticket is merged or parked. `/warp-stop` tells every registered agent to stop. Set `CURSOR_API_KEY` in the environment (never commit it). A dry run is the default:
+
+```bash
+python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud
+python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply
+```
+
+The first command prints each match with id, name, repo, status, last update, and link, then `cleanup: count`. It changes nothing. The second archives that list with `POST /v1/agents/{id}/archive`. A match is IDLE, its repository is this checkout's origin, and it is in `.warp/agents.json` or its name or prompt is a Warp role (Shuttle, IMPLEMENT, fix, rebase, listener, Warp-triggered Bugbot). The agent running the command stays. A RUNNING or ACTIVE agent stays. `--all-idle` includes every IDLE agent in this repo. `--all-idle --any-repo` includes every IDLE agent the key can see. Those two flags are the wide sweep. The commands above are the ones for a pile of about 199 Warp agents in this repo. Without the key, the command prints `https://cursor.com/agents/<id>` for the Cursor UI. If that slash command is missing from the command list, run `python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud`.
 
 Required for the Jira and Slack prompts:
 
@@ -121,7 +128,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-pause` | Stop new claims and the listener, then push that paused beam to main | `--reason` |
 | `/warp-resume` | Resume a paused beam, load main's beam on a fresh checkout, run the watchdog, and start one listener Subagent | `--reason` |
 | `/warp-stop` | Stay stopped until the next start, tell every registered agent to stop, and push that stopped beam to main | `--reason` |
-| `/warp-cleanup` | List `.warp/agents.json`. With `CURSOR_API_KEY`, archive idle cloud agents | `--beam`, `--cloud`, `--apply` |
+| `/warp-cleanup` | Dry-run idle cloud agents for this repo, then archive that list with `--apply` | `--beam`, `--cloud`, `--apply`, `--all-idle`, `--any-repo` |
 | `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | List open tickets, alarms and stalls first, and rewrite `.warp/STATUS.md` and the board | |
