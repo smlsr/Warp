@@ -152,8 +152,10 @@ class WorktreeTests(GitRepo):
         self.assertEqual(pushed.returncode, 0, pushed.stderr)
         return bare
 
-    def test_cloud_launch_requires_a_new_agent_and_refuses_the_task_tool(self):
+    def test_cloud_launch_prints_implement_and_does_not_require_a_branch(self):
         row = self.ticket(status="claimed", agent="shuttle-T-1")
+        row["jiraKey"] = "WAR-1"
+        row["acs"] = ["viewer serves the page"]
         row["token"] = "super-secret-token"
         row["usage"] = {"cost": 9.5, "tokensIn": 10}
         row["summary"] = "see https://hooks.slack.com/services/T00/B00/secret"
@@ -167,51 +169,39 @@ class WorktreeTests(GitRepo):
         self.assertIn("refuse: in-process", refused.stdout)
         self.assertIn("new Agent", refused.stdout)
         self.assertNotIn("tool: Task", refused.stdout)
-        blocked = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
-        self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn("refuse", blocked.stdout)
-        self.assertNotIn("Start one new Agent", blocked.stdout)
-        bare = self._origin()
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
         text = launched.stdout
+        self.assertIn("IMPLEMENT T-1", text)
+        self.assertIn("ticket: T-1", text)
+        self.assertIn("jira: WAR-1", text)
+        self.assertIn("locks: src/T-1", text)
+        self.assertIn("acceptance: viewer serves the page", text)
+        self.assertIn("branch: warp/T-1-WAR-1", text)
         self.assertIn(orchestrator.TICKET_AGENT_INSTRUCTION, text)
         self.assertIn("new Agent", text)
         self.assertIn("Do not start a Subagent", text)
         self.assertIn("Do not use the Task tool", text)
-        self.assertIn("fresh clone of main", text)
-        self.assertIn("checkout: warp/T-1", text)
+        self.assertIn("Clone main", text)
+        self.assertIn("does not have to exist", text)
+        self.assertNotIn("fresh clone of main", text)
+        self.assertNotIn("Check out the ticket branch", text)
+        self.assertNotIn("has no .warp beam", text)
+        self.assertNotIn("do not start the Agent", text)
         self.assertNotIn("tool: Task", text)
         self.assertNotIn("subagent_type", text)
         self.assertNotIn("cloud_base_branch", text)
+        self.assertNotIn("super-secret-token", text)
+        self.assertNotIn("hooks.slack.com", text)
+        self.assertNotIn("9.5", text)
+        self.assertNotIn("journal-token", text)
+        self.assertNotIn("config-token-value", text)
         head = git(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
         self.assertEqual(head.stdout.strip(), "main")
+        missing = git(self.repo, "rev-parse", "--verify", "-q", "refs/heads/warp/T-1-WAR-1")
+        self.assertNotEqual(missing.returncode, 0)
         live = (warp / "beam.json").read_text()
         self.assertIn("super-secret-token", live)
-        branch_beam = git(self.repo, "show", "warp/T-1:.warp/beam.json")
-        self.assertEqual(branch_beam.returncode, 0, branch_beam.stderr)
-        self.assertIn('"status": "claimed"', branch_beam.stdout)
-        self.assertIn("shuttle-T-1", branch_beam.stdout)
-        self.assertNotIn("super-secret-token", branch_beam.stdout)
-        self.assertNotIn("hooks.slack.com", branch_beam.stdout)
-        self.assertNotIn("9.5", branch_beam.stdout)
-        config = git(self.repo, "cat-file", "-e", "warp/T-1:.warp/config.yaml")
-        self.assertNotEqual(config.returncode, 0)
-        journal = git(self.repo, "show", "warp/T-1:.warp/journal.jsonl")
-        self.assertNotIn("journal-token", journal.stdout)
-        main_beam = git(self.repo, "cat-file", "-e", "main:.warp/beam.json")
-        self.assertNotEqual(main_beam.returncode, 0)
-        clone = self.tmp / "agent"
-        cloned = git(self.tmp, "clone", "--branch", "warp/T-1", str(bare), str(clone))
-        self.assertEqual(cloned.returncode, 0, cloned.stderr)
-        claim = json.loads((clone / ".warp" / "beam.json").read_text())
-        self.assertEqual(claim["tickets"]["T-1"]["status"], "claimed")
-        self.assertEqual(claim["tickets"]["T-1"]["agent"], "shuttle-T-1")
-        self.assertFalse((clone / ".warp" / "config.yaml").exists())
-        main_clone = self.tmp / "main-clone"
-        cloned_main = git(self.tmp, "clone", "--branch", "main", str(bare), str(main_clone))
-        self.assertEqual(cloned_main.returncode, 0, cloned_main.stderr)
-        self.assertFalse((main_clone / ".warp" / "beam.json").exists())
 
     def _advance_origin_main(self, bare):
         other = self.tmp / "other"
@@ -228,23 +218,27 @@ class WorktreeTests(GitRepo):
         stale = git(self.repo, "cat-file", "-e", "main:merged.txt")
         self.assertNotEqual(stale.returncode, 0)
 
-    def test_new_ticket_branch_is_cut_from_the_fetched_base_tip(self):
+    def test_beam_only_branch_tells_the_agent_to_start_from_main(self):
         row = self.ticket(status="claimed", agent="shuttle-T-1")
+        row["jiraKey"] = "WAR-1"
+        row["acs"] = ["viewer serves the page"]
         self.beam([row], runner="cloud", baseBranch="main")
-        bare = self._origin()
-        self._advance_origin_main(bare)
+        self._origin()
+        published = state_commit.publish_ticket(self.repo, str(self.repo / ".warp" / "beam.json"), "T-1", push=True)
+        self.assertEqual(published, 0)
+        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1-WAR-1:.warp/beam.json").returncode, 0)
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
-        self.assertIn("base: origin/main", launched.stdout)
-        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:merged.txt").returncode, 0)
-        self.assertNotEqual(git(self.repo, "cat-file", "-e", "main:merged.txt").returncode, 0)
+        self.assertIn("IMPLEMENT T-1", launched.stdout)
+        self.assertIn("stale-beam: warp/T-1-WAR-1", launched.stdout)
+        self.assertIn("Do not keep that stale beam as your working tree.", launched.stdout)
+        self.assertIn("Start from latest main.", launched.stdout)
+        self.assertNotIn("has no .warp beam", launched.stdout)
         self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
-        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:.warp/beam.json").returncode, 0)
 
-    def test_in_flight_ticket_branch_is_not_rebased(self):
+    def test_in_flight_work_is_not_reset(self):
         row = self.ticket(status="claimed", agent="shuttle-T-1", branch="warp/T-1")
         self.beam([row], runner="cloud", baseBranch="main")
-        bare = self._origin()
         git(self.repo, "checkout", "-b", "warp/T-1")
         (self.repo / "ticket-only.txt").write_text("keep\n")
         git(self.repo, "add", "ticket-only.txt")
@@ -252,15 +246,13 @@ class WorktreeTests(GitRepo):
         self.assertEqual(committed.returncode, 0, committed.stderr)
         ticket_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
         git(self.repo, "checkout", "main")
-        self._advance_origin_main(bare)
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
-        self.assertIn("branch: warp/T-1 kept", launched.stdout)
-        self.assertNotIn("base: origin/main", launched.stdout)
+        self.assertIn("branch-kept: warp/T-1", launched.stdout)
+        self.assertNotIn("stale-beam:", launched.stdout)
+        self.assertIn("IMPLEMENT T-1", launched.stdout)
+        self.assertEqual(git(self.repo, "rev-parse", "warp/T-1").stdout.strip(), ticket_tip)
         self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:ticket-only.txt").returncode, 0)
-        self.assertNotEqual(git(self.repo, "cat-file", "-e", "warp/T-1:merged.txt").returncode, 0)
-        self.assertEqual(git(self.repo, "merge-base", "--is-ancestor", ticket_tip, "warp/T-1").returncode, 0)
-        self.assertEqual(git(self.repo, "cat-file", "-e", "warp/T-1:.warp/beam.json").returncode, 0)
         self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
 
     def test_dispatch_text_requires_a_new_agent_and_forbids_subagent_and_task(self):
@@ -284,15 +276,46 @@ class WorktreeTests(GitRepo):
         }
         lines = orchestrator.format_dispatch(data)
         text = "\n".join(lines)
+        self.assertIn("IMPLEMENT T-1", text)
+        self.assertIn("ticket: T-1", text)
+        self.assertIn("locks: src/t", text)
         self.assertIn("new Agent", text)
         self.assertIn("Do not start a Subagent", text)
         self.assertIn("Do not use the Task tool", text)
-        self.assertIn("fresh clone of main", text)
+        self.assertIn("Clone main", text)
+        self.assertIn("does not have to exist", text)
+        self.assertNotIn("fresh clone of main", text)
+        self.assertNotIn("has no .warp beam", text)
         self.assertNotIn("task-cloud", text)
         self.assertNotIn("subagent_type", text)
         self.assertNotIn("tool: Task", text)
         self.assertTrue(any(line.startswith("start T-1 ") for line in lines))
         self.assertIn("launch=new-agent", text)
+
+
+class ParentExitTests(unittest.TestCase):
+    def test_parent_does_not_exit_while_a_ticket_is_claimed(self):
+        beam = {"runState": "running", "tickets": {"T-1": {"id": "T-1", "status": "claimed"}}}
+        self.assertFalse(orchestrator.parent_may_exit(beam))
+        queued = {"runState": "running", "tickets": {"T-2": {"id": "T-2", "status": "queued"}}}
+        self.assertFalse(orchestrator.parent_may_exit(queued))
+        review = {
+            "runState": "running",
+            "tickets": {"T-3": {"id": "T-3", "status": "review", "pr": {"rollup": "pending"}}},
+        }
+        self.assertFalse(orchestrator.parent_may_exit(review))
+
+    def test_parent_may_exit_when_paused(self):
+        beam = {
+            "runState": "paused",
+            "paused": True,
+            "tickets": {"T-1": {"id": "T-1", "status": "claimed"}},
+        }
+        self.assertTrue(orchestrator.parent_may_exit(beam))
+        stopped = {"runState": "stopped", "tickets": {"T-1": {"id": "T-1", "status": "queued"}}}
+        self.assertTrue(orchestrator.parent_may_exit(stopped))
+        idle = {"runState": "running", "tickets": {"T-1": {"id": "T-1", "status": "merged"}}}
+        self.assertTrue(orchestrator.parent_may_exit(idle))
 
 
 class SlotTests(unittest.TestCase):

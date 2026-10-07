@@ -30,10 +30,12 @@ opened records a pull request when the Shuttle exits. That does not free the
 slot. merge records merged only for outcome merged. enqueue and rejected do
 not. mergeQueue defaults to false. A detected GitHub merge queue also enqueues.
 The orchestrator does not implement a ticket. checkout.py implement refuses.
-checkout.py launch commits the beam, journal, board, and that ticket's claim
-onto the ticket branch and pushes it before a new Agent may start. A branch
-with no .warp beam does not start. Do not start a ticket Agent on a fresh
-clone of main.
+checkout.py launch does not create the branch. It prints an IMPLEMENT prompt
+that contains the claim. The Agent clones main, then creates the branch.
+A beam file does not have to exist on the branch before the Agent starts.
+parent-exit prints parent: stay while a ticket is claimed, in review,
+awaiting checks, or queued, and parent: exit when the run is paused or
+stopped, or when nothing is claimed, queued, or awaiting checks.
 """
 
 from __future__ import annotations
@@ -863,8 +865,9 @@ TICKET_AGENT_INSTRUCTION = (
     "Start one new Agent for this ticket. "
     "An Agent is a separate top-level cloud agent. "
     "Own conversation, own VM, own checkout. "
-    "Check out the ticket branch. Do not start it on a fresh clone of main. "
-    "Read the claim from .warp/beam.json in that checkout. "
+    "Clone main so .cursor rules load, then create the branch from that main. "
+    "The claim is in the IMPLEMENT prompt. "
+    "A beam file does not have to exist on the branch before the Agent starts. "
     "Do not start a Subagent. "
     "A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). "
     "It shares the parent session and checkout. Forbidden for tickets. "
@@ -880,12 +883,127 @@ LOCAL_WORKTREE_INSTRUCTION = (
 )
 
 
+def _joined(value) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def acceptance_text(ticket: dict) -> str:
+    """Acceptance criteria from acs, or acceptance when that is what the plan stored."""
+    raw = ticket.get("acs")
+    if raw is None:
+        raw = ticket.get("acceptance")
+    if isinstance(raw, list):
+        return " | ".join(str(item) for item in raw)
+    if raw is None:
+        return ""
+    return str(raw)
+
+
+def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: str = "missing") -> str:
+    """IMPLEMENT prompt for one new Agent. The branch does not have to exist yet.
+
+    branch_state is missing, beam-only, or work. A beam-only branch is the
+    stale snapshot Shawn's run left behind. The Agent starts from latest main
+    and does not keep that commit as its working tree. Work beyond the beam
+    stays on that branch.
+    """
+    tid = str(ticket.get("id") or "")
+    branch = branch_name(ticket, config)
+    if branch_state == "work":
+        clone = (
+            "Clone main so .cursor rules load, then check out %s. "
+            "That branch has work beyond the beam commit. Do not reset it to main."
+        ) % branch
+    elif branch_state == "beam-only":
+        clone = (
+            "Clone main so .cursor rules load. "
+            "Start from latest main. Do not keep that stale beam as your working tree. "
+            "Create %s from that main."
+        ) % branch
+    else:
+        clone = "Clone main so .cursor rules load, then create %s from that main." % branch
+    lines = [
+        "IMPLEMENT %s" % tid,
+        "ticket: %s" % tid,
+        "jira: %s" % (ticket.get("jiraKey") or ""),
+        "locks: %s" % _joined(ticket.get("locks")),
+        "acceptance: %s" % acceptance_text(ticket),
+        "branch: %s" % branch,
+        TICKET_AGENT_INSTRUCTION,
+        clone,
+        "Write .warp/tickets/%s/ and push it. The parent reads that folder later." % tid,
+        "A beam file does not have to exist on the branch before the Agent starts.",
+        (
+            "If %s already exists and is only the beam commit, start from latest main. "
+            "Do not keep that stale beam as your working tree."
+        )
+        % branch,
+    ]
+    if branch_state == "beam-only":
+        lines.append("stale-beam: %s" % branch)
+    elif branch_state == "work":
+        lines.append("branch-kept: %s" % branch)
+    return "\n".join(lines)
+
+
+# Claimed work, review, checks still running, and the queue. The listener
+# dies with the parent turn, so these keep the turn open. awaiting_approval
+# is waiting on warp:proceed, which only the listener can hear.
+_PARENT_STAY = {
+    "queued",
+    "claimed",
+    "recovering",
+    "planning",
+    "coding",
+    "fix",
+    "review",
+    "bugbot_running",
+    "awaiting_approval",
+    "merging",
+}
+_CHECK_PENDING = {"pending", "red", "failure", "failed", "in_progress", "inprogress", "queued"}
+
+
+def ticket_keeps_parent(ticket: dict) -> bool:
+    """True when this ticket is claimed, in review, awaiting checks, or queued."""
+    if not isinstance(ticket, dict):
+        return False
+    status = ticket.get("status")
+    if status in _PARENT_STAY:
+        return True
+    if status in SETTLED or status in {"blocked", "alarm"}:
+        return False
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    rollup = str(pr.get("rollup") or "").strip().casefold()
+    ci = str(pr.get("ci") or "").strip().casefold()
+    return rollup in _CHECK_PENDING or ci in _CHECK_PENDING
+
+
+def parent_may_exit(beam: dict) -> bool:
+    """The parent may end the turn only when the listener is allowed to stop.
+
+    Pause and stop may exit even if tickets are still claimed. A running beam
+    stays up while any ticket is claimed, in review, awaiting checks, or queued.
+    A launch refusal is not an idle beam.
+    """
+    if beam.get("paused") or (beam.get("runState") or "running") in {"paused", "stopped"}:
+        return True
+    for ticket in (beam.get("tickets") or {}).values():
+        if ticket_keeps_parent(ticket):
+            return False
+    return True
+
+
 def launch_for(config: Optional[dict]) -> dict:
     """How the Warp session starts one ticket. Never in this process.
 
-    Cloud starts one new Agent on the ticket branch after that branch has
-    the beam. Local is one git worktree of that same branch. Neither path
-    is a Subagent or the Task tool.
+    Cloud starts one new Agent with an IMPLEMENT prompt. The branch does not
+    have to exist yet. Local is one git worktree. Neither path is a Subagent
+    or the Task tool.
     """
     kind = checkout_kind(config)
     if kind == "worktree":
@@ -909,10 +1027,12 @@ def format_dispatch(data: dict) -> list:
     cap = beam_mod.configured_cap(data.get("config") or {})
     actions = dispatch_actions(data, rows, cap=cap)
     lines = []
-    if actions:
-        instruction = (actions[0].get("instruction") or "").strip()
-        if instruction:
+    seen = set()
+    for action in actions:
+        instruction = (action.get("instruction") or "").strip()
+        if instruction and instruction not in seen:
             lines.append(instruction)
+            seen.add(instruction)
     for action in actions:
         extra = " launch=%s" % action.get("launch")
         if action.get("refuseInProcess"):
@@ -953,16 +1073,17 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                 }
             )
     for ticket in ready_rows:
-        actions.append(
-            {
-                "action": "start",
-                "id": ticket.get("id"),
-                "branch": branch_name(ticket, cfg),
-                "checkout": checkout_kind(cfg),
-                "base": (cfg.get("baseBranch") or "") or "base",
-                **launch,
-            }
-        )
+        action = {
+            "action": "start",
+            "id": ticket.get("id"),
+            "branch": branch_name(ticket, cfg),
+            "checkout": checkout_kind(cfg),
+            "base": (cfg.get("baseBranch") or "") or "base",
+            **launch,
+        }
+        if action.get("launch") == "new-agent":
+            action["instruction"] = implement_prompt(ticket, cfg)
+        actions.append(action)
     return actions
 
 
@@ -1022,6 +1143,9 @@ def main(argv: Optional[list] = None) -> int:
 
     pd = sub.add_parser("dispatch")
     pd.add_argument("--beam", required=True)
+
+    px = sub.add_parser("parent-exit")
+    px.add_argument("--beam", required=True)
 
     prec = sub.add_parser("record")
     prec.add_argument("--beam", required=True)
@@ -1092,6 +1216,13 @@ def main(argv: Optional[list] = None) -> int:
             data = _load(path)
         for line in format_dispatch(data):
             print(line)
+        return 0
+    if args.cmd == "parent-exit":
+        data = _load(Path(args.beam))
+        if parent_may_exit(data):
+            print("parent: exit")
+        else:
+            print("parent: stay")
         return 0
     if args.cmd == "record":
         path = Path(args.beam)

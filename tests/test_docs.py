@@ -419,7 +419,9 @@ class TicketAgentDocTests(unittest.TestCase):
             "new Agent",
             "Do not start a Subagent",
             "Do not use the Task tool",
-            "fresh clone of main",
+            "IMPLEMENT",
+            "Clone main",
+            "does not have to exist",
             ".warp/beam.json",
         )
         banned = (
@@ -427,6 +429,8 @@ class TicketAgentDocTests(unittest.TestCase):
             "subagent_type",
             "with the Task tool",
             "cloud_base_branch",
+            "Do not start it on a fresh clone of main",
+            "Check out the ticket branch",
         )
         for rel in ("README.md", "docs/GUIDE.md", "AGENTS.md", "rules/warp-operating.mdc"):
             text = (ROOT / rel).read_text()

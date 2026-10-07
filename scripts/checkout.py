@@ -2,18 +2,20 @@
 """One checkout per ticket.
 
 Cloud: this plugin cannot create a Cursor cloud agent. There is no API to
-call. `launch` fetches origin and cuts a new ticket branch from the tip of
-the base branch. A ticket branch already in flight is not rebased. It then
-commits the beam, journal, board, and that ticket's claim onto the ticket
-branch, pushes the branch, and tells the Warp session to start one new Agent
-checked out on that branch. An Agent is a separate
-top-level cloud agent: own conversation, own VM, own checkout. Do not start
-a Subagent. Do not use the Task tool for a ticket. Do not start it on a
-fresh clone of main. `implement` refuses to do the ticket in this process.
+call. `launch` does not create the branch and does not require one. It prints
+an IMPLEMENT prompt that contains the claim (ticket id, Jira key, locks,
+acceptance, branch warp/<id>-<jira>). The parent starts one new Agent with
+that prompt. The Agent clones main so .cursor rules load, then creates the
+branch from that main. It writes .warp/tickets/<id>/ and pushes. A beam file
+does not have to exist on the branch before the Agent starts. If the branch
+already exists and is only the beam commit, the prompt says to start from
+latest main and not to keep that stale beam as the working tree. Do not start
+a Subagent. Do not use the Task tool for a ticket. `implement` refuses to do
+the ticket in this process.
 
 Local: `add` and `remove` run `git worktree add` and `git worktree remove`
-on the ticket branch that already has .warp/beam.json. One worktree, one
-branch, one ticket. Not a Subagent inside the orchestrator checkout.
+on the ticket branch. One worktree, one branch, one ticket. Not a Subagent
+inside the orchestrator checkout.
 
   python3 scripts/checkout.py ?
   python3 scripts/checkout.py launch --beam .warp/beam.json --id T-1
@@ -54,27 +56,84 @@ def worktree_rel(ticket_id: str) -> str:
     return ".warp/worktrees/%s" % (safe or "ticket")
 
 
-def launch_lines(ticket_id: str, base: str, branch: str) -> list:
-    """Instruction for one new Agent. Printed only after the branch has a beam.
+_BEAM_ONLY_PATHS = {
+    ".warp/beam.json",
+    ".warp/journal.jsonl",
+    ".warp/BOARD.md",
+    ".warp/STATUS.md",
+    ".warp/board.html",
+    ".warp/status.json",
+}
 
-    base is the branch the ticket branch was cut from. The Agent does not
-    check out base. This script cannot create the Agent.
+
+def _ref_exists(root: Path, ref: str) -> bool:
+    return _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0
+
+
+def _resolve_ref(root: Path, name: str) -> str:
+    for candidate in (name, "refs/heads/%s" % name, "origin/%s" % name):
+        if candidate and _ref_exists(root, candidate):
+            return candidate
+    return ""
+
+
+def _fetch_branch(root: Path, branch: str) -> None:
+    """See a remote beam-only branch. A missing remote or ref does not refuse launch."""
+    names = _git(root, "remote")
+    if names.returncode != 0 or "origin" not in names.stdout.split():
+        return
+    _git(
+        root,
+        "fetch",
+        "origin",
+        "refs/heads/%s:refs/remotes/origin/%s" % (branch, branch),
+    )
+
+
+def branch_state(root: Path, branch: str, base: str) -> str:
+    """missing, beam-only, or work.
+
+    beam-only is a branch whose diff against the base is only the Warp state
+    files, including .warp/beam.json. That is the pre-made beam commit. Work
+    is any other path. A missing branch does not block launch.
     """
-    del base
-    return [
-        orchestrator.TICKET_AGENT_INSTRUCTION,
+    _fetch_branch(root, branch)
+    ref = _resolve_ref(root, branch)
+    if not ref:
+        return "missing"
+    base_name = base if base and base != "HEAD" else "main"
+    base_ref = _resolve_ref(root, "origin/%s" % base_name) or _resolve_ref(root, base_name) or ""
+    if not base_ref:
+        base_ref = "HEAD" if _ref_exists(root, "HEAD") else ""
+    if not base_ref:
+        return "missing"
+    diff = _git(root, "diff", "--name-only", "%s...%s" % (base_ref, ref))
+    if diff.returncode != 0:
+        diff = _git(root, "diff", "--name-only", "%s..%s" % (base_ref, ref))
+    if diff.returncode != 0:
+        return "missing"
+    names = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+    if not names or ".warp/beam.json" not in names:
+        return "work" if names else "missing"
+    if all(name in _BEAM_ONLY_PATHS for name in names):
+        return "beam-only"
+    return "work"
+
+
+def launch_lines(ticket: dict, config: Optional[dict], branch: str, state: str) -> list:
+    """IMPLEMENT prompt for one new Agent. The branch does not have to exist.
+
+    This script cannot create the Agent. It does not create the branch.
+    """
+    del branch
+    prompt = orchestrator.implement_prompt(ticket, config, branch_state=state)
+    ticket_id = ticket.get("id") or ""
+    return prompt.splitlines() + [
         "launch: one new Agent per ticket",
-        "checkout: %s" % branch,
-        "branch: %s" % branch,
-        "prompt: IMPLEMENT %s" % ticket_id,
-        "beam: .warp/beam.json",
-        "claim: read it from that checkout",
         "refuse: in-process",
         "refuse: Subagent",
         "refuse: Task",
-        "refuse: clone of main",
         "The plugin has no cloud-agent API. Do not implement this ticket in the orchestrator checkout.",
-        "Do not start this Agent when the branch has no .warp beam.",
         "After the Agent id comes back, record it:",
         "python3 scripts/checkout.py bind --beam .warp/beam.json --id %s --agent <agent-id>" % ticket_id,
     ]
@@ -101,9 +160,10 @@ def has_claim(ticket: dict) -> bool:
 
 
 def _launch_cloud(root: Path, path: Path, data: dict, ticket: dict, branch: str, base: str, ticket_id: str) -> int:
-    """Publish the claim onto the ticket branch, then print the new Agent instruction.
+    """Print the IMPLEMENT prompt. Do not create the branch, and do not require one.
 
-    The instruction is not printed when the branch has no .warp beam.
+    A beam file on the branch is not a start condition. A branch that is only
+    the beam commit is named in the prompt so the Agent starts from latest main.
     """
     if not has_claim(ticket):
         print("refuse: ticket %s has no claim; do not start the Agent" % ticket_id)
@@ -111,15 +171,8 @@ def _launch_cloud(root: Path, path: Path, data: dict, ticket: dict, branch: str,
     ticket["branch"] = branch
     ticket["checkout"] = "cloud-vm"
     _save(path, data)
-    published = state_commit.publish_ticket(root, str(path), ticket_id, push=True)
-    if published != 0:
-        return published
-    if not state_commit.branch_has_beam(root, branch):
-        print("refuse: branch %s has no .warp beam" % branch)
-        print("refuse: do not start the Agent")
-        return 2
-    shown_base = base if base != "HEAD" else "main"
-    for line in launch_lines(ticket_id, shown_base, branch):
+    state = branch_state(root, branch, base)
+    for line in launch_lines(ticket, data.get("config") or {}, branch, state):
         print(line)
     return 0
 

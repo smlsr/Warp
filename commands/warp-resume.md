@@ -23,6 +23,6 @@ python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <new
 
 `listener: already running <id>`: this turn already started the listener. Do not start a second. A new `--turn` takes a slot the previous turn left running.
 
-For each `shuttle: replace <id>` line, start exactly one new Agent for that same ticket (`checkout.py launch`, then the Agent on that branch). Do not start a Subagent. Do not use the Task tool. Do not start it on a fresh clone of main. Keep the branch. Do not queue a duplicate. A second tick must not launch another Shuttle for that id. `shuttle: alarm <id> worker-died` does not start a Shuttle.
+For each `shuttle: replace <id>` line, start exactly one new Agent for that same ticket (`checkout.py launch`, then the IMPLEMENT prompt). Do not start a Subagent. Do not use the Task tool. The branch does not have to exist yet. If the prompt says `branch-kept`, keep that branch. Do not queue a duplicate. A second tick must not launch another Shuttle for that id. `shuttle: alarm <id> worker-died` does not start a Shuttle.
 
-Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. The end of the tick runs `session_note.py --type session-stop`, which commits the live beam onto main and pushes it.
+Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. Do not end the turn while `orchestrator.py parent-exit` prints `parent: stay`. `parent: exit` runs `session_note.py --type session-stop`, which commits the live beam onto main and pushes it. Pause and stop still sync state, and then the listener may stop.

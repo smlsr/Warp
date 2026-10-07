@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.13
+
+- `checkout.py launch` does not create the branch. It prints an IMPLEMENT prompt that contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. The Agent clones main so `.cursor` rules load, then creates that branch. A beam file does not have to exist before the Agent starts. A branch that is only the beam commit is started from latest main.
+- The parent does not end the turn while the run is running and any ticket is claimed, in review, awaiting checks, or queued. Each pass starts one listener, reads `warp:` commands, fetches `.warp/tickets/<id>/`, patches the beam, dispatches, and passes again. `orchestrator.py parent-exit` prints `parent: stay` in that case and `parent: exit` when the run is paused or stopped, or when nothing is claimed, queued, or awaiting checks. Pause and stop still sync state, and then the listener may stop.
+
 ## 1.4.12
 
 - The listener is a Subagent of the parent; each ticket is a new Agent. One listener Subagent per parent turn. It reads Slack and Teams, acknowledges `warp:` commands, and returns them. The parent applies them. It does not merge and does not implement tickets. A running flag from the previous turn does not block the next tick.

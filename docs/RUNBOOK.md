@@ -14,7 +14,7 @@ The merge queue is serial and automatic for sizes in `autoMergeSizes`: rebase on
 
 A red base branch stops merging. Sub-agents keep working. Dispatch a fix ahead of every rank. Resume the queue when the base is green. On start or resume, rebuild from git (`merged`, `in-flight`, `pending`) and run the dispatch loop. Done means every ticket is merged or explicitly parked, and the base branch is green. `state_commit.py commit` commits the beam, journal, STATUS, and BOARD and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored.
 
-One new Agent, one ticket, one branch, one checkout. `runner: cloud` is its own VM, checked out on the ticket branch that has `.warp/beam.json`. Do not start it on a fresh clone of main. `runner: local` is its own git worktree of that branch. Never two Agents in one working copy. Do not start a Subagent. Do not use the Task tool for a ticket.
+One new Agent, one ticket, one branch, one checkout. `runner: cloud` is its own VM. `checkout.py launch` prints an IMPLEMENT prompt with the claim. Clone main so `.cursor` rules load, then create the branch from that main. A beam file does not have to exist on the branch before the Agent starts. `runner: local` is its own git worktree of that branch. Never two Agents in one working copy. Do not start a Subagent. Do not use the Task tool for a ticket.
 
 ## Pause overnight but keep the board
 

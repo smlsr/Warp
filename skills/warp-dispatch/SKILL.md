@@ -26,17 +26,11 @@ Before the first claim of a running cloud session, `prompt_gate.py check` must p
 
 For each id `ready` prints, claim it, then start that ticket in its own checkout. Do not implement it here.
 
-`runner: cloud`: claim the ticket first. Then run `checkout.py launch`. It fetches origin and cuts a new ticket branch from the tip of the base branch. A ticket branch already in flight is not rebased. It commits the beam, journal, board, and that claim onto the ticket branch, pushes the branch, and prints the instruction only when `.warp/beam.json` is on that branch. Start one new Agent checked out on that branch. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Do not start it on a fresh clone of main. The Agent reads the claim from `.warp/beam.json` in that checkout. Do not start a Subagent. Do not use the Task tool for a ticket. Do not implement the ticket in this turn. If launch exits non-zero, do not start the Agent. Then `checkout.py bind --agent` with the id it returns. `checkout.py implement` must not be how the ticket gets built.
+`runner: cloud`: claim the ticket first. Then run `checkout.py launch`. It does not create the branch. It prints an IMPLEMENT prompt that contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. Start one new Agent with that prompt. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. The Agent clones main so `.cursor` rules load, then creates that branch from the main it cloned. A beam file does not have to exist on the branch before the Agent starts. If the prompt names a stale beam commit, the Agent starts from latest main and does not keep that commit as its working tree. Do not start a Subagent. Do not use the Task tool for a ticket. Do not implement the ticket in this turn. A non-zero launch is not a reason to end the turn. Then `checkout.py bind --agent` with the id it returns. `checkout.py implement` must not be how the ticket gets built.
 
 `runner: local`: `checkout.py add` commits the beam onto the ticket branch, then runs `git worktree add` for that branch. That is one worktree, not a Subagent inside the orchestrator checkout. Remove it later with `checkout.py remove`.
 
-The kickoff is only:
-
-```
-IMPLEMENT A-03
-```
-
-Use the real id. Do not paste the rules into the prompt. The Shuttle reads `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` because its workspace is the repo. See `assets/KICKOFF.md`.
+The kickoff is the IMPLEMENT prompt `checkout.py launch` prints. It starts with `IMPLEMENT <id>` and includes the claim. Pass that prompt to the new Agent. Do not use the Task tool. The Shuttle clones main so `.cursor` rules load, then creates the branch. See `assets/KICKOFF.md`.
 
 ```bash
 python3 <plugin>/scripts/beam.py set --beam .warp/beam.json \
