@@ -145,6 +145,24 @@ bugbotManual: true
 # still covers auto-merge.
 maxFixAttempts: 3
 stuckAfterMinutes: 90
+# Minutes with no progress before supervise marks that state stalled.
+# A newer heartbeat is progress and clears the stall.
+stallImplementingMinutes: 90
+stallPrOpenMinutes: 20
+stallReviewingMinutes: 45
+stallFixingMinutes: 90
+stallReadyMinutes: 30
+stallMergingMinutes: 20
+stallQueuedMinutes: 180
+stallApprovalMinutes: 240
+stallMinutes: 45
+# Fallback for recovering and alarm, and for a state without its own key.
+statusDigestMinutes: 60
+# How often supervise posts one short Slack digest of alarms, stalls, and counts.
+# A new stall or alarm posts once and is not posted again.
+maxStallFixes: 3
+# Fixer attempts for one stalled or alarmed ticket. Past this cap the ticket
+# parks and Slack gets one alarm. Default 3.
 staleMinutes: 15
 # A Shuttle or the one listener is dead when lastSeenAt is older than this,
 # or it never heartbeated and the claim or listener start is older than this.

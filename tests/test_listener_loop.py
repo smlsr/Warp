@@ -35,7 +35,7 @@ class ListenerLoopTests(unittest.TestCase):
                 {
                     "version": 1,
                     "runState": "running",
-                    "tickets": {"T-1": {"id": "T-1", "status": "merged"}},
+                    "tickets": {"T-1": {"id": "T-1", "status": "review", "pr": {"url": "https://example.test/1", "rollup": "pending"}}},
                     "gates": [],
                     "config": {"pollSeconds": 300, "listenerStaleMinutes": 15, "listenerRestartNote": 3},
                 }
@@ -116,7 +116,9 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: idle"])
         self.assertTrue(orchestrator.parent_may_exit(data))
         running = {"runState": "running", "tickets": {}}
-        self.assertFalse(orchestrator.parent_may_exit(running))
+        self.assertTrue(orchestrator.parent_may_exit(running))
+        open_ticket = {"runState": "running", "tickets": {"T-1": {"id": "T-1", "status": "review"}}}
+        self.assertFalse(orchestrator.parent_may_exit(open_ticket))
 
     def test_repeated_restarts_log_each_one_and_post_one_note(self):
         inbound.claim(self.beam_path, "listener-1", turn="turn-a")

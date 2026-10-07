@@ -536,7 +536,9 @@ class ParentExitTests(unittest.TestCase):
         stopped = {"runState": "stopped", "tickets": {"T-1": {"id": "T-1", "status": "queued"}}}
         self.assertTrue(orchestrator.parent_may_exit(stopped))
         idle = {"runState": "running", "tickets": {"T-1": {"id": "T-1", "status": "merged"}}}
-        self.assertFalse(orchestrator.parent_may_exit(idle))
+        self.assertTrue(orchestrator.parent_may_exit(idle))
+        parked = {"runState": "running", "tickets": {"T-2": {"id": "T-2", "status": "parked"}}}
+        self.assertTrue(orchestrator.parent_may_exit(parked))
 
 
 class SlotTests(unittest.TestCase):

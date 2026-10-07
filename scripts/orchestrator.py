@@ -36,14 +36,16 @@ to maxAgents. The subagent writes .warp/tickets/<id>/ into the parent
 checkout by absolute path. It never merges and never calls Jira or Slack.
 launch: agent is the optional IMPLEMENT prompt for a future Cloud Agents
 API. This plugin does not call that API.
-parent-exit prints parent: stay while the listener is supposed to be
-running, and parent: exit when the run is paused or stopped. A running loop
-stays up even when nothing is claimed, queued, or awaiting checks.
+parent-exit prints parent: stay while any ticket is not merged or parked.
+parent: exit is when every ticket is merged or parked, or the run is paused
+or stopped. The listener stays up for that same window.
 supervise prints listener: start when the listener returned or its heartbeat
 file is older than listenerStaleMinutes. listener: hold means one is alive.
-listener: idle means paused or stopped. A restart is logged. Herald gets one
-note when restarts repeat.
-  python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned recycle
+listener: idle means paused, stopped, or every ticket is merged or parked.
+A restart is logged. Herald gets one note when restarts repeat.
+The same pass drives each ticket: implementing, pr-open, reviewing, fixing,
+ready, merging, then merged or parked. Opening a pull request is not done.
+  python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned recycle --now 2026-01-01T00:00:00Z --provider provider.json
 """
 
 from __future__ import annotations
@@ -1288,21 +1290,35 @@ LISTENER_RESTART_NOTE = "Listener kept restarting. One listener is running."
 _LISTENER_STOP = {"pause", "stop", "warp:pause", "warp:stop"}
 
 
+def pipeline_unfinished(beam: dict) -> bool:
+    """True while any ticket is not merged, done, parked, or skipped."""
+    if not isinstance(beam, dict):
+        return False
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    for ticket in tickets.values():
+        if isinstance(ticket, dict) and ticket.get("status") not in SETTLED:
+            return True
+    return False
+
+
 def listener_should_run(beam: dict) -> bool:
-    """The one listener stays up while the Warp loop is running."""
+    """The listener stays up until every ticket is merged or parked.
+
+    Pause and stop stop it. A running loop with nothing left to merge or
+    park does not keep the listener up.
+    """
     if not isinstance(beam, dict):
         return False
     if beam.get("paused") or (beam.get("runState") or "running") in {"paused", "stopped"}:
         return False
-    return True
+    return pipeline_unfinished(beam)
 
 
 def parent_may_exit(beam: dict) -> bool:
-    """The parent stays up while a listener is supposed to be running.
+    """Exit when the run is paused or stopped, or every ticket is settled.
 
-    Pause and stop may exit even if tickets are still claimed. A running loop
-    is not idle when every ticket is merged: the listener is still supposed
-    to be reading the channel. A launch refusal is not an idle beam.
+    Settled is merged, done, parked, or skipped. A ticket still implementing,
+    in review, fixing, or queued keeps the parent and the listener up.
     """
     return not listener_should_run(beam)
 
@@ -1351,6 +1367,27 @@ def _polled_since(last, pending) -> bool:
     if last_dt is None or pending_dt is None:
         return False
     return last_dt > pending_dt
+
+
+def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
+    """One parent pass: the listener, then the ticket pipeline.
+
+    The listener decision stays first. The pipeline adopts open pull requests,
+    recovers alarms, requests Bugbot, merges one ready ticket, and refills a
+    free slot. Pause and stop do none of that.
+    """
+    import pipeline
+
+    path = Path(beam_path)
+    lines = supervise_listener(path, returned=returned, now=now)
+    if not path.is_file():
+        return lines
+    data = _load(path)
+    if not listener_should_run(data):
+        return lines
+    lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
+    _save(path, data)
+    return lines
 
 
 def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None) -> list:
@@ -1643,6 +1680,7 @@ def main(argv: Optional[list] = None) -> int:
     ps.add_argument("--beam", required=True)
     ps.add_argument("--returned", default=None, help="word the listener returned: recycle, pause, or stop")
     ps.add_argument("--now", default=None, help="timestamp for tests")
+    ps.add_argument("--provider", default=None, help="JSON file of id to pull request, checks, and Bugbot")
 
     prec = sub.add_parser("record")
     prec.add_argument("--beam", required=True)
@@ -1713,8 +1751,11 @@ def main(argv: Optional[list] = None) -> int:
             print(line)
         if not data:
             data = _load(path)
-        for line in format_dispatch(data):
+        import pipeline
+
+        for line in pipeline.advance(data, beam_path=path):
             print(line)
+        _save(path, data)
         return 0
     if args.cmd == "parent-exit":
         data = _load(Path(args.beam))
@@ -1724,7 +1765,10 @@ def main(argv: Optional[list] = None) -> int:
             print("parent: stay")
         return 0
     if args.cmd == "supervise":
-        for line in supervise_listener(Path(args.beam), returned=args.returned, now=args.now):
+        provider = None
+        if args.provider:
+            provider = json.loads(Path(args.provider).read_text())
+        for line in supervise(Path(args.beam), returned=args.returned, now=args.now, provider=provider):
             print(line)
         return 0
     if args.cmd == "record":

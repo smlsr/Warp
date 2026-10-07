@@ -597,6 +597,17 @@ def _effective_status(beam: dict, root: Path) -> str:
         return "effective: unavailable (%s)" % exc
 
 
+def print_open_work(beam_path: Path) -> None:
+    """Store open work on the beam and print it. Does not start a fix."""
+    import watch
+
+    beam = load_json(beam_path)
+    lines = watch.snapshot(beam)
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    for line in lines:
+        print(line)
+
+
 def write_status(beam_path: Path) -> None:
     beam = load_json(beam_path)
     beam["metrics"] = metrics(beam)
@@ -675,6 +686,14 @@ def write_status(beam_path: Path) -> None:
     lines += [f"- **{t['id']}** {t['status']} {t['size']} — {t['summary']}" for t in left[:40]] or ["None."]
     if len(left) > 40:
         lines.append(f"- … {len(left) - 40} more in status.json")
+    import watch
+
+    open_lines = watch.snapshot(beam)
+    lines += ["", "## Open work", ""]
+    lines += open_lines or ["None."]
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    for line in open_lines:
+        print(line)
     if (beam_path.parent / "warp-complete.html").is_file():
         lines += ["", f"Report: warp-complete.html generated {beam.get('reportGeneratedAt') or 'unknown'}"]
     lines.append("")
@@ -1067,6 +1086,7 @@ def main() -> None:
             sys.exit(gate)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
+        print_open_work(Path(args.beam))
     elif args.cmd == "resume":
         import resume_hint
         import state_commit
@@ -1075,6 +1095,7 @@ def main() -> None:
             print(line)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
+        print_open_work(Path(args.beam))
     elif args.cmd == "pause":
         set_run(Path(args.beam), "paused", args.reason)
     elif args.cmd == "stop":

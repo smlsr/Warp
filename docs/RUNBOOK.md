@@ -20,9 +20,13 @@ Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`
 
 `/warp-pause` with a reason. In-flight Shuttles finish the current step and checkpoint. The HTML board stays valid. `/warp-resume` reconciles, then ticks.
 
+## Pipeline
+
+`orchestrator.py supervise` and the dispatch tick are the pipeline. Phases are `implementing`, `pr-open`, `reviewing`, `fixing`, `ready`, `merging`, then `merged` or `parked`. Opening a pull request is not done. Launch a Shuttle when the pass prints `start <id> ... step=implement`, `step=fix`, or `step=restart`. Request Bugbot when it prints `bugbot: request <id> <url>`. Post `herald:`, do `jira: MUST DO`, post `slack:`, and push the beam when a ticket merges. `/warp-start` and `/warp-resume` adopt an existing open pull request into `reviewing` or `fixing`. A `lock-escape` from `checkout.py verify` is repaired in that same pass. `/warp-status`, start, and resume list every ticket that is not merged, alarms and stalls first. A ticket with no progress inside its stall limit is stalled, and that supervise pass tries one fix: ask Bugbot again, rerun CI, rebase, restart a silent Shuttle, widen a lock-escape, clear a stale gate, start a base-branch fix, or return an approved pull request to the merge queue. Past `maxStallFixes` the ticket parks and Slack gets one alarm. The digest posts every `statusDigestMinutes`, and a new stall or alarm posts once.
+
 ## A PR will not go green
 
-After `maxFixAttempts` (default 3) Reed sets `alarm` / `bugbot-failed` and Herald posts. The same counter covers auto-merge and manual tickets. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` stops new claims.
+`orchestrator.py supervise` starts a fix Shuttle for a Bugbot finding, red CI, or a failed acceptance criterion, then asks Bugbot to review again. After `maxFixAttempts` (default 3) the ticket is `parked`. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` stops new claims.
 
 Manual tickets (`autoMerge` false) use that loop before anyone is asked to review. `beam.py set --status awaiting_approval` is refused until `pr.bugbot` is `pass` and `pr.ci` is `green`, unless `bugbotManual` is false (Bugbot off for that path only) or `bugbotRequired` is false (Bugbot off for both). QA Ready is the Jira move for that status, not for pull-request open.
 
