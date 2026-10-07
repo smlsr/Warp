@@ -587,6 +587,7 @@ class SlotTests(unittest.TestCase):
         )
         self.assertEqual(provider.interpret_rollup([{"state": "INPROGRESS"}]), "pending")
         self.assertEqual(provider.interpret_rollup([{"state": "FAILED"}]), "red")
+        self.assertEqual(provider.interpret_rollup([]), "absent")
         self.assertTrue(orchestrator.apply_reported_merge(ticket, "merged", sha="abc1234"))
         self.assertEqual(ticket["status"], "merged")
         self.assertEqual(ticket["pr"]["sha"], "abc1234")

@@ -91,7 +91,7 @@ class StallTests(unittest.TestCase):
         warp.mkdir()
         self.path = warp / "beam.json"
 
-    def test_no_progress_marks_a_stall_and_a_heartbeat_clears_it(self):
+    def test_no_progress_marks_a_stall_and_a_heartbeat_does_not_clear_it(self):
         row = stalled(
             ticket(
                 "T-1",
@@ -118,8 +118,17 @@ class StallTests(unittest.TestCase):
         self.assertEqual(log.read_text().count('"type":"stall"'), 1)
 
         saved["lastSeenAt"] = NOW
+        saved["status"] = "bugbot_running"
+        held = watch.apply(data, beam_path=self.path, now=NOW)
+        self.assertTrue(saved["stalled"])
+        self.assertEqual(saved["watch"]["since"], OLD)
+        self.assertNotIn("stall: T-1", text(held))
+
+        saved["pr"]["headSha"] = "abc123"
+        saved["pr"]["check"] = "green"
         cleared = watch.apply(data, beam_path=self.path, now=NOW)
         self.assertFalse(saved["stalled"])
+        self.assertEqual(saved["watch"]["progressAt"], NOW)
         self.assertNotIn("stall: T-1", text(cleared))
 
     def test_inside_the_limit_is_not_stalled_and_a_shorter_limit_is(self):
@@ -234,6 +243,53 @@ class FixerTests(unittest.TestCase):
         self.assertIn("step=fix", blob)
         self.assertEqual(data["tickets"]["C-1"]["phase"], "fixing")
         self.assertEqual(data["tickets"]["B-1"]["status"], "fix")
+        self.assertIn("keep both", blob)
+
+    def test_dirty_mergeable_rebases_without_a_stored_conflict(self):
+        row = ticket(
+            "A-001",
+            status="review",
+            phase="reviewing",
+            pr={
+                "url": "https://example.test/pull/82",
+                "bugbot": "pass",
+                "ci": "green",
+                "rollup": "green",
+                "mergeable": "CONFLICTING",
+                "mergeStateStatus": "DIRTY",
+            },
+        )
+        data = beam([row])
+        lines = watch.apply(data, now=NOW)
+        blob = text(lines)
+        self.assertIn("fixer: A-001 rebase", blob)
+        self.assertIn("rebase onto main", blob)
+        self.assertNotIn("review: wait", blob)
+
+    def test_ci_that_never_started_is_pushed_immediately(self):
+        row = ticket(
+            "A-004",
+            status="review",
+            phase="reviewing",
+            pr={
+                "url": "https://example.test/pull/83",
+                "bugbot": "pass",
+                "ci": "pending",
+                "rollup": "absent",
+                "ciAbsent": True,
+                "checkCount": 0,
+            },
+        )
+        data = beam([row])
+        self.assertEqual(watch.next_action(data["tickets"]["A-004"]), "start CI")
+        lines = watch.apply(data, now=NOW)
+        blob = text(lines)
+        self.assertIn("ci: start A-004", blob)
+        self.assertIn("fixer: A-004 ci-start", blob)
+        self.assertIn("empty commit", blob)
+        self.assertNotIn("review: wait", blob)
+        self.assertNotIn("ci: rerun", blob)
+        self.assertEqual(watch.next_action(data["tickets"]["A-004"]), "wait for the Shuttle")
 
     def test_a_silent_shuttle_restarts_the_step(self):
         row = stalled(

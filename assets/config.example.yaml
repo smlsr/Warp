@@ -10,6 +10,13 @@ model: claude-sonnet-5-5-high
 maxAgents: 18
 # Concurrent Shuttles. No per-person cap. A project may set 18.
 # The orchestrator reads this value. It does not assume a fixed cap.
+# Separate from maxInProgress, which caps how many tickets have started.
+
+maxInProgress: 20
+# Tickets that have started and are not merged or parked. At this count,
+# nothing new is taken from the ready queue. Fixes, rebases, reruns, and
+# merges on tickets already in progress keep running. Parked tickets do not
+# count. Already being over the cap does not park or cancel anyone. Default 20.
 
 checkCommand: ""
 # Optional. The orchestrator runs this on a rebased head before it merges.
@@ -146,7 +153,8 @@ bugbotManual: true
 maxFixAttempts: 5
 stuckAfterMinutes: 90
 # Minutes with no progress before supervise marks that state stalled.
-# A newer heartbeat is progress and clears the stall.
+# Progress is a new commit, a phase change, or a check result change.
+# A heartbeat, or a start that does not change those, does not clear the stall.
 stallImplementingMinutes: 90
 stallPrOpenMinutes: 20
 stallReviewingMinutes: 45
@@ -157,6 +165,10 @@ stallQueuedMinutes: 180
 stallApprovalMinutes: 240
 stallMinutes: 45
 # Fallback for recovering and alarm, and for a state without its own key.
+ciStartGraceMinutes: 5
+# Minutes before a pull request head with zero check runs counts as CI that
+# never started. supervise re-requests the workflow or pushes an empty commit
+# in that pass. A conflict is rebased first. Default 5.
 statusDigestMinutes: 60
 # How often supervise posts one short Slack digest of alarms, stalls, and counts.
 # A new stall or alarm posts once and is not posted again.

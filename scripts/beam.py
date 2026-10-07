@@ -481,6 +481,89 @@ def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
     return held
 
 
+_IN_PROGRESS_PHASES = {"implementing", "pr-open", "reviewing", "fixing", "ready", "merging"}
+_NOT_STARTED = {"queued", "blocked"}
+_SETTLED_PROGRESS = {"merged", "done", "parked", "skipped"}
+
+
+def ticket_in_progress(ticket: dict) -> bool:
+    """Started, and not merged or parked.
+
+    Parked tickets do not count, so a pile of parks cannot hold the cap shut.
+    Queued and blocked tickets are still To Do. Review, fix, ready, merging,
+    and anything stalled or alarmed after it started all count.
+    """
+    if not isinstance(ticket, dict):
+        return False
+    status = ticket.get("status")
+    if status in _SETTLED_PROGRESS:
+        return False
+    phase = ticket.get("phase")
+    if phase in _IN_PROGRESS_PHASES:
+        return True
+    if status in _NOT_STARTED:
+        return False
+    if status == "alarm" or ticket.get("alarm") or ticket.get("stalled"):
+        return True
+    return bool(status)
+
+
+def max_in_progress(cfg: Optional[dict]) -> int:
+    """How many started tickets may be open. Default 20. Negative falls back."""
+    default = int(default_config()["maxInProgress"])
+    raw = (cfg or {}).get("maxInProgress")
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
+        return default
+    return number
+
+
+def in_progress_count(beam: dict) -> int:
+    tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
+    return sum(1 for ticket in tickets.values() if ticket_in_progress(ticket))
+
+
+def in_progress_label(beam: dict) -> str:
+    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
+    return "in progress %d/%d" % (in_progress_count(beam), max_in_progress(cfg))
+
+
+def _watch_slot(beam: dict) -> dict:
+    watch = beam.get("watch")
+    if not isinstance(watch, dict):
+        watch = {}
+        beam["watch"] = watch
+    return watch
+
+
+def _sync_launch_hold(beam: dict, suppressed: bool, count: int, cap: int) -> None:
+    """Remember a one-time note when this cap, not the Shuttle cap, held a start."""
+    watch = _watch_slot(beam)
+    if not suppressed:
+        if count < cap:
+            watch.pop("inProgressHeld", None)
+            watch.pop("inProgressHoldPending", None)
+        return
+    if not watch.get("inProgressHeld") and not watch.get("inProgressHoldPending"):
+        watch["inProgressHoldPending"] = "launch: hold in progress %d/%d" % (count, cap)
+
+
+def take_launch_hold(beam: dict) -> str:
+    """The hold line, once, for the pass that first refuses a new launch."""
+    watch = beam.get("watch")
+    if not isinstance(watch, dict):
+        return ""
+    line = watch.pop("inProgressHoldPending", None) or ""
+    if line:
+        watch["inProgressHeld"] = True
+    return str(line)
+
+
 def configured_cap(cfg: Optional[dict]) -> int:
     """maxAgents from config. The product default applies only when it is unset.
 
@@ -692,11 +775,14 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
 
     A blocker counts only when it is merged to the base branch. An open or
     green pull request does not. Lock overlap uses each ticket's full lock
-    list, including a parent folder. The cap is maxAgents minus slots still
-    held. A green pull request has already freed its slot. A red base branch
+    list, including a parent folder. The Shuttle cap is maxAgents minus slots still
+    held. maxInProgress
+    (default 20) is separate: at that many started tickets, nothing new is
+    taken. A green pull request has already freed its slot. A red base branch
     reserves one slot for a fix when no fix ticket exists yet. Ready tickets
     fill the remaining slots. Nothing is held back for a ticket that is not
     ready, and a later ticket does not wait for an unrelated dependency level.
+    Parked tickets do not count toward maxInProgress.
     """
     state = beam.get("runState") or ("paused" if beam.get("paused") else "running")
     if beam.get("paused") or state in {"paused", "stopped"}:
@@ -704,12 +790,16 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     cfg = beam.get("config") or {}
     cap = configured_cap(cfg)
     running = sum(1 for t in beam["tickets"].values() if orchestrator.holds_slot(t, cfg))
-    slots = max(0, cap - running)
-    if orchestrator.needs_base_fix(beam) and slots > 0:
-        slots -= 1
+    agent_slots = max(0, cap - running)
+    if orchestrator.needs_base_fix(beam) and agent_slots > 0:
+        agent_slots -= 1
     if limit is not None:
-        slots = min(slots, limit)
-    if slots == 0:
+        agent_slots = min(agent_slots, limit)
+    progress_cap = max_in_progress(cfg)
+    progress_count = in_progress_count(beam)
+    progress_room = max(0, progress_cap - progress_count)
+    if agent_slots == 0:
+        _sync_launch_hold(beam, False, progress_count, progress_cap)
         return []
     anc_cache: dict = {}
     held = held_locks(beam)
@@ -740,12 +830,16 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     candidates.sort(key=lambda t: orchestrator.sort_key(t, base_red=base_red))
     chosen = []
     for t in candidates:
-        if len(chosen) >= slots:
+        if len(chosen) >= agent_slots:
             break
         paths = orchestrator.lock_paths(t)
         if any(lock_overlap(paths, orchestrator.lock_paths(c)) for c in chosen):
             continue
         chosen.append(t)
+    suppressed = len(chosen) > progress_room
+    if suppressed:
+        chosen = chosen[:progress_room]
+    _sync_launch_hold(beam, suppressed, progress_count, progress_cap)
     return chosen
 
 
@@ -1437,6 +1531,7 @@ def default_config() -> dict:
     return {
         "model": "claude-sonnet-5-5-high",
         "maxAgents": 18,
+        "maxInProgress": 20,
         "autoMergeSizes": list(DEFAULT_AUTO_MERGE_SIZES),
         "messenger": "both",
         "notify": "verbose",
@@ -1476,6 +1571,7 @@ def default_config() -> dict:
         "stallQueuedMinutes": 180,
         "stallApprovalMinutes": 240,
         "stallMinutes": 45,
+        "ciStartGraceMinutes": 5,
         "statusDigestMinutes": 60,
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,
@@ -1541,7 +1637,9 @@ does not start. A green
 `make ci` is recorded and is not a failure. Evidence that is only the
 name `make ci` is not a red check. Paused and stopped runs do not
 recompute.
-ready's only cap is maxAgents. Do not hand-edit beam.json.
+ready's Shuttle cap is maxAgents. maxInProgress (default 20) is how many
+started tickets may be open. At that cap, ready takes nothing new. Parked
+tickets do not count. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
 uses inbound.py heartbeat during its parent turn. watchdog runs on every
 Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is

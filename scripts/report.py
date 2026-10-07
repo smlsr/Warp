@@ -419,6 +419,8 @@ def _show_cost(value) -> str:
 
 
 def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
+    import pipeline
+
     tickets = [t for t in (data.get("tickets") or {}).values() if isinstance(t, dict)]
     tickets.sort(key=lambda t: str(t.get("id") or ""))
     cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
@@ -476,7 +478,7 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
         if status in {"merged", "done"} and (pr.get("url") or pr.get("sha") or pr.get("via")):
             prs_merged += 1
         if "bugbotFindings" in pr and pr.get("bugbotFindings") is not None:
-            bug_found_vals.append(int(pr.get("bugbotFindings") or 0))
+            bug_found_vals.append(pipeline.finding_count(pr.get("bugbotFindings")))
         if "bugbotFixed" in pr and pr.get("bugbotFixed") is not None:
             bug_fixed_vals.append(int(pr.get("bugbotFixed") or 0))
         events = [e for e in (ticket.get("events") or []) if isinstance(e, dict)]
