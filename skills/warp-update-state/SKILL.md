@@ -11,6 +11,13 @@ Insurance sync. `/warp-pause` and `/warp-stop` run this after they set paused or
 python3 <plugin>/scripts/update_state.py --beam .warp/beam.json
 ```
 
+The slash command can be missing from Cursor's plugin command index. This script is already on a 1.4.12 install and does not need it:
+
+```bash
+python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json
+python3 .cursor/plugins/warp/scripts/update_state.py ?
+```
+
 `update_state.py ?` prints the options. Quote `?` if the shell expands it.
 
 1. Fetch origin/main and load that beam. Do not start from an empty beam if main has one.
@@ -20,4 +27,4 @@ python3 <plugin>/scripts/update_state.py --beam .warp/beam.json
 5. Push that beam to main.
 6. Tell the user the summary: what was pulled, what local state won, and the commit on main (`pulled:`, `local won:`, `commit:`).
 
-The listener is a Subagent of the parent; each ticket is a new Agent. Do not start a listener. Do not dispatch. Do not merge.
+The listener is a Subagent of the parent. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true. Do not start a listener. Do not dispatch. Do not merge.

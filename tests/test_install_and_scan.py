@@ -50,6 +50,45 @@ class InitTests(Base):
         after = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
         self.assertEqual(before, after)
 
+    def test_every_command_is_in_the_manifest_and_installed(self):
+        manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        on_disk = sorted("./commands/" + path.name for path in (ROOT / "commands").glob("*.md"))
+        self.assertGreaterEqual(len(on_disk), 1)
+        self.assertEqual(manifest["commands"], on_disk)
+        missing = [rel for rel in on_disk if rel not in manifest["commands"]]
+        self.assertEqual(missing, [], "command files missing from the manifest")
+        installed = run(INSTALL, "init", "--root", ".", cwd=self.repo)
+        self.assertEqual(installed.returncode, 0, installed.stderr + installed.stdout)
+        for rel in on_disk:
+            name = Path(rel).name
+            dest = self.repo / ".cursor" / "commands" / name
+            self.assertEqual(dest.read_bytes(), (ROOT / "commands" / name).read_bytes(), name)
+        source = self.tmp / "plugin-src"
+        (source / "commands").mkdir(parents=True)
+        for rel in on_disk:
+            name = Path(rel).name
+            shutil.copy(ROOT / "commands" / name, source / "commands" / name)
+        (source / "VERSION").write_text("9.9.9\n")
+        (source / ".cursor-plugin").mkdir()
+        (source / ".cursor-plugin" / "plugin.json").write_text('{"version": "9.9.9"}\n')
+        for path in (self.repo / ".cursor" / "commands").glob("*.md"):
+            path.unlink()
+        upgraded = run(
+            ROOT / "scripts" / "upgrade.py",
+            "--root",
+            str(self.repo),
+            "--source",
+            str(source),
+            cwd=self.repo,
+        )
+        self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
+        for rel in on_disk:
+            name = Path(rel).name
+            stem = Path(name).stem
+            self.assertIn("/%s -> .cursor/commands/%s" % (stem, name), upgraded.stdout)
+            dest = self.repo / ".cursor" / "commands" / name
+            self.assertEqual(dest.read_bytes(), (source / "commands" / name).read_bytes(), name)
+
     def test_existing_config_only_default_channels_change(self):
         (self.repo / ".warp").mkdir()
         cfg = self.repo / ".warp/config.yaml"

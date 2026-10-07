@@ -67,11 +67,18 @@ def upgrade_line(installed: str, source: str) -> str:
 
 # The project copy of the upgrade script. It runs without /warp-upgrade.
 UPGRADE_SCRIPT = "python3 .cursor/plugins/warp/scripts/upgrade.py"
+# The project copy of the insurance sync. It runs without /warp-update-state.
+UPDATE_STATE_SCRIPT = "python3 .cursor/plugins/warp/scripts/update_state.py"
 
 
 def upgrade_fallback() -> str:
     """Script lines for a palette that does not list /warp-upgrade."""
     return f"{UPGRADE_SCRIPT}\n{UPGRADE_SCRIPT} ?"
+
+
+def update_state_fallback() -> str:
+    """Script lines for a palette that does not list /warp-update-state."""
+    return f"{UPDATE_STATE_SCRIPT} --beam .warp/beam.json\n{UPDATE_STATE_SCRIPT} ?"
 
 
 def describe(root: Path) -> str:
@@ -109,6 +116,8 @@ def describe(root: Path) -> str:
         lines.append("effective: unavailable (%s)" % exc)
     lines.append("If /warp-upgrade is not in the command list:")
     lines.append(upgrade_fallback())
+    lines.append("If /warp-update-state is not in the command list:")
+    lines.append(update_state_fallback())
     return "\n".join(lines)
 
 
@@ -135,6 +144,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         "  python3 .cursor/plugins/warp/scripts/upgrade.py\n"
         "  python3 .cursor/plugins/warp/scripts/upgrade.py ?\n"
         "That script does not need the slash command. ? prints its flags. Quote ? if the shell expands it.\n"
+        "When /warp-update-state is missing, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n"
+        "  python3 .cursor/plugins/warp/scripts/update_state.py ?\n"
+        "That script is on a 1.4.12 install and does not need the slash command.\n"
         "?, help, -h, and --help print this text.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

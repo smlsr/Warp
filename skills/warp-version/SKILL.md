@@ -26,4 +26,11 @@ python3 .cursor/plugins/warp/scripts/upgrade.py ?
 
 `?` prints the flags (`--root` and `--source`). Quote `?` if the shell expands it. A 1.4.6 tree includes `scripts/upgrade.py` at that path.
 
+- The output also prints the insurance-sync script when `/warp-update-state` is not in the command list. Read these lines to the user. They do not need the slash command. A 1.4.12 tree already includes `scripts/update_state.py`:
+
+```bash
+python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json
+python3 .cursor/plugins/warp/scripts/update_state.py ?
+```
+
 The number in `VERSION` is the source of truth. `.cursor-plugin/plugin.json` must match it.
