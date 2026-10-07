@@ -322,12 +322,12 @@ class MakeCiBeamTests(unittest.TestCase):
         self.assertEqual(self.gate()["status"], "pending")
         self.assertEqual(self.starts(lines), [])
 
-    def test_third_red_parks_without_a_start(self):
-        self.write({"P-004": ticket("P-004", status="review", attempts=2, pr={"ci": "red", "checkLog": "still red"})})
+    def test_fifth_red_parks_without_a_start(self):
+        self.write({"P-004": ticket("P-004", status="review", attempts=4, pr={"ci": "red", "checkLog": "still red"})})
         lines, _data = self.refresh()
         saved = self.load()["tickets"]["P-004"]
         self.assertEqual(saved["status"], "parked")
-        self.assertEqual(saved["attempts"], 3)
+        self.assertEqual(saved["attempts"], 5)
         self.assertIn("send-back P-004 parked", lines)
         self.assertEqual(self.starts(lines), [])
 

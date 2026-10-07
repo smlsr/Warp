@@ -47,6 +47,7 @@ ACCEPTED_FORMS = (
 VERB_RE = re.compile(r"^warp:\s*(pause|resume|stop|start|proceed|retry|status)\b\s*(.*?)\s*$", re.I)
 ACK_NAME = "inbound-ack.json"
 PENDING_NAME = "pending-commands.jsonl"
+LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
 
 
@@ -130,14 +131,43 @@ def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None, turn: Optio
     }
     if turn_id:
         record["turn"] = turn_id
+    for key in ("restarts", "restartNoted", "pendingStart", "lastRestartReason"):
+        if key in raw:
+            record[key] = raw[key]
     data["listener"] = record
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    write_listener_file(beam_path, agent_id, pid=record["pid"], reason="start", when=now)
     beam.journal(beam_path, {"type": "listener-start", "agentId": agent_id, "pid": record["pid"], "turn": turn_id or None})
     return "listener: started %s" % agent_id
 
 
-def heartbeat(beam_path: Path, agent_id: str) -> str:
-    """Record lastSeenAt for the running listener. The agent id must own the slot."""
+def listener_file(beam_path: Path) -> Path:
+    """`.warp/listener.json` next to the beam."""
+    return Path(beam_path).parent / LISTENER_FILE
+
+
+def write_listener_file(
+    beam_path: Path,
+    agent_id: str,
+    pid: Optional[str] = None,
+    reason: str = "poll",
+    when: Optional[str] = None,
+) -> dict:
+    """Heartbeat the parent supervises. pid or agent id, last poll time, reason."""
+    body = {
+        "agentId": agent_id,
+        "pid": str(pid) if pid else None,
+        "lastPollAt": when or beam.utcnow(),
+        "reason": reason or "poll",
+    }
+    path = listener_file(beam_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    beam.atomic_write(path, json.dumps(body, indent=2) + "\n")
+    return body
+
+
+def heartbeat(beam_path: Path, agent_id: str, pid: Optional[str] = None, reason: str = "poll") -> str:
+    """Record lastSeenAt and `.warp/listener.json`. The agent id must own the slot."""
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return "listener: no beam at %s" % beam_path
@@ -151,12 +181,23 @@ def heartbeat(beam_path: Path, agent_id: str) -> str:
     if cur["agentId"] != agent_id:
         return "listener: heartbeat refused %s" % cur["agentId"]
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    raw["lastSeenAt"] = beam.utcnow()
+    now = beam.utcnow()
+    raw["lastSeenAt"] = now
     raw["agentId"] = agent_id
     raw["state"] = "running"
+    if pid:
+        raw["pid"] = str(pid)
     data["listener"] = raw
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    write_listener_file(beam_path, agent_id, pid=raw.get("pid"), reason=reason or "poll", when=now)
     return "listener: heartbeat %s" % agent_id
+
+
+def poll_seconds(beam_path: Path) -> int:
+    """Shell sleep between channel reads. `pollSeconds`, default 300."""
+    beam_path = Path(beam_path)
+    data = beam.load_json(beam_path) if beam_path.is_file() else {}
+    return beam.config_int(data if isinstance(data, dict) else {}, beam_path, "pollSeconds", 300)
 
 
 def release(beam_path: Path) -> str:
@@ -393,7 +434,7 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
         if action in {"pause", "stop"}:
             extra = "\nlistener: do not keep reading while paused or stopped"
         if action in {"resume", "start"}:
-            extra = "\nlistener: the next parent tick starts one listener Subagent. Do not start a second in this turn."
+            extra = "\nlistener: keep looping. Do not start a second."
         return "action: %s%s" % (action, extra)
     if action == "retry":
         return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"]))
@@ -536,6 +577,25 @@ def enqueue(beam_path: Path, text: str, by: Optional[str], message_id: Optional[
     return "enqueue: queued"
 
 
+def apply_pending(beam_path: Path) -> list:
+    """Apply queued commands. The listener already posted the ack."""
+    path = _pending(beam_path)
+    rows = _read_pending(path)
+    results = []
+    changed = False
+    for row in rows:
+        if row.get("applied"):
+            continue
+        result = apply_command(beam_path, row.get("text") or "", by=row.get("by"), source=row.get("source") or "pending")
+        row["applied"] = True
+        row["ack"] = result.get("ack")
+        changed = True
+        results.append(result)
+    if changed:
+        path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows))
+    return results
+
+
 def drain(beam_path: Path) -> list:
     path = _pending(beam_path)
     rows = _read_pending(path)
@@ -568,13 +628,15 @@ HELP = """
 examples:
   python3 scripts/inbound.py ?
   python3 scripts/inbound.py claim --beam .warp/beam.json --agent-id listener-1 --pid 4242
-  python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id listener-1
+  python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id listener-1 --reason poll
+  python3 scripts/inbound.py interval --beam .warp/beam.json
   python3 scripts/inbound.py release --beam .warp/beam.json
   python3 scripts/inbound.py status --beam .warp/beam.json
   python3 scripts/inbound.py parse --text "warp:proceed XV-01"
   python3 scripts/inbound.py handle --beam .warp/beam.json --by shawn --text "warp:proceed XV-01"
   python3 scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --by shawn --message-id 1 --source slack
   python3 scripts/inbound.py drain --beam .warp/beam.json
+  python3 scripts/inbound.py apply-pending --beam .warp/beam.json
 
 claim takes the slot for this parent turn. Pass `--turn` once per parent
 turn. `listener: already running <id>` means this turn already started its
@@ -583,6 +645,10 @@ even when the previous turn left state running. That flag must not block the
 next tick. release sets listener.state to stopped. The listener must not keep
 reading while paused or stopped. One listener Subagent for the beam, not one
 per ticket, and not a separate Agent.
+heartbeat writes listener.lastSeenAt and `.warp/listener.json` (agentId or
+pid, lastPollAt, reason). reason is poll, recycle, pause, or stop. interval
+prints pollSeconds. The listener sleeps that many seconds with the shell
+sleep between reads. It does not return while the loop is running.
 accept writes the ack and prints `return:` for the parent. It does not apply
 the command. apply runs proceed, pause, stop, retry, and the other verbs.
 The parent applies. The listener does not merge.
@@ -615,6 +681,11 @@ def main(argv: Optional[list] = None) -> int:
     pb = sub.add_parser("heartbeat")
     pb.add_argument("--beam", default=".warp/beam.json")
     pb.add_argument("--agent-id", required=True)
+    pb.add_argument("--pid", default=None)
+    pb.add_argument("--reason", default="poll", help="poll, recycle, pause, or stop")
+
+    pi = sub.add_parser("interval")
+    pi.add_argument("--beam", default=".warp/beam.json")
 
     ps = sub.add_parser("status")
     ps.add_argument("--beam", default=".warp/beam.json")
@@ -650,6 +721,9 @@ def main(argv: Optional[list] = None) -> int:
     pd = sub.add_parser("drain")
     pd.add_argument("--beam", default=".warp/beam.json")
 
+    pap = sub.add_parser("apply-pending")
+    pap.add_argument("--beam", default=".warp/beam.json")
+
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
@@ -663,9 +737,12 @@ def main(argv: Optional[list] = None) -> int:
         print(line)
         return 1 if line.startswith("listener: no beam") else 0
     if args.cmd == "heartbeat":
-        line = heartbeat(beam_path, args.agent_id)
+        line = heartbeat(beam_path, args.agent_id, pid=args.pid, reason=args.reason)
         print(line)
         return 0 if line.startswith("listener: heartbeat ") and "refused" not in line and "needs" not in line else 1
+    if args.cmd == "interval":
+        print(poll_seconds(beam_path))
+        return 0
     if args.cmd == "status":
         if not beam_path.is_file():
             print("listener: no beam at %s" % beam_path)
@@ -690,6 +767,14 @@ def main(argv: Optional[list] = None) -> int:
         return result.get("code") or 0
     if args.cmd == "enqueue":
         print(enqueue(beam_path, args.text, args.by, args.message_id, args.source))
+        return 0
+    if args.cmd == "apply-pending":
+        results = apply_pending(beam_path)
+        if not results:
+            print("inbound: nothing pending")
+            return 0
+        for result in results:
+            _print_result(result)
         return 0
     results = drain(beam_path)
     if not results:

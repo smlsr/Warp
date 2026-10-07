@@ -19,10 +19,10 @@ Pick one `--turn` for this parent turn.
 python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <new-id> --turn <turn>
 ```
 
-`listener: started <id>`: start exactly one `warp-listen` Subagent with that id. It reads, acknowledges, and returns `warp:` commands. You apply them with `inbound.py apply`. It does not merge.
+`listener: started <id>`: start exactly one `warp-listen` Subagent with that id. It loops on the channel, posts acks, and returns only for pause, stop, or `recycle`. You apply queued commands with `inbound.py apply-pending`. It does not merge.
 
 `listener: already running <id>`: this turn already started the listener. Do not start a second. A new `--turn` takes a slot the previous turn left running.
 
 For each `shuttle: replace <id>` line, start exactly one subagent for that same ticket (`checkout.py launch`, then the prompt). Reuse the surviving worktree and branch. Do not queue a duplicate. A second tick must not launch another Shuttle for that id. `shuttle: alarm <id> worker-died` does not start a Shuttle. A failed subagent result raises `worker-died`.
 
-Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. Do not end the turn while `orchestrator.py parent-exit` prints `parent: stay`. `parent: exit` runs `session_note.py --type session-stop`, which commits the live beam onto main and pushes it. Pause and stop still sync state, and then the listener may stop.
+Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. You restart it from `orchestrator.py supervise` when it returns or `.warp/listener.json` is stale, unless the loop is paused or stopped. `scan.py resume` prints the open-work list, alarms and stalls first. `supervise` adopts a ticket that already has an open pull request into `reviewing` or `fixing`. Do not relaunch that ticket from scratch. Exactly one listener. Do not end the turn while `orchestrator.py parent-exit` prints `parent: stay`. That is while any ticket is not merged or parked. `parent: exit` is when every ticket is merged or parked, or the run is paused or stopped, and runs `session_note.py --type session-stop`, which commits the live beam onto main and pushes it. Pause and stop still sync state, and then the listener may stop.

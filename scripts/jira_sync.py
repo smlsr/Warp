@@ -91,7 +91,7 @@ DEFAULTS = {
     "jiraExternalIdFallback": "label",
     "bugbotRequired": True,
     "bugbotManual": True,
-    "maxFixAttempts": 3,
+    "maxFixAttempts": 5,
 }
 EVENTS = ["claim", "release", "qa-ready", "done"]
 COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "bugbot-rerun", "ci", "alarm", "blocked"]
@@ -179,7 +179,7 @@ def mark_bugbot_pass(ticket: dict) -> None:
 
 def mark_bugbot_fail(ticket: dict, cfg: Optional[dict], count_attempt: bool) -> str:
     cfg = cfg or {}
-    cap = int(cfg.get("maxFixAttempts") or 3)
+    cap = int(cfg.get("maxFixAttempts") or 5)
     pr = ticket.setdefault("pr", {})
     if count_attempt:
         ticket["attempts"] = int(ticket.get("attempts") or 0) + 1

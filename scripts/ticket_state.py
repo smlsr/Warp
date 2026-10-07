@@ -317,7 +317,7 @@ def _apply_check(beam_path: Path, data: dict, ticket: dict, result: str, name: s
     """Record check-red or check-green. Red uses the existing send-back path.
 
     claimed, planning, coding, or recovering is moved to review first so a
-    dead Agent's red check is not dropped. fix stays fix. The third red parks.
+    dead Agent's red check is not dropped. fix stays fix. Past maxFixAttempts (default 5) the ticket parks.
     """
     result = "red" if str(result).strip().casefold() == "red" else "green"
     name = (name or "").strip() or "make ci"

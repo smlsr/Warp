@@ -37,7 +37,7 @@ import orchestrator  # noqa: E402
 
 REASON = "lock-escape"
 DEFAULT_ALARM_REPAIR_MINUTES = 15
-DEFAULT_MAX_ALARM_REPAIRS = 3
+DEFAULT_MAX_ALARM_REPAIRS = 5
 # Statuses that mean the repair Shuttle is still the worker on this ticket.
 # review and later belong to Reed or a person. merged and done are finished.
 FORWARD = {
@@ -65,7 +65,7 @@ examples:
 
 Subcommand: next. One repair Shuttle at a time, for lock-escape only.
 alarmRepairMinutes (default 15) is how often a running listener opens a pass.
-maxAlarmRepairs (default 3) is the cap per ticket. A second tick is idempotent.
+maxAlarmRepairs (default 5) is the cap per ticket. A second tick is idempotent.
 Paused and stopped runs print alarm-repair: skipped and change nothing.
 When that pass opens and the ready set is empty, pending gates are
 recomputed, including a stale red gate the beam can disprove. A gate turns

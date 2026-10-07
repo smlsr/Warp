@@ -103,7 +103,7 @@ class BugbotGateTests(unittest.TestCase):
 
     def test_fix_loop_exhausts_at_max_fix_attempts(self):
         self.set("HOS-9", "--status", "review")
-        for n in (1, 2):
+        for n in range(1, 5):
             proc = self.set("HOS-9", "--bugbot", "fail")
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(self.ticket("HOS-9")["status"], "fix")
@@ -112,15 +112,17 @@ class BugbotGateTests(unittest.TestCase):
         self.assertEqual(last.returncode, 0, last.stdout + last.stderr)
         self.assertEqual(self.ticket("HOS-9")["status"], "alarm")
         self.assertEqual(self.ticket("HOS-9")["alarm"], "bugbot-failed")
-        self.assertEqual(self.ticket("HOS-9")["attempts"], 3)
+        self.assertEqual(self.ticket("HOS-9")["attempts"], 5)
         self.assertIn("status alarm", last.stdout)
         blocked = self.set("HOS-9", "--status", "awaiting_approval")
         self.assertNotEqual(blocked.returncode, 0)
         self.assertEqual(self.ticket("HOS-9")["status"], "alarm")
+        for _ in range(4):
+            step = self.set("HOS-1", "--bugbot", "fail")
+            self.assertEqual(step.returncode, 0, step.stdout + step.stderr)
+            self.assertEqual(self.ticket("HOS-1")["status"], "fix")
         auto = self.set("HOS-1", "--bugbot", "fail")
-        self.assertEqual(self.ticket("HOS-1")["status"], "fix")
-        self.set("HOS-1", "--bugbot", "fail")
-        self.set("HOS-1", "--bugbot", "fail")
+        self.assertEqual(auto.returncode, 0, auto.stdout + auto.stderr)
         self.assertEqual(self.ticket("HOS-1")["status"], "alarm")
         self.assertEqual(self.ticket("HOS-1")["alarm"], "bugbot-failed")
 
