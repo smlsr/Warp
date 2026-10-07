@@ -72,11 +72,101 @@ def acs_pass(ticket: dict) -> bool:
     return bool(results) and all(value in _PASS for value in results.values())
 
 
-def findings_of(ticket: dict) -> list:
-    raw = (ticket.get("pr") or {}).get("bugbotFindings") or []
+_PLACEHOLDER_SUFFIX = " Bugbot findings (details not loaded)"
+
+
+def _placeholder_count(text: str):
+    if not isinstance(text, str) or not text.endswith(_PLACEHOLDER_SUFFIX):
+        return None
+    number = text[: -len(_PLACEHOLDER_SUFFIX)]
+    if number.isdigit() and int(number) > 0:
+        return int(number)
+    return None
+
+
+def _finding_text(item) -> str:
+    """One finding's text. A dict contributes message, then body, never its repr."""
+    if isinstance(item, dict):
+        for key in ("message", "body"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, bool) or item is None:
+        return ""
+    if isinstance(item, int):
+        return str(item)
+    return ""
+
+
+def coerce_findings(raw) -> list:
+    """`bugbotFindings` as a list of non-empty strings.
+
+    An int above 0 is a count whose details were not loaded, so the merge
+    gate stays closed. 0 and False are no findings. Anything else that is
+    not a string, list, or tuple is ignored.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return []
+    if isinstance(raw, int):
+        if raw > 0:
+            return ["%d%s" % (raw, _PLACEHOLDER_SUFFIX)]
+        return []
     if isinstance(raw, str):
-        raw = [raw]
-    return [str(item).strip() for item in raw if str(item).strip()]
+        text = raw.strip()
+        return [text] if text else []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    found = []
+    for item in raw:
+        text = _finding_text(item)
+        if text:
+            found.append(text)
+    return found
+
+
+def findings_of(ticket: dict) -> list:
+    pr = ticket.get("pr") if isinstance(ticket, dict) else None
+    if not isinstance(pr, dict):
+        return []
+    return coerce_findings(pr.get("bugbotFindings"))
+
+
+def finding_count(raw) -> int:
+    """How many findings a stored value represents, including a bare count."""
+    if isinstance(raw, bool) or raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw if raw > 0 else 0
+    texts = coerce_findings(raw)
+    if len(texts) == 1:
+        counted = _placeholder_count(texts[0])
+        if counted is not None:
+            return counted
+    return len(texts)
+
+
+def _is_count_value(raw) -> bool:
+    if raw is None or isinstance(raw, (bool, int)):
+        return True
+    if isinstance(raw, str):
+        text = raw.strip()
+        return (not text) or _placeholder_count(text) is not None
+    if isinstance(raw, (list, tuple)):
+        texts = coerce_findings(raw)
+        if not texts:
+            return True
+        return len(texts) == 1 and _placeholder_count(texts[0]) is not None
+    return True
+
+
+def next_findings(raw) -> list:
+    """One more Bugbot failure, always stored as a list."""
+    if _is_count_value(raw):
+        return coerce_findings(finding_count(raw) + 1)
+    return coerce_findings(raw) + ["Bugbot finding (details not loaded)"]
 
 
 def bugbot_state(ticket: dict) -> str:
@@ -144,7 +234,7 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict]) -> None:
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
     if "findings" in snap:
-        pr["bugbotFindings"] = list(snap.get("findings") or [])
+        pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
     if isinstance(snap.get("acs"), dict):
         pr["acResults"] = {str(key): str(value) for key, value in snap["acs"].items()}
     if snap.get("escaped"):

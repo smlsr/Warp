@@ -76,6 +76,12 @@ def _repair_running(data: dict, ticket: dict) -> bool:
     return repair.get("active") == ticket.get("id")
 
 
+def _bugbot_findings(pr: dict) -> list:
+    import pipeline
+
+    return pipeline.coerce_findings(pr.get("bugbotFindings"))
+
+
 def _ticket_action(data: dict, ticket: dict, snap: dict) -> str:
     import watch
 
@@ -85,7 +91,7 @@ def _ticket_action(data: dict, ticket: dict, snap: dict) -> str:
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     if pr.get("conflict") or pr.get("behind") or snap.get("conflict") or snap.get("behind"):
         return "rebase"
-    findings = pr.get("bugbotFindings") or []
+    findings = _bugbot_findings(pr)
     bugbot = str(pr.get("bugbot") or "").strip().casefold()
     if findings or bugbot in {"fail", "failed", "failure"}:
         return "fix"
@@ -105,7 +111,7 @@ def _detail(ticket: dict, action: str, snap: dict) -> str:
     if action == "rebase":
         return "conflict" if pr.get("conflict") or snap.get("conflict") else "behind"
     if action == "fix":
-        findings = pr.get("bugbotFindings") or []
+        findings = _bugbot_findings(pr)
         return "bugbot findings" if findings else "bugbot fail"
     if action == "lock-escape":
         return "lock-escape"
@@ -291,7 +297,7 @@ def _act_ticket(data: dict, ticket: dict, action: str, lines: list, beam_path: O
 
     if action == "fix":
         pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-        reasons = ["bugbot: %s" % item for item in (pr.get("bugbotFindings") or [])]
+        reasons = ["bugbot: %s" % item for item in _bugbot_findings(pr)]
         if not reasons:
             reasons = ["bugbot fail"]
         before = ticket.get("status")

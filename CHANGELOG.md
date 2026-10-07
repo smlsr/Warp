@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.16
+
+- `pipeline.findings_of` crashed when `pr.bugbotFindings` was an int, a string, or another non-list. `jira_sync.mark_bugbot_fail` had stored a running count, and a shuttle snapshot passed a string through `list()`, which split it into characters. The field is now a list of finding strings. A count above 0 is stored as `N Bugbot findings (details not loaded)`, so the merge gate stays closed and a fix run starts. 0 and false are no findings. A dict finding stores its message, or else its body.
+
 ## 1.4.15
 
 - The listener skill told it to read the channel once and return, so the subagent exited after a single poll. It now loops until the Warp loop is paused or stopped: poll, post acks, write `.warp/listener.json`, shell `sleep` for `pollSeconds`, and repeat. It returns on pause or stop, or returns `recycle` when its context is large.

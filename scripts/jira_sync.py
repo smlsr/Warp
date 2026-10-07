@@ -173,17 +173,24 @@ def invalidate_head(ticket: dict) -> None:
 
 
 def mark_bugbot_pass(ticket: dict) -> None:
+    import pipeline
+
     pr = ticket.setdefault("pr", {})
-    pr["bugbotFixed"] = int(pr.get("bugbotFindings") or 0)
+    raw = pr.get("bugbotFindings")
+    pr["bugbotFixed"] = pipeline.finding_count(raw)
+    if "bugbotFindings" in pr:
+        pr["bugbotFindings"] = pipeline.coerce_findings(raw)
 
 
 def mark_bugbot_fail(ticket: dict, cfg: Optional[dict], count_attempt: bool) -> str:
+    import pipeline
+
     cfg = cfg or {}
     cap = int(cfg.get("maxFixAttempts") or 5)
     pr = ticket.setdefault("pr", {})
     if count_attempt:
         ticket["attempts"] = int(ticket.get("attempts") or 0) + 1
-    pr["bugbotFindings"] = int(pr.get("bugbotFindings") or 0) + 1
+    pr["bugbotFindings"] = pipeline.next_findings(pr.get("bugbotFindings"))
     attempt = int(ticket.get("attempts") or 0)
     if attempt >= cap:
         ticket["status"] = "alarm"

@@ -206,3 +206,47 @@ class SweepTests(unittest.TestCase):
         again = sweep.run(data, now=LATER)
         self.assertNotIn("slack:", text(again))
         self.assertEqual(data["tickets"]["T-1"]["status"], "parked")
+
+    def test_a_finding_count_or_string_starts_a_fix(self):
+        data = data_of(
+            [
+                ticket(
+                    "B-2",
+                    pr={
+                        "bugbot": "pass",
+                        "rollup": "green",
+                        "ci": "green",
+                        "bugbotFindings": 2,
+                        "url": "https://example.test/pull/9",
+                    },
+                )
+            ]
+        )
+        self.path.write_text(json.dumps(data) + "\n")
+        lines = sweep.run(data, beam_path=self.path, now=NOW)
+        blob = text(lines)
+        self.assertIn("2 Bugbot findings (details not loaded)", blob)
+        self.assertIn("step=fix", blob)
+        self.assertEqual(data["tickets"]["B-2"]["status"], "fix")
+
+        stringy = data_of(
+            [
+                ticket(
+                    "B-3",
+                    pr={
+                        "bugbot": "fail",
+                        "rollup": "green",
+                        "ci": "green",
+                        "bugbotFindings": "unused import",
+                        "url": "https://example.test/pull/10",
+                    },
+                )
+            ]
+        )
+        detail = sweep._detail(stringy["tickets"]["B-3"], "fix", {})
+        self.assertEqual(detail, "bugbot findings")
+        reasons = [
+            "bugbot: %s" % item
+            for item in sweep._bugbot_findings(stringy["tickets"]["B-3"]["pr"])
+        ]
+        self.assertEqual(reasons, ["bugbot: unused import"])

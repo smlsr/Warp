@@ -374,5 +374,86 @@ class ParkAndRefillTests(unittest.TestCase):
         self.assertNotEqual(fixing["tickets"]["E-2"]["status"], "merged")
 
 
+def _clean(findings):
+    return ticket(
+        "G-1",
+        status="review",
+        phase="ready",
+        autoMerge=True,
+        pr={
+            "url": "https://example.test/pull/1",
+            "bugbot": "pass",
+            "rollup": "green",
+            "ci": "green",
+            "check": "green",
+            "acResults": {"builds": "pass"},
+            "bugbotFindings": findings,
+        },
+    )
+
+
+class FindingsTests(unittest.TestCase):
+    def test_findings_of_accepts_every_stored_shape(self):
+        def of(raw):
+            return pipeline.findings_of({"pr": {"bugbotFindings": raw}})
+
+        self.assertEqual(of(2), ["2 Bugbot findings (details not loaded)"])
+        self.assertEqual(of(0), [])
+        self.assertEqual(of(False), [])
+        self.assertEqual(of("  unused import  "), ["unused import"])
+        self.assertEqual(of([" a ", "", "b"]), ["a", "b"])
+        self.assertEqual(
+            of([{"message": "race", "body": "hidden"}, {"message": "  ", "body": "nit"}, {"other": "x"}]),
+            ["race", "nit"],
+        )
+        self.assertEqual(of([{"other": "x"}]), [])
+        self.assertEqual(of(None), [])
+        self.assertEqual(of(True), [])
+        self.assertEqual(of(1.5), [])
+        self.assertEqual(of({"message": "race"}), [])
+        self.assertEqual(pipeline.findings_of({}), [])
+
+    def test_count_above_zero_blocks_the_merge_gate_and_starts_a_fix(self):
+        cfg = {"bugbotRequired": True, "checkCommand": "make ci", "autoMergeSizes": ["S"]}
+        self.assertFalse(pipeline.gate_open(_clean(2), cfg))
+        self.assertTrue(pipeline.gate_open(_clean(0), cfg))
+        self.assertTrue(pipeline.gate_open(_clean(False), cfg))
+        self.assertTrue(pipeline.gate_open(_clean(None), cfg))
+
+        data = beam([_clean(2)])
+        data["tickets"]["G-1"]["phase"] = "reviewing"
+        lines = pipeline.advance(data, now=NOW)
+        blob = text(lines)
+        self.assertIn("step=fix", blob)
+        self.assertIn("2 Bugbot findings (details not loaded)", blob)
+        self.assertEqual(data["tickets"]["G-1"]["status"], "fix")
+        self.assertNotEqual(data["tickets"]["G-1"]["status"], "merged")
+
+    def test_writers_store_a_list(self):
+        import jira_sync
+
+        row = ticket("S-1", pr={"url": "https://example.test/pull/1"})
+        pipeline._apply_snapshot(row, {"findings": "unused import"})
+        self.assertEqual(row["pr"]["bugbotFindings"], ["unused import"])
+        pipeline._apply_snapshot(row, {"findings": 4})
+        self.assertEqual(row["pr"]["bugbotFindings"], ["4 Bugbot findings (details not loaded)"])
+        pipeline._apply_snapshot(row, {"findings": [{"body": "nit"}]})
+        self.assertEqual(row["pr"]["bugbotFindings"], ["nit"])
+
+        counted = {"id": "H-1", "status": "review", "pr": {"bugbotFindings": 2}}
+        jira_sync.mark_bugbot_fail(counted, {"maxFixAttempts": 5}, True)
+        self.assertEqual(counted["pr"]["bugbotFindings"], ["3 Bugbot findings (details not loaded)"])
+        jira_sync.mark_bugbot_pass(counted)
+        self.assertEqual(counted["pr"]["bugbotFixed"], 3)
+        self.assertEqual(counted["pr"]["bugbotFindings"], ["3 Bugbot findings (details not loaded)"])
+
+        text_row = {"id": "H-2", "pr": {"bugbotFindings": "unused import"}}
+        jira_sync.mark_bugbot_fail(text_row, {"maxFixAttempts": 5}, False)
+        self.assertEqual(
+            text_row["pr"]["bugbotFindings"],
+            ["unused import", "Bugbot finding (details not loaded)"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
