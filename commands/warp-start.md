@@ -3,24 +3,32 @@ name: warp-start
 description: Start Warp dispatch after a scan
 ---
 
-Set runState to running with `scripts/scan.py start`, tell Herald, then claim the one channel listener. Refuse if there is no beam. If start prints `refuse:` and names missing MCP tools, do not start and do not claim. Post that list (Herald already has it). `scan.py start --force` starts anyway. A local runner does not block. `scan.py start` prints the resume hint and runs `beam.py watchdog`. Follow it. Do not dispatch when it says the beam is missing or paused. `watchdog: skipped` means do not recover and do not start a replacement. A later claim runs the same check unless this start was `--force`.
-
-One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The slot is `listener` on the beam: `state`, `agentId`, optional `pid`, and `lastSeenAt`.
-
-Read the watchdog lines before you claim:
-
-- `listener: replace <id>`: the dead listener was cleared and this id already owns the slot. Launch exactly one `warp-listen` Agent with that id. One Agent for the beam, not one Agent per ticket. Do not claim a different id. Herald posts one line: `Listener died. A new one started.`
-- `listener: alive <id>` or `listener: fresh <id>`: do not launch a second.
-- `listener: stopped`: claim, then launch only when the reply is `listener: started`.
+On a fresh checkout, fetch origin and load the beam from main before anything else. Do not start from an empty beam if main has one. Close the window, open a new one, and `/warp-start`: state comes from main plus each ticket folder.
 
 ```bash
-python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <new-id>
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json
 ```
 
-`listener: started <id>` means you claimed the slot. Launch exactly one Agent with the `warp-listen` skill and that same agent id. Ticket workers are not Subagents of that listener.
+`scan.py start` prints `beam: fetched origin/<base>` and, when the local beam is missing or empty, `beam: loaded from origin/<base>`. Then it runs the watchdog, which fetches each in-flight ticket branch and patches the live beam from `.warp/tickets/<id>/`. It does not copy that branch's beam. Then it dispatches.
 
-`listener: already running <id>` means a listener is already running. Do not launch a second, unless this start printed `listener: replace` for that same id and you have not launched it yet. Launch that one id once.
+Set runState to running with that command, tell Herald, then start the one channel listener. Refuse if there is no beam on the checkout and main has none. If start prints `refuse:` and names missing MCP tools, do not start and do not claim. Post that list (Herald already has it). `scan.py start --force` starts anyway. A local runner does not block. `scan.py start` prints the resume hint and runs `beam.py watchdog`. Follow it. Do not dispatch when it says the beam is missing or paused. `watchdog: skipped` means do not recover Shuttles and do not start a listener. A later claim runs the same check unless this start was `--force`.
+
+One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The listener is a Subagent of the parent. It shares this session and this checkout. It is not a separate Agent. Do not start a separate Agent. Each ticket is a new Agent. One listener Subagent per parent turn. If this turn ends, the subagent ends with it. The next tick starts one again.
+
+Pick one `--turn` id for this parent turn and keep it. Claim, then start the subagent only when the reply is `listener: started`.
+
+```bash
+python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <new-id> --turn <turn>
+```
+
+`listener: started <id>` means you claimed the slot. Start exactly one `warp-listen` Subagent with that id. It reads Slack and Teams, acknowledges commands, and returns them. You apply them. It does not merge and does not implement tickets.
+
+`listener: already running <id>` means this turn already started the listener. Do not start a second. A running flag left by the previous turn does not block this tick: a new `--turn` takes the slot (`listener: started`).
+
+`listener: subagent` from the watchdog is the same instruction. It does not reserve an id. Do not launch a separate Agent because of it.
 
 For each `shuttle: replace <id>` line, start exactly one new Agent for that ticket (`checkout.py launch`, then `IMPLEMENT <id>` on that branch). Do not start a Subagent. Do not use the Task tool. Keep its branch, pull request, `jira.startedAt`, and locks. Do not queue a duplicate. Do not start it on a fresh clone of main. `shuttle: alarm <id> worker-died` means the recovery cap is reached. Do not start another. Herald posts `<id> worker died. A new Shuttle started.` once.
 
-Then run one Warp tick. That tick runs the watchdog again. A second tick must not launch a second replacement. Plugin hooks do not run on cloud runners. The listener is not a hook. It must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it.
+Then run one Warp tick. That tick runs the watchdog again. A second claim with this same `--turn` must not start a second listener. Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it.
+
+At the end of the tick, `scripts/session_note.py --type session-stop` clears the listener flag and commits the live beam, journal, and board onto main, then pushes when origin exists. `.warp/config.yaml` is not committed. Tokens, cost, API keys, and webhook URLs are stripped.

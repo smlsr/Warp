@@ -797,6 +797,12 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
             print(inbound.release(beam_path))
         except Exception as e:
             print("listener: not stopped (%s)" % e)
+        try:
+            import update_state
+
+            update_state.update_state(beam_path)
+        except Exception as e:
+            print("state: not synced (%s)" % e)
     print(state)
     if state == "running":
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
@@ -1036,7 +1042,10 @@ def main() -> None:
     elif args.cmd == "start":
         import prompt_gate
         import resume_hint
+        import state_commit
 
+        for line in state_commit.load_main_beam(Path(args.beam)):
+            print(line)
         gate = prompt_gate.gate_start(Path(args.beam), force=bool(getattr(args, "force", False)))
         if gate != 0:
             sys.exit(gate)
@@ -1044,7 +1053,10 @@ def main() -> None:
         set_run(Path(args.beam), "running", args.reason)
     elif args.cmd == "resume":
         import resume_hint
+        import state_commit
 
+        for line in state_commit.load_main_beam(Path(args.beam)):
+            print(line)
         resume_hint.print_hint(Path(args.beam))
         set_run(Path(args.beam), "running", args.reason)
     elif args.cmd == "pause":

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -562,3 +563,129 @@ class MergeTests(unittest.TestCase):
         self.assertIn("coding", state.stdout)
         product = git(repo, "show", "main:f.txt")
         self.assertIn("ticket", product.stdout)
+
+    def test_merge_commit_lands_the_live_beam_not_the_branch_copy(self):
+        import provider
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "warp@example.com")
+        git(repo, "config", "user.name", "Warp")
+        (repo / "f.txt").write_text("base\n")
+        warp = repo / ".warp"
+        warp.mkdir()
+        (warp / "beam.json").write_text(json.dumps({"marker": "OLD-MAIN", "tickets": {}}) + "\n")
+        git(repo, "add", "f.txt", ".warp/beam.json")
+        git(repo, "commit", "-q", "-m", "base")
+        git(repo, "checkout", "-q", "-b", "warp/T-1")
+        (repo / "f.txt").write_text("base\nticket\n")
+        (warp / "beam.json").write_text(json.dumps({"marker": "STALE-BEAM", "tickets": {}}) + "\n")
+        ticket = warp / "tickets" / "T-1"
+        ticket.mkdir(parents=True)
+        (ticket / "state.json").write_text('{"id": "T-1", "state": "coding"}\n')
+        git(repo, "add", "f.txt", ".warp/beam.json", ".warp/tickets")
+        git(repo, "commit", "-q", "-m", "ticket")
+        git(repo, "checkout", "-q", "main")
+        live = {
+            "marker": "LIVE-BEAM",
+            "token": "super-secret-token",
+            "apiKey": "super-secret-token",
+            "tickets": {"T-1": {"id": "T-1", "status": "review"}},
+        }
+        (warp / "beam.json").write_text(json.dumps(live, indent=2) + "\n")
+        (warp / "journal.jsonl").write_text(
+            json.dumps(
+                {
+                    "type": "note",
+                    "token": "super-secret-token",
+                    "msg": "ping https://hooks.slack.com/services/T00/B00/secret",
+                }
+            )
+            + "\n"
+        )
+        (warp / "BOARD.md").write_text("board https://hooks.slack.com/services/T00/B00/secret\n")
+        (warp / "config.yaml").write_text("token: super-secret-token\n")
+        ok, detail = provider.merge_local(repo, "warp/T-1", "main", "merge T-1")
+        self.assertTrue(ok, detail)
+        merged = git(repo, "show", "main:.warp/beam.json")
+        self.assertEqual(merged.returncode, 0, merged.stderr)
+        self.assertIn("LIVE-BEAM", merged.stdout)
+        self.assertNotIn("STALE-BEAM", merged.stdout)
+        self.assertNotIn("OLD-MAIN", merged.stdout)
+        self.assertNotIn("super-secret-token", merged.stdout)
+        journal = git(repo, "show", "main:.warp/journal.jsonl")
+        self.assertEqual(journal.returncode, 0, journal.stderr)
+        self.assertNotIn("super-secret-token", journal.stdout)
+        self.assertIn("[redacted]", journal.stdout)
+        board = git(repo, "show", "main:.warp/BOARD.md")
+        self.assertIn("[redacted]", board.stdout)
+        self.assertNotIn("hooks.slack.com", board.stdout)
+        hidden = git(repo, "cat-file", "-e", "main:.warp/config.yaml")
+        self.assertNotEqual(hidden.returncode, 0)
+        product = git(repo, "show", "main:f.txt")
+        self.assertIn("ticket", product.stdout)
+        state = git(repo, "show", "main:.warp/tickets/T-1/state.json")
+        self.assertIn("coding", state.stdout)
+
+
+class FreshCheckoutTests(GitBeam):
+    def test_start_and_resume_load_main_then_ticket_folders(self):
+        import session_note
+
+        row = self.ticket(status="claimed")
+        self.write_beam({"T-1": row})
+        data = json.loads(self.beam_path.read_text())
+        data["marker"] = "LIVE-BEAM"
+        data["token"] = "super-secret-token"
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        warp = self.repo / ".warp"
+        (warp / "config.yaml").write_text("token: super-secret-token\n")
+        git(self.repo, "config", "user.email", "warp@example.com")
+        git(self.repo, "config", "user.name", "Warp")
+        noted = session_note.note(warp, "session-stop")
+        self.assertEqual(noted, "noted")
+        published = git(self.repo, "show", "origin/main:.warp/beam.json")
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertIn("LIVE-BEAM", published.stdout)
+        self.assertNotIn("super-secret-token", published.stdout)
+        hidden = git(self.repo, "cat-file", "-e", "origin/main:.warp/config.yaml")
+        self.assertNotEqual(hidden.returncode, 0)
+        fresh_at = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state = {
+            "id": "T-1",
+            "state": "coding",
+            "startedAt": fresh_at,
+            "updatedAt": fresh_at,
+            "heartbeatAt": fresh_at,
+        }
+        stale = {"tickets": {"T-1": {"id": "T-1", "status": "merged", "marker": "STALE-BEAM"}}}
+        self.commit_branch(
+            "warp/T-1",
+            {
+                ".warp/tickets/T-1/state.json": json.dumps(state, indent=2) + "\n",
+                ".warp/beam.json": json.dumps(stale, indent=2) + "\n",
+            },
+        )
+        for command in ("start", "resume"):
+            checkout = self.tmp / command
+            cloned = git(self.tmp, "clone", "--branch", "main", str(self.tmp / "origin.git"), str(checkout))
+            self.assertEqual(cloned.returncode, 0, cloned.stderr)
+            git(checkout, "config", "user.email", "warp@example.com")
+            git(checkout, "config", "user.name", "Warp")
+            self.assertTrue((checkout / ".warp" / "beam.json").is_file(), cloned.stderr)
+            (checkout / ".warp" / "beam.json").unlink()
+            args = ["scan.py", command, "--beam", ".warp/beam.json"]
+            if command == "start":
+                args.append("--force")
+            started = run(checkout, *args)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            self.assertIn("beam: loaded from origin/main", started.stdout)
+            loaded = json.loads((checkout / ".warp" / "beam.json").read_text())
+            self.assertEqual(loaded["marker"], "LIVE-BEAM")
+            self.assertNotIn("super-secret-token", json.dumps(loaded))
+            self.assertEqual(loaded["tickets"]["T-1"]["status"], "coding")
+            self.assertNotIn("STALE-BEAM", (checkout / ".warp" / "beam.json").read_text())
+            self.assertNotIn("marker", loaded["tickets"]["T-1"])

@@ -32,19 +32,20 @@ python3 <plugin>/scripts/scan.py stop --beam .warp/beam.json --reason "end of da
 
 ## Listener
 
-One `warp-listen` Agent for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. Ticket workers are not Subagents of that listener. `/warp-start` and `/warp-resume` launch it when `inbound.py claim` prints `listener: started`, or when `beam.py watchdog` prints `listener: replace <id>` for a dead listener. `listener: already running` or `listener: alive` means do not launch a second. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. This tick does not read Slack. It launches a listener only for that one `listener: replace` line. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
+The listener is a Subagent of the parent; each ticket is a new Agent. One `warp-listen` Subagent for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. It shares this session and this checkout. It is not a separate Agent. Do not start a separate Agent. It reads Slack and Teams, acknowledges `warp:` commands, and returns them in this turn. You apply proceed, pause, stop, and retry with `inbound.py apply` and patch the live beam. It does not implement tickets, does not merge, and does not write product code.
+
+One Subagent per parent turn. Claim with one `--turn` id. `listener: started` means start it. `listener: already running` means this turn already started it: do not start a second. A running flag left by the previous turn does not block the next tick. A new `--turn` takes the slot. `/warp-pause` and `/warp-stop` run `inbound.py release`. The listener must not keep reading while paused or stopped. If this turn ends, the subagent ends with it. The next tick starts one again. Plugin hooks do not run on cloud runners. A dead turn does not notify Warp. Cursor does not restart it.
 
 ## Heartbeat and watchdog
 
 `beam.py watchdog` runs on this tick, before `ready()`. `scan.py start` and `scan.py resume` run it too. It does not look at a process table. First it fetches each in-flight ticket branch and reads only `.warp/tickets/<id>/`. It patches the live beam from `state.json` and `log.jsonl`. It does not copy the branch beam. A Shuttle writes that directory (`ticket_state.py append --push`) at claim, at each status change, and at least every 5 minutes while the turn is alive. The listener writes the live beam with `inbound.py heartbeat` on every read. Both stay inside `staleMinutes` (default 15). Paused and stopped runs do not fetch and do not relaunch.
 
-A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than `staleMinutes`. A fresh heartbeat (`alive` or `fresh`) is left alone. `watchdog: skipped` means the run is paused or stopped: do not recover and do not start a replacement.
+A Shuttle is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim is older than `staleMinutes`. A fresh Shuttle heartbeat (`alive` or `fresh`) is left alone. `watchdog: skipped` means the run is paused or stopped: do not recover and do not start a replacement. `listener: subagent` means start one listener Subagent this turn if claim prints `started`. The watchdog does not reserve a listener id.
 
-- `listener: replace <id>`: the stale `running` flag is already cleared and this id owns the slot. Launch exactly one `warp-listen` agent with that id. Do not claim a different id. Herald posts one line: `Listener died. A new one started.`
 - `shuttle: replace <id>`: status is `recovering`. Branch, pull request, `jira.startedAt`, and locks stayed. Dispatch exactly one Shuttle for that same ticket. Do not queue a duplicate and do not release the lock. Herald posts one line: `<id> worker died. A new Shuttle started.`
 - `shuttle: alarm <id> worker-died`: `maxRecoveries` (default 3) is spent. Do not start another.
 
-Lock-escape repair is the listener's job, not this tick. Do not launch a repair Shuttle from `/warp`. The listener runs `alarm_repair.py next` and widens that ticket's locks to the paths that escaped.
+Lock-escape repair is this tick's job. Run `alarm_repair.py next` and widen that ticket's locks to the paths that escaped. Start one new Agent for a repair the same way you start any ticket. Do not start a Subagent. Do not use the Task tool. The listener does not start it.
 
 A second tick must not launch a second replacement for the same worker. The first write reserved it.
 
@@ -72,6 +73,7 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
 6. Claim each id, run `checkout.py launch`, and start one new Agent on that branch. Do not start a Subagent. Do not use the Task tool. Do not start it on a fresh clone of main. Then `beam.py heartbeat` for that id. Herald posts each claim.
 7. `scan.py status` and `beam.py board`.
 8. Herald posts the tick digest: done, working, left, next ready.
+9. `session_note.py --type session-stop` clears the listener and commits the live beam, journal, and board onto main, then pushes. Close the window, open a new one, `/warp-start`: state comes from main plus ticket folders. On every merge, that same live beam is what lands on main. The ticket branch's beam is dropped.
 
 ## Status file
 

@@ -87,23 +87,40 @@ def status_line(data: dict) -> str:
     return "listener: stopped"
 
 
-def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None) -> str:
-    """Take the one slot, or refuse when another id already owns it."""
+def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None, turn: Optional[str] = None) -> str:
+    """Take the listener slot for this parent turn.
+
+    The same `--turn` while the slot is running prints `already running` and
+    does not start a second subagent. A new turn, or a new id with no turn,
+    takes the slot even when the previous turn left `state` running. That
+    flag must not block the next tick. The same id with no turn is idempotent.
+    """
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return "listener: no beam at %s" % beam_path
     if not agent_id or not str(agent_id).strip():
         return "listener: claim needs --agent-id"
     agent_id = str(agent_id).strip()
+    turn_id = str(turn).strip() if turn else ""
     data = beam.load_json(beam_path)
     cur = listener_of(data)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    stored_turn = str(raw.get("turn") or "")
     if cur["state"] == "running" and cur["agentId"]:
-        if pid and cur["agentId"] == agent_id and str(cur.get("pid") or "") != str(pid):
-            data["listener"]["pid"] = str(pid)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-        return "listener: already running %s" % cur["agentId"]
+        same_turn = bool(turn_id) and stored_turn == turn_id
+        same_id = (not turn_id) and cur["agentId"] == agent_id
+        if same_turn or same_id:
+            if pid and cur["agentId"] == agent_id and str(cur.get("pid") or "") != str(pid):
+                raw["pid"] = str(pid)
+                data["listener"] = raw
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return "listener: already running %s" % cur["agentId"]
+        beam.journal(
+            beam_path,
+            {"type": "listener-stop", "agentId": cur["agentId"], "reason": "turn-ended"},
+        )
     now = beam.utcnow()
-    data["listener"] = {
+    record = {
         "state": "running",
         "agentId": agent_id,
         "pid": str(pid) if pid else None,
@@ -111,8 +128,11 @@ def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None) -> str:
         "stoppedAt": None,
         "lastSeenAt": now,
     }
+    if turn_id:
+        record["turn"] = turn_id
+    data["listener"] = record
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    beam.journal(beam_path, {"type": "listener-start", "agentId": agent_id, "pid": data["listener"]["pid"]})
+    beam.journal(beam_path, {"type": "listener-start", "agentId": agent_id, "pid": record["pid"], "turn": turn_id or None})
     return "listener: started %s" % agent_id
 
 
@@ -373,7 +393,7 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
         if action in {"pause", "stop"}:
             extra = "\nlistener: do not keep reading while paused or stopped"
         if action in {"resume", "start"}:
-            extra = "\nlistener: stay the one listener. Do not launch a second."
+            extra = "\nlistener: the next parent tick starts one listener Subagent. Do not start a second in this turn."
         return "action: %s%s" % (action, extra)
     if action == "retry":
         return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"]))
@@ -387,9 +407,7 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
     return "action: none"
 
 
-def handle(beam_path: Path, text: str, by: Optional[str] = None, source: str = "slack") -> dict:
-    """Ack first, then apply. A bad id acks and does not merge any other ticket."""
-    beam_path = Path(beam_path)
+def _decide(beam_path: Path, text: str) -> dict:
     parsed = parse(text)
     if parsed is None:
         return {"ignored": True, "code": 0, "ack": None, "action": "none"}
@@ -399,8 +417,68 @@ def handle(beam_path: Path, text: str, by: Optional[str] = None, source: str = "
     data = beam.load_json(beam_path)
     cfg = jira_sync.settings(beam_path, data)
     decision = plan_command(data, parsed, cfg)
-    root = _root(beam_path)
-    write_ack(root, decision["ack"])
+    return {"ignored": False, "code": 0, "parsed": parsed, "decision": decision}
+
+
+def _pack(result: dict, decision: dict, detail: str, source: str) -> dict:
+    return {
+        "ignored": False,
+        "code": result.get("code") or 0,
+        "ack": decision.get("ack"),
+        "verb": decision.get("verb"),
+        "ticket": decision.get("ticket"),
+        "action": decision.get("action"),
+        "ok": decision.get("ok"),
+        "detail": detail,
+        "source": source,
+    }
+
+
+def accept(beam_path: Path, text: str, by: Optional[str] = None, source: str = "slack") -> dict:
+    """Write the ack and return the command. Do not apply it and do not merge."""
+    beam_path = Path(beam_path)
+    decided = _decide(beam_path, text)
+    if decided.get("ignored") or decided.get("code"):
+        return decided
+    parsed = decided["parsed"]
+    decision = decided["decision"]
+    write_ack(_root(beam_path), decision["ack"])
+    beam.journal(
+        beam_path,
+        {
+            "type": "ack",
+            "command": parsed.get("command"),
+            "verb": parsed.get("verb"),
+            "ack": decision["ack"],
+            "by": by,
+            "source": source,
+            "ticket": decision.get("ticket"),
+        },
+    )
+    detail = "return: %s\napply: parent" % (parsed.get("command") or "")
+    return _pack(decided, decision, detail, source)
+
+
+def apply_command(beam_path: Path, text: str, by: Optional[str] = None, source: str = "parent") -> dict:
+    """Apply a command the listener returned. Do not write another ack."""
+    beam_path = Path(beam_path)
+    decided = _decide(beam_path, text)
+    if decided.get("ignored") or decided.get("code"):
+        return decided
+    decision = decided["decision"]
+    detail = _apply(beam_path, decision, by) if decision.get("action") != "none" else "action: none"
+    return _pack(decided, decision, detail, source)
+
+
+def handle(beam_path: Path, text: str, by: Optional[str] = None, source: str = "slack") -> dict:
+    """Ack first, then apply. A bad id acks and does not merge any other ticket."""
+    beam_path = Path(beam_path)
+    decided = _decide(beam_path, text)
+    if decided.get("ignored") or decided.get("code"):
+        return decided
+    parsed = decided["parsed"]
+    decision = decided["decision"]
+    write_ack(_root(beam_path), decision["ack"])
     beam.journal(
         beam_path,
         {
@@ -414,17 +492,7 @@ def handle(beam_path: Path, text: str, by: Optional[str] = None, source: str = "
         },
     )
     detail = _apply(beam_path, decision, by) if decision.get("action") != "none" else "action: none"
-    return {
-        "ignored": False,
-        "code": 0,
-        "ack": decision["ack"],
-        "verb": decision.get("verb"),
-        "ticket": decision.get("ticket"),
-        "action": decision.get("action"),
-        "ok": decision.get("ok"),
-        "detail": detail,
-        "source": source,
-    }
+    return _pack(decided, decision, detail, source)
 
 
 def _pending(beam_path: Path) -> Path:
@@ -508,12 +576,16 @@ examples:
   python3 scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --by shawn --message-id 1 --source slack
   python3 scripts/inbound.py drain --beam .warp/beam.json
 
-claim is idempotent. `listener: already running <id>` means do not launch a second
-listener. release sets listener.state to stopped. The listener must not keep
-reading while paused or stopped. One listener for the beam, not one per ticket.
-heartbeat writes listener.lastSeenAt and the agent id. Call it at claim, on
-each pass of the read loop, and whenever the turn is still alive. A dead turn
-does not notify Warp. beam.py watchdog reads that timestamp.
+claim takes the slot for this parent turn. Pass `--turn` once per parent
+turn. `listener: already running <id>` means this turn already started its
+one listener Subagent: do not start a second. A new `--turn` takes the slot
+even when the previous turn left state running. That flag must not block the
+next tick. release sets listener.state to stopped. The listener must not keep
+reading while paused or stopped. One listener Subagent for the beam, not one
+per ticket, and not a separate Agent.
+accept writes the ack and prints `return:` for the parent. It does not apply
+the command. apply runs proceed, pause, stop, retry, and the other verbs.
+The parent applies. The listener does not merge.
 
 handle writes .warp/inbound-ack.json before it changes the beam. Herald posts
 that ack, then the action runs. A proceed id that is not awaiting approval
@@ -535,6 +607,7 @@ def main(argv: Optional[list] = None) -> int:
     pc.add_argument("--beam", default=".warp/beam.json")
     pc.add_argument("--agent-id", required=True)
     pc.add_argument("--pid", default=None)
+    pc.add_argument("--turn", default=None, help="parent turn id; a new id takes a stale running slot")
 
     pr = sub.add_parser("release")
     pr.add_argument("--beam", default=".warp/beam.json")
@@ -555,6 +628,18 @@ def main(argv: Optional[list] = None) -> int:
     ph.add_argument("--by", default=None)
     ph.add_argument("--source", default="slack")
 
+    pa = sub.add_parser("accept")
+    pa.add_argument("--beam", default=".warp/beam.json")
+    pa.add_argument("--text", required=True)
+    pa.add_argument("--by", default=None)
+    pa.add_argument("--source", default="slack")
+
+    py = sub.add_parser("apply")
+    py.add_argument("--beam", default=".warp/beam.json")
+    py.add_argument("--text", required=True)
+    py.add_argument("--by", default=None)
+    py.add_argument("--source", default="parent")
+
     pe = sub.add_parser("enqueue")
     pe.add_argument("--beam", default=".warp/beam.json")
     pe.add_argument("--text", required=True)
@@ -570,7 +655,7 @@ def main(argv: Optional[list] = None) -> int:
     args = parser.parse_args(usage.normalize_argv(argv))
     beam_path = Path(getattr(args, "beam", ".warp/beam.json"))
     if args.cmd == "claim":
-        line = claim(beam_path, args.agent_id, args.pid)
+        line = claim(beam_path, args.agent_id, args.pid, turn=args.turn)
         print(line)
         return 1 if line.startswith("listener: no beam") or line.startswith("listener: claim needs") else 0
     if args.cmd == "release":
@@ -593,6 +678,14 @@ def main(argv: Optional[list] = None) -> int:
         return 0 if parsed is not None else 0
     if args.cmd == "handle":
         result = handle(beam_path, args.text, by=args.by, source=args.source)
+        _print_result(result)
+        return result.get("code") or 0
+    if args.cmd == "accept":
+        result = accept(beam_path, args.text, by=args.by, source=args.source)
+        _print_result(result)
+        return result.get("code") or 0
+    if args.cmd == "apply":
+        result = apply_command(beam_path, args.text, by=args.by, source=args.source)
         _print_result(result)
         return result.get("code") or 0
     if args.cmd == "enqueue":

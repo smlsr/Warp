@@ -429,6 +429,122 @@ def publish_ticket(
     return 0
 
 
+def push_ref(root: Path, branch: str, remote: str = "origin") -> int:
+    """Push `branch` when `remote` exists. No remote is not an error."""
+    if remote not in _remote_names(root):
+        return 0
+    pushed = _git(root, "push", remote, "refs/heads/%s:refs/heads/%s" % (branch, branch))
+    if pushed.returncode != 0:
+        print("state: push failed")
+        print((pushed.stderr or pushed.stdout).strip())
+        return 1
+    print("state: pushed %s/%s" % (remote, branch))
+    return 0
+
+
+def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = True) -> int:
+    """Commit the live beam, journal, and board onto the base branch and push.
+
+    Secrets are stripped. `.warp/config.yaml` is not committed. A checkout that
+    is not a git repo does nothing. The parent calls this at the end of a tick
+    and after a merge so a fresh clone of main has the latest beam.
+    """
+    root = Path(root).resolve()
+    if _git(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return 0
+    beam_path = Path(beam_name)
+    if not beam_path.is_absolute():
+        beam_path = root / beam_path
+    if not beam_path.is_file():
+        return 0
+    try:
+        data = json.loads(beam_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        print("state: beam is not json")
+        return 1
+    config = data.get("config") if isinstance(data.get("config"), dict) else {}
+    base = _base_name(root, config)
+    head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    current = head.stdout.strip()
+    if head.returncode == 0 and current == base:
+        code = commit_state(root, str(beam_path), base)
+    else:
+        payload = state_payload(beam_path.parent)
+        if ".warp/beam.json" not in payload:
+            print("state: nothing to commit")
+            return 0
+        code = _commit_files_on_branch(root, base, payload, "Warp state: beam, journal, and board")
+        if code == 0:
+            print("state: committed on %s" % base)
+    if code != 0 or not push:
+        return code
+    return push_ref(root, base)
+
+
+def load_main_beam(beam_path: Path, replace: bool = False) -> list:
+    """Fetch the base branch and load its beam when the local one is missing or empty.
+
+    A fresh checkout must not start from an empty beam when main has one.
+    A local beam that already has tickets is kept unless `replace` is true.
+    `/warp-update-state` replaces, then puts local pause, stop, and claims back.
+    The caller patches in-flight tickets from each `.warp/tickets/<id>/` directory.
+    """
+    beam_path = Path(beam_path)
+    if not beam_path.is_absolute():
+        beam_path = Path.cwd() / beam_path
+    root = beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent
+    if _git(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return []
+    lines = []
+    local = None
+    if beam_path.is_file():
+        try:
+            local = json.loads(beam_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            local = None
+    config = {}
+    if isinstance(local, dict) and isinstance(local.get("config"), dict):
+        config = local["config"]
+    base = _base_name(root, config)
+    ref = base
+    if "origin" in _remote_names(root):
+        fetched = _git(root, "fetch", "origin", base)
+        if fetched.returncode != 0:
+            lines.append("beam: fetch failed")
+        else:
+            lines.append("beam: fetched origin/%s" % base)
+            remote_ref = "refs/remotes/origin/%s" % base
+            if _ref_exists(root, remote_ref):
+                ref = "origin/%s" % base
+    shown = _git(root, "show", "%s:.warp/beam.json" % ref)
+    if shown.returncode != 0 or not shown.stdout.strip():
+        lines.append("beam: %s has no beam" % ref)
+        return lines
+    try:
+        remote = json.loads(shown.stdout)
+    except json.JSONDecodeError:
+        lines.append("beam: %s beam is not json" % ref)
+        return lines
+    if not isinstance(remote, dict):
+        lines.append("beam: %s beam is not json" % ref)
+        return lines
+    remote_tickets = remote.get("tickets") if isinstance(remote.get("tickets"), dict) else {}
+    local_tickets = {}
+    if isinstance(local, dict) and isinstance(local.get("tickets"), dict):
+        local_tickets = local["tickets"]
+    if not replace:
+        if beam_path.is_file() and local_tickets:
+            lines.append("beam: kept local")
+            return lines
+        if beam_path.is_file() and not remote_tickets:
+            lines.append("beam: kept local")
+            return lines
+    beam_path.parent.mkdir(parents=True, exist_ok=True)
+    beam_path.write_text(json.dumps(remote, indent=2) + "\n")
+    lines.append("beam: loaded from %s" % ref)
+    return lines
+
+
 def commit_state(root: Path, beam_name: str = ".warp/beam.json", base: str = "") -> int:
     root = root.resolve()
     beam_path = Path(beam_name)

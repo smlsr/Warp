@@ -1,7 +1,7 @@
 {
   "name": "warp",
   "displayName": "Warp",
-  "version": "1.4.11",
+  "version": "1.4.12",
   "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, and commit the beam without secrets.",
   "author": { "name": "HumanifyOS" },
   "publisher": "HumanifyOS",
@@ -43,6 +43,7 @@
     "./skills/warp-status",
     "./skills/warp-status-post",
     "./skills/warp-uninstall",
+    "./skills/warp-update-state",
     "./skills/warp-upgrade",
     "./skills/warp-version"
   ],
@@ -69,6 +70,7 @@
     "./commands/warp-status.md",
     "./commands/warp-stop.md",
     "./commands/warp-uninstall.md",
+    "./commands/warp-update-state.md",
     "./commands/warp-upgrade.md",
     "./commands/warp-version.md",
     "./commands/warp.md"

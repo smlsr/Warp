@@ -121,13 +121,15 @@ class CloudHookTests(unittest.TestCase):
         self.assertEqual(stopped.returncode, 0, stopped.stderr + stopped.stdout)
         self.assertIn("noted session-stop", stopped.stdout)
         types = [json.loads(line)["type"] for line in (self.warp / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(types[-2:], ["stopped", "session-stop"])
+        self.assertEqual(types[-3:], ["stopped", "session-stop", "update-state"])
+        self.assertIn("commit: none", stopped.stdout)
 
         paused = run("beam.py", "pause", "--beam", str(path), "--reason", "hold", cwd=self.repo)
         self.assertEqual(paused.returncode, 0, paused.stderr + paused.stdout)
         self.assertIn("noted session-stop", paused.stdout)
         types = [json.loads(line)["type"] for line in (self.warp / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(types[-2:], ["pause", "session-stop"])
+        self.assertEqual(types[-3:], ["pause", "session-stop", "update-state"])
+        self.assertIn("commit: none", paused.stdout)
 
         resumed = run("beam.py", "resume", "--beam", str(path), cwd=self.repo)
         self.assertEqual(resumed.returncode, 0, resumed.stderr + resumed.stdout)
