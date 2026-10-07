@@ -11,6 +11,8 @@ and the beam are not touched.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 Prints `Warp vX.Y.Z` and tells you to reload Cursor. Safe to run again.
+Also writes `.cursor/commands/warp-upgrade.md` from `commands/warp-upgrade.md`
+when the source has that file, so a reload lists `/warp-upgrade`.
 """
 
 from __future__ import annotations
@@ -30,6 +32,34 @@ HELP = __doc__
 PLUGIN_REL = Path(".cursor/plugins/warp")
 COPY_IGNORE = {".git", ".cursor", ".warp", "__pycache__", "node_modules"}
 KEEP_STATE = ("config.yaml", "beam.json")
+PLUGIN_COMMAND = Path("commands/warp-upgrade.md")
+PROJECT_COMMAND = Path(".cursor/commands/warp-upgrade.md")
+
+
+def install_project_command(root: Path, source: Path, dry: bool = False) -> str:
+    """Copy commands/warp-upgrade.md to .cursor/commands/warp-upgrade.md.
+
+    Cursor's plugin command index keeps paths from when that index was
+    published and does not admit commands/warp-upgrade.md. A project command
+    at .cursor/commands/ is what a reload lists. Returns wrote, kept, or missing.
+    """
+    src = source / PLUGIN_COMMAND
+    if not src.is_file():
+        return "missing"
+    dest = root / PROJECT_COMMAND
+    data = src.read_bytes()
+    if dest.is_file() and dest.read_bytes() == data:
+        return "kept"
+    if dry:
+        return "wrote"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return "wrote"
+
+
+def _report_project_command(root: Path, source: Path) -> None:
+    if install_project_command(root, source) in ("wrote", "kept"):
+        print("/warp-upgrade -> .cursor/commands/warp-upgrade.md")
 
 
 def _git(root: Path, *args: str, timeout: int = 20) -> subprocess.CompletedProcess:
@@ -132,10 +162,12 @@ def upgrade(root: Path, source: Optional[Path] = None) -> int:
     if tree is None:
         print("fetch failed: %s" % err)
         print("keeping the installed copy")
+        _report_project_command(root, source)
         return 0
     cleanup = tree != source
     try:
         if plugin.resolve() == tree.resolve():
+            _report_project_command(root, tree)
             landed = version.version_of(plugin) or version.version_of(source)
             print(version.label(landed))
             print("Reload Cursor (Developer: Reload Window).")
@@ -143,6 +175,7 @@ def upgrade(root: Path, source: Optional[Path] = None) -> int:
         plugin.parent.mkdir(parents=True, exist_ok=True)
         plugin.mkdir(parents=True, exist_ok=True)
         copy_tree(tree, plugin)
+        _report_project_command(root, tree)
     finally:
         if cleanup:
             shutil.rmtree(tree, ignore_errors=True)

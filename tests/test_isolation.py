@@ -562,6 +562,22 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn("keeping the installed copy", proc.stdout)
         self.assertEqual(installed.read_text(), before)
 
+    def test_upgrade_writes_the_project_slash_command(self):
+        command = self.source / "commands"
+        command.mkdir()
+        body = "---\nname: warp-upgrade\ndescription: Replace the installed Warp plugin.\n---\n\nRun it.\n"
+        (command / "warp-upgrade.md").write_text(body)
+        proc = run("upgrade.py", "--root", str(self.repo), "--source", str(self.source), cwd=self.repo)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("/warp-upgrade -> .cursor/commands/warp-upgrade.md", proc.stdout)
+        written = self.repo / ".cursor" / "commands" / "warp-upgrade.md"
+        self.assertEqual(written.read_text(), body)
+        plugin_copy = self.repo / ".cursor" / "plugins" / "warp" / "commands" / "warp-upgrade.md"
+        self.assertEqual(plugin_copy.read_text(), body)
+        again = run("upgrade.py", "--root", str(self.repo), "--source", str(self.source), cwd=self.repo)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(written.read_text(), body)
+
     def test_help(self):
         proc = run("upgrade.py", "?", cwd=self.repo)
         self.assertEqual(proc.returncode, 0, proc.stderr)

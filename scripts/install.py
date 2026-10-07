@@ -242,6 +242,14 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
         else:
             steps.append(("skip", f"{PLUGIN_REL}/ already has every plugin file"))
 
+    import upgrade
+
+    placed = upgrade.install_project_command(root, PLUGIN_ROOT, dry)
+    if placed == "wrote":
+        steps.append(("done", "wrote .cursor/commands/warp-upgrade.md"))
+    elif placed == "kept":
+        steps.append(("skip", ".cursor/commands/warp-upgrade.md already matches"))
+
     cfg = state / "config.yaml"
     if cfg.exists():
         text = cfg.read_text()
@@ -362,6 +370,9 @@ def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
     for label, p in (("plugin copy", plugin), ("Warp state", state)):
         if p.is_symlink() or p.exists():
             targets.append((label, p))
+    slash = root / ".cursor" / "commands" / "warp-upgrade.md"
+    if slash.is_file() and slash.read_text(errors="replace").startswith("---\nname: warp-upgrade\n"):
+        targets.append(("slash command", slash))
 
     block_found = False
     gi_note = None
@@ -431,6 +442,10 @@ def uninstall(root: Path, remove_gitignore: bool, yes: bool) -> int:
             p.unlink()
         else:
             shutil.rmtree(p)
+    try:
+        (root / ".cursor" / "commands").rmdir()
+    except OSError:
+        pass
     for d in (root / ".cursor" / "plugins", root / ".cursor"):
         try:
             d.rmdir()
