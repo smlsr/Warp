@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.11
+
+- 1.4.11 version bump, no functional changes.
+
 ## 1.4.10
 
 - A ticket Agent writes only `.warp/tickets/<id>/`. `state.json` holds the current state, timestamps (started, last update, heartbeat), pull request, check result, error, alarm reason, and escaped paths. `log.jsonl` is an append-only line per event. The Agent commits and pushes that directory when the state changes and on a heartbeat. It does not commit updates to `.warp/beam.json`. The launch snapshot stays read-only.
