@@ -14,6 +14,12 @@ claims skip this check.
 Missing tools are printed on stdout and handed to Herald.
 Jira transitions require transitionJiraIssue and addOrEditJiraIssueComment.
 Slack notify requires slack_send_message. --force starts anyway.
+When subagentVm is true on a cloud runner, a start with no cloud environment
+(.cursor/environment.json or cloudSnapshot) warns and refuses. --force allows
+that start and still warns. runner: local forces subagentVm false and launch
+worktree, skips that check, and logs one note. Start prints the effective
+values after that override. Cloud subagents use the MCP servers configured
+at cursor.com/agents, not the local session's.
 --cursor-home stands in for ~/.cursor. A local runner does not block.
 """
 
@@ -161,6 +167,47 @@ def missing_tools(config: dict, entries, env: Optional[dict] = None, force: bool
     return [name for name in required_tools(config) if name not in have]
 
 
+ENV_WARN = (
+    "warn: no cloud environment (.cursor/environment.json or a configured snapshot). "
+    "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's."
+)
+
+
+def has_cloud_environment(root: Path, config: dict) -> bool:
+    """A repo environment file, or a snapshot id in config, is enough to start."""
+    path = Path(root) / ".cursor" / "environment.json"
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            return True
+    except OSError:
+        pass
+    return bool(str((config or {}).get("cloudSnapshot") or "").strip())
+
+
+def environment_blocked(beam: dict, beam_path: Path, env: Optional[dict] = None) -> bool:
+    """True when a cloud run asked for VM subagents and has no environment.
+
+    A force-started beam is not blocked. A local runner is not blocked.
+    subagentVm false is not blocked.
+    """
+    if beam.get("promptForced"):
+        return False
+    if (beam.get("runState") or "") != "running":
+        return False
+    import orchestrator
+
+    root = beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent
+    cfg = effective_config(beam, root)
+    if not orchestrator.subagent_vm(cfg, env) or not cloud_run(cfg, env):
+        return False
+    return not has_cloud_environment(root, cfg)
+
+
+def warn_environment() -> None:
+    print(ENV_WARN)
+    print("refuse: no cloud environment")
+
+
 def announce(root: Path, missing: list) -> None:
     text = "Cloud run would prompt. Missing MCP allow-list tools: %s" % ", ".join(missing)
     print("refuse: " + text)
@@ -194,23 +241,37 @@ def gate_start(beam_path: Path, force: bool = False, env: Optional[dict] = None,
         return 2
     beam = json.loads(beam_path.read_text())
     root = beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent
+    cfg = effective_config(beam, root)
+    gap = False
+    import orchestrator
+
+    note = orchestrator.override_note(cfg, env)
+    if note:
+        print(note)
+    print(orchestrator.effective_text(cfg, env))
+    if orchestrator.subagent_vm(cfg, env) and cloud_run(cfg, env) and not has_cloud_environment(root, cfg):
+        gap = True
     if force:
         beam["promptForced"] = True
         import beam as beam_mod
 
         beam_mod.atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+        if gap:
+            print(ENV_WARN)
         print("prompt-gate: force")
         return 0
     if beam.get("promptForced"):
         print("prompt-gate: forced earlier")
         return 0
-    cfg = effective_config(beam, root)
     missing = missing_tools(cfg, allow_entries(root, home), env=env, force=False)
-    if not missing:
-        print("prompt-gate: ok")
-        return 0
-    announce(root, missing)
-    return 2
+    if missing:
+        announce(root, missing)
+        return 2
+    if gap:
+        warn_environment()
+        return 2
+    print("prompt-gate: ok")
+    return 0
 
 
 def claim_blocked(beam: dict, beam_path: Path, env: Optional[dict] = None, home: Optional[Path] = None) -> list:

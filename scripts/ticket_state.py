@@ -10,13 +10,15 @@ Status comes out in that ticket's own directory. Only that Agent writes it:
   .warp/tickets/<id>/state.json   current state
   .warp/tickets/<id>/log.jsonl    one line per event
 
-The Agent commits and pushes only that directory when the state changes, and
-on a heartbeat at least every 5 minutes. Those directories do not overlap, so
-they may merge to main. The beam file may not.
+A worktree subagent writes that directory straight into the parent checkout
+by absolute path and does not push it. The parent reads the files where they
+are. Nothing pushes that state around. An optional launch: agent worker may
+still commit and push only that directory.
 
-Every tick fetches each in-flight branch and reads only that ticket's
-directory. It patches the live beam. It does not copy the branch beam. A
-second tick applies nothing again. Paused and stopped runs do not fetch.
+Every tick reads a worktree ticket's directory from the parent checkout. It
+fetches an agent-mode branch and reads only that ticket's directory. It
+patches the live beam. It does not copy a branch beam. A second tick applies
+nothing again. Paused and stopped runs do not fetch.
 
   python3 scripts/ticket_state.py append --id T-1 --state planning --root . --push
   python3 scripts/ticket_state.py append --id T-1 --state heartbeat --push
@@ -676,6 +678,35 @@ def _default_checks(root: Path, ticket: dict):
     return provider.fetch_check_rows(root, text)
 
 
+def _read_local_dir(root: Path, tid: str):
+    """state.json and log.jsonl already on the parent checkout."""
+    folder = ticket_dir(root, tid)
+    state_path = folder / "state.json"
+    log_path = folder / "log.jsonl"
+    if not state_path.is_file() and not log_path.is_file():
+        return None, []
+    state = None
+    if state_path.is_file():
+        try:
+            parsed = json.loads(state_path.read_text())
+        except json.JSONDecodeError:
+            parsed = None
+        state = parsed if isinstance(parsed, dict) else None
+    rows = _read_log(log_path) if log_path.is_file() else []
+    return state, rows
+
+
+def _local_checkout(ticket: dict) -> bool:
+    """Worktree tickets write state on the parent disk. A VM ticket does not."""
+    if str(ticket.get("checkout") or "") == "subagent-vm" and ticket.get("isolation") != "fallback":
+        return False
+    if str(ticket.get("checkout") or "") == "worktree":
+        return True
+    if ticket.get("isolation") == "fallback":
+        return True
+    return bool(ticket.get("worktree"))
+
+
 def _in_flight(ticket: dict) -> bool:
     if not isinstance(ticket, dict):
         return False
@@ -723,14 +754,24 @@ def observe_locked(
         if not _in_flight(ticket):
             continue
         branch = str(ticket.get("branch") or "")
-        if fetch_fn is not None and not fetch_fn(root, branch):
-            lines.append("observe: fetch failed %s" % tid)
-            continue
-        try:
-            state, log_rows = read_fn(root, branch, tid)
-        except Exception:
-            lines.append("observe: fetch failed %s" % tid)
-            continue
+        state, log_rows = None, []
+        local = _local_checkout(ticket)
+        if local:
+            try:
+                state, log_rows = _read_local_dir(root, tid)
+            except Exception:
+                lines.append("observe: fetch failed %s" % tid)
+                continue
+        remote = (not local) or (ticket.get("isolation") == "fallback" and state is None and not log_rows)
+        if remote:
+            if fetch_fn is not None and not fetch_fn(root, branch):
+                lines.append("observe: fetch failed %s" % tid)
+                continue
+            try:
+                state, log_rows = read_fn(root, branch, tid)
+            except Exception:
+                lines.append("observe: fetch failed %s" % tid)
+                continue
         try:
             checks = checks_fn(root, ticket) if checks_fn else None
         except Exception:

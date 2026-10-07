@@ -1,12 +1,14 @@
 # Kickoff
 
-Warp starts each ticket as an agent whose workspace is the repo. Local and cloud use the same words.
+Warp starts each ticket as one subagent. `subagentVm` defaults to false: a git worktree, capped by `maxLocalSubagents` (default 18). `memoryCheck` defaults to false. `runner: local` forces `subagentVm` false. On a cloud runner, `true` asks for a dedicated VM with its own clone and branch, not a git worktree on this machine. The parent starts them in parallel up to `maxAgents`. A same hostname uses a git worktree and `maxLocalSubagents`.
 
 ```
-IMPLEMENT API-01
+SUBAGENT API-01
 ```
 
-The id is the plan id (`API-01`, `P-001`, `L-01`). The workspace is the clone, so `.cursor/`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The message does not carry the rules. The agent reads them.
+The id is the plan id (`API-01`, `P-001`, `L-01`). The worktree is a checkout of `warp/<id>-<jira>` from `origin/main`, so `.cursor/`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The message names the ticket, Jira key, locks, acceptance, branch, and absolute worktree path. The subagent works only inside that path. It does not call Jira or Slack.
+
+Optional `launch: agent` still starts with `IMPLEMENT API-01` for one new Agent. This plugin does not call a Cloud Agents API. Clone main so `.cursor` rules load. A beam file does not have to exist on the branch before that Agent starts.
 
 First reads, before any edit:
 

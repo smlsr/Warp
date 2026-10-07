@@ -46,3 +46,23 @@ python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .
 ```
 
 If it prints `ask`, do not call the tool. Do not widen the list. Do not pass a server wildcard. `--allow-server-tools` stays off unless the user set it. A missing hook is not permission to run every MCP tool or every shell command. This check does not approve shell commands. Local IDE prompts still follow `.cursor/permissions.json`.
+
+## Ticket subagents
+
+Start one subagent per ticket, in parallel up to `maxAgents`. Subagent frontmatter has no isolation field. The fields are name, description, model, readonly, and is_background. Isolation is requested in the prompt. `subagentVm` defaults to false. `maxLocalSubagents` defaults to 18. `memoryCheck` defaults to false.
+
+`runner` is the main driver. `runner: local`, and `auto` that resolves to local, forces `subagentVm` false and `launch` to `worktree` even when the file says otherwise. That start skips the cloud-environment check and logs one note. Start, `/warp-version`, and status print the effective values after the override.
+
+When `subagentVm` is true on a cloud runner, the prompt must say: "Run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine." The subagent fetches the latest main, clones it, and creates `warp/<id>-<jira>` itself. Its first step is `hostname` and `free -g`. It reports that output with its branch name and working directory. It writes `.warp/tickets/<id>/` on its own branch and pushes. The parent patches the beam from those folders. The parent's disk is not shared. The subagent never merges, never touches the parent checkout, and never calls Jira or Slack. It returns one line.
+
+After each subagent, run `checkout.py verify`. Compare the hostname it reports with this machine's `hostname`. A different hostname is a separate VM. The same hostname means the ticket fell back to a worktree on this machine. Record that in the ticket log, run that ticket under the shared-machine rules, and post one warning per run.
+
+When `subagentVm` is false, or on that fallback, use a git worktree under `worktreeRoot`. Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`, and only up to `maxLocalSubagents` on this machine. `memoryCheck: true` lets `free -g` lower that cap when memory is tight. At least one may run. With `memoryCheck` false, only `maxLocalSubagents` limits how many run at once. The subagent writes `.warp/tickets/<id>/state.json` and `log.jsonl` into the parent checkout by absolute path.
+
+A failed subagent result raises `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn. `/warp-resume` reuses surviving worktrees and branches.
+
+On a cloud runner, effective `subagentVm: true` warns, and `--force` allows the start, when `.cursor/environment.json` and `cloudSnapshot` are both missing. A local runner skips that check. Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.
+
+In the Agents Window, `/in-cloud` runs one task as a cloud subagent on its own VM and branch. It is a manual fallback, one ticket per invocation.
+
+Optional `launch: agent` prints an IMPLEMENT prompt for one new Agent. This plugin does not call a Cloud Agents API.

@@ -11,7 +11,7 @@ python3 <plugin>/scripts/scan.py resume --beam .warp/beam.json
 
 `beam: loaded from origin/<base>` means the fresh checkout took main's beam. `beam: kept local` means this checkout already had tickets. Either way, patch in-flight work from the ticket folders before dispatch.
 
-One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The listener is a Subagent of the parent. It shares this session and this checkout. It is not a separate Agent. Do not start a separate Agent. Each ticket is a new Agent.
+One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The listener is a Subagent of the parent. It shares this session and this checkout. It is not a separate Agent. Do not start a separate Agent. Start one subagent per ticket in its own worktree, in parallel up to maxAgents. `/warp-resume` reuses surviving worktrees and branches.
 
 Pick one `--turn` for this parent turn.
 
@@ -23,6 +23,6 @@ python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <new
 
 `listener: already running <id>`: this turn already started the listener. Do not start a second. A new `--turn` takes a slot the previous turn left running.
 
-For each `shuttle: replace <id>` line, start exactly one new Agent for that same ticket (`checkout.py launch`, then the IMPLEMENT prompt). Do not start a Subagent. Do not use the Task tool. The branch does not have to exist yet. If the prompt says `branch-kept`, keep that branch. Do not queue a duplicate. A second tick must not launch another Shuttle for that id. `shuttle: alarm <id> worker-died` does not start a Shuttle.
+For each `shuttle: replace <id>` line, start exactly one subagent for that same ticket (`checkout.py launch`, then the prompt). Reuse the surviving worktree and branch. Do not queue a duplicate. A second tick must not launch another Shuttle for that id. `shuttle: alarm <id> worker-died` does not start a Shuttle. A failed subagent result raises `worker-died`.
 
 Plugin hooks do not run on cloud runners. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. Do not end the turn while `orchestrator.py parent-exit` prints `parent: stay`. `parent: exit` runs `session_note.py --type session-stop`, which commits the live beam onto main and pushes it. Pause and stop still sync state, and then the listener may stop.
