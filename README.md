@@ -263,15 +263,15 @@ Each worker writes a heartbeat on the beam: `lastSeenAt` and its agent id. A Shu
 
 `beam.py watchdog` runs on every `/warp` tick and on `/warp-start` and `/warp-resume`. A worker is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim or listener start is older than that. A fresh heartbeat is left alone. Do not start a second worker. Pause and stop do not replace anyone.
 
-The listener is a Subagent of the parent; each ticket is a new Agent. It dies when the parent turn ends, so the parent does not end the turn while any ticket is claimed, in review, awaiting checks, or queued. A `running` flag left by the previous turn does not block the next pass. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders.
+The listener is a Subagent of the parent. Start one subagent per ticket in its own worktree, in parallel up to maxAgents. It dies when the parent turn ends, so the parent does not end the turn while any ticket is claimed, in review, awaiting checks, or queued. A `running` flag left by the previous turn does not block the next pass. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders.
 
 A dead Shuttle stays on the same branch, pull request, `jira.startedAt`, and locks. Status becomes `recovering`, and exactly one new Shuttle is dispatched for that same ticket. Herald posts `<id> worker died. A new Shuttle started.` It is not released, so another ticket cannot take the files. Past `maxRecoveries` (default 3) the ticket is `alarm` / `worker-died` and no new Shuttle starts.
 
 ## Remote status
 
-The claim is in the IMPLEMENT prompt. The Agent does not need `.warp/beam.json` on the branch before it starts, and it does not commit updates to that file.
+The claim is in the subagent prompt: ticket, Jira key, locks, acceptance, branch, and absolute worktree path. The subagent does not commit updates to `.warp/beam.json`.
 
-Status comes back out in that ticket's own directory. Only that Agent writes it:
+Status is written straight into the parent checkout. Only that subagent writes it, by absolute path:
 
 ```
 .warp/tickets/<id>/state.json
@@ -280,11 +280,11 @@ Status comes back out in that ticket's own directory. Only that Agent writes it:
 
 `state.json` is the current state: when it started, when it last changed, the last heartbeat, the pull request, the check result, the error text, the alarm reason, and any paths that escaped the lock. `log.jsonl` is an append-only mini log. Each line has a timestamp, a state, and the error text.
 
-The Agent commits and pushes only `.warp/tickets/<id>/` when the state changes, and on a heartbeat at least every 5 minutes. `ticket_state.py append --id <id> --state <state> --push` does that. It does not commit `.warp/beam.json`.
+The subagent writes that directory in the parent checkout and does not push it. `ticket_state.py append --id <id> --state <state> --root <parent>` does that. It does not commit `.warp/beam.json`. Optional `launch: agent` may still pass `--push`.
 
-Every tick fetches each in-flight branch and reads only that ticket's directory. It patches the live beam. It does not replace the live beam with the file on the branch. A second tick applies the same lines once. Paused and stopped runs do not fetch and do not relaunch.
+Every tick reads a worktree ticket's directory from the parent checkout. It fetches an agent-mode branch and reads only that ticket's directory. It patches the live beam. It does not replace the live beam with a file from the branch. A second tick applies the same lines once. Paused and stopped runs do not fetch and do not relaunch.
 
-A missing heartbeat is the death signal. The parent uses `heartbeatAt` in `state.json`, or the last `heartbeat` line in the log. If the Agent never heartbeated, it uses the launch time already on the live beam. Older than `staleMinutes` means the Agent died. One new Agent starts on the same branch. The branch is not rebased. Branch, pull request, locks, and `jira.startedAt` stay. Past `maxRecoveries` the alarm is `worker-died`.
+A subagent failure returns straight to the parent, which raises `worker-died` from that result. The heartbeat watchdog stays for a parent that dies mid-turn. The parent uses `heartbeatAt` in `state.json`, or the last `heartbeat` line in the log. If the worker never heartbeated, it uses the launch time already on the live beam. Older than `staleMinutes` means the worker died. One subagent starts again on the same worktree and branch. `/warp-resume` reuses them. The branch is not rebased. Branch, pull request, locks, and `jira.startedAt` stay. Past `maxRecoveries` the alarm is `worker-died`. Optional `launch: agent` starts one new Agent on that branch instead.
 
 A `lock-escape` line is an alarm with the escaped paths, even though the Agent has already exited. The repair pass can widen the lock and retry. The parent does not wait for the Agent to still be running.
 
@@ -296,7 +296,7 @@ Those directories can merge to main. They do not overlap. The beam file does not
 
 ## Alarms
 
-The parent tick repairs `lock-escape` and no other alarm, one ticket at a time. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop do not repair. Plugin hooks do not run on cloud runners. The tick calls `scripts/alarm_repair.py next` and starts one new Agent for that ticket. The listener Subagent does not. A second call in the same moment does not start a second repair.
+The parent tick repairs `lock-escape` and no other alarm, one ticket at a time. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop do not repair. Plugin hooks do not run on cloud runners. The tick calls `scripts/alarm_repair.py next` and starts one subagent in that ticket's worktree. The listener Subagent does not. A second call in the same moment does not start a second repair.
 
 The Shuttle that hits the alarm stores each path outside the lock with `beam.py set --alarm lock-escape --escaped <path>`. Those paths live on the ticket as `escaped`. The repair widens that ticket's locks to those paths, records them on `addedLocks`, and says which paths it added in the Herald line. It does not take a path an in-flight ticket currently holds. It waits, then widens and starts after that holder finishes. A queued ticket's overlapping lock can be widened. An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before any edit.
 
@@ -329,7 +329,7 @@ If `/warp-upgrade` is not in the command list, `/warp-version` prints `python3 .
 
 `/warp-init` still does not overwrite plugin files or config values you already set. It does append config keys that are missing, with the defaults and comments from `assets/config.example.yaml`. A config that is only missing new keys does not need an upgrade. Re-run `/warp-init`. It appends each missing key and prints the names it added (`jiraKeyPrefixes`, `jiraKeyMap`, `jiraExternalIdField`, `jiraWriteExternalId`, `jiraSite`, `staleMinutes`, `maxRecoveries`, `alarmRepairMinutes`, `maxAlarmRepairs`, and any later key). Values you already set stay. Readers use the same defaults when a key is still absent.
 
-The plugin has no API that creates a Cursor cloud agent. On `runner: cloud`, `checkout.py launch` does not create the branch. It prints an IMPLEMENT prompt that contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. The parent starts one new Agent with that prompt. An Agent is a separate top-level cloud agent. Own conversation, own VM, own checkout. Clone main so `.cursor` rules load, then create that branch from the main it cloned. It writes `.warp/tickets/<id>/` and pushes. The parent reads that folder later. A beam file does not have to exist on the branch before the Agent starts. If that branch already exists and is only the beam commit, the prompt says to start from latest main and not to keep that stale beam as the working tree. Do not start a Subagent. Do not use the Task tool for a ticket. `checkout.py implement` refuses to do that work in the orchestrator checkout. `runner: local` is still one git worktree per ticket.
+`subagentVm` defaults to true. `checkout.py launch` prints a prompt that says: run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine. The subagent fetches the latest main, clones it, and creates `warp/<id>-<jira>` itself. Its first step is `hostname` and `free -g`. It writes `.warp/tickets/<id>/` on that branch and pushes. The parent patches the beam from those folders. `checkout.py verify` compares the hostname with this machine. The same hostname is a worktree fallback: one warning per run, then the shared-machine rules. `subagentVm: false` fetches origin and adds a git worktree under `worktreeRoot` (default `.warp/worktrees`). Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`, and on one machine only up to `maxLocalSubagents`. The subagent works only inside that path. `checkout.py verify` runs after it. `checkout.py implement` refuses to do that work in the parent checkout. Cloud subagents use the MCP servers at cursor.com/agents, not this session. A cloud start warns, and `--force` allows it, when `.cursor/environment.json` and `cloudSnapshot` are both missing. In the Agents Window, `/in-cloud` runs one task as a cloud subagent on its own VM and branch. That is a manual fallback, one ticket per invocation. Optional `launch: agent` prints an IMPLEMENT prompt for one new Agent, for a future Cursor Cloud Agents API. This plugin does not call that API. Clone main so `.cursor` rules load, then create the branch. A beam file does not have to exist on the branch before that Agent starts.
 
 ## Troubleshooting
 
@@ -494,7 +494,7 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 
 ## Status in Teams or Slack
 
-The listener is a Subagent of the parent; each ticket is a new Agent. One listener Subagent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the parent turn. It is not a separate Agent. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. It shares the parent's session and checkout, acknowledges `warp:` commands, and returns them. The parent applies them and patches the live beam. The listener does not merge and does not implement tickets. `/warp-start` and `/warp-resume` launch it when `inbound.py claim --turn` prints `listener: started`. `listener: already running` means this turn already started it: do not start a second. A running flag from the previous turn does not block the next tick. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
+The listener is a Subagent of the parent. Start one subagent per ticket in its own worktree, in parallel up to maxAgents. One listener Subagent reads the configured Slack channel, and Teams when `messenger` is `teams` or `both`, for the parent turn. It is not a separate Agent. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. It shares the parent's session and checkout, acknowledges `warp:` commands, and returns them. The parent applies them and patches the live beam. The listener does not merge and does not implement tickets. `/warp-start` and `/warp-resume` launch it when `inbound.py claim --turn` prints `listener: started`. `listener: already running` means this turn already started it: do not start a second. A running flag from the previous turn does not block the next tick. `/warp-pause` and `/warp-stop` run `inbound.py release` and set `listener.state` to `stopped`. The listener must not keep reading while paused or stopped.
 
 The slot is `listener` on the beam. `state` is the flag (`running` or `stopped`). `agentId` is the subagent id for this turn. `pid` is optional and is often empty on a cloud runner. `lastSeenAt` is the heartbeat, written by `inbound.py heartbeat` at claim.
 
@@ -526,6 +526,10 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `messenger` | `both` | `slack`, `teams`, or `both`. |
 | `notify` | `verbose` | Every claim and tick, plus init and scan. `quiet` posts alarms, approval waits, a red gate, and pause/stop. `warp:status` is always answered. |
 | `runner` | `cloud` | Cloud VM, or `local` for this machine. |
+| `subagentVm` | `true` | Ask each ticket subagent for its own cloud VM, clone, and branch. `false` uses a git worktree on this machine. |
+| `maxLocalSubagents` | `4` | Cap when subagents share this machine, also lowered by `free -g`. |
+| `cloudSnapshot` | empty | Snapshot id that counts as a cloud environment beside `.cursor/environment.json`. |
+| `worktreeRoot` | `.warp/worktrees` | Parent of `<id>` worktrees. Gitignored. Used when `subagentVm` is false or a VM falls back. |
 | `jiraProject` | empty | Jira project prefix, such as `WAR`. Plan ids are not issue keys unless the prefix matches. |
 | `jiraKeyPrefixes` | empty | More prefixes that confirm a Jira key. |
 | `jiraKeyMap` | empty | Plan id to issue key, for example `{"WV-01": "WAR-1"}`. |
@@ -568,7 +572,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 
 ## Merge policy
 
-The orchestrator is the only merger. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. A green pull request frees the slot and keeps the locks until merge or park. The slot stays occupied until the provider check rollup is green. The merge queue is serial. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. The third red parks the ticket. A red base branch stops merging. On start or resume, restart classifies each ticket from git: merged, in flight, or pending. One checkout per ticket: a cloud agent, or a local git worktree. `maxAgents` is the only cap.
+The orchestrator is the only merger. Ready means every blocker is merged on the base branch and no lock overlaps an in-flight ticket, including a parent folder. A green pull request frees the slot and keeps the locks until merge or park. The slot stays occupied until the provider check rollup is green. The merge queue is serial. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. The third red parks the ticket. A red base branch stops merging. On start or resume, restart classifies each ticket from git: merged, in flight, or pending. One worktree per ticket. Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`. `maxAgents` is the only cap.
 
 L and XL are not special. `autoMergeSizes` is the cut. Sizes in `autoMergeSizes` (`autoMerge` true) and sizes not in `autoMergeSizes` (`autoMerge` false) share one gate: Bugbot passes, findings are fixed up to `maxFixAttempts`, and CI is green. A listed size then auto-merges and Jira moves to Done. A size not in `autoMergeSizes` then moves to `awaiting_approval`, Jira moves to QA Ready, and the Jira and pull-request comment says Bugbot is clean and how many finding rounds were fixed. A person approves on the provider or with `warp:proceed <id>` (plan id, Jira key, or a `#` number). The one channel listener acks in channel, then merges that ticket in the same turn. Jira then moves to Done, the merged comments go out, locks drop, and dependents whose deps are terminal become ready. The Slack reply includes the ack, then the merge sha and the Jira status. `jiraDoneOnManualMerge: false` leaves the issue at QA Ready. `bugbotManual: false` skips Bugbot on the manual path only. The provider comes from `gitProvider`. If it is not usable, or `pushMerge` is false, Reed merges the branch into `baseBranch` locally and does not push. Three failed Bugbot rounds raise an alarm. Warp will not retry it until `warp:retry`. A red gate blocks dependents until check evidence is recorded. New commits after QA Ready send the ticket back through Bugbot and leave the Jira status where it is. A merge that never recorded Done shows on `/warp-jira-check` as `merged-but-not-done`.
 
@@ -578,15 +582,15 @@ Scan and export write an estimate into `.warp/_ingested_schedule.json`, the beam
 
 ## Kickoff
 
-Warp starts each ticket in this repo's workspace, local or cloud, with one line:
+Warp starts each ready ticket in its own git worktree. The prompt begins:
 
 ```
-IMPLEMENT API-01
+SUBAGENT API-01
 ```
 
-The id is the plan id. The workspace is the clone, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. A Shuttle does not inherit the parent chat. Its first step is to read those rules, then the claim in the beam. See `assets/KICKOFF.md`.
+The id is the plan id. The worktree is a checkout of `warp/<id>-<jira>` from `origin/main`, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The subagent works only inside that path. Its first step is to read those rules, then the claim in the prompt. See `assets/KICKOFF.md`.
 
-Cloud and local are the same contract. A cloud agent is a virtual machine with a clone of the repo. A local agent is your clone. Rules apply because the files are in the workspace, not because they were copied into the prompt. A rule only applies if Cursor would apply it in that workspace: `alwaysApply`, a matching glob, or the Shuttle reading it. Warp requires the read.
+Optional `launch: agent` still starts with `IMPLEMENT API-01` for one new Agent. This plugin does not call a Cloud Agents API. Clone main so `.cursor` rules load. A beam file does not have to exist on the branch before that Agent starts. Rules apply because the files are in the worktree, not because they were copied into the prompt. A rule only applies if Cursor would apply it in that workspace: `alwaysApply`, a matching glob, or the Shuttle reading it. Warp requires the read.
 
 ## Agents
 

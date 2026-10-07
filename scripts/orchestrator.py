@@ -2,8 +2,8 @@
 """Warp orchestrator policy.
 
 One orchestrator dispatches, merges, and tracks. It writes no ticket product
-code. It is the only thing that merges to the base branch. Ticket Agents never
-merge. A ticket is not a Subagent.
+code. It is the only thing that merges to the base branch. Ticket subagents
+never merge. Optional launch: agent is one new Agent and does not call an API.
 
 The cap is config maxAgents. A project may set 18. This module does not treat
 any number as a built-in cap.
@@ -30,9 +30,12 @@ opened records a pull request when the Shuttle exits. That does not free the
 slot. merge records merged only for outcome merged. enqueue and rejected do
 not. mergeQueue defaults to false. A detected GitHub merge queue also enqueues.
 The orchestrator does not implement a ticket. checkout.py implement refuses.
-checkout.py launch does not create the branch. It prints an IMPLEMENT prompt
-that contains the claim. The Agent clones main, then creates the branch.
-A beam file does not have to exist on the branch before the Agent starts.
+checkout.py launch fetches origin and adds a git worktree for the ticket.
+The parent starts one subagent per ticket in that worktree, in parallel up
+to maxAgents. The subagent writes .warp/tickets/<id>/ into the parent
+checkout by absolute path. It never merges and never calls Jira or Slack.
+launch: agent is the optional IMPLEMENT prompt for a future Cloud Agents
+API. This plugin does not call that API.
 parent-exit prints parent: stay while a ticket is claimed, in review,
 awaiting checks, or queued, and parent: exit when the run is paused or
 stopped, or when nothing is claimed, queued, or awaiting checks.
@@ -42,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -507,11 +511,137 @@ def needs_base_fix(beam: dict) -> bool:
 
 
 def checkout_kind(config: Optional[dict]) -> str:
-    """One isolated checkout. Cloud uses its own VM. Local uses its own worktree."""
+    """Runner class. Cloud is a cloud session. Local is this machine.
+
+    Ticket isolation is launch_mode, not this value. The default launch is
+    one git worktree per ticket on either runner.
+    """
     runner = str((config or {}).get("runner") or "cloud").strip().casefold()
     if runner == "local":
         return "worktree"
     return "cloud-vm"
+
+
+def launch_mode(config: Optional[dict]) -> str:
+    """worktree is the plugin path. agent is the optional future API path."""
+    raw = str((config or {}).get("launch") or "worktree").strip().casefold()
+    if raw in {"agent", "cloud-agent", "implement"}:
+        return "agent"
+    return "worktree"
+
+
+def subagent_vm(config: Optional[dict]) -> bool:
+    """True when each ticket subagent is asked for its own cloud VM.
+
+    The subagent config has no isolation field. The prompt asks for the VM.
+    False, or a same-hostname fallback, uses a git worktree on this machine.
+    """
+    raw = (config or {}).get("subagentVm")
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return True
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+
+
+def shared_machine(config: Optional[dict], beam: Optional[dict] = None) -> bool:
+    """Worktrees on this machine: subagentVm is false, or a VM request fell back."""
+    if launch_mode(config) == "agent":
+        return False
+    if not subagent_vm(config):
+        return True
+    return bool((beam or {}).get("subagentVmFallback"))
+
+
+def worktree_root_name(config: Optional[dict]) -> str:
+    """Directory of ticket worktrees. Default is gitignored."""
+    raw = str((config or {}).get("worktreeRoot") or ".warp/worktrees").strip()
+    return raw or ".warp/worktrees"
+
+
+def max_local_subagents(config: Optional[dict]) -> int:
+    """Cap for subagents that share this machine. Default is 4."""
+    raw = (config or {}).get("maxLocalSubagents")
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return 4
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 4
+
+
+def available_gib(text: Optional[str] = None) -> Optional[int]:
+    """Available GiB from `free -g`. None when the command is missing."""
+    if text is None:
+        try:
+            proc = subprocess.run(["free", "-g"], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0:
+            return None
+        text = proc.stdout
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if not parts or parts[0].rstrip(":").casefold() != "mem":
+            continue
+        # free -g: total used free shared buff/cache available
+        for token in (parts[6] if len(parts) >= 7 else "", parts[3] if len(parts) >= 4 else ""):
+            if token.isdigit():
+                return int(token)
+    return None
+
+
+def local_subagent_cap(config: Optional[dict], available: Optional[int] = None) -> int:
+    """Fewer local subagents when `free -g` shows little memory. At least one."""
+    cap = max_local_subagents(config)
+    if available is None:
+        return cap
+    # Two GiB each. A machine that reports 0 still runs one, and does not crash.
+    mem_slots = 1 if available < 2 else available // 2
+    return max(1, min(cap, mem_slots))
+
+
+def local_in_use(beam: dict, config: Optional[dict], skip_id: Optional[str] = None) -> int:
+    """In-flight tickets already on this machine, aside from the one being started.
+
+    A confirmed other VM does not count. Everything else does once this run
+    is on the shared-machine path.
+    """
+    used = 0
+    sharing = shared_machine(config, beam)
+    for ticket in (beam.get("tickets") or {}).values():
+        if skip_id and str(ticket.get("id") or "") == str(skip_id):
+            continue
+        if not holds_slot(ticket, config):
+            continue
+        remote = ticket.get("isolation") == "vm" and ticket.get("checkout") == "subagent-vm"
+        on_machine = ticket.get("checkout") == "worktree" or ticket.get("isolation") in {"fallback", "worktree"}
+        if remote:
+            continue
+        if sharing or on_machine:
+            used += 1
+    return used
+
+
+def local_room(beam: dict, config: Optional[dict], skip_id: Optional[str] = None, available: Optional[int] = None) -> int:
+    """How many more shared-machine subagents may start."""
+    if available is None:
+        available = available_gib()
+    cap = local_subagent_cap(config, available)
+    return max(0, cap - local_in_use(beam, config, skip_id=skip_id))
+
+
+def dispatch_checkout(config: Optional[dict], beam: Optional[dict] = None) -> str:
+    """Where the ticket's files live.
+
+    agent mode is the optional top-level Agent. subagent-vm is a dedicated
+    VM whose disk is not this checkout. worktree is this machine.
+    """
+    if launch_mode(config) == "agent":
+        return "cloud-vm"
+    if shared_machine(config, beam):
+        return "worktree"
+    return "subagent-vm"
 
 
 def branch_name(ticket: dict, config: Optional[dict] = None) -> str:
@@ -861,26 +991,45 @@ def apply_reported_merge(ticket: dict, outcome: str, sha: Optional[str] = None) 
     return True
 
 
+VM_LINE = (
+    "Run in your own cloud environment on a dedicated VM with its own clone and branch, "
+    "not a git worktree on this machine."
+)
+
+SUBAGENT_INSTRUCTION = (
+    "Start one subagent per ticket in its own worktree, in parallel up to maxAgents. "
+    "The subagent works only inside that worktree. "
+    "It commits, pushes, and opens the pull request. "
+    "It never merges. It never touches the parent checkout. It never calls Jira or Slack. "
+    "It writes .warp/tickets/<id>/state.json and log.jsonl at the parent checkout by absolute path. "
+    "It returns one line."
+)
+
+VM_INSTRUCTION = (
+    "Start one subagent per ticket on its own dedicated VM, in parallel up to maxAgents. "
+    + VM_LINE
+    + " The subagent fetches the latest main, clones it, and creates the branch itself. "
+    "Its first step is `hostname` and `free -g`. "
+    "It writes .warp/tickets/<id>/ on its own branch and pushes. "
+    "The parent patches the beam from that folder. "
+    "It never merges. It never touches the parent checkout. It never calls Jira or Slack. "
+    "It returns one line. "
+    "A same hostname is a worktree on this machine: shared-machine rules and maxLocalSubagents."
+)
+
 TICKET_AGENT_INSTRUCTION = (
+    "Optional launch: agent. "
     "Start one new Agent for this ticket. "
     "An Agent is a separate top-level cloud agent. "
     "Own conversation, own VM, own checkout. "
     "Clone main so .cursor rules load, then create the branch from that main. "
     "The claim is in the IMPLEMENT prompt. "
     "A beam file does not have to exist on the branch before the Agent starts. "
-    "Do not start a Subagent. "
-    "A Subagent is a child spawned inside the orchestrator's turn (Task / subagent). "
-    "It shares the parent session and checkout. Forbidden for tickets. "
-    "Do not use the Task tool for a ticket. "
+    "This plugin does not call a Cloud Agents API. "
     "Do not implement the ticket in this turn."
 )
 
-LOCAL_WORKTREE_INSTRUCTION = (
-    "One git worktree per ticket on the ticket branch that already has .warp/beam.json. "
-    "Do not start a Subagent inside the orchestrator checkout. "
-    "Do not use the Task tool for a ticket. "
-    "Do not implement the ticket in this turn."
-)
+LOCAL_WORKTREE_INSTRUCTION = SUBAGENT_INSTRUCTION
 
 
 def _joined(value) -> str:
@@ -901,6 +1050,91 @@ def acceptance_text(ticket: dict) -> str:
     if raw is None:
         return ""
     return str(raw)
+
+
+def path_inside_locks(path: str, locks: list, append_only: Optional[list] = None) -> bool:
+    """True when a diff path is .warp, a lock, or an append-only path."""
+    norm = _norm(path)
+    if not norm or norm == ".warp" or norm.startswith(".warp/"):
+        return True
+    allowed = []
+    for item in list(locks or []) + list(append_only or []):
+        base = _norm(item)
+        if base and base not in allowed:
+            allowed.append(base)
+    for base in allowed:
+        if norm == base or norm.startswith(base + "/"):
+            return True
+    return False
+
+
+def _prompt_head(ticket: dict, branch: str) -> list:
+    tid = str(ticket.get("id") or "")
+    return [
+        "SUBAGENT %s" % tid,
+        "ticket: %s" % tid,
+        "jira: %s" % (ticket.get("jiraKey") or ""),
+        "locks: %s" % _joined(ticket.get("locks")),
+        "acceptance: %s" % acceptance_text(ticket),
+        "branch: %s" % branch,
+    ]
+
+
+def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False) -> str:
+    """Prompt that asks for a dedicated VM. Isolation is not a subagent setting."""
+    del config
+    tid = str(ticket.get("id") or "")
+    lines = _prompt_head(ticket, branch)
+    lines.extend(
+        [
+            VM_LINE,
+            "Start one subagent per ticket on its own dedicated VM, in parallel up to maxAgents.",
+            "Fetch the latest main, clone it, and create %s yourself." % branch,
+            "First step: run `hostname` and `free -g`. Report that output with your branch name and working directory.",
+            "Write .warp/tickets/%s/ on your own branch and push it." % tid,
+            "The parent patches the beam from that folder. The parent's disk is not shared.",
+            "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.",
+            "Never merge. Never touch the parent checkout. Never call Jira or Slack.",
+            "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=<cwd> memory=<available-gib>"
+            % (tid, branch),
+            "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,
+        ]
+    )
+    if reused:
+        lines.append("The branch %s already exists. Check it out. Do not recreate it." % branch)
+    return "\n".join(lines)
+
+
+def subagent_prompt(
+    ticket: dict,
+    config: Optional[dict],
+    branch: str,
+    worktree: str,
+    parent: str,
+) -> str:
+    """Prompt for one subagent in a git worktree on this machine. The path is absolute."""
+    del config
+    tid = str(ticket.get("id") or "")
+    state_dir = str(Path(parent) / ".warp" / "tickets" / tid)
+    lines = _prompt_head(ticket, branch)
+    lines.extend(
+        [
+            "worktree: %s" % worktree,
+            "parent: %s" % parent,
+            "state: %s/state.json" % state_dir,
+            "log: %s/log.jsonl" % state_dir,
+            SUBAGENT_INSTRUCTION,
+            "Work only inside %s." % worktree,
+            "Commit, push, and open the pull request from that worktree.",
+            "Never merge. Never touch the parent checkout %s. Never call Jira or Slack." % parent,
+            "Write state with this command. Do not pass --push:",
+            "python3 scripts/ticket_state.py append --id %s --state coding --root %s" % (tid, parent),
+            "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=%s memory=<available-gib>"
+            % (tid, branch, worktree),
+            "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,
+        ]
+    )
+    return "\n".join(lines)
 
 
 def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: str = "missing") -> str:
@@ -998,24 +1232,41 @@ def parent_may_exit(beam: dict) -> bool:
     return True
 
 
-def launch_for(config: Optional[dict]) -> dict:
+def note_subagent_failure(ticket: dict) -> str:
+    """A subagent that returned a failure is worker-died.
+
+    The heartbeat watchdog is the other path: a parent that dies mid-turn
+    and never receives this result.
+    """
+    prev = ticket.get("status")
+    ticket["status"] = "alarm"
+    ticket["alarm"] = "worker-died"
+    ticket["recoveries"] = int(ticket.get("recoveries") or 0) + 1
+    if prev and prev != "recovering":
+        ticket["recoveryPriorStatus"] = prev
+    return "worker-died"
+
+
+def launch_for(config: Optional[dict], beam: Optional[dict] = None) -> dict:
     """How the Warp session starts one ticket. Never in this process.
 
-    Cloud starts one new Agent with an IMPLEMENT prompt. The branch does not
-    have to exist yet. Local is one git worktree. Neither path is a Subagent
-    or the Task tool.
+    The default asks for one subagent on its own VM. A shared machine uses a
+    git worktree. launch: agent prints an IMPLEMENT prompt and does not call an API.
     """
-    kind = checkout_kind(config)
-    if kind == "worktree":
+    if launch_mode(config) == "agent":
         return {
-            "launch": "worktree",
+            "launch": "new-agent",
             "refuseInProcess": True,
-            "instruction": LOCAL_WORKTREE_INSTRUCTION,
+            "instruction": TICKET_AGENT_INSTRUCTION,
         }
+    if shared_machine(config, beam):
+        instruction = SUBAGENT_INSTRUCTION
+    else:
+        instruction = VM_INSTRUCTION
     return {
-        "launch": "new-agent",
+        "launch": "subagent",
         "refuseInProcess": True,
-        "instruction": TICKET_AGENT_INSTRUCTION,
+        "instruction": instruction,
     }
 
 
@@ -1060,29 +1311,52 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
     if cap is None:
         cap = agent_cap(cfg)
     actions = []
-    launch = launch_for(cfg)
+    launch = launch_for(cfg, beam)
+    checkout = dispatch_checkout(cfg, beam)
+    sharing = checkout == "worktree" and launch.get("launch") != "new-agent"
+    room = local_room(beam, cfg) if sharing else None
     if needs_base_fix(beam) and cap is not None:
         used = sum(1 for t in (beam.get("tickets") or {}).values() if holds_slot(t, cfg))
-        if used < cap:
+        if used < cap and (room is None or room > 0):
             actions.append(
                 {
                     "action": "dispatch-base-fix",
                     "aheadOfRank": True,
-                    "checkout": checkout_kind(cfg),
+                    "checkout": checkout,
                     **launch,
                 }
             )
-    for ticket in ready_rows:
+            if room is not None:
+                room -= 1
+    rows = list(ready_rows)
+    if room is not None:
+        rows = rows[:room]
+    for ticket in rows:
         action = {
             "action": "start",
             "id": ticket.get("id"),
             "branch": branch_name(ticket, cfg),
-            "checkout": checkout_kind(cfg),
+            "checkout": checkout,
             "base": (cfg.get("baseBranch") or "") or "base",
             **launch,
         }
         if action.get("launch") == "new-agent":
             action["instruction"] = implement_prompt(ticket, cfg)
+        elif checkout == "worktree":
+            action["instruction"] = "\n".join(
+                [
+                    "SUBAGENT %s" % ticket.get("id"),
+                    "ticket: %s" % ticket.get("id"),
+                    "jira: %s" % (ticket.get("jiraKey") or ""),
+                    "locks: %s" % _joined(ticket.get("locks")),
+                    "acceptance: %s" % acceptance_text(ticket),
+                    "branch: %s" % action["branch"],
+                    SUBAGENT_INSTRUCTION,
+                    "Run checkout.py launch. It prints the absolute worktree path.",
+                ]
+            )
+        else:
+            action["instruction"] = subagent_vm_prompt(ticket, cfg, action["branch"])
         actions.append(action)
     return actions
 
@@ -1105,6 +1379,15 @@ def shared_branches(beam: dict) -> list:
 
 
 HELP = __doc__
+
+
+def settle_worktree(beam_path: Path, data: dict, tid: str) -> str:
+    """Remove the ticket worktree after a merge or a park. Missing git is a no-op."""
+    import checkout as checkout_mod
+
+    path = Path(beam_path).resolve()
+    root = path.parent.parent if path.parent.name == ".warp" else path.parent
+    return checkout_mod.drop_worktree(root, data, tid)
 
 
 def _load(path: Path) -> dict:
@@ -1183,6 +1466,8 @@ def main(argv: Optional[list] = None) -> int:
         if not ticket:
             sys.exit("unknown ticket %s" % args.id)
         outcome = note_failure(ticket, args.output, data.get("config") or {})
+        if outcome == "parked":
+            settle_worktree(path, data, args.id)
         _save(path, data)
         print("%s %s" % (args.id, outcome))
         return 0
@@ -1257,6 +1542,8 @@ def main(argv: Optional[list] = None) -> int:
         if not ticket:
             sys.exit("unknown ticket %s" % args.id)
         applied = apply_reported_merge(ticket, args.outcome, sha=args.sha)
+        if applied:
+            settle_worktree(path, data, args.id)
         _save(path, data)
         if applied:
             print("%s merged" % args.id)

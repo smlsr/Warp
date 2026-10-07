@@ -414,23 +414,29 @@ class Since140DocTests(unittest.TestCase):
 
 
 class TicketAgentDocTests(unittest.TestCase):
-    def test_docs_start_a_new_agent_and_not_a_subagent(self):
+    def test_docs_start_a_worktree_subagent(self):
         needles = (
+            "Start one subagent per ticket in its own worktree",
+            "maxAgents",
+            "worktreeRoot",
+            "checkout.py verify",
+            "worker-died",
             "new Agent",
-            "Do not start a Subagent",
-            "Do not use the Task tool",
             "IMPLEMENT",
             "Clone main",
             "does not have to exist",
             ".warp/beam.json",
         )
         banned = (
+            "Do not start a Subagent",
+            "Do not use the Task tool",
             "sub-agent",
             "subagent_type",
             "with the Task tool",
             "cloud_base_branch",
             "Do not start it on a fresh clone of main",
             "Check out the ticket branch",
+            "Forbidden for tickets",
         )
         for rel in ("README.md", "docs/GUIDE.md", "AGENTS.md", "rules/warp-operating.mdc"):
             text = (ROOT / rel).read_text()
@@ -438,6 +444,11 @@ class TicketAgentDocTests(unittest.TestCase):
                 self.assertIn(needle, text, "%s missing %s" % (rel, needle))
             for bad in banned:
                 self.assertNotIn(bad, text, "%s still says %s" % (rel, bad))
+        for folder in ("commands", "skills"):
+            for path in (ROOT / folder).rglob("*.md"):
+                text = path.read_text()
+                for bad in ("Do not start a Subagent", "Do not use the Task tool", "Forbidden for tickets"):
+                    self.assertNotIn(bad, text, "%s still says %s" % (path, bad))
 
 
 class HelpTokenTests(unittest.TestCase):

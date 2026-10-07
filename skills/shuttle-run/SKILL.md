@@ -1,11 +1,19 @@
 ---
 name: shuttle-run
-description: "Run one claimed ticket from Jira through an open pull request. Bugbot runs on that pull request, not in this VM. Use when a Shuttle is started with IMPLEMENT <id>. Does not merge."
+description: "Run one claimed ticket on its own VM, or in its own git worktree, through an open pull request. Bugbot runs on that pull request, not in this turn. Use when a Shuttle is started with the subagent prompt. Does not merge, and does not call Jira or Slack."
 ---
 
 # Shuttle run
 
-You were started with an IMPLEMENT prompt as an Agent: own conversation, own VM, own checkout. You are not a Subagent. Cloud is your own VM. Local is your own git worktree. The prompt contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. Clone main so `.cursor` rules load, then create that branch from the main you cloned. A beam file does not have to exist before you start. If the prompt says the branch is only the beam commit, start from latest main and do not keep that stale beam as your working tree. If it says `branch-kept`, check out that branch and do not reset it. Write `.warp/tickets/<id>/` and push it. Do not share a working copy. The orchestrator is the only merger. Do not implement from chat memory. Edit only this ticket's locks and `appendOnlyPaths` (add your own lines at the end). Do not force a `feature/` prefix. If you need work that is not on the base branch, record a blocker on the plan. Do not build another ticket. Do not ask. Before the pull request, `orchestrator.py record --plan --result`. Then stop. Do not merge, do not push to the base branch, and do not start a second ticket.
+You were started as one subagent. The prompt contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`.
+
+When the prompt says "Run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine", do that. Fetch the latest main, clone it, and create the branch yourself. First run `hostname` and `free -g`. Report that output with your branch name and working directory. Write `.warp/tickets/<id>/` on your branch and push it. The parent disk is not shared. Cloud MCP servers are the ones at cursor.com/agents, not the parent's session.
+
+When the prompt names a `worktree:` path, work only inside that absolute path. Write `.warp/tickets/<id>/state.json` and `log.jsonl` at the parent absolute path (`--root` is that parent). Do not pass `--push`.
+
+Either way: commit, push, and open the pull request. Never merge. Never touch the parent checkout. Never call Jira or Slack. Return one line: `result: <id> ok hostname=<hostname> branch=<branch> cwd=<cwd> memory=<available-gib>` or `result: <id> failed <why> hostname=<hostname> cwd=<cwd>`. The orchestrator is the only merger. Do not implement from chat memory. Edit only this ticket's locks and `appendOnlyPaths` (add your own lines at the end). Do not force a `feature/` prefix. If you need work that is not on the base branch, record a blocker on the plan. Do not build another ticket. Do not ask. Before the pull request, `orchestrator.py record --plan --result` using the parent beam path when you are on a worktree. On a VM, commit that record into the ticket branch. Then stop. Do not push to the base branch, and do not start a second ticket.
+
+Optional `launch: agent` starts one new Agent from an IMPLEMENT prompt. Clone main so `.cursor` rules load, then create the branch. A beam file does not have to exist before that Agent starts. That mode is for a future Cloud Agents API. This plugin does not call that API. Jira and Slack calls below are for that mode only. The default subagent skips them. The parent does that work.
 
 ## Load the repo before editing
 
@@ -14,11 +22,11 @@ You were started with an IMPLEMENT prompt as an Agent: own conversation, own VM,
 3. Read the preamble the plan names.
 4. Read `.warp/config.yaml` and the claim in the IMPLEMENT prompt. Status must be `claimed` or `recovering`, and `agent` must be you. Otherwise stop. If status is `recovering`, you are the replacement for a dead Shuttle. Keep a branch that has work beyond the beam commit, the pull request, `jira.startedAt`, and the locks. Do not open a second pull request. A branch that is only the beam commit is not that work: start from latest main. After the heartbeat below, set status back to `recoveryPriorStatus` and continue that work.
 5. Fetch the Jira issue if a key is set. Otherwise read the ticket in `CURSOR_PLAN.md`. Read every acceptance criterion.
-6. Heartbeat. Your agent id is the ticket's `agent` field. A dead turn does not notify Warp. Cursor does not restart you. Plugin hooks do not run on cloud runners. There is no process table. The parent cannot see this checkout's beam. Write your status under `.warp/tickets/<id>/` and push only that directory. Repeat at each status change and at least every 5 minutes while you are working, always inside `staleMinutes` (default 15). Do not commit `.warp/beam.json`. The parent reads `.warp/tickets/<id>/` later.
+6. Heartbeat. Write status into the parent checkout by absolute path. Do not push that directory. Repeat at each status change and at least every 5 minutes while you are working, always inside `staleMinutes` (default 15). Do not commit `.warp/beam.json`. A failed turn returns `result: <id> failed <why>` so the parent can raise `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn.
 
 ```bash
-python3 <plugin>/scripts/ticket_state.py append --id <id> --state started --agent <agent> --root . --push
-python3 <plugin>/scripts/ticket_state.py append --id <id> --state heartbeat --agent <agent> --root . --push
+python3 <plugin>/scripts/ticket_state.py append --id <id> --state started --agent <agent> --root <parent>
+python3 <plugin>/scripts/ticket_state.py append --id <id> --state heartbeat --agent <agent> --root <parent>
 ```
 
 ## Then
@@ -27,8 +35,8 @@ python3 <plugin>/scripts/ticket_state.py append --id <id> --state heartbeat --ag
 2. Set `planning` by appending it to your ticket directory and pushing that directory. Plan the diff inside the lock paths only. An escape is `alarm` / `lock-escape`. Name every file or directory outside the lock with `--escaped`, one flag per path, and push that too. Do not widen the lock yourself. Do not commit `.warp/beam.json`.
 
 ```bash
-python3 <plugin>/scripts/ticket_state.py append --id <id> --state planning --root . --push
-python3 <plugin>/scripts/ticket_state.py append --id <id> --state lock-escape --escaped <path> --root . --push
+python3 <plugin>/scripts/ticket_state.py append --id <id> --state planning --root <parent>
+python3 <plugin>/scripts/ticket_state.py append --id <id> --state lock-escape --escaped <path> --root <parent>
 ``` If `alarmRepair.state` is `naming`, you are only naming those paths: run `alarm_repair.py paths --id <id> --path <path>` and stop. Do not edit. A repair whose state is `working` already has the widened locks. Finish inside them. Clear the alarm only when the diff stays inside those locks and you set a normal status. If you still need a path outside them, set `alarm` / `lock-escape` with the new `--escaped` paths. If you error out, run `alarm_repair.py next --returned <id> --error "<why>"` and leave the alarm set.
 3. Set `coding`. Branch `warp/<id>-<jiraKey>` off `baseBranch` from `python3 <plugin>/scripts/provider.py resolve`. Use `config.model` (default `claude-sonnet-5-5-high`, Claude Sonnet 5.5 High; the slug must match the Cursor model picker).
 4. Implement. Prove each acceptance criterion. Checkpoint spend with `scripts/beam.py spend`. If the Cursor run reports token usage, also record it. Pass the totals for this ticket, which replace the previous report:

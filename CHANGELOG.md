@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.14
+
+- Tickets start as one subagent per ticket in its own git worktree, in parallel up to `maxAgents`. `checkout.py launch` fetches origin and runs `git worktree add <worktreeRoot>/<id> -b warp/<id>-<jira> origin/main`. `worktreeRoot` defaults to `.warp/worktrees`, which is gitignored. The subagent works only inside that path, commits, pushes, and opens the pull request. It never merges, never touches the parent checkout, and never calls Jira or Slack. It writes `.warp/tickets/<id>/state.json` and `log.jsonl` into the parent checkout by absolute path and returns one line.
+- `checkout.py verify` runs after each subagent. The parent checkout must be clean apart from `.warp/`, and the diff must stay inside the worktree and the locks. A miss raises `lock-escape`. Merge or park runs `git worktree remove` and `git worktree prune`. A failed subagent result raises `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn. `/warp-resume` reuses the surviving worktrees and branches.
+- Optional `launch: agent` keeps the IMPLEMENT prompt for one new Agent, for a future Cursor Cloud Agents API. This plugin does not call that API.
+- `subagentVm` defaults to true. The prompt says: run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine. The subagent fetches the latest main, clones it, creates `warp/<id>-<jira>`, runs `hostname` and `free -g` first, and pushes `.warp/tickets/<id>/` on that branch. The parent patches the beam from those folders. The same hostname is a worktree on this machine: the ticket log records it, shared-machine rules apply, and one warning is posted per run. `maxLocalSubagents` (default 4) and `free -g` cap that machine.
+- A cloud start with `subagentVm` true warns, and `--force` allows it, when `.cursor/environment.json` and `cloudSnapshot` are both missing. Cloud subagents use the MCP servers at cursor.com/agents, not the local session. `/in-cloud` in the Agents Window is the manual fallback, one ticket per invocation. The isolation and parallelism rules live in `rules/warp-session.mdc`.
+- A local merge commits the live beam onto the base branch, then checks the previous branch back out. That checkout no longer deletes the working-tree beam when the ticket branch does not track it.
+
 ## 1.4.13
 
 - `checkout.py launch` does not create the branch. It prints an IMPLEMENT prompt that contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. The Agent clones main so `.cursor` rules load, then creates that branch. A beam file does not have to exist before the Agent starts. A branch that is only the beam commit is started from latest main.

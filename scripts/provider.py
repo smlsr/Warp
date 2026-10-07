@@ -47,7 +47,7 @@ FALSE = {"false", "no", "off", "0"}
 
 def _run(cmd: list[str], cwd: Optional[Path] = None, timeout: int = 20) -> subprocess.CompletedProcess:
     if cmd and cmd[0] == "git":
-        cmd = ["git", "-c", "maintenance.auto=false", *cmd[1:]]
+        cmd = ["git", "-c", "maintenance.auto=false", "-c", "commit.gpgsign=false", *cmd[1:]]
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
@@ -310,6 +310,15 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
         return True, fmt.git(root, "rev-parse", "--short", "HEAD")
     finally:
         _run(["git", "checkout", "-q", original], root)
+        # The live beam was committed on the base. Switching back to a ticket
+        # branch that does not track that file deletes it. Put the snapshot
+        # back so the parent still has its beam.
+        for rel, text in (live or {}).items():
+            path = root / rel
+            if path.is_file() or not text:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
 
 
 PROTECTION_MARKERS = (

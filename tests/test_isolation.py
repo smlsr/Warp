@@ -152,14 +152,14 @@ class WorktreeTests(GitRepo):
         self.assertEqual(pushed.returncode, 0, pushed.stderr)
         return bare
 
-    def test_cloud_launch_prints_implement_and_does_not_require_a_branch(self):
+    def test_launch_adds_a_worktree_and_prints_the_subagent_prompt(self):
         row = self.ticket(status="claimed", agent="shuttle-T-1")
         row["jiraKey"] = "WAR-1"
         row["acs"] = ["viewer serves the page"]
         row["token"] = "super-secret-token"
         row["usage"] = {"cost": 9.5, "tokensIn": 10}
         row["summary"] = "see https://hooks.slack.com/services/T00/B00/secret"
-        self.beam([row], runner="cloud", baseBranch="main")
+        self.beam([row], runner="cloud", baseBranch="main", launch="worktree", subagentVm=False)
         warp = self.repo / ".warp"
         (warp / "config.yaml").write_text('token: "config-token-value"\n')
         (warp / "journal.jsonl").write_text(json.dumps({"type": "claim", "id": "T-1", "token": "journal-token"}) + "\n")
@@ -167,30 +167,30 @@ class WorktreeTests(GitRepo):
         refused = run("checkout.py", "implement", "--id", "T-1", cwd=self.repo)
         self.assertEqual(refused.returncode, 2)
         self.assertIn("refuse: in-process", refused.stdout)
+        self.assertIn("subagent", refused.stdout)
         self.assertIn("new Agent", refused.stdout)
-        self.assertNotIn("tool: Task", refused.stdout)
         launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
         text = launched.stdout
-        self.assertIn("IMPLEMENT T-1", text)
+        worktree = (self.repo / ".warp" / "worktrees" / "T-1").resolve()
+        self.assertTrue(worktree.is_dir(), text)
+        self.assertIn("SUBAGENT T-1", text)
         self.assertIn("ticket: T-1", text)
         self.assertIn("jira: WAR-1", text)
         self.assertIn("locks: src/T-1", text)
         self.assertIn("acceptance: viewer serves the page", text)
         self.assertIn("branch: warp/T-1-WAR-1", text)
-        self.assertIn(orchestrator.TICKET_AGENT_INSTRUCTION, text)
-        self.assertIn("new Agent", text)
-        self.assertIn("Do not start a Subagent", text)
-        self.assertIn("Do not use the Task tool", text)
-        self.assertIn("Clone main", text)
-        self.assertIn("does not have to exist", text)
-        self.assertNotIn("fresh clone of main", text)
-        self.assertNotIn("Check out the ticket branch", text)
-        self.assertNotIn("has no .warp beam", text)
-        self.assertNotIn("do not start the Agent", text)
-        self.assertNotIn("tool: Task", text)
-        self.assertNotIn("subagent_type", text)
-        self.assertNotIn("cloud_base_branch", text)
+        self.assertIn("worktree: %s" % worktree, text)
+        self.assertIn(orchestrator.SUBAGENT_INSTRUCTION, text)
+        self.assertIn("start one subagent per ticket", text.casefold())
+        self.assertIn("maxAgents", text)
+        self.assertIn("Never merge", text)
+        self.assertIn("Never call Jira or Slack", text)
+        self.assertIn(str(self.repo.resolve()), text)
+        self.assertIn("state.json", text)
+        self.assertIn("result: T-1 ok", text)
+        self.assertNotIn("Do not start a Subagent", text)
+        self.assertNotIn("Do not use the Task tool", text)
         self.assertNotIn("super-secret-token", text)
         self.assertNotIn("hooks.slack.com", text)
         self.assertNotIn("9.5", text)
@@ -198,10 +198,68 @@ class WorktreeTests(GitRepo):
         self.assertNotIn("config-token-value", text)
         head = git(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
         self.assertEqual(head.stdout.strip(), "main")
-        missing = git(self.repo, "rev-parse", "--verify", "-q", "refs/heads/warp/T-1-WAR-1")
-        self.assertNotEqual(missing.returncode, 0)
-        live = (warp / "beam.json").read_text()
-        self.assertIn("super-secret-token", live)
+        branch = git(self.repo, "rev-parse", "--verify", "-q", "refs/heads/warp/T-1-WAR-1")
+        self.assertEqual(branch.returncode, 0, text)
+        again = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("reused: worktree", again.stdout)
+        self.assertIn("reused: branch", again.stdout)
+        clean = run("checkout.py", "verify", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        self.assertIn("verify: ok T-1", clean.stdout)
+        (self.repo / "leaked.txt").write_text("parent edit\n")
+        escaped = run("checkout.py", "verify", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(escaped.returncode, 2, escaped.stdout + escaped.stderr)
+        self.assertIn("lock-escape: T-1", escaped.stdout)
+        self.assertIn("escaped: leaked.txt", escaped.stdout)
+        saved = json.loads((warp / "beam.json").read_text())
+        self.assertEqual(saved["tickets"]["T-1"]["alarm"], "lock-escape")
+        (self.repo / "leaked.txt").unlink()
+        saved["tickets"]["T-1"]["alarm"] = None
+        saved["tickets"]["T-1"]["status"] = "coding"
+        saved["tickets"]["T-1"].pop("escaped", None)
+        (warp / "beam.json").write_text(json.dumps(saved) + "\n")
+        outside = worktree / "src" / "other.txt"
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("nope\n")
+        outside_lock = run("checkout.py", "verify", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(outside_lock.returncode, 2, outside_lock.stdout + outside_lock.stderr)
+        self.assertIn("src/other.txt", outside_lock.stdout)
+        outside.unlink()
+        inside = worktree / "src" / "T-1" / "ok.txt"
+        inside.parent.mkdir(parents=True, exist_ok=True)
+        inside.write_text("yes\n")
+        held = run("checkout.py", "verify", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(held.returncode, 0, held.stdout + held.stderr)
+        failed = run(
+            "checkout.py",
+            "result",
+            "--root",
+            str(self.repo),
+            "--id",
+            "T-1",
+            "--line",
+            "result: T-1 failed boom",
+            cwd=self.repo,
+        )
+        self.assertEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertIn("worker-died", failed.stdout)
+        died = json.loads((warp / "beam.json").read_text())["tickets"]["T-1"]
+        self.assertEqual(died["alarm"], "worker-died")
+        merged = run(
+            "orchestrator.py",
+            "merge",
+            "--beam",
+            str(warp / "beam.json"),
+            "--id",
+            "T-1",
+            "--outcome",
+            "merged",
+            cwd=self.repo,
+        )
+        self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
+        self.assertFalse(worktree.exists(), merged.stdout)
+        self.assertIn("pruned", merged.stdout)
 
     def _advance_origin_main(self, bare):
         other = self.tmp / "other"
@@ -222,7 +280,7 @@ class WorktreeTests(GitRepo):
         row = self.ticket(status="claimed", agent="shuttle-T-1")
         row["jiraKey"] = "WAR-1"
         row["acs"] = ["viewer serves the page"]
-        self.beam([row], runner="cloud", baseBranch="main")
+        self.beam([row], runner="cloud", baseBranch="main", launch="agent")
         self._origin()
         published = state_commit.publish_ticket(self.repo, str(self.repo / ".warp" / "beam.json"), "T-1", push=True)
         self.assertEqual(published, 0)
@@ -238,7 +296,7 @@ class WorktreeTests(GitRepo):
 
     def test_in_flight_work_is_not_reset(self):
         row = self.ticket(status="claimed", agent="shuttle-T-1", branch="warp/T-1")
-        self.beam([row], runner="cloud", baseBranch="main")
+        self.beam([row], runner="cloud", baseBranch="main", launch="agent")
         git(self.repo, "checkout", "-b", "warp/T-1")
         (self.repo / "ticket-only.txt").write_text("keep\n")
         git(self.repo, "add", "ticket-only.txt")
@@ -260,7 +318,7 @@ class WorktreeTests(GitRepo):
             "version": 1,
             "runState": "running",
             "baseGreen": True,
-            "config": {"runner": "cloud", "maxAgents": 2, "baseBranch": "main"},
+            "config": {"runner": "cloud", "maxAgents": 2, "baseBranch": "main", "launch": "worktree"},
             "tickets": {
                 "T-1": {
                     "id": "T-1",
@@ -276,21 +334,116 @@ class WorktreeTests(GitRepo):
         }
         lines = orchestrator.format_dispatch(data)
         text = "\n".join(lines)
-        self.assertIn("IMPLEMENT T-1", text)
+        self.assertIn("SUBAGENT T-1", text)
         self.assertIn("ticket: T-1", text)
         self.assertIn("locks: src/t", text)
-        self.assertIn("new Agent", text)
-        self.assertIn("Do not start a Subagent", text)
-        self.assertIn("Do not use the Task tool", text)
-        self.assertIn("Clone main", text)
-        self.assertIn("does not have to exist", text)
-        self.assertNotIn("fresh clone of main", text)
-        self.assertNotIn("has no .warp beam", text)
-        self.assertNotIn("task-cloud", text)
+        self.assertIn("start one subagent per ticket", text.casefold())
+        self.assertIn("maxAgents", text)
+        self.assertNotIn("Do not start a Subagent", text)
+        self.assertNotIn("Do not use the Task tool", text)
         self.assertNotIn("subagent_type", text)
-        self.assertNotIn("tool: Task", text)
         self.assertTrue(any(line.startswith("start T-1 ") for line in lines))
-        self.assertIn("launch=new-agent", text)
+        self.assertIn("launch=subagent", text)
+        self.assertIn("checkout=subagent-vm", text)
+        self.assertIn(orchestrator.VM_LINE, text)
+        self.assertIn("hostname", text)
+        self.assertIn("free -g", text)
+        local = dict(data)
+        local["config"] = dict(data["config"], subagentVm=False)
+        local_text = "\n".join(orchestrator.format_dispatch(local))
+        self.assertIn("checkout=worktree", local_text)
+        self.assertIn("Run checkout.py launch", local_text)
+        agent = dict(data)
+        agent["config"] = dict(data["config"], launch="agent")
+        agent_text = "\n".join(orchestrator.format_dispatch(agent))
+        self.assertIn("IMPLEMENT T-1", agent_text)
+        self.assertIn("new Agent", agent_text)
+        self.assertIn("launch=new-agent", agent_text)
+
+
+class VmLaunchTests(GitRepo):
+    def test_default_launch_asks_for_a_dedicated_vm(self):
+        row = self.ticket(status="claimed", agent="shuttle-T-1")
+        row["jiraKey"] = "WAR-1"
+        row["acs"] = ["viewer serves the page"]
+        self.beam([row], runner="cloud", baseBranch="main")
+        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo)
+        self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+        self.assertIn(orchestrator.VM_LINE, launched.stdout)
+        self.assertIn("free -g", launched.stdout)
+        self.assertIn("hostname", launched.stdout)
+        self.assertIn("warp/T-1-WAR-1", launched.stdout)
+        self.assertIn("cursor.com/agents", launched.stdout)
+        self.assertNotIn("created: worktree", launched.stdout)
+        self.assertFalse((self.repo / ".warp" / "worktrees" / "T-1").exists())
+        host = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
+        other = run(
+            "checkout.py",
+            "result",
+            "--root",
+            str(self.repo),
+            "--id",
+            "T-1",
+            "--line",
+            "result: T-1 ok hostname=other-vm branch=warp/T-1-WAR-1 cwd=/tmp/clone memory=8",
+            cwd=self.repo,
+        )
+        self.assertEqual(other.returncode, 0, other.stdout + other.stderr)
+        self.assertIn("verify: vm T-1", other.stdout)
+        saved = json.loads((self.repo / ".warp" / "beam.json").read_text())
+        self.assertEqual(saved["tickets"]["T-1"]["isolation"], "vm")
+        self.assertNotIn("subagentVmWarned", saved)
+        saved["tickets"]["T-1"]["status"] = "coding"
+        saved["tickets"]["T-1"]["checkout"] = "subagent-vm"
+        (self.repo / ".warp" / "beam.json").write_text(json.dumps(saved) + "\n")
+        same = run(
+            "checkout.py",
+            "result",
+            "--root",
+            str(self.repo),
+            "--id",
+            "T-1",
+            "--line",
+            "result: T-1 ok hostname=%s cwd=/tmp/does-not-exist" % host,
+            cwd=self.repo,
+        )
+        self.assertEqual(same.returncode, 0, same.stdout + same.stderr)
+        self.assertIn("herald: subagent fell back to a worktree on this machine", same.stdout)
+        log = (self.repo / ".warp" / "tickets" / "T-1" / "log.jsonl").read_text()
+        self.assertIn("same hostname as parent", log)
+        warned = json.loads((self.repo / ".warp" / "beam.json").read_text())
+        self.assertTrue(warned.get("subagentVmWarned"))
+        self.assertTrue(warned.get("subagentVmFallback"))
+        warned["tickets"]["T-1"]["status"] = "coding"
+        warned["tickets"]["T-1"]["checkout"] = "subagent-vm"
+        (self.repo / ".warp" / "beam.json").write_text(json.dumps(warned) + "\n")
+        again = run(
+            "checkout.py",
+            "result",
+            "--root",
+            str(self.repo),
+            "--id",
+            "T-1",
+            "--line",
+            "result: T-1 ok hostname=%s" % host,
+            cwd=self.repo,
+        )
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertNotIn("herald: subagent fell back", again.stdout)
+        self.assertIn("fallback: T-1", again.stdout)
+
+    def test_local_cap_and_memory(self):
+        self.assertEqual(orchestrator.local_subagent_cap({}, available=None), 4)
+        self.assertEqual(orchestrator.local_subagent_cap({"maxLocalSubagents": 4}, available=16), 4)
+        self.assertEqual(orchestrator.local_subagent_cap({"maxLocalSubagents": 4}, available=3), 1)
+        self.assertEqual(orchestrator.local_subagent_cap({}, available=0), 1)
+        first = self.ticket("T-1", status="coding", agent="shuttle-T-1")
+        second = self.ticket("T-2", status="claimed", agent="shuttle-T-2")
+        self.beam([first, second], subagentVm=False, maxLocalSubagents=1, runner="local")
+        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-2", cwd=self.repo)
+        self.assertEqual(launched.returncode, 2, launched.stdout + launched.stderr)
+        self.assertIn("refuse: local subagent cap", launched.stdout)
+        self.assertIn("local-cap:", launched.stdout)
 
 
 class ParentExitTests(unittest.TestCase):
@@ -521,6 +674,36 @@ class PromptGateTests(GitRepo):
         cloud = prompt_gate.missing_tools(cfg, [], env={"CURSOR_CLOUD": "1"})
         self.assertIn("transitionJiraIssue", cloud)
         self.assertNotIn("slack_send_message", cloud)
+
+    def test_cloud_vm_start_needs_an_environment_unless_forced(self):
+        self.beam(
+            [self.ticket()],
+            runner="cloud",
+            jiraTransition=False,
+            messenger="teams",
+            notify="off",
+            subagentVm=True,
+        )
+        data = json.loads((self.repo / ".warp" / "beam.json").read_text())
+        data["runState"] = "stopped"
+        (self.repo / ".warp" / "beam.json").write_text(json.dumps(data) + "\n")
+        refused = run("scan.py", "start", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("no cloud environment", refused.stdout)
+        self.assertIn("cursor.com/agents", refused.stdout)
+        self.assertNotEqual(json.loads((self.repo / ".warp" / "beam.json").read_text()).get("runState"), "running")
+        forced = run("scan.py", "start", "--force", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
+        self.assertIn("warn: no cloud environment", forced.stdout)
+        self.assertEqual(json.loads((self.repo / ".warp" / "beam.json").read_text())["runState"], "running")
+        stopped = json.loads((self.repo / ".warp" / "beam.json").read_text())
+        stopped["runState"] = "stopped"
+        stopped.pop("promptForced", None)
+        stopped["config"]["cloudSnapshot"] = "snap-1"
+        (self.repo / ".warp" / "beam.json").write_text(json.dumps(stopped) + "\n")
+        started = run("scan.py", "start", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+        self.assertIn("prompt-gate: ok", started.stdout)
 
 
 class UpgradeTests(unittest.TestCase):

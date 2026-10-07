@@ -807,6 +807,9 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         if missing:
             prompt_gate.announce(beam_path.parent.parent, missing)
             sys.exit(2)
+        if prompt_gate.environment_blocked(beam, beam_path):
+            prompt_gate.warn_environment()
+            sys.exit(2)
     if args.status and args.status not in STATUSES:
         sys.exit(f"bad status {args.status}; use {STATUSES}")
     pr = t.get("pr") or {}
@@ -1438,6 +1441,11 @@ def default_config() -> dict:
         "messenger": "both",
         "notify": "verbose",
         "runner": "cloud",
+        "launch": "worktree",
+        "worktreeRoot": ".warp/worktrees",
+        "subagentVm": True,
+        "maxLocalSubagents": 4,
+        "cloudSnapshot": "",
         "jiraProject": "",
         "jiraKeyPrefixes": "",
         "jiraKeyMap": {},

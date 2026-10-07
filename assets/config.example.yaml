@@ -36,11 +36,39 @@ messenger: both
 notify: verbose
 # verbose | quiet
 runner: cloud
-# cloud = one Cursor cloud agent VM per ticket. local = one git worktree per ticket.
+# cloud = this session is a cloud agent. local = this machine.
 # auto = cloud when this session is a cloud agent, otherwise local.
+# The runner picks the prompt gate. It does not pick the ticket checkout.
 # To run on this machine, comment out the line above and uncomment the next.
 # runner: local
 # runner: auto
+launch: worktree
+# worktree = one subagent per ticket in its own git worktree, in parallel up to maxAgents.
+# agent = optional IMPLEMENT prompt for one new Agent, for a future Cursor Cloud Agents API.
+# This plugin does not call that API. Clone main so .cursor rules load. A beam file
+# does not have to exist on the branch before that Agent starts.
+# launch: agent
+worktreeRoot: .warp/worktrees
+# Parent of ticket worktrees: <worktreeRoot>/<id>. The default is gitignored.
+subagentVm: true
+# true: each ticket subagent is asked, in the prompt, to run in its own cloud
+# environment on a dedicated VM with its own clone and branch, not a git
+# worktree on this machine. The subagent config has no isolation field.
+# The subagent fetches latest main, clones it, and creates warp/<id>-<jira>.
+# Its first step is hostname and free -g. It writes .warp/tickets/<id>/ on
+# that branch and pushes. The parent patches the beam from that folder.
+# The same hostname is a worktree on this machine. One warning per run.
+# false: the worktree path, capped by maxLocalSubagents.
+# Cloud subagents use the MCP servers at cursor.com/agents, not this session.
+# In the Agents Window, /in-cloud is the manual fallback, one ticket at a time.
+maxLocalSubagents: 4
+# Shared-machine cap when subagentVm is false or a subagent falls back here.
+# free -g lowers it when available memory is under 2 GiB per extra subagent.
+# At least one still runs. Nothing starts enough to crash the machine.
+cloudSnapshot: ""
+# Snapshot id. With .cursor/environment.json, either one is a cloud environment.
+# On a cloud runner, subagentVm true with neither warns and refuses /warp-start.
+# --force allows the start and still warns.
 
 jiraProject: ""
 # Jira project key, for example WAR. Leave this empty: /warp-init and /warp-scan
