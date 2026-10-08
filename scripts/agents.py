@@ -67,6 +67,9 @@ runners do not execute hooks, and nothing depends on them.
   python3 scripts/agents.py list --beam .warp/beam.json
   python3 scripts/agents.py list --beam .warp/beam.json --tag all
   python3 scripts/agents.py list --beam .warp/beam.json --untagged
+  python3 scripts/agents.py list --beam .warp/beam.json --scan="Jira","Fix","Bugbot"
+  python3 scripts/agents.py list --beam .warp/beam.json --scan Jira,Fix,Bugbot
+  python3 scripts/agents.py list --beam .warp/beam.json --scan Jira --scan Fix
   python3 scripts/agents.py check --beam .warp/beam.json
   python3 scripts/agents.py reap --beam .warp/beam.json --id subagent:WV-01 --ticket WV-01
   python3 scripts/agents.py reap --remote --id subagent:WV-01 --ticket WV-01
@@ -78,6 +81,8 @@ runners do not execute hooks, and nothing depends on them.
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --tag a1b2c3
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --untagged
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --scan Jira,Fix,Bugbot
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --scan Jira,Fix,Bugbot
 """
 
 from __future__ import annotations
@@ -1170,6 +1175,94 @@ def cloud_prompt(item: dict) -> str:
     return ""
 
 
+def first_prompt(item: dict) -> str:
+    """The first prompt the API returned: a prompts list, then `prompt` text."""
+    prompts = item.get("prompts") if isinstance(item, dict) else None
+    if isinstance(prompts, list) and prompts:
+        first = prompts[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            return str(first.get("text") or first.get("prompt") or "")
+    return cloud_prompt(item if isinstance(item, dict) else {})
+
+
+def scan_texts(item: dict) -> list:
+    """`(field, text)` in scan order: name, summary, description, first prompt."""
+    if not isinstance(item, dict):
+        return []
+    return [
+        ("name", str(item.get("name") or "")),
+        ("summary", str(item.get("summary") or "")),
+        ("description", str(item.get("description") or "")),
+        ("prompt", first_prompt(item)),
+    ]
+
+
+def parse_scan(values) -> list:
+    """Words from `--scan`: a comma list, quoted items, or repeated flags.
+
+    `--scan="Jira","Fix","Bugbot"`, `--scan Jira,Fix,Bugbot`, and
+    `--scan Jira --scan Fix` are the same three words. Matching is
+    case-insensitive, so a repeated word is kept once, in the first spelling.
+    """
+    words = []
+    seen = set()
+    if values is None:
+        return words
+    if isinstance(values, str):
+        values = [values]
+    for raw in values:
+        for part in re.split(r"\s*,\s*", str(raw).strip()):
+            word = part.strip()
+            if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'":
+                word = word[1:-1].strip()
+            else:
+                word = word.strip("\"'")
+            word = word.strip()
+            if not word:
+                continue
+            key = word.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            words.append(word)
+    return words
+
+
+def scan_hit(item: dict, words: list) -> Optional[tuple]:
+    """`(word, field)` for the first field that contains a scan word.
+
+    Fields are name, then summary, then description, then the first prompt.
+    Within a field the earliest word in the list wins. The comparison is
+    case-insensitive. Empty when nothing matches.
+    """
+    needles = [(word, str(word).casefold()) for word in words or [] if str(word).strip()]
+    if not needles:
+        return None
+    for label, text in scan_texts(item):
+        folded = text.casefold()
+        if not folded:
+            continue
+        for word, needle in needles:
+            if needle in folded:
+                return word, label
+    return None
+
+
+def _scan_body_complete(item: dict) -> bool:
+    """True when this row already has a prompt and a summary or description.
+
+    A list row omits those. A scan that has not matched yet reads
+    `GET /v1/agents/{id}` once so the prompt and the summary can be checked.
+    """
+    if not isinstance(item, dict):
+        return False
+    has_prompt = "prompt" in item or "prompts" in item
+    has_blurb = "summary" in item or "description" in item
+    return bool(has_prompt and has_blurb)
+
+
 TAG = "warp"
 _TAG_RE = re.compile(r"(?im)^\s*\[warp(?::([a-z0-9]{1,16}))?\](?=\s|$)")
 
@@ -1365,12 +1458,18 @@ def cloud_match_line(item: dict, origin_key: str) -> str:
     name = str(item.get("name") or "").replace("\n", " ").strip()
     status = str(item.get("status") or "")
     link = str(item.get("url") or agent_url(ident))
-    return "cloud: id=%s name=%s repo=%s status=%s updated=%s %s" % (
+    matched = ""
+    word = str(item.get("_scanWord") or "").replace("\n", " ").strip()
+    field = str(item.get("_scanField") or "").strip()
+    if word and field:
+        matched = " word=%s field=%s" % (word, field)
+    return "cloud: id=%s name=%s repo=%s status=%s updated=%s%s %s" % (
         ident,
         name,
         _display_repo(item, origin_key),
         status,
         _updated(item),
+        matched,
         link,
     )
 
@@ -1408,6 +1507,7 @@ def classify_cloud(
     instance: str = "",
     all_instances: bool = False,
     cancel_loose: bool = False,
+    scan_words: Optional[list] = None,
 ) -> str:
     """`archive`, `cancel`, `skip:<reason>`, or empty when the agent is out of scope.
 
@@ -1415,9 +1515,12 @@ def classify_cloud(
     row, or this instance's tag `[warp:<instance>]` on its name or prompt.
     `all_instances` takes the tag of any Warp run. `untagged` adds agents
     from before the tag: a prompt Warp printed, or Warp role words.
-    `--all-idle` drops the match. This process and this run's parent are
-    never touched. A RUNNING or ACTIVE agent is skipped unless `running`,
-    which cancels its run before the archive.
+    `--all-idle` drops the match. `--scan` ignores the repo, the tag, and
+    the registry, and matches the words in the name, summary or description,
+    and first prompt. This process and this run's parent are never touched.
+    A RUNNING or ACTIVE agent is skipped unless `running`, which cancels
+    its run before the archive. A running `--scan` match is left
+    (`skip:running-scan`) unless `cancel_loose` (`--force`).
     """
     if not isinstance(item, dict):
         return ""
@@ -1427,6 +1530,20 @@ def classify_cloud(
     status = str(item.get("status") or "").strip().upper()
     if status == "ARCHIVED":
         return ""
+    if scan_words:
+        if not scan_hit(item, scan_words):
+            return ""
+        if self_id and ident == self_id:
+            return "skip:self"
+        if protected and ident in protected:
+            return "skip:parent"
+        if status in _BUSY_STATUS:
+            if not cancel_loose:
+                return "skip:running-scan"
+            return "cancel"
+        if status != "IDLE":
+            return "skip:status"
+        return "archive"
     if not any_repo and not _same_repo(item, origin_key):
         return ""
     in_registry = ident in registry_ids
@@ -1491,13 +1608,19 @@ def _needs_detail(
     name_only: bool = False,
     instance: str = "",
     all_instances: bool = False,
+    scan_words: Optional[list] = None,
 ) -> bool:
     """Whether GET /v1/agents/{id} is needed to decide. List rows carry the name and not the repos.
 
     `name_only` is the halt: it is on a time limit, so an agent whose name
     has no tag and that is not in the registry is passed over from the list
-    row alone, with no extra call.
+    row alone, with no extra call. `--scan` reads the detail when the list
+    row has not already matched and is missing the prompt or the summary.
     """
+    if scan_words:
+        if scan_hit(item, scan_words):
+            return False
+        return not _scan_body_complete(item)
     ident = str(item.get("id") or "")
     name = str(item.get("name") or "")
     known = ident in registry_ids or tag_match(name, instance, all_instances)
@@ -1514,7 +1637,21 @@ def _needs_detail(
 
 def _merge_detail(item: dict, detail: dict) -> dict:
     merged = dict(item)
-    for field in ("name", "status", "repos", "prompt", "url", "updatedAt", "repository", "repo", "git", "latestRunId"):
+    for field in (
+        "name",
+        "status",
+        "repos",
+        "prompt",
+        "prompts",
+        "summary",
+        "description",
+        "url",
+        "updatedAt",
+        "repository",
+        "repo",
+        "git",
+        "latestRunId",
+    ):
         value = detail.get(field)
         if value not in (None, "", []):
             merged[field] = value
@@ -1599,19 +1736,24 @@ def select_cloud(
     deadline: Optional[float] = None,
     tick: Optional[Callable] = None,
     started: float = 0.0,
+    scan_words: Optional[list] = None,
 ) -> dict:
     """The cloud agents a listing or a cleanup is about. Reads, never writes.
 
     Returns `error` (a line, or empty), `matches` as (agent, kind) with kind
     `archive`, `cancel`, or `skip:<reason>`, the repo key, and whether the
-    time limit cut the read short.
+    time limit cut the read short. `scan_words` pages every agent the key
+    can see and ignores the repo, the tag, and the registry.
     """
     doc = registry(data, beam_path)
     instance, every, foreign = tag_scope(data, tag_override)
+    words = list(scan_words or [])
     root = Path(beam_path).resolve().parent.parent if beam_path is not None else None
     remote = origin if origin is not None else origin_url(root)
     origin_key = repo_key(remote)
-    found = {"error": "", "matches": [], "origin": origin_key, "late": False, "instance": instance, "every": every, "foreign": foreign}
+    found = {"error": "", "matches": [], "origin": origin_key, "late": False, "instance": instance, "every": every, "foreign": foreign, "scan": words}
+    if words:
+        any_repo = True
     if not any_repo and not origin_key:
         found["error"] = "no origin; nothing matched"
         return found
@@ -1631,7 +1773,17 @@ def select_cloud(
         ident = str(item.get("id") or "")
         if skip and ident in skip:
             continue
-        if _needs_detail(item, registry_ids, all_idle, any_repo, untagged=untagged, name_only=name_only, instance=instance, all_instances=every) and ident:
+        if _needs_detail(
+            item,
+            registry_ids,
+            all_idle,
+            any_repo,
+            untagged=untagged,
+            name_only=name_only,
+            instance=instance,
+            all_instances=every,
+            scan_words=words,
+        ) and ident:
             detail = fetch_agent(ident, secret, transport=transport)
             if detail:
                 item = _merge_detail(item, detail)
@@ -1648,8 +1800,14 @@ def select_cloud(
             instance=instance,
             all_instances=every,
             cancel_loose=cancel_loose,
+            scan_words=words,
         )
         if kind:
+            if words:
+                hit = scan_hit(item, words)
+                if hit:
+                    item = dict(item)
+                    item["_scanWord"], item["_scanField"] = hit
             found["matches"].append((item, kind))
     return found
 
@@ -1665,14 +1823,21 @@ def out_lines(
     untagged: bool = False,
     all_idle: bool = False,
     any_repo: bool = False,
+    scan_words: Optional[list] = None,
 ) -> list:
     """What is still out: the registry, then the tagged cloud agents with their status. Changes nothing.
 
     This is `/warp-list`. The cloud half needs CURSOR_API_KEY. `--tag` names
     another run's tag, or `all` for any Warp run. `--untagged` adds agents
-    from before the tag.
+    from before the tag. `--scan` lists every agent the key can see whose
+    name, summary or description, or first prompt contains one of the words.
     """
     doc = registry(data, beam_path)
+    words = list(scan_words or [])
+    if words:
+        tag_override = ""
+        untagged = False
+        all_idle = False
     instance, every, foreign = tag_scope(data, tag_override)
     lines = [instance_line(data)]
     scope = scope_text(instance, every, untagged, all_idle)
@@ -1683,10 +1848,13 @@ def out_lines(
         lines.extend(_row_line(row) for row in rows)
         live = sum(1 for row in rows if row.get("state") in _LIVE)
         lines.append("registry: live=%d ended=%d" % (live, len(rows) - live))
+    if words:
+        lines.append("scan: words %s" % ", ".join(words))
+        lines.append("scan: crosses repos. Check this list before --apply.")
     secret = api_key() if key is None else key
     if not secret:
         lines.append("cloud: not read. Set %s in the environment to list cloud agents." % ENV_KEY)
-        if not foreign:
+        if not foreign and not words:
             for ident in _recorded_links(doc):
                 lines.append("cloud: link %s" % agent_url(ident))
         return lines
@@ -1697,15 +1865,29 @@ def out_lines(
         transport=transport,
         origin=origin,
         self_id=self_id,
-        tag_override=tag_override,
-        untagged=untagged,
-        all_idle=all_idle,
-        any_repo=any_repo,
+        tag_override="" if words else tag_override,
+        untagged=False if words else untagged,
+        all_idle=False if words else all_idle,
+        any_repo=True if words else any_repo,
         running=True,
         cancel_loose=False,
+        scan_words=words,
     )
     if found["error"]:
         lines.append("cloud: %s" % found["error"])
+        return lines
+    if words:
+        shown = 0
+        for item, kind in found["matches"]:
+            reason = kind.split(":", 1)[1] if kind.startswith("skip:") else ""
+            if reason in {"self", "parent"}:
+                lines.append("list: kept %s reason=%s" % (item.get("id"), reason))
+                continue
+            lines.append(cloud_match_line(item, found["origin"]))
+            shown += 1
+            if reason:
+                lines.append("list: kept %s reason=%s" % (item.get("id"), reason))
+        lines.append("scan: count %d" % shown)
         return lines
     busy = idle = kept = 0
     for item, kind in found["matches"]:
@@ -1747,6 +1929,7 @@ def cleanup(
     clock: Optional[Callable] = None,
     skip: Optional[set] = None,
     tag_override: str = "",
+    scan_words: Optional[list] = None,
 ) -> list:
     """Cancel and archive cloud agents. `--cloud` without `--apply` is a dry run.
 
@@ -1756,17 +1939,29 @@ def cleanup(
     or `all` for the tag of any Warp run. `--untagged` adds agents from
     before the tag, matched loosely on Warp role words. `--all-idle` drops
     the match and stays on this repo. `--any-repo` drops the repo check.
-    This process and this run's parent are never touched. A RUNNING or
-    ACTIVE agent stays unless `--running`, which cancels its run first.
-    `--running` is refused while this run is running, unless `--force`:
-    pause or stop first. An agent that only matched loosely and is still
-    running is also left unless `--force`.
+    `--scan` ignores the repo, the tag, and the registry, and matches the
+    words in the name, summary or description, and first prompt, in every
+    repo the key can see. This process and this run's parent are never
+    touched. A RUNNING or ACTIVE agent stays unless `--running`, which
+    cancels its run first. `--running` is refused while this run is
+    running, unless `--force`: pause or stop first. An agent that only
+    matched loosely and is still running is also left unless `--force`.
+    A running `--scan` match is left (`reason=running-scan`) unless
+    `--force`, which cancels it and then archives it. Archive only.
     """
     import time
 
     tick = clock or time.monotonic
     started = tick()
     doc = registry(data, beam_path)
+    words = list(scan_words or [])
+    if words:
+        # --scan replaces the tag, the repo, and the registry selection.
+        tag_override = ""
+        all_instances = False
+        untagged = False
+        all_idle = False
+        any_repo = True
     if all_instances and not tag_override:
         tag_override = "all"
     instance, every, foreign = tag_scope(data, tag_override)
@@ -1789,7 +1984,11 @@ def cleanup(
         lines.append("cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.")
         running = False
     if listing:
-        lines.append("cleanup: tag %s" % scope_text(instance, every, untagged, all_idle))
+        if words:
+            lines.append("cleanup: scan %s" % ", ".join(words))
+            lines.append("cleanup: scan crosses repos. Check the list before --apply.")
+        else:
+            lines.append("cleanup: tag %s" % scope_text(instance, every, untagged, all_idle))
     found = select_cloud(
         data,
         beam_path,
@@ -1808,6 +2007,7 @@ def cleanup(
         deadline=deadline,
         tick=tick,
         started=started,
+        scan_words=words,
     )
     if found["error"]:
         lines.append("cleanup: %s" % found["error"])
@@ -1822,8 +2022,10 @@ def cleanup(
         lines.append(cloud_match_line(item, found["origin"]))
         if kind in {"archive", "cancel"}:
             chosen.append((item, kind))
-            if kind == "cancel" and not apply:
+            if not apply and kind == "cancel":
                 lines.append("cleanup: would cancel %s" % ident)
+            elif not apply and words and kind == "archive":
+                lines.append("cleanup: would archive %s" % ident)
         elif kind.startswith("skip:"):
             lines.append("cleanup: skip %s reason=%s" % (ident, kind.split(":", 1)[1]))
     lines.append("cleanup: count %d" % len(chosen))
@@ -2660,11 +2862,21 @@ SELECTION_HELP = """\
                     This can match someone else's agent.
   --all-idle        Every idle agent in this repo, tagged or not.
   --any-repo        Do not limit to this repo.
+  --scan <words>    Match these words in the name, the summary or description,
+                    and the first prompt, in every repo the key can see.
+                    Ignores the repo filter and the tag and registry rules.
+                    A comma list, quoted items, or repeated flags:
+                      --scan="Jira","Fix","Bugbot"
+                      --scan Jira,Fix,Bugbot
+                      --scan Jira --scan Fix
+                    Case-insensitive. --scan crosses repos: read the list
+                    before --apply.
 
 Other agents in the repo are not matched, whatever words are in their names,
-and neither are another Warp run's. The agent running the command
-(reason=self) and this run's parent (reason=parent) are never touched.
-The cloud agents need CURSOR_API_KEY in the environment. It is never written.
+and neither are another Warp run's, unless you pass --scan. The agent
+running the command (reason=self) and this run's parent (reason=parent) are
+never matched. The cloud agents need CURSOR_API_KEY in the environment. It
+is never written.
 
 ?, help, -h, and --help print this text and do nothing else. Quote ? if the
 shell expands it.
@@ -2682,8 +2894,11 @@ It prints:
   cloud: id= name= repo= status= updated= <link>
                              one line per matching cloud agent. status=ACTIVE
                              is still running. status=IDLE is not.
-  list: kept <id> reason=parent|self|running-untagged|status
+                             --scan adds word= and field= (name, summary,
+                             description, or prompt).
+  list: kept <id> reason=parent|self|running-untagged|running-scan|status
   out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>
+  scan: count <n>            with --scan, after the matches. Crosses repos.
 
 Without CURSOR_API_KEY it prints the registry, `cloud: not read.`, and a
 link for each recorded cloud agent.
@@ -2696,8 +2911,11 @@ examples:
   /warp-list --tag a1b2c3
   /warp-list --tag all
   /warp-list --untagged
+  /warp-list --scan="Jira","Fix","Bugbot"
   python3 scripts/agents.py list --beam .warp/beam.json
   python3 scripts/agents.py list --beam .warp/beam.json --tag all --untagged
+  python3 scripts/agents.py list --beam .warp/beam.json --scan Jira,Fix,Bugbot
+  python3 scripts/agents.py list --beam .warp/beam.json --scan Jira --scan Fix
 """
 )
 
@@ -2719,15 +2937,20 @@ While this run is running, the idle ones are archived and the running ones
 are left: `cleanup: --running refused while the run is running`. /warp-pause
 or /warp-stop first, or pass --force. An agent that only matched --untagged
 and is still running is left (reason=running-untagged) unless --force,
-because it may be someone else's.
+because it may be someone else's. A running --scan match is left
+(reason=running-scan) unless --force, which cancels it and then archives
+it. That refusal while the run is running still applies. Archive only.
+Warp never deletes an agent.
 
   --cloud     Read the account's cloud agents. Needed for anything below.
-  --apply     Act. Without it this is a dry run: each match, `cleanup: would
-              cancel <id>` for the running ones, and `cleanup: count`.
+  --apply     Act. Without it this is a dry run: each match, `cleanup: would archive <id>`
+              for an idle --scan match, `cleanup: would cancel <id>` for the running
+              ones, and `cleanup: count`.
   --running   Also cancel the run of a RUNNING or ACTIVE match before the
-              archive. Without it a running agent is skipped.
+              archive. Without it a running agent is skipped. It does not
+              cancel a running --scan match: that takes --force.
   --force     Cancel running agents while this run is running, and cancel a
-              running agent that only matched loosely.
+              running agent that only matched loosely or by --scan.
 
 """
     + SELECTION_HELP
@@ -2738,9 +2961,13 @@ examples:
   /warp-cleanup --tag all
   /warp-cleanup --untagged
   /warp-cleanup --force
+  /warp-list --scan="Jira","Fix","Bugbot"
+  /warp-cleanup --scan Jira,Fix,Bugbot
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud                      (dry run)
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --untagged
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --scan Jira,Fix,Bugbot
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --force --scan Jira --scan Fix
 """
 )
 
@@ -2782,13 +3009,19 @@ def main(argv: Optional[list] = None) -> int:
             cmd.add_argument("--untagged", action="store_true", help="Also match agents with no Warp tag, from before 1.5.0, loosely, on Warp role words in the name or prompt.")
             cmd.add_argument("--all-idle", action="store_true", help="Drop the match. Every idle agent in this repo, unless --any-repo.")
             cmd.add_argument("--any-repo", action="store_true", help="Include other repositories.")
+            cmd.add_argument(
+                "--scan",
+                action="append",
+                default=None,
+                help='Match these words in the name, summary or description, and first prompt, in every repo the key can see. Repeat, or pass a comma list: --scan Jira,Fix,Bugbot. Ignores the repo filter and the tag and registry rules. Crosses repos: read the list before --apply.',
+            )
         if name == "list":
             cmd.add_argument("--cloud", action="store_true", help="Accepted and not needed. The cloud agents are listed whenever CURSOR_API_KEY is set.")
         if name == "cleanup":
             cmd.add_argument("--cloud", action="store_true", help="Read GET /v1/agents. Without --apply this is a dry run.")
             cmd.add_argument("--apply", action="store_true", help="Archive the dry-run matches.")
             cmd.add_argument("--running", action="store_true", help="Also cancel the run of a RUNNING or ACTIVE match, then archive it. Pause or stop first.")
-            cmd.add_argument("--force", action="store_true", help="Allow --running while this run is running, and cancel a running agent that only matched loosely.")
+            cmd.add_argument("--force", action="store_true", help="Allow --running while this run is running, and cancel a running agent that only matched loosely or by --scan.")
         if name == "reap":
             cmd.add_argument("--id", default="", help="This agent's id from the prompt line `agent:`.")
             cmd.add_argument("--ticket", default="", help="The ticket this Shuttle works on.")
@@ -2834,6 +3067,7 @@ def main(argv: Optional[list] = None) -> int:
             untagged=args.untagged,
             all_idle=args.all_idle,
             any_repo=args.any_repo,
+            scan_words=parse_scan(args.scan),
         ):
             print(line)
         return 0
@@ -2853,6 +3087,7 @@ def main(argv: Optional[list] = None) -> int:
         force=args.force,
         untagged=args.untagged,
         tag_override=args.tag,
+        scan_words=parse_scan(args.scan),
     ):
         print(line)
     return 0

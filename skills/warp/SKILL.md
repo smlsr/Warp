@@ -19,8 +19,8 @@ Plugin hooks do not run on cloud runners. Every check here is a script you run. 
 | `/warp-start` or `/warp-resume` | running | yes | the same command, from paused, stopped, or running. Unfinished work first, then new tickets, up to maxAgents |
 | `/warp-pause` | paused | no | every agent is ended. Branches, pull requests, and locks stay |
 | `/warp-stop` | stopped | no | the same teardown as pause, then the completion report |
-| `/warp-list` | unchanged | no | what is still out for this run, running or idle |
-| `/warp-cleanup` | unchanged | no | cancels and archives what `/warp-list` shows |
+| `/warp-list` | unchanged | no | what is still out for this run, running or idle. `--scan` lists word matches in any repo and changes nothing |
+| `/warp-cleanup` | unchanged | no | cancels and archives what `/warp-list` shows. `--scan` crosses repos: read the list before `--apply` |
 
 ```bash
 python3 <plugin>/scripts/scan.py start --beam .warp/beam.json
