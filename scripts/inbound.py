@@ -2,26 +2,28 @@
 """Parse, acknowledge, and apply one inbound warp: command.
 
 Warp has no Slack webhook and does not run plugin hooks on cloud runners.
-The one channel listener (skills/warp-listen) reads Slack and Teams, then
-runs this script. This script does not call Slack. It writes the ack to
-.warp/inbound-ack.json before it changes the beam. Herald posts that ack,
-then the listener does the action.
+The listener (skills/warp-listen) is one poll: the parent starts it when
+`orchestrator.py supervise` prints `listener: poll`. It reads Slack and
+Teams once, runs this script for each warp: command, records the poll with
+`polled`, and returns. It does not loop and it does not sleep. This script
+does not call Slack. It writes the ack to .warp/inbound-ack.json before it
+changes the beam. Herald posts that ack, then the action runs.
 
-One listener for the beam is tracked at beam["listener"]:
-  state    running or stopped. The flag. running means one listener owns
-           the channel. stopped means it must not keep reading.
-  agentId  the one Agent id for the beam. A second claim does not replace it while
-           state is running.
-  pid      optional process id. Cloud agents often have none.
-  startedAt, stoppedAt, lastSeenAt
-  recoveredAt, recoveries   set when the watchdog replaces a dead listener
+The poll is tracked at beam["listener"]:
+  state          running while one poll is out, stopped between polls and
+                 while the run is paused or stopped
+  agentId        `listener` for a poll the parent started
+  pollStartedAt  set by supervise when the poll is issued, cleared by polled
+  lastSeenAt     the last finished poll. `.warp/listener.json` has the same
+                 time as lastPollAt
+  cursor         the newest message the last poll read, when it reported one
 
-  python3 scripts/inbound.py claim --beam .warp/beam.json --agent-id <id>
-  python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id <id>
-  python3 scripts/inbound.py release --beam .warp/beam.json
-  python3 scripts/inbound.py handle --beam .warp/beam.json --text "warp:proceed XV-01"
+  python3 scripts/inbound.py poll --beam .warp/beam.json
+  python3 scripts/inbound.py accept --beam .warp/beam.json --text "warp:proceed XV-01"
   python3 scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --message-id 1
-  python3 scripts/inbound.py drain --beam .warp/beam.json
+  python3 scripts/inbound.py polled --beam .warp/beam.json --count 1 --cursor 1759850000.000100
+  python3 scripts/inbound.py apply-pending --beam .warp/beam.json
+  python3 scripts/inbound.py release --beam .warp/beam.json
 """
 
 from __future__ import annotations
@@ -220,6 +222,101 @@ def release(beam_path: Path) -> str:
     beam.journal(beam_path, {"type": "listener-stop", "agentId": cur.get("agentId")})
     who = cur.get("agentId") or ""
     return ("listener: stopped %s" % who).rstrip()
+
+
+LISTENER_ID = "listener"
+_LOOP_KEYS = (
+    "restarts",
+    "restartNoted",
+    "pendingStart",
+    "lastRestartReason",
+    "restartCapped",
+    "restartAts",
+    "nextRestartAt",
+    "turn",
+    "pid",
+)
+
+
+def begin_poll(data: dict, now_s: str) -> dict:
+    """Mark one poll as out. The caller holds the lock and writes the beam."""
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    raw = dict(raw)
+    for key in _LOOP_KEYS:
+        raw.pop(key, None)
+    raw["state"] = "running"
+    raw["agentId"] = LISTENER_ID
+    raw["startedAt"] = now_s
+    raw["stoppedAt"] = None
+    raw["pollStartedAt"] = now_s
+    raw["polls"] = int(raw.get("polls") or 0) + 1
+    data["listener"] = raw
+    return raw
+
+
+def end_poll(data: dict, now_s: str, count: Optional[int] = None, cursor: str = "") -> dict:
+    """The poll is back. The slot is stopped until supervise issues the next one."""
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    raw = dict(raw)
+    raw["state"] = "stopped"
+    raw["stoppedAt"] = now_s
+    raw["lastSeenAt"] = now_s
+    raw.pop("pollStartedAt", None)
+    if count is not None:
+        raw["lastCount"] = int(count)
+    if cursor:
+        raw["cursor"] = str(cursor)
+    data["listener"] = raw
+    return raw
+
+
+def polled(beam_path: Path, count: int = 0, cursor: str = "") -> str:
+    """The listener's last step. Records the finished poll and frees the slot."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return "listener: no beam at %s" % beam_path
+    data = beam.load_json(beam_path)
+    now = beam.utcnow()
+    raw = end_poll(data, now, count=count, cursor=cursor)
+    try:
+        import agents
+
+        agents.note_listener_done(data, now=now, beam_path=beam_path, reason="polled")
+    except Exception:
+        pass
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    write_listener_file(beam_path, raw.get("agentId") or LISTENER_ID, reason="polled", when=now)
+    return "listener: polled %d" % int(count or 0)
+
+
+def channels(beam_path: Path) -> list:
+    """(`slack` or `teams`, channel) for each channel the listener reads. Empty means no listener."""
+    cfg = herald_fmt.read_config(_root(Path(beam_path)))
+    messenger = cfg.get("messenger") or "both"
+    found = []
+    if messenger in {"slack", "both"} and cfg.get("slackChannel"):
+        found.append(("slack", str(cfg["slackChannel"]).lower()))
+    if messenger in {"teams", "both"} and cfg.get("teamsChannel"):
+        found.append(("teams", str(cfg["teamsChannel"])))
+    return found
+
+
+def poll_lines(beam_path: Path) -> list:
+    """What one poll needs: the reap line, then each channel and where to read from."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return ["listener: no beam at %s" % beam_path]
+    import agents
+
+    lines = agents.reap_from(_root(beam_path), LISTENER_ID, "", "listener", beam_path=beam_path)
+    if lines and lines[0].startswith("reap: exit"):
+        return lines
+    data = beam.load_json(beam_path)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    since = str(raw.get("cursor") or raw.get("lastSeenAt") or "")
+    for kind, channel in channels(beam_path):
+        lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
+    return lines
 
 
 def first_command_line(text: str) -> str:
@@ -429,12 +526,18 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
         import scan
 
         state = {"pause": "paused", "resume": "running", "stop": "stopped", "start": "running"}[action]
+        if state == "running":
+            current = beam.load_json(Path(beam_path))
+            if not current.get("paused") and (current.get("runState") or "running") == "running":
+                # The parent applying this command already owns the run. A new
+                # session here would supersede it and leave the run with no parent.
+                return "action: %s\nrun: already running. Nothing changed." % action
         scan.set_run(beam_path, state, decision.get("reason"))
         extra = ""
         if action in {"pause", "stop"}:
             extra = "\nlistener: do not keep reading while paused or stopped"
         if action in {"resume", "start"}:
-            extra = "\nlistener: keep looping. Do not start a second."
+            extra = "\nlistener: the parent starts the next poll on `listener: poll`. Do not start one now."
         return "action: %s%s" % (action, extra)
     if action == "retry":
         return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"]))
@@ -557,6 +660,13 @@ def _read_pending(path: Path) -> list:
     return rows
 
 
+def already_queued(beam_path: Path, message_id: Optional[str]) -> bool:
+    """True when this channel message was queued by an earlier poll. Applied rows stay in the file."""
+    if not message_id:
+        return False
+    return any(str(row.get("id")) == str(message_id) for row in _read_pending(_pending(beam_path)))
+
+
 def enqueue(beam_path: Path, text: str, by: Optional[str], message_id: Optional[str], source: str) -> str:
     path = _pending(beam_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -627,6 +737,8 @@ def _print_result(result: dict) -> None:
 HELP = """
 examples:
   python3 scripts/inbound.py ?
+  python3 scripts/inbound.py poll --beam .warp/beam.json
+  python3 scripts/inbound.py polled --beam .warp/beam.json --count 1 --cursor 1759850000.000100
   python3 scripts/inbound.py claim --beam .warp/beam.json --agent-id listener-1 --pid 4242
   python3 scripts/inbound.py heartbeat --beam .warp/beam.json --agent-id listener-1 --reason poll
   python3 scripts/inbound.py interval --beam .warp/beam.json
@@ -638,19 +750,22 @@ examples:
   python3 scripts/inbound.py drain --beam .warp/beam.json
   python3 scripts/inbound.py apply-pending --beam .warp/beam.json
 
-claim takes the slot for this parent turn. Pass `--turn` once per parent
-turn. `listener: already running <id>` means this turn already started its
-one listener Subagent: do not start a second. A new `--turn` takes the slot
-even when the previous turn left state running. That flag must not block the
-next tick. release sets listener.state to stopped. The listener must not keep
-reading while paused or stopped. One listener Subagent for the beam, not one
-per ticket, and not a separate Agent.
-heartbeat writes listener.lastSeenAt and `.warp/listener.json` (agentId or
-pid, lastPollAt, reason). reason is poll, recycle, pause, or stop. interval
-prints pollSeconds. The listener sleeps that many seconds with the shell
-sleep between reads. It does not return while the loop is running.
+poll prints the reap line and each channel with the `since` mark to read
+from. `reap: exit` means return without reading. polled is the listener's
+last step: it records the finished poll, the count of warp: commands, and
+the newest message read, and sets listener.state to stopped. The listener
+is one poll. It does not loop, and it does not sleep. `orchestrator.py
+supervise` prints `listener: poll` when the next one is due, every
+pollSeconds. interval prints pollSeconds. release sets listener.state to
+stopped. The listener must not keep reading while paused or stopped. One
+listener Subagent for the beam, not one per ticket, and not a separate Agent.
+claim and heartbeat are for a listener someone starts by hand. A run does
+not use them. `listener: already running <id>` from claim means do not
+start a second. heartbeat writes listener.lastSeenAt and
+`.warp/listener.json` (agentId or pid, lastPollAt, reason).
 accept writes the ack and prints `return:` for the parent. It does not apply
-the command. apply runs proceed, pause, stop, retry, and the other verbs.
+the command. With --message-id, a message an earlier poll already queued
+prints `inbound: duplicate <id>` and writes no ack. apply runs proceed, pause, stop, retry, and the other verbs.
 The parent applies. The listener does not merge.
 
 handle writes .warp/inbound-ack.json before it changes the beam. Herald posts
@@ -682,10 +797,18 @@ def main(argv: Optional[list] = None) -> int:
     pb.add_argument("--beam", default=".warp/beam.json")
     pb.add_argument("--agent-id", required=True)
     pb.add_argument("--pid", default=None)
-    pb.add_argument("--reason", default="poll", help="poll, recycle, pause, or stop")
+    pb.add_argument("--reason", default="poll", help="poll, pause, or stop. For a listener started by hand")
 
     pi = sub.add_parser("interval")
     pi.add_argument("--beam", default=".warp/beam.json")
+
+    ppo = sub.add_parser("poll", help="reap line and the channels for one poll")
+    ppo.add_argument("--beam", default=".warp/beam.json")
+
+    ppd = sub.add_parser("polled", help="record one finished poll")
+    ppd.add_argument("--beam", default=".warp/beam.json")
+    ppd.add_argument("--count", type=int, default=0, help="warp: commands this poll accepted")
+    ppd.add_argument("--cursor", default="", help="newest message read, so the next poll starts after it")
 
     ps = sub.add_parser("status")
     ps.add_argument("--beam", default=".warp/beam.json")
@@ -704,6 +827,7 @@ def main(argv: Optional[list] = None) -> int:
     pa.add_argument("--text", required=True)
     pa.add_argument("--by", default=None)
     pa.add_argument("--source", default="slack")
+    pa.add_argument("--message-id", default=None, help="channel message id. A message an earlier poll queued is not acked twice")
 
     py = sub.add_parser("apply")
     py.add_argument("--beam", default=".warp/beam.json")
@@ -743,6 +867,17 @@ def main(argv: Optional[list] = None) -> int:
     if args.cmd == "interval":
         print(poll_seconds(beam_path))
         return 0
+    if args.cmd == "poll":
+        lines = poll_lines(beam_path)
+        for line in lines:
+            print(line)
+        if lines and lines[0].startswith("listener: no beam"):
+            return 1
+        return 3 if lines and lines[0].startswith("reap: exit") else 0
+    if args.cmd == "polled":
+        line = polled(beam_path, count=args.count, cursor=args.cursor)
+        print(line)
+        return 1 if line.startswith("listener: no beam") else 0
     if args.cmd == "status":
         if not beam_path.is_file():
             print("listener: no beam at %s" % beam_path)
@@ -758,6 +893,10 @@ def main(argv: Optional[list] = None) -> int:
         _print_result(result)
         return result.get("code") or 0
     if args.cmd == "accept":
+        if already_queued(beam_path, args.message_id):
+            print("inbound: duplicate %s" % args.message_id)
+            print("inbound: an earlier poll queued this message. Do not post an ack and do not enqueue it.")
+            return 0
         result = accept(beam_path, args.text, by=args.by, source=args.source)
         _print_result(result)
         return result.get("code") or 0

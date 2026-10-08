@@ -43,7 +43,6 @@ def ticket(tid, **extra):
 def data_of(tickets, **config):
     cfg = {
         "maxAgents": 4,
-        "maxLocalSubagents": 4,
         "bugbotRequired": True,
         "maxFixAttempts": 5,
         "maxRecoveries": 5,
@@ -76,6 +75,7 @@ class SweepTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         warp = self.tmp / ".warp"
         warp.mkdir()
+        (warp / "config.yaml").write_text("messenger: slack\nslackChannel: warp-run\n")
         self.path = warp / "beam.json"
 
     def test_defaults_are_five_and_the_sweep_is_fifteen_minutes(self):
@@ -122,7 +122,9 @@ class SweepTests(unittest.TestCase):
         self.assertIn("lock: remove M-1", blob)
         self.assertEqual(data["tickets"]["M-1"]["locks"], [])
         self.assertEqual(data["tickets"]["L-1"]["locks"], ["src/live"])
-        self.assertIn("listener: start reason=sweep", blob)
+        self.assertIn("listener: poll", blob)
+        self.assertIn("sweep: action listener poll", blob)
+        self.assertEqual(data["listener"]["pollStartedAt"], NOW)
         self.assertIn("beam: sync", blob)
         self.assertIn("herald: G1 red cleared. Members merged. Tick ran.", blob)
         self.assertIn("dispatch-base-fix checkout=worktree", blob)
@@ -152,12 +154,13 @@ class SweepTests(unittest.TestCase):
                 ticket("H-1", status="claimed", phase="implementing"),
             ],
             maxAgents=1,
-            maxLocalSubagents=1,
         )
-        data["listener"] = {"lastSeenAt": OLD, "pendingStart": NOW, "agentId": "listener-1"}
+        # A poll is already out, so the sweep does not issue a second one.
+        data["listener"] = {"lastSeenAt": OLD, "pollStartedAt": NOW, "agentId": "listener"}
         data["beamSync"] = "behind"
         data["repairSweep"] = {"at": OLD, "pending": {"beam": True}}
-        lines = sweep.run(data, now=NOW)
+        self.path.write_text(json.dumps(data) + "\n")
+        lines = sweep.run(data, beam_path=self.path, now=NOW)
         blob = text(lines)
         self.assertIn("sweep: skip S-1 running", blob)
         self.assertNotIn("fixer: S-1 rebase", blob)
@@ -165,7 +168,7 @@ class SweepTests(unittest.TestCase):
         self.assertNotIn("fixer: R-1 rebase", blob)
         self.assertIn("ci: rerun C-1", blob)
         self.assertIn("sweep: skip listener running", blob)
-        self.assertNotIn("listener: start", blob)
+        self.assertNotIn("listener: poll", blob)
         self.assertIn("sweep: skip beam running", blob)
         self.assertNotIn("beam: sync", blob)
 

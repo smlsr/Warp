@@ -7,24 +7,31 @@ model: claude-sonnet-5-5-high
 # Cursor model slug for coding steps. Claude Sonnet 5.5 High.
 # The slug must match the Cursor model picker. Override it here.
 
+# Two caps, and only two.
+#   maxAgents      how many agents run at once
+#   maxInProgress  how many tickets are open at once
+
 maxAgents: 18
-# Concurrent Shuttles. No per-person cap. A project may set 18.
-# The orchestrator reads this value. It does not assume a fixed cap.
-# Separate from maxInProgress, which caps how many tickets have started.
+# Agents that run at once: every Shuttle, whatever its step (implement, fix,
+# rebase, rerun, restart, repair), in a worktree on this machine or on its
+# own VM. No per-person cap. A project may set 18. It is the one cap on
+# running agents. There is no separate cap for fixes or for this machine.
+# memoryCheck can lower it on a shared machine when memory is tight.
 
 maxInProgress: 20
-# Tickets that have started and are not merged or parked. At this count,
-# nothing new is taken from the ready queue. This does not stop a fix, a
-# rebase, a CI rerun, a Bugbot re-request, or a merge. Parked tickets do not
-# count. Already being over the cap does not park or cancel anyone. Default 20.
+# Tickets that are open at once: started and not merged or parked. A ticket
+# waiting on review or CI is open and uses no agent. At this count, nothing
+# new is taken from the ready queue. This does not stop a fix, a rebase, a
+# CI rerun, a Bugbot re-request, or a merge: those tickets are already
+# open. Parked tickets do not count. Already being over the cap does not
+# park or cancel anyone. Default 20.
 # Status then says: holding new launches (N/maxInProgress), N fix workers running.
-
-maxFixWorkers: 5
-# Fix, rebase, and rerun Shuttles that are actually running. Default 5.
-# Still applies when in progress is at or above maxInProgress, and it stays
-# within maxAgents and maxLocalSubagents. A cold start or resume with no
-# Shuttle out dispatches these immediately: conflicts and CI that never
-# started, then Bugbot findings, then red CI.
+#
+# Start and resume launch unfinished work first: open pull requests that
+# need a fix (a conflict, CI that never started, red CI, then Bugbot
+# findings), then tickets whose Shuttle was halted or died, then new
+# tickets. All of it draws on maxAgents, so a new ticket starts only in a
+# slot unfinished work did not need.
 
 checkCommand: ""
 # Optional. The orchestrator runs this on a rebased head before it merges.
@@ -78,13 +85,10 @@ subagentVm: false
 # runner: local forces false even when this line is true.
 # Cloud subagents use the MCP servers at cursor.com/agents, not this session.
 # In the Agents Window, /in-cloud is the manual fallback, one ticket at a time.
-maxLocalSubagents: 18
-# Shared-machine cap when subagentVm is false or a subagent falls back here.
-# The default matches maxAgents. memoryCheck is what may lower it.
 memoryCheck: false
-# true: free -g lowers maxLocalSubagents when available memory is under 2 GiB
-# per extra subagent. At least one still runs. false: only maxLocalSubagents
-# limits how many run at once. free -g is not read.
+# true: on a shared machine, free -g lowers maxAgents when available memory
+# is under 2 GiB per extra subagent. At least one still runs. false: only
+# maxAgents limits how many run at once, and free -g is not read.
 cloudSnapshot: ""
 # Snapshot id. With .cursor/environment.json, either one is a cloud environment.
 # On a cloud runner, subagentVm true with neither warns and refuses /warp-start.
@@ -189,11 +193,12 @@ repairSweepMinutes: 15
 # is already queued or running, and starts what it can inside the slot cap.
 # Slack posts only when the sweep starts something new or escalates. Default 15.
 staleMinutes: 15
-# A Shuttle or the one listener is dead when lastSeenAt is older than this,
-# or it never heartbeated and the claim or listener start is older than this.
-# The watchdog replaces a dead worker while the run is running. Pause and stop
-# do not. A fresh heartbeat is left alone. /warp-init appends this key when
-# the file does not have it yet.
+# A Shuttle is dead when lastSeenAt is older than this, or it never
+# heartbeated and the claim is older than this. The watchdog replaces a dead
+# Shuttle while the run is running. Pause and stop do not. A fresh heartbeat
+# is left alone. A Shuttle whose turn returned this long ago and was not
+# resumed reads reap: exit not-resumed if it wakes up. /warp-init appends
+# this key when the file does not have it yet.
 maxRecoveries: 5
 # Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
 # worker-died and no new Shuttle starts. Branch, pull request, and
@@ -206,14 +211,10 @@ maxSpawnsPerHour: 40
 # New Shuttle and Bugbot spawns in the last 60 minutes, across the run.
 # Past this cap no ticket starts a new agent until an hour has passed.
 # Default 40.
-maxListenerRestartsPerHour: 8
-# Listener restarts in the last 60 minutes. Past this cap the listener
-# stays down and Herald posts once. Restarts also wait, longer each time,
-# up to 30 minutes. Default 8.
 alarmRepairMinutes: 15
-# How often the one listener looks for lock-escape alarms and starts one
+# How often the parent pass looks for lock-escape alarms and starts one
 # repair. Only while the run is running. Pause and stop do not repair.
-# A repair already in flight is checked on each listener pass. /warp-init
+# A repair already in flight is checked on each pass. /warp-init
 # appends this key when the file does not have it yet.
 maxAlarmRepairs: 5
 # Repair attempts for one lock-escape ticket. Past this cap the alarm stays
@@ -222,19 +223,16 @@ maxAlarmRepairs: 5
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300
-# Seconds the one listener sleeps between channel reads. The sleep is the
-# shell command sleep, not a model pause. listenerStaleMinutes must cover
-# at least one of these polls.
+# Seconds between channel reads. The listener is one poll: it reads Slack
+# and Teams once and returns. The parent starts the next poll this many
+# seconds after the last one finished. It is also the longest the parent
+# waits between passes (orchestrator.py parent-exit --wait). Nothing sleeps
+# in a loop. No slackChannel and no teamsChannel means no listener at all.
 listenerStaleMinutes: 15
-# The parent restarts the listener when .warp/listener.json lastPollAt is
-# older than this many minutes. The window is also at least one poll plus
-# a minute, so a listener that is sleeping is not treated as dead. Pause
-# and stop do not restart. /warp-init appends this key when the file does
-# not have it yet.
-listenerRestartNote: 3
-# After this many listener restarts in one run, Herald posts one note:
-# Listener kept restarting. One listener is running. Later restarts are
-# logged and do not post again until pause or stop. Default 3.
+# A poll that was started and never reported back is issued again after
+# this many minutes. The window is also at least one poll plus a minute.
+# Pause and stop do not issue a poll. /warp-init appends this key when the
+# file does not have it yet.
 reportOnComplete: true
 # true: when every ticket is merged, done, skipped, blocked, or alarmed, or the run
 # is stopped, write .warp/warp-complete.html and ask Herald to post the totals.

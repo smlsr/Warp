@@ -6,6 +6,9 @@
     "stop": [
       { "command": "./hooks/on-stop.sh" }
     ],
+    "subagentStart": [
+      { "command": "./hooks/subagent-start.sh" }
+    ],
     "subagentStop": [
       { "command": "./hooks/subagent-stop.sh" }
     ]

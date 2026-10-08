@@ -537,25 +537,6 @@ def in_progress_label(beam: dict) -> str:
     return "in progress %d/%d" % (count, cap)
 
 
-def max_fix_workers(cfg: Optional[dict]) -> int:
-    """How many fix, rebase, and rerun Shuttles may run at once. Default 5.
-
-    Zero is a real cap. A negative or junk value falls back to the default.
-    This cap is not maxInProgress: it still applies when that count is full.
-    """
-    default = int(default_config()["maxFixWorkers"])
-    raw = (cfg or {}).get("maxFixWorkers")
-    if raw is None or str(raw).strip() == "":
-        return default
-    try:
-        number = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if number < 0:
-        return default
-    return number
-
-
 def _shuttle_pending(ticket: dict) -> bool:
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     return bool(shuttle.get("pending"))
@@ -610,11 +591,8 @@ def shuttle_cap(beam: dict) -> int:
     """The cap a live Shuttle counts against. Shared machines use the lower one."""
     cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
     cap = configured_cap(cfg)
-    if orchestrator.shared_machine(cfg, beam):
-        local_cap = orchestrator.max_local_subagents(cfg)
-        if orchestrator.memory_check(cfg):
-            local_cap = orchestrator.local_subagent_cap(cfg)
-        cap = min(cap, local_cap)
+    if orchestrator.shared_machine(cfg, beam) and orchestrator.memory_check(cfg):
+        cap = min(cap, orchestrator.local_subagent_cap(cfg))
     return cap
 
 
@@ -624,11 +602,9 @@ def shuttle_room(beam: dict) -> int:
     room = max(0, configured_cap(cfg) - running_shuttle_count(beam))
     if room < 1:
         return 0
-    if not orchestrator.shared_machine(cfg, beam):
+    if not orchestrator.shared_machine(cfg, beam) or not orchestrator.memory_check(cfg):
         return room
-    local_cap = orchestrator.max_local_subagents(cfg)
-    if orchestrator.memory_check(cfg):
-        local_cap = orchestrator.local_subagent_cap(cfg)
+    local_cap = orchestrator.local_subagent_cap(cfg)
     return min(room, max(0, local_cap - _local_shuttle_count(beam)))
 
 
@@ -662,15 +638,12 @@ def live_shuttle_label(beam: dict) -> str:
 def fix_worker_room(beam: dict) -> int:
     """How many more fix, rebase, or rerun Shuttles may start.
 
-    maxInProgress does not reduce this. The room is maxFixWorkers minus the
-    fix workers already running, and it also stays inside maxAgents and
-    maxLocalSubagents counted by live Shuttles only.
+    A fix is an agent like any other, so the room is the room under
+    maxAgents. maxInProgress does not reduce it: the ticket is already in
+    progress. Unfinished work is launched before the ready queue, so fixes
+    get the free slots first.
     """
-    cfg = beam.get("config") if isinstance(beam.get("config"), dict) else {}
-    room = max(0, max_fix_workers(cfg) - fix_worker_count(beam))
-    if room < 1:
-        return 0
-    return min(room, shuttle_room(beam))
+    return shuttle_room(beam)
 
 
 def _watch_slot(beam: dict) -> dict:
@@ -1232,33 +1205,16 @@ def cmd_gate(beam_path: Path, args: argparse.Namespace) -> None:
     print(f"{args.key} -> {args.status}")
 
 
-def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str]) -> None:
-    beam = load_json(beam_path)
-    beam["paused"] = paused
-    beam["pauseReason"] = reason
-    beam["runState"] = "paused" if paused else "running"
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
-    journal(beam_path, {"type": "pause" if paused else "resume", "reason": reason})
+def cmd_pause(beam_path: Path, paused: bool, reason: Optional[str], force: bool = False) -> None:
+    """`beam.py pause` and `beam.py resume`. The same code as `scan.py pause` and `scan.py resume`."""
+    import scan
+
     if paused:
-        import session_note
-
-        session_note.note(beam_path.parent, "session-stop")
-        try:
-            import inbound
-
-            print(inbound.release(beam_path))
-        except Exception as e:
-            print("listener: not stopped (%s)" % e)
-        try:
-            import update_state
-
-            update_state.update_state(beam_path)
-        except Exception as e:
-            print("state: not synced (%s)" % e)
-    print("paused" if paused else "resumed")
-    if not paused:
-        for line in watchdog(beam_path):
-            print(line)
+        scan.set_run(beam_path, "paused", reason)
+        return
+    code = scan.go(beam_path, reason, force=force)
+    if code != 0:
+        sys.exit(code)
 
 
 def render_board(beam: dict) -> str:
@@ -1474,14 +1430,12 @@ def _unique_id(prefix: str, number: int, current: Optional[str]) -> tuple:
 
 
 def _recover_listener(data: dict, beam_path: Path, now: datetime, now_s: str, stale: int, lines: list, events: list) -> bool:
-    """The listener is a subagent of this parent turn. Do not reserve a replacement.
+    """The listener is one poll the parent starts from `orchestrator.py supervise`.
 
-    A `running` flag left by the previous turn is not a live Agent. This does
-    not clear it and does not set a new id: the parent claims with a new turn
-    id, and that claim takes the slot. Shuttle recovery is unchanged.
+    The watchdog does not start it, reserve an id for it, or clear its flag,
+    and it prints no listener line. Shuttle recovery is unchanged.
     """
-    del data, beam_path, now, now_s, stale, events
-    lines.append("listener: subagent")
+    del data, beam_path, now, now_s, stale, lines, events
     return False
 
 
@@ -1575,8 +1529,8 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
 def watchdog(beam_path: Path, now=None) -> list:
     """Detect dead Shuttles. Reserve at most one replacement each.
 
-    The listener is a subagent of the parent turn. This prints `listener: subagent`
-    and does not reserve a listener id. A running flag does not block the next tick.
+    The listener is one poll the parent starts from `orchestrator.py supervise`.
+    This prints no listener line and never starts one.
     Paused and stopped runs change nothing. A fresh Shuttle heartbeat is left alone.
     The caller launches the Shuttle named on each `shuttle: replace` line.
     This does not look at a process table.
@@ -1640,6 +1594,10 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
     if not agent:
         sys.exit(f"{args.id}: heartbeat needs --agent")
     if ticket.get("agent") and ticket["agent"] != agent:
+        import agents
+
+        for line in agents.reap_lines("replaced", args.id):
+            print(line)
         sys.exit(f"{args.id}: heartbeat agent {agent} does not own the ticket ({ticket['agent']})")
     stamp = utcnow()
     ticket["agent"] = agent
@@ -1650,6 +1608,13 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
     beam["metrics"] = metrics(beam)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     print(f"{args.id} heartbeat {agent}")
+    try:
+        import agents
+
+        for line in agents.reap(beam, agent, args.id, "shuttle", beam_path=beam_path):
+            print(line)
+    except Exception:
+        pass
 
 
 def cmd_check(beam: dict) -> int:
@@ -1695,7 +1660,6 @@ def default_config() -> dict:
         "model": "claude-sonnet-5-5-high",
         "maxAgents": 18,
         "maxInProgress": 20,
-        "maxFixWorkers": 5,
         "autoMergeSizes": list(DEFAULT_AUTO_MERGE_SIZES),
         "messenger": "both",
         "notify": "verbose",
@@ -1703,7 +1667,6 @@ def default_config() -> dict:
         "launch": "worktree",
         "worktreeRoot": ".warp/worktrees",
         "subagentVm": False,
-        "maxLocalSubagents": 18,
         "memoryCheck": False,
         "cloudSnapshot": "",
         "jiraProject": "",
@@ -1741,11 +1704,9 @@ def default_config() -> dict:
         "repairSweepMinutes": 15,
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "listenerStaleMinutes": 15,
-        "listenerRestartNote": 3,
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "maxSpawnsPerTicket": 8,
         "maxSpawnsPerHour": 40,
-        "maxListenerRestartsPerHour": 8,
         "alarmRepairMinutes": 15,
         "maxAlarmRepairs": 5,
         "respectMergeWindows": False,
@@ -1776,7 +1737,7 @@ set takes --status, --agent, --branch, --jira, --pr, --rollup, --sha,
 --rollup green|red|pending is the provider check rollup. green frees the slot.
 --tokens-in, --tokens-out, --tokens-cached, --cost.
 --escaped is a path outside the lock, repeatable, stored on the ticket
-with a lock-escape alarm. The listener's repair widens the lock to those
+with a lock-escape alarm. The parent's repair widens the lock to those
 paths. It does not clear the alarm by itself.
 usage records the same token and cost totals for one ticket, replacing the
 previous report. Pass the totals Cursor reported for this ticket. If the run
@@ -1807,18 +1768,18 @@ recompute.
 ready's Shuttle cap is maxAgents. maxInProgress (default 20) is how many
 started tickets may be open. At that cap, ready takes nothing new. That
 hold is only the ready queue. Fixes, rebases, reruns, and merges keep
-going. maxFixWorkers (default 5) caps the fix, rebase, and rerun Shuttles
-that are actually running, including when in progress is already over the
-cap, and it stays within maxAgents and maxLocalSubagents. Parked tickets
-do not count. Do not hand-edit beam.json.
-heartbeat writes lastSeenAt and the agent id for one Shuttle. The listener
-uses inbound.py heartbeat during its parent turn. watchdog runs on every
-Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is
+going, up to maxAgents, which is the one cap on agents that run at once.
+Unfinished work is launched before anything from the ready queue. Parked
+tickets do not count. Do not hand-edit beam.json.
+heartbeat writes lastSeenAt and the agent id for one Shuttle, then prints
+the reap line: reap: continue, or reap: exit <reason>, which means stop
+now. The listener is one poll and records it with inbound.py polled.
+watchdog runs on every Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is
 older than staleMinutes, or it never heartbeated and the claim is older
-than that. watchdog re-dispatches a dead Shuttle once. It does not replace
-the listener. The listener is a Subagent of the parent turn. A running flag
-from the previous turn does not block the next tick. Paused and stopped
-runs do nothing. A fresh Shuttle heartbeat is left alone.
+than that. watchdog re-dispatches a dead Shuttle once. It never starts a
+listener and prints no listener line. Paused and stopped runs do nothing.
+pause ends every agent in .warp/agents.json, the same teardown as
+scan.py pause (stop: <id>, halt: paused agents=<n>, then cleanup lines). A fresh Shuttle heartbeat is left alone.
 Past maxRecoveries the ticket is alarm worker-died.
 A remote Agent does not write this beam. It writes .warp/tickets/<id>/
 on its branch. watchdog fetches that directory first and patches this beam.
@@ -1903,7 +1864,10 @@ def main() -> None:
     pp = sub.add_parser("pause")
     pp.add_argument("--beam", required=True)
     pp.add_argument("--reason")
-    sub.add_parser("resume").add_argument("--beam", required=True)
+    pr_resume = sub.add_parser("resume")
+    pr_resume.add_argument("--beam", required=True)
+    pr_resume.add_argument("--reason")
+    pr_resume.add_argument("--force", action="store_true", help="resume even if a cloud run would prompt for MCP tools. The same as scan.py resume --force")
 
     pb = sub.add_parser("board")
     pb.add_argument("--beam", required=True)
@@ -1963,7 +1927,7 @@ def main() -> None:
     elif args.cmd == "pause":
         cmd_pause(Path(args.beam), True, args.reason)
     elif args.cmd == "resume":
-        cmd_pause(Path(args.beam), False, None)
+        cmd_pause(Path(args.beam), False, args.reason, force=bool(args.force))
     elif args.cmd == "board":
         beam = load_json(Path(args.beam))
         beam["metrics"] = metrics(beam)

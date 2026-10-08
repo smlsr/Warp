@@ -129,20 +129,11 @@ def _room(data: dict) -> int:
     """Slots left for a new Shuttle. Waiting reviews do not fill them.
 
     maxInProgress is not a slot. Only Shuttles that are actually out count,
-    and the same count stays inside maxLocalSubagents on a shared machine.
+    against maxAgents.
     """
     import beam as beam_mod
-    import orchestrator
 
-    cfg = data.get("config") or {}
-    running = beam_mod.running_shuttle_count(data)
-    room = max(0, beam_mod.configured_cap(cfg) - running)
-    if not orchestrator.shared_machine(cfg, data):
-        return room
-    local_cap = orchestrator.max_local_subagents(cfg)
-    if orchestrator.memory_check(cfg):
-        local_cap = orchestrator.local_subagent_cap(cfg)
-    return min(room, max(0, local_cap - beam_mod._local_shuttle_count(data)))
+    return beam_mod.shuttle_room(data)
 
 
 def _orphan_locks(data: dict, findings: list, actions: list, lines: list) -> None:
@@ -160,64 +151,33 @@ def _orphan_locks(data: dict, findings: list, actions: list, lines: list) -> Non
         lines.append("lock: remove %s" % tid)
 
 
-def _listener_last(data: dict, beam_path: Optional[Path]) -> str:
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    last = str(raw.get("lastSeenAt") or "")
-    if beam_path is not None:
-        import orchestrator
-
-        file_body = orchestrator._read_listener_file(Path(beam_path))
-        last = str(file_body.get("lastPollAt") or last)
-    return last
-
-
-def _listener_limit(data: dict, beam_path: Optional[Path]) -> int:
-    if beam_path is not None:
-        import orchestrator
-
-        return orchestrator.listener_stale_minutes(data, Path(beam_path))
-    return _cfg_int(data, "listenerStaleMinutes", 15)
-
-
 def _listener(data: dict, beam_path: Optional[Path], now: str, findings: list, actions: list, skipped: list, lines: list) -> None:
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    last = _listener_last(data, beam_path)
-    if not last or _minutes(last, now) <= _listener_limit(data, beam_path):
+    """A poll that is overdue past the stale window. Issue one unless one is out."""
+    if beam_path is None:
+        return
+    import beam as beam_mod
+    import orchestrator
+
+    path = Path(beam_path)
+    last = orchestrator.listener_last_poll(data, path)
+    limit = orchestrator.listener_stale_minutes(data, path)
+    if not last or _minutes(last, now) <= limit:
         return
     findings.append({"kind": "listener", "id": "listener", "detail": "stale"})
-    pending = str(raw.get("pendingStart") or "")
-    limit = _listener_limit(data, beam_path)
-    if pending and _minutes(pending, now) <= limit:
+    now_dt, _now_s = beam_mod.coerce_now(now)
+    decision = orchestrator.listener_poll_due(data, path, now_dt)
+    if decision in {"idle", "none"}:
+        lines.append("listener: %s" % decision)
+        return
+    if decision == "hold":
         skipped.append({"kind": "listener", "id": "listener", "reason": "running"})
         lines.append("sweep: skip listener running")
         return
-    import agents
-
-    decision = agents.listener_decision(data, now=now, beam_path=beam_path)
-    if decision == "closed":
-        lines.append("listener: idle")
-        return
-    if decision == "backoff":
-        skipped.append({"kind": "listener", "id": "listener", "reason": "backoff"})
-        lines.append("listener: backoff")
-        lines.append("sweep: skip listener backoff")
-        return
-    if decision == "cap":
-        lines.append("listener: cap")
-        if not raw.get("restartCapped"):
-            agents.cap_listener(data, now=now, beam_path=beam_path)
-            lines.append("herald: Listener restart cap reached. No new listener.")
-        lines.append("sweep: skip listener cap")
-        return
-    raw = dict(raw)
-    raw["pendingStart"] = now
-    raw["lastRestartReason"] = "sweep"
-    raw["restarts"] = int(raw.get("restarts") or 0) + 1
-    data["listener"] = raw
-    agents.note_listener_restart(data, now=now, beam_path=beam_path, previous=str(raw.get("agentId") or ""))
+    orchestrator.begin_listener_poll(data, path, now=now_dt)
     actions.append({"kind": "listener", "id": "listener"})
-    lines.append("listener: start reason=sweep")
-    lines.append("sweep: action listener restart")
+    lines.append("listener: poll")
+    lines.extend(orchestrator.listener_prompt(path))
+    lines.append("sweep: action listener poll")
 
 
 def _beam_sync(data: dict, pending: dict, findings: list, actions: list, skipped: list, lines: list) -> None:

@@ -35,7 +35,6 @@ def ticket(tid, **extra):
 def beam(tickets, **config):
     cfg = {
         "maxAgents": 4,
-        "maxLocalSubagents": 4,
         "bugbotRequired": True,
         "maxFixAttempts": 3,
         "maxRecoveries": 3,
@@ -318,7 +317,6 @@ class ParkAndRefillTests(unittest.TestCase):
                 ticket("R-2", locks=["src/b"]),
             ],
             maxAgents=1,
-            maxLocalSubagents=1,
         )
         waiting = pipeline.advance(data, now=NOW)
         self.assertNotIn("start R-2", text(waiting))
@@ -814,7 +812,11 @@ class InProgressCapTests(unittest.TestCase):
         import beam as beam_mod
 
         self.assertEqual(beam_mod.default_config()["maxInProgress"], 20)
-        self.assertEqual(beam_mod.default_config()["maxFixWorkers"], 5)
+        # One cap on running agents, one on open tickets. The older per-kind caps are gone.
+        self.assertEqual(beam_mod.default_config()["maxAgents"], 18)
+        self.assertNotIn("maxFixWorkers", beam_mod.default_config())
+        self.assertNotIn("maxLocalSubagents", beam_mod.default_config())
+        self.assertEqual(beam_mod.fix_worker_room(beam([], maxAgents=7)), 7)
         self.assertFalse(beam_mod.ticket_in_progress(ticket("Q-1")))
         parked = ticket("P-1", status="parked", phase="parked", stalled=True, alarm="stalled")
         self.assertFalse(beam_mod.ticket_in_progress(parked))
@@ -954,7 +956,8 @@ class InProgressCapTests(unittest.TestCase):
             built.append(ticket("N-1"))
             return built
 
-        cfg = dict(maxInProgress=20, maxFixWorkers=2, maxAgents=18, maxLocalSubagents=18)
+        # maxAgents is the cap on agents that run at once, fixes included.
+        cfg = dict(maxInProgress=20, maxAgents=2)
         data = beam(rows(), **cfg)
         import beam as beam_mod
 
@@ -991,7 +994,7 @@ class InProgressCapTests(unittest.TestCase):
         self.assertEqual(pipeline.cold_start(path), [])
         shutil.rmtree(folder)
 
-    def test_max_fix_workers_is_respected_and_the_fixer_still_runs_over_the_cap(self):
+    def test_fixes_fill_max_agents_and_the_fixer_still_runs_over_the_in_progress_cap(self):
         import sweep
         import watch
 
@@ -1002,9 +1005,7 @@ class InProgressCapTests(unittest.TestCase):
         data = beam(
             conflicts + [ticket("Q-1")],
             maxInProgress=1,
-            maxFixWorkers=2,
-            maxAgents=10,
-            maxLocalSubagents=10,
+            maxAgents=2,
         )
         pipeline.advance(data, now=NOW)
         pending = [tid for tid, row in data["tickets"].items() if (row.get("shuttle") or {}).get("pending")]
@@ -1032,10 +1033,10 @@ class InProgressCapTests(unittest.TestCase):
             built.append(self._review("C-9", conflict=True))
             return built
 
-        fixer = beam(held_rows(), maxInProgress=2, maxAgents=3, maxLocalSubagents=3, maxFixWorkers=5)
+        fixer = beam(held_rows(), maxInProgress=2, maxAgents=3)
         watched = text(watch.apply(fixer, now=NOW))
         self.assertIn("fixer: C-9 rebase", watched)
-        swept = beam(held_rows(), maxInProgress=2, maxAgents=3, maxLocalSubagents=3, maxFixWorkers=5)
+        swept = beam(held_rows(), maxInProgress=2, maxAgents=3)
         sweep_lines = text(sweep.run(swept, now=NOW))
         self.assertIn("fixer: C-9 rebase", sweep_lines)
         self.assertNotIn("sweep: skip C-9 slot", sweep_lines)
@@ -1081,8 +1082,6 @@ class LiveShuttleCapTests(unittest.TestCase):
         data = beam(
             claims,
             maxAgents=18,
-            maxLocalSubagents=18,
-            maxFixWorkers=5,
             maxInProgress=20,
         )
         data["parentSession"] = "previous"
@@ -1123,6 +1122,62 @@ class LiveShuttleCapTests(unittest.TestCase):
         self.assertEqual(again, [])
         shutil.rmtree(folder)
 
+    def test_start_launches_unfinished_work_before_anything_new(self):
+        def rows():
+            halted = [
+                ticket(
+                    "U-%d" % index,
+                    status="coding",
+                    phase="implementing",
+                    agent="subagent:U-%d" % index,
+                    needsReplacement=True,
+                    haltResume=True,
+                    shuttle={"pending": False, "step": "implement"},
+                )
+                for index in range(2)
+            ]
+            fix = self._review("F-1", conflict=["cmd/api/routes.go"])
+            waiting = self._review("W-1", rollup="pending", ci="pending")
+            return halted + [fix, waiting, ticket("N-1"), ticket("N-2")]
+
+        def started(lines):
+            return sorted(line.split()[1] for line in lines if line.startswith("start "))
+
+        tight = beam(rows(), maxAgents=3, maxInProgress=20)
+        found = pipeline.unfinished(tight)
+        self.assertEqual(found, {"fix": ["F-1"], "shuttle": ["U-0", "U-1"], "out": [], "waiting": ["W-1"]})
+        self.assertEqual(
+            pipeline.unfinished_line(tight),
+            "unfinished: 4 open. 1 need a fix, 2 need a Shuttle, 0 have a Shuttle out, 1 wait on review or checks. "
+            "These start first, up to maxAgents 3. New tickets start after, while fewer than maxInProgress 20 are open.",
+        )
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = folder / "beam.json"
+        path.write_text(json.dumps(tight))
+        lines = pipeline.cold_start(path)
+        # Three slots, three unfinished tickets that need an agent. Nothing new starts.
+        self.assertEqual(started(lines), ["F-1", "U-0", "U-1"])
+        self.assertLess(text(lines).index("F-1"), text(lines).index("start U-0"), "the fix goes before the relaunch")
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["tickets"]["N-1"]["status"], "queued")
+        self.assertNotIn("worker died", text(lines))
+        self.assertEqual(saved["tickets"]["U-0"].get("recoveries") or 0, 0, "a halted Shuttle is not a recovery")
+
+        roomy = beam(rows(), maxAgents=4, maxInProgress=20)
+        path.write_text(json.dumps(roomy))
+        lines = pipeline.cold_start(path)
+        # One slot is left after the unfinished work, so one new ticket starts.
+        self.assertEqual(started(lines), ["F-1", "N-1", "U-0", "U-1"])
+        self.assertLess(text(lines).index("start U-1"), text(lines).index("start N-1"))
+
+        held = beam(rows(), maxAgents=10, maxInProgress=4)
+        path.write_text(json.dumps(held))
+        lines = pipeline.cold_start(path)
+        # Four tickets are already open, so maxInProgress holds the new ones. The unfinished ones still start.
+        self.assertEqual(started(lines), ["F-1", "U-0", "U-1"])
+        self.assertEqual(pipeline.unfinished_line(beam([ticket("N-1")])), "unfinished: none. New tickets start from the ready queue.")
+
     def test_a_dead_shuttle_frees_its_slot_and_the_cap_counts_live_ones(self):
         import beam as beam_mod
 
@@ -1149,8 +1204,6 @@ class LiveShuttleCapTests(unittest.TestCase):
         data = beam(
             [live, dead, review, ticket("Q-1")],
             maxAgents=2,
-            maxLocalSubagents=2,
-            maxFixWorkers=5,
         )
         data["parentSession"] = "s"
         self.assertTrue(orchestrator.shuttle_is_live(live, data))
@@ -1192,7 +1245,7 @@ class LiveShuttleCapTests(unittest.TestCase):
             isolation="vm",
             checkout="subagent-vm",
         )
-        data = beam([fresh, stale], maxAgents=18, maxLocalSubagents=18, subagentVm=True, runner="cloud")
+        data = beam([fresh, stale], maxAgents=18, subagentVm=True, runner="cloud")
         self.assertTrue(orchestrator.vm_mode(data["config"], data))
         released = text(pipeline.open_parent_session(data))
         self.assertNotIn("shuttle: release V-1", released)

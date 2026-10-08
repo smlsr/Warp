@@ -10,7 +10,7 @@ python3 <plugin>/scripts/scan.py status --beam .warp/beam.json
 python3 <plugin>/scripts/beam.py board --beam .warp/beam.json
 ```
 
-`scan.py status` prints the resume hint first (`scripts/resume_hint.py`). Follow it. Do not dispatch from this command. Plugin hooks do not run on cloud runners.
+`scan.py status` prints the resume hint first (`scripts/resume_hint.py`). Follow it. Its last block, the version lines, includes `instance: warp:<instance> host=<host> machine=<machine id>`. Report that line. The instance is six characters that name this Warp run. Its agents carry it in their names (`[warp:<instance>] <ticket> <step>`), every Slack and Teams header ends with it, and `.warp/STATUS.md` and `.warp/status.json` record it. It is how this run is told from another Warp run in the same repo or another one. Do not dispatch from this command. Plugin hooks do not run on cloud runners.
 
 `scan.py ?` and `beam.py ?` print the options. Quote `?` if the shell expands it.
 

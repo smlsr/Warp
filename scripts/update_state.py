@@ -81,8 +81,13 @@ def _summary(pulled: list, won: list, sha: Optional[str], base: Optional[str]) -
         print("commit: none")
 
 
-def update_state(beam_path: Path, push: bool = True) -> int:
-    """Reconcile main, ticket folders, and local parent state. Push the beam."""
+def update_state(beam_path: Path, push: bool = True, finalize=None) -> int:
+    """Reconcile main, ticket folders, and local parent state. Push the beam.
+
+    `finalize` is called with the reconciled beam before it is written and
+    pushed. Pause and stop pass the halt, so the beam on main already shows
+    every Shuttle slot freed.
+    """
     beam_path = Path(beam_path)
     if not beam_path.is_absolute():
         beam_path = Path.cwd() / beam_path
@@ -153,6 +158,8 @@ def update_state(beam_path: Path, push: bool = True) -> int:
                 continue
             remote_tickets[tid] = copy.deepcopy(row)
             won.append("claim %s" % tid)
+    if finalize is not None:
+        finalize(patched)
     patched["metrics"] = beam.metrics(patched)
     beam.atomic_write(beam_path, json.dumps(patched, indent=2) + "\n")
     beam.journal(beam_path, {"type": "update-state", "pulled": pulled, "won": won})

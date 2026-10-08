@@ -1,38 +1,90 @@
 #!/usr/bin/env python3
-"""Registry of Warp agents, spawn caps, and cloud-agent cleanup.
+"""Registry of Warp agents, the reap check, the halt, and cloud-agent cleanup.
 
-`.warp/agents.json` sits next to the beam. Every spawn and every exit is a
-row: id, ticket, role, session, started, ended, state. A ticket has one live
-Shuttle. A replacement starts only after the previous one is confirmed dead
-(its turn returned, or its heartbeat is older than staleMinutes). Fix rounds
-resume that Shuttle. Bugbot is requested once per head commit.
+`.warp/agents.json` sits next to the beam and is the one registry. Every
+spawn and every exit is a row: id, ticket, role, session, started, ended,
+state. A ticket has one live Shuttle. A replacement starts only after the
+previous one is confirmed dead (its turn returned, or its heartbeat is older
+than staleMinutes). Fix rounds resume that Shuttle. Bugbot is requested once
+per head commit. The parent is the only agent that starts another agent.
 
 Nothing is spawned while the run is paused or stopped, or every ticket is
 merged or parked. Hitting a spawn cap raises an alarm and does not try again.
 
-Cloud agents are archived with POST /v1/agents/{id}/archive when
-CURSOR_API_KEY is set. The key is read from the environment and is never
-written. Without the key, cleanup prints https://cursor.com/agents/<id>.
+reap is the check every Warp agent runs first and after each state it
+writes. It prints `reap: continue`, or `reap: exit <reason>` and exits 3.
+The reasons are paused, stopped, done, settled (the ticket is merged or
+parked), replaced, halted (started before a pause or a stop), archived,
+not-resumed, and not-launched. `--remote`
+reads the beam from origin's base branch, for a Shuttle on its own VM.
+`ticket_state.py append` and `beam.py heartbeat` print the same line.
 
-`--cloud` without `--apply` is a dry run. It lists idle agents for this
-repo that are in the registry or whose name or prompt is a Warp role.
-It does not archive the agent running the command, or any RUNNING or
-ACTIVE agent. `--all-idle` drops the role check and stays on this repo.
-`--any-repo` drops the repo check and is only for use with `--all-idle`
-when you mean every idle agent the key can see.
+Every agent Warp starts is tagged `warp:<instance>`. The instance is six
+characters that name this Warp run: the last six of the parent's cloud agent
+id, or a hash of this machine and this beam's path on a laptop. It is set
+once by `/warp-start`, kept on the beam, and shown by start, status,
+version, list, and every Slack or Teams message. Cursor has no tag field on
+an agent, so the tag is the name: `[warp:<instance>] <ticket> <step>` for a
+Shuttle and `[warp:<instance>] listener` for a poll. The same text is the
+first line of the prompt. `checkout.py launch` prints the name for the
+parent to use.
+
+`/warp-pause` and `/warp-stop` run one teardown. Every registry row is
+ended and marked halted, so nothing from before the halt is resumed. With
+CURSOR_API_KEY, every cloud agent in the registry, and every agent in this
+repo whose name carries this instance's tag, has its run cancelled
+(POST /v1/agents/{id}/runs/{runId}/cancel) and is archived
+(POST /v1/agents/{id}/archive). The agent running the command and this
+run's parent stay. The key is read from the environment and is never
+written. Without the key, cleanup prints https://cursor.com/agents/<id>.
+stop here is the local half of that teardown: no network.
+
+list is `/warp-list`: what is still out. It prints the instance, every
+registry row, and, when CURSOR_API_KEY is set, each cloud agent that carries
+this run's tag with its status, then `out: tag [warp:<instance>] running=N
+idle=N kept=N`. It changes nothing.
+
+cleanup is `/warp-cleanup`: the clear you run yourself. `--cloud` without
+`--apply` is a dry run. `--cloud --apply --running` cancels the run of each
+RUNNING or ACTIVE match and archives every match. Without `--running` a
+running agent is skipped. `--running` is refused while this run is running
+unless `--force`: pause or stop first.
+
+list and cleanup take the same selection. By default it is this run: the
+registry, and agents in this repo whose name carries `[warp:<instance>]`.
+Other agents in the repo are not matched, and neither are another Warp
+run's. `--tag a1b2c3` (or `warp:a1b2c3`) names another run's tag in place of
+this one. `--tag all` is the tag of any Warp run. `--untagged` adds agents
+with no Warp tag, from before 1.5.0, matched loosely on Warp role words in
+the name or prompt. One of those that is still running is left alone unless
+`--force`, because it may be someone else's. `--all-idle` drops the match
+and stays on this repo. `--any-repo` drops the repo check.
+
+hook-start and hook-stop are the local IDE duplicates of the gate. Cloud
+runners do not execute hooks, and nothing depends on them.
 
   python3 scripts/agents.py ?
   python3 scripts/agents.py list --beam .warp/beam.json
+  python3 scripts/agents.py list --beam .warp/beam.json --tag all
+  python3 scripts/agents.py list --beam .warp/beam.json --untagged
   python3 scripts/agents.py check --beam .warp/beam.json
+  python3 scripts/agents.py reap --beam .warp/beam.json --id subagent:WV-01 --ticket WV-01
+  python3 scripts/agents.py reap --remote --id subagent:WV-01 --ticket WV-01
+  python3 scripts/agents.py reap --beam .warp/beam.json --role parent --id <session>
+  python3 scripts/agents.py stop --beam .warp/beam.json
   python3 scripts/agents.py cleanup --beam .warp/beam.json
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud
   python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --tag a1b2c3
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --untagged
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -49,7 +101,6 @@ ENV_KEY = "CURSOR_API_KEY"
 HOUR_MINUTES = 60
 DEFAULT_MAX_SPAWNS_PER_TICKET = 8
 DEFAULT_MAX_SPAWNS_PER_HOUR = 40
-DEFAULT_MAX_LISTENER_RESTARTS_PER_HOUR = 8
 _LIVE = {"starting", "running"}
 _SETTLED = {"merged", "done", "parked", "skipped"}
 
@@ -87,18 +138,42 @@ def save_file(beam_path: Optional[Path], doc: dict) -> None:
     beam_mod.atomic_write(path, json.dumps(doc, indent=2) + "\n")
 
 
+def _signature(beam_path: Path) -> list:
+    """Size and mtime of `.warp/agents.json`. Empty when the file is missing."""
+    try:
+        stat = registry_path(Path(beam_path)).stat()
+    except OSError:
+        return []
+    return [stat.st_mtime_ns, stat.st_size]
+
+
 def registry(data: dict, beam_path: Optional[Path] = None) -> dict:
-    """The registry for this pass. A beam path loads and owns the file."""
-    current = data.get("_agentBeam")
-    if isinstance(data.get("agentRegistry"), dict):
-        if beam_path is None or str(beam_path) == current:
-            return data["agentRegistry"]
-    loaded = load_file(beam_path)
-    if isinstance(data.get("agentRegistry"), dict) and not loaded.get("agents") and not loaded.get("spawns"):
-        loaded = data["agentRegistry"]
+    """The registry for this pass. `.warp/agents.json` is the source of truth.
+
+    The beam carries a copy so one pass works on one object. That copy is
+    used only while the file is unchanged since this process read or wrote
+    it. A Shuttle's reap check, a hook, or another window may have written
+    the file since, and then the file wins.
+    """
+    path = beam_path
+    if path is None and data.get("_agentBeam"):
+        path = Path(str(data["_agentBeam"]))
+    cached = data.get("agentRegistry") if isinstance(data.get("agentRegistry"), dict) else None
+    if path is None:
+        if cached is None:
+            cached = _empty()
+            data["agentRegistry"] = cached
+        return cached
+    same = str(path) == data.get("_agentBeam")
+    sig = _signature(Path(path))
+    if cached is not None and same and (not sig or sig == data.get("_agentSig")):
+        return cached
+    loaded = load_file(Path(path))
+    if cached is not None and not loaded.get("agents") and not loaded.get("spawns"):
+        loaded = cached
     data["agentRegistry"] = loaded
-    if beam_path is not None:
-        data["_agentBeam"] = str(beam_path)
+    data["_agentBeam"] = str(path)
+    data["_agentSig"] = sig
     return loaded
 
 
@@ -109,6 +184,8 @@ def flush(data: dict, beam_path: Optional[Path] = None) -> None:
     doc = data.get("agentRegistry")
     if isinstance(doc, dict):
         save_file(path, doc)
+        if path is not None:
+            data["_agentSig"] = _signature(Path(path))
 
 
 def _cfg(data: dict, key: str, default: int) -> int:
@@ -265,6 +342,16 @@ def end_id(doc: dict, agent_id: str, now_s: str, reason: str) -> None:
             row["endReason"] = reason
 
 
+def _retire_row(row: dict) -> None:
+    """A Shuttle that is being replaced leaves its VM. The next pass cancels and archives it."""
+    for ident in (str(row.get("id") or ""), str(row.get("cloudId") or "")):
+        if not _cloud_id(ident) or ident in (row.get("archivedIds") or []):
+            continue
+        left = row.setdefault("retired", [])
+        if ident not in left:
+            left.append(ident)
+
+
 def end_ticket(data: dict, ticket: dict, reason: str, now=None, beam_path: Optional[Path] = None, role: str = "shuttle") -> None:
     """Record the current Shuttle as ended before a replacement or a resume."""
     if not isinstance(ticket, dict):
@@ -276,6 +363,8 @@ def end_ticket(data: dict, ticket: dict, reason: str, now=None, beam_path: Optio
         row["state"] = "ended"
         row["ended"] = now_s
         row["endReason"] = reason
+        if reason == "dead":
+            _retire_row(row)
     agent = str(ticket.get("agent") or "")
     if agent:
         known = any(isinstance(row, dict) and row.get("id") == agent for row in _rows(doc))
@@ -311,6 +400,8 @@ def can_resume(data: dict, ticket: dict, beam_path: Optional[Path] = None) -> st
             continue
         if str(row.get("ticket") or "") != tid or row.get("role") != "shuttle":
             continue
+        if row.get("halted") or row.get("archived"):
+            continue
         if row.get("state") == "ended" and row.get("endReason") == "returned" and row.get("id"):
             chosen = str(row["id"])
     return chosen
@@ -327,6 +418,34 @@ def _new_id(ticket: dict, doc: dict) -> str:
         ):
             return candidate
         number += 1
+
+
+def _halted_id(doc: dict, agent_id: str) -> bool:
+    if not agent_id:
+        return False
+    return any(isinstance(row, dict) and row.get("id") == agent_id and row.get("halted") for row in _rows(doc))
+
+
+def launch_refused(data: dict, ticket: dict) -> list:
+    """Why `checkout.py launch` must not print a prompt. Empty means go ahead.
+
+    This is the gate. No prompt is printed while the run is paused, stopped,
+    or finished, or for a ticket that is merged or parked.
+    """
+    tid = str(ticket.get("id") or "") if isinstance(ticket, dict) else ""
+    halted = halt_state(data)
+    if halted:
+        word = "finished" if halted == "done" else halted
+        return [
+            "spawn: closed %s" % tid,
+            "refuse: Warp is %s. No agent starts. /warp-resume or /warp-start opens the run." % word,
+        ]
+    if isinstance(ticket, dict) and ticket.get("status") in _SETTLED:
+        return [
+            "spawn: closed %s" % tid,
+            "refuse: ticket %s is %s. Nothing starts for it." % (tid, ticket.get("status")),
+        ]
+    return []
 
 
 def prepare_launch(
@@ -369,6 +488,10 @@ def prepare_launch(
         ticket["agent"] = _new_id(ticket, doc)
     elif not str(ticket.get("agent") or "").strip():
         ticket["agent"] = "subagent:%s" % tid
+    if _halted_id(doc, str(ticket.get("agent") or "")):
+        # An id from before a pause or a stop is never reused. Whatever still
+        # holds it reads `reap: exit` on its next check.
+        ticket["agent"] = _new_id(ticket, doc)
     agent = str(ticket.get("agent") or "")
     if any(isinstance(row, dict) and row.get("id") == agent and row.get("state") in _LIVE for row in _rows(doc)):
         return {"action": "hold", "id": agent}
@@ -450,6 +573,9 @@ def note_checkout(data: dict, ticket: dict, beam_path: Optional[Path] = None, no
     _now_dt, now_s = beam_mod.coerce_now(now)
     if not live:
         agent = str(ticket.get("agent") or "").strip() or ("subagent:%s" % tid)
+        if _halted_id(doc, agent):
+            ticket["agent"] = agent
+            agent = _new_id(ticket, doc)
         ticket["agent"] = agent
         doc.setdefault("agents", []).append(
             {
@@ -479,15 +605,23 @@ def release_ticket(
     reason: str = "closed",
     now=None,
     beam_path: Optional[Path] = None,
+    key: Optional[str] = None,
+    transport: Optional[Callable] = None,
 ) -> list:
-    """End this ticket's agents. Archive a cloud id when CURSOR_API_KEY is set."""
+    """End this ticket's agents. With CURSOR_API_KEY, cancel and archive every VM it used."""
     note_closed(data, ticket, reason, now=now, beam_path=beam_path)
     finish_bugbot(data, ticket, now=now, beam_path=beam_path)
     doc = registry(data, beam_path)
     tid = str(ticket.get("id") or "")
     _now_dt, now_s = beam_mod.coerce_now(now)
     lines = []
-    secret = api_key()
+    secret = api_key() if key is None else key
+    kept = protected_ids(doc)
+    mine = current_agent_id()
+    if mine:
+        kept.add(mine)
+    wanted = []
+    changed = False
     for row in _rows(doc):
         if not isinstance(row, dict) or str(row.get("ticket") or "") != tid:
             continue
@@ -495,33 +629,28 @@ def release_ticket(
             row["state"] = "ended"
             row["ended"] = now_s
             row["endReason"] = reason
-        ident = str(row.get("id") or "")
-        if not _cloud_id(ident):
-            continue
+            changed = True
         if row.get("state") not in {"ended", "stopped"} and not row.get("ended"):
             continue
+        if row.get("archived"):
+            continue
+        done = row.get("archivedIds") if isinstance(row.get("archivedIds"), list) else []
+        for ident in row_cloud_ids(row):
+            if ident not in done and ident not in kept and ident not in wanted:
+                wanted.append(ident)
+    if changed:
+        flush(data, beam_path)
+    archived = []
+    for ident in wanted:
         if not secret:
             lines.append("cleanup: link %s" % agent_url(ident))
             continue
-        ok, status = archive_id(ident, secret)
+        ok, said = _stop_cloud(ident, secret, transport)
+        lines.extend(said)
         if ok:
-            row["state"] = "ended"
-            row["archived"] = True
-            lines.append("cleanup: archived %s" % ident)
-        else:
-            lines.append("cleanup: archive failed %s (%s) %s" % (ident, status, agent_url(ident)))
-    flush(data, beam_path)
+            archived.append(ident)
+    _commit_archived(data, beam_path, archived, now_s)
     return lines
-
-
-def cleanup_settled(data: dict, beam_path: Optional[Path] = None, now=None) -> list:
-    """Full cleanup once nothing may spawn. Empty when the registry is empty."""
-    if spawns_open(data):
-        return []
-    doc = registry(data, beam_path)
-    if not any(isinstance(row, dict) and row.get("id") for row in _rows(doc)):
-        return []
-    return cleanup(data, beam_path=beam_path, now=now)
 
 
 def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacing: bool = False, now=None, beam_path: Optional[Path] = None) -> list:
@@ -618,102 +747,84 @@ def finish_bugbot(data: dict, ticket: dict, now=None, beam_path: Optional[Path] 
     flush(data, beam_path)
 
 
-def listener_backoff_minutes(count: int) -> int:
-    """Minutes to wait after this many restarts. The first is immediate."""
-    if count <= 1:
-        return 0
-    return min(2 ** (count - 1), 30)
+LISTENER_ID = "listener"
 
 
-def listener_decision(data: dict, now=None, beam_path: Optional[Path] = None, returned: str = "") -> str:
-    """`start`, `backoff`, `cap`, or `closed`."""
-    if not spawns_open(data):
-        return "closed"
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    if raw.get("restartCapped"):
-        return "cap"
-    _now_dt, now_s = beam_mod.coerce_now(now)
-    nxt = str(raw.get("nextRestartAt") or "")
-    if nxt and not returned:
-        start = beam_mod.parse_ts(now_s)
-        until = beam_mod.parse_ts(nxt)
-        if start is not None and until is not None and start < until:
-            return "backoff"
-    cap = _cfg(data, "maxListenerRestartsPerHour", DEFAULT_MAX_LISTENER_RESTARTS_PER_HOUR)
-    stamps = [str(item) for item in (raw.get("restartAts") or []) if str(item)]
-    recent = [item for item in stamps if _within_hour(item, now_s)]
-    if len(recent) >= cap:
-        return "cap"
-    return "start"
-
-
-def note_listener_restart(data: dict, now=None, beam_path: Optional[Path] = None, previous: str = "") -> None:
-    """End the listener that is being replaced, then record the new start."""
+def note_listener_poll(data: dict, now=None, beam_path: Optional[Path] = None) -> None:
+    """One poll is out. The registry keeps one listener row, not one row per poll."""
     doc = registry(data, beam_path)
     _now_dt, now_s = beam_mod.coerce_now(now)
-    if previous:
-        end_id(doc, previous, now_s, "replaced")
-    for row in _rows(doc):
-        if isinstance(row, dict) and row.get("role") == "listener" and row.get("state") in _LIVE:
-            row["state"] = "ended"
-            row["ended"] = now_s
-            row["endReason"] = "replaced"
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    count = int(raw.get("restarts") or 0)
-    ident = "listener-r%d" % count
-    doc.setdefault("agents", []).append(
-        {
-            "id": ident,
-            "ticket": "",
-            "role": "listener",
-            "session": str(data.get("parentSession") or ""),
-            "started": now_s,
-            "ended": None,
-            "state": "starting",
-        }
-    )
-    stamps = [str(item) for item in (raw.get("restartAts") or []) if str(item)]
-    stamps.append(now_s)
-    raw["restartAts"] = stamps
-    wait = listener_backoff_minutes(count)
-    if wait:
-        from datetime import timedelta
-
-        start = beam_mod.parse_ts(now_s)
-        if start is not None:
-            raw["nextRestartAt"] = (start + timedelta(minutes=wait)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    data["listener"] = raw
+    row = None
+    for item in _rows(doc):
+        if not isinstance(item, dict) or item.get("role") != "listener":
+            continue
+        if item.get("id") == LISTENER_ID and row is None:
+            row = item
+            continue
+        if item.get("state") in _LIVE:
+            item["state"] = "ended"
+            item["ended"] = now_s
+            item["endReason"] = "replaced"
+    if row is None:
+        row = {"id": LISTENER_ID, "ticket": "", "role": "listener", "polls": 0}
+        doc.setdefault("agents", []).append(row)
+    row["session"] = str(data.get("parentSession") or "")
+    row["started"] = now_s
+    row["ended"] = None
+    row["endReason"] = ""
+    row["state"] = "running"
+    row["polls"] = int(row.get("polls") or 0) + 1
+    row.pop("halted", None)
     flush(data, beam_path)
 
 
-def cap_listener(data: dict, now=None, beam_path: Optional[Path] = None) -> None:
-    raw = data.setdefault("listener", {})
-    if not isinstance(raw, dict):
-        raw = {}
-        data["listener"] = raw
-    raw["restartCapped"] = True
-    flush(data, beam_path)
+def note_listener_done(data: dict, now=None, beam_path: Optional[Path] = None, reason: str = "polled") -> None:
+    """The poll came back, or was lost. The listener row is ended until the next poll."""
+    doc = registry(data, beam_path)
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    changed = False
+    for item in _rows(doc):
+        if not isinstance(item, dict) or item.get("role") != "listener":
+            continue
+        if item.get("state") in _LIVE:
+            item["state"] = "ended"
+            item["ended"] = now_s
+            item["endReason"] = reason
+            changed = True
+    if changed:
+        flush(data, beam_path)
 
 
-def stop_all(data: dict, now=None, beam_path: Optional[Path] = None) -> list:
-    """Mark every live registered agent stopped. Used by /warp-stop."""
+def stop_all(data: dict, now=None, beam_path: Optional[Path] = None, reason: str = "stopped") -> list:
+    """Mark every live registered agent stopped. Pause, stop, and the end of a run.
+
+    Every row is also marked halted, so nothing from before the halt is
+    resumed. `/warp-resume` and `/warp-start` start new agents.
+    """
     doc = registry(data, beam_path)
     _now_dt, now_s = beam_mod.coerce_now(now)
     lines = []
+    changed = False
     for row in _rows(doc):
         if not isinstance(row, dict):
             continue
+        if not row.get("halted"):
+            row["halted"] = True
+            changed = True
         if row.get("state") not in _LIVE:
             continue
         row["state"] = "stopped"
         row["ended"] = now_s
-        row["endReason"] = "stopped"
+        row["endReason"] = reason
+        changed = True
         if row.get("id"):
             lines.append("stop: %s" % row["id"])
     raw = data.get("listener")
     if isinstance(raw, dict):
         raw["state"] = "stopped"
-    flush(data, beam_path)
+        raw.pop("pollStartedAt", None)
+    if changed:
+        flush(data, beam_path)
     return lines
 
 
@@ -741,12 +852,16 @@ def default_transport(method: str, url: str, key: str, body: Optional[dict] = No
     if payload is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read().decode("utf-8", "replace")
             status = getattr(resp, "status", 200)
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
         status = exc.code
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        # No network, a refused connection, a timeout. Status 0 is a failed
+        # call. It never raises, so a pass or a halt is not cut off halfway.
+        return 0, {"error": str(getattr(exc, "reason", exc))[:200]}
     if not raw:
         return status, {}
     try:
@@ -855,12 +970,46 @@ def origin_url(root: Optional[Path]) -> str:
     return out.stdout.strip()
 
 
+def _metadata(key: str, timeout: float = 1.5) -> str:
+    """One value from the Cursor VM metadata socket. Empty when there is none."""
+    sock_path = os.environ.get("CURSOR_AGENT_SOCKET", "").strip() or "/run/cursor/api.sock"
+    if not os.path.exists(sock_path):
+        return ""
+    import socket
+
+    chunks = []
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(timeout)
+            conn.connect(sock_path)
+            conn.sendall(("GET /v1/meta-data/%s HTTP/1.0\r\nHost: cursor-agent\r\n\r\n" % key).encode())
+            while True:
+                part = conn.recv(4096)
+                if not part:
+                    break
+                chunks.append(part)
+        finally:
+            conn.close()
+    except OSError:
+        return ""
+    raw = b"".join(chunks).decode("utf-8", "replace")
+    head, _sep, body = raw.partition("\r\n\r\n")
+    first = head.splitlines()[0] if head else ""
+    if " 200" not in first:
+        return ""
+    return body.strip()
+
+
 def current_agent_id() -> str:
-    """Cloud agent id of this process, when Cursor put one in the environment."""
+    """Cloud agent id of this process: the environment, then the VM metadata socket."""
     for key in ("CURSOR_AGENT_ID", "CURSOR_CLOUD_AGENT_ID", "CURSOR_CONVERSATION_ID"):
         value = os.environ.get(key, "").strip()
         if value.startswith("bc-") or value.startswith("bc_"):
             return value
+    value = _metadata("agent/id")
+    if value.startswith("bc-") or value.startswith("bc_"):
+        return value
     return ""
 
 
@@ -905,19 +1054,173 @@ def cloud_prompt(item: dict) -> str:
     return ""
 
 
+TAG = "warp"
+_TAG_RE = re.compile(r"(?im)^\s*\[warp(?::([a-z0-9]{1,16}))?\](?=\s|$)")
+
+
+def machine_id() -> str:
+    """The machine this process is on: the Cursor cloud agent id on a cloud VM, else an id for this computer."""
+    cloud = current_agent_id()
+    if cloud:
+        return cloud
+    import socket
+    import uuid
+
+    try:
+        node = "%012x" % uuid.getnode()
+    except Exception:
+        node = ""
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = ""
+    return "local-%s-%s" % (host or "host", node or "0")
+
+
+def _hostname() -> str:
+    import socket
+
+    try:
+        return socket.gethostname()
+    except Exception:
+        return ""
+
+
+def mint_instance(beam_path: Optional[Path], now=None) -> dict:
+    """A new instance record for this beam: six characters that name this Warp run.
+
+    On a cloud VM it is the last six characters of the parent's cloud agent
+    id. On a laptop one machine can run Warp in several checkouts, so it is
+    six characters of a hash of the machine id and this beam's path.
+    """
+    machine = machine_id()
+    if _cloud_id(machine):
+        ident = re.sub(r"[^a-z0-9]", "", machine.lower())[-6:]
+    else:
+        where = str(Path(beam_path).resolve()) if beam_path is not None else ""
+        ident = hashlib.sha256(("%s|%s" % (machine, where)).encode()).hexdigest()[:6]
+    return {"id": ident, "machine": machine, "host": _hostname(), "createdAt": beam_mod.coerce_now(now)[1]}
+
+
+def instance_id(data: dict) -> str:
+    """The six-character id on the beam. Empty until `/warp-start` or a launch sets it."""
+    raw = data.get("instance") if isinstance(data, dict) else None
+    if isinstance(raw, dict):
+        return str(raw.get("id") or "").strip().lower()
+    return str(raw or "").strip().lower()
+
+
+def ensure_instance(data: dict, beam_path: Optional[Path] = None, now=None) -> str:
+    """The instance id, set once and kept. The caller writes the beam.
+
+    It belongs to the beam, not to one parent. A later `/warp-resume` from
+    another window or another VM keeps it, so that parent still finds the
+    agents the earlier one started.
+    """
+    found = instance_id(data)
+    if found:
+        return found
+    data["instance"] = mint_instance(beam_path, now=now)
+    return data["instance"]["id"]
+
+
+def tag(instance: str = "") -> str:
+    """`warp:<instance>`, or `warp` when the beam has no instance yet."""
+    return "%s:%s" % (TAG, instance) if instance else TAG
+
+
+def instance_line(data: dict) -> str:
+    """One line for start, status, version, and list: which Warp this is and where it started."""
+    raw = data.get("instance") if isinstance(data, dict) and isinstance(data.get("instance"), dict) else {}
+    ident = instance_id(data)
+    if not ident:
+        return "instance: none yet. /warp-start sets it."
+    return "instance: %s host=%s machine=%s" % (tag(ident), raw.get("host") or "unknown", raw.get("machine") or "unknown")
+
+
+def tag_name(ticket_id: str = "", step: str = "", role: str = "shuttle", instance: str = "") -> str:
+    """The name every agent Warp starts carries: `[warp:<instance>] <ticket> <step>`.
+
+    Cursor has no tag field on an agent. The name is the one label its API
+    returns in the agent list, so the tag lives there, and on the first line
+    of the prompt. The instance tells this Warp run's agents from another
+    Warp run's, in this repo or any other.
+    """
+    head = "[%s]" % tag(instance)
+    if role == "listener":
+        return "%s listener" % head
+    return " ".join(part for part in (head, str(ticket_id or ""), str(step or "")) if part)
+
+
+def tag_instance(text: str) -> Optional[str]:
+    """The instance in a `[warp:<instance>]` tag that starts a name or a prompt line.
+
+    None when there is no tag. Empty for a bare `[warp]`.
+    """
+    match = _TAG_RE.search(str(text or ""))
+    if not match:
+        return None
+    return str(match.group(1) or "").lower()
+
+
+def has_tag(text: str) -> bool:
+    """True when a name, or any line of a prompt, starts with a Warp tag of any instance."""
+    return tag_instance(text) is not None
+
+
+def parse_tag(value: str) -> tuple:
+    """(instance, any) from `--tag`. `all` and `*` mean the tag of any Warp run.
+
+    `a1b2c3`, `warp:a1b2c3`, and `[warp:a1b2c3]` are the same instance.
+    Empty means this beam's own instance.
+    """
+    text = str(value or "").strip().strip("[]").strip().lower()
+    if not text:
+        return "", False
+    if text in {"*", "all", "any", "warp:*", "warp:all"}:
+        return "", True
+    if text.startswith("warp:"):
+        text = text[len("warp:"):]
+    return re.sub(r"[^a-z0-9]", "", text), False
+
+
+def tag_match(text: str, instance: str = "", all_instances: bool = False) -> bool:
+    """True when the text carries this instance's tag. `all_instances` takes any Warp tag."""
+    found = tag_instance(text)
+    if found is None:
+        return False
+    if all_instances or not instance:
+        return True
+    return found == instance
+
+
 def warp_role(text: str) -> bool:
-    """True when a name or prompt is a Warp Shuttle, listener, fix, rebase, or Bugbot."""
+    """Loose match for agents from before the tag: Shuttle, listener, fix, rebase, or Bugbot in the text."""
     folded = str(text or "").casefold()
     if any(word in folded for word in _ROLE_WORDS):
         return True
     return re.search(r"\bfix\b", folded) is not None
 
 
+def row_cloud_ids(row: dict) -> list:
+    """Every cloud agent id this row has had: its id, its VM, and VMs it left behind."""
+    found = []
+    if not isinstance(row, dict):
+        return found
+    values = [row.get("id"), row.get("cloudId")]
+    if isinstance(row.get("retired"), list):
+        values.extend(row["retired"])
+    for value in values:
+        ident = str(value or "")
+        if _cloud_id(ident) and ident not in found:
+            found.append(ident)
+    return found
+
+
 def _registry_cloud_ids(doc: dict) -> set:
     found = set()
     for row in _rows(doc):
-        if isinstance(row, dict) and _cloud_id(str(row.get("id") or "")):
-            found.add(str(row["id"]))
+        found.update(row_cloud_ids(row))
     return found
 
 
@@ -956,6 +1259,26 @@ def cloud_match_line(item: dict, origin_key: str) -> str:
     )
 
 
+_LAUNCH_RE = re.compile(r"(?m)^\s*(SUBAGENT|IMPLEMENT)\s+([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*$")
+_LISTEN_RE = re.compile(r"(?m)^\s*LISTEN\s+once\s*$")
+
+
+def launch_marker(text: str) -> tuple:
+    """(`shuttle`, ticket id) or (`listener`, ``) for a prompt Warp printed. Else (``, ``)."""
+    body = str(text or "")
+    match = _LAUNCH_RE.search(body)
+    if match:
+        return "shuttle", match.group(2)
+    if _LISTEN_RE.search(body):
+        return "listener", ""
+    return "", ""
+
+
+def strict_role(text: str) -> bool:
+    """True only for a prompt Warp printed: SUBAGENT <id>, IMPLEMENT <id>, or LISTEN once."""
+    return bool(launch_marker(text)[0])
+
+
 def classify_cloud(
     item: dict,
     origin_key: str,
@@ -963,12 +1286,22 @@ def classify_cloud(
     all_idle: bool = False,
     any_repo: bool = False,
     self_id: str = "",
+    running: bool = False,
+    protected: Optional[set] = None,
+    untagged: bool = False,
+    instance: str = "",
+    all_instances: bool = False,
+    cancel_loose: bool = False,
 ) -> str:
-    """`archive`, `skip:<reason>`, or empty when the agent is out of scope.
+    """`archive`, `cancel`, `skip:<reason>`, or empty when the agent is out of scope.
 
-    In scope means this repo (unless `--any-repo`) and either a registry row
-    or a Warp role in the name or prompt (unless `--all-idle`). RUNNING,
-    ACTIVE, and this process are never archived.
+    In scope means this repo (unless `--any-repo`) and one of: a registry
+    row, or this instance's tag `[warp:<instance>]` on its name or prompt.
+    `all_instances` takes the tag of any Warp run. `untagged` adds agents
+    from before the tag: a prompt Warp printed, or Warp role words.
+    `--all-idle` drops the match. This process and this run's parent are
+    never touched. A RUNNING or ACTIVE agent is skipped unless `running`,
+    which cancels its run before the archive.
     """
     if not isinstance(item, dict):
         return ""
@@ -981,13 +1314,28 @@ def classify_cloud(
     if not any_repo and not _same_repo(item, origin_key):
         return ""
     in_registry = ident in registry_ids
-    role = warp_role("%s\n%s" % (item.get("name") or "", cloud_prompt(item)))
-    if not all_idle and not in_registry and not role:
+    name = str(item.get("name") or "")
+    prompt = cloud_prompt(item)
+    role = tag_match(name, instance, all_instances) or tag_match(prompt, instance, all_instances)
+    loose = False
+    if not role and untagged and not has_tag(name) and not has_tag(prompt):
+        # Untagged means it carries no Warp tag at all. An agent tagged for
+        # another Warp run belongs to that run.
+        loose = strict_role(prompt) or warp_role("%s\n%s" % (name, prompt))
+    if not all_idle and not in_registry and not role and not loose:
         return ""
     if self_id and ident == self_id:
         return "skip:self"
+    if protected and ident in protected:
+        return "skip:parent"
     if status in _BUSY_STATUS:
-        return "skip:running"
+        if not running:
+            return "skip:running"
+        if not in_registry and not role and not cancel_loose:
+            # Matched on words alone, or only by --all-idle, and still working.
+            # That may be someone else's agent. It takes --force to cancel it.
+            return "skip:running-untagged"
+        return "cancel"
     if status != "IDLE":
         return "skip:status"
     return "archive"
@@ -1002,24 +1350,263 @@ def fetch_agent(agent_id: str, key: str, transport: Optional[Callable] = None) -
     return body
 
 
-def _needs_detail(item: dict, registry_ids: set, all_idle: bool, any_repo: bool) -> bool:
+def cancel_run(agent_id: str, key: str, transport: Optional[Callable] = None, run_id: str = "") -> tuple:
+    """POST /v1/agents/{id}/runs/{runId}/cancel for the latest run. Returns (ok, detail).
+
+    A run that already ended (409) counts as cancelled.
+    """
+    call = transport or default_transport
+    run = str(run_id or "")
+    if not run:
+        run = str(fetch_agent(agent_id, key, transport=transport).get("latestRunId") or "")
+    if not run:
+        return False, "no run"
+    status, _body = call("POST", "%s/v1/agents/%s/runs/%s/cancel" % (API_ROOT, agent_id, run), key, None)
+    code = int(status)
+    return (200 <= code < 300) or code == 409, status
+
+
+def _needs_detail(
+    item: dict,
+    registry_ids: set,
+    all_idle: bool,
+    any_repo: bool,
+    untagged: bool = False,
+    name_only: bool = False,
+    instance: str = "",
+    all_instances: bool = False,
+) -> bool:
+    """Whether GET /v1/agents/{id} is needed to decide. List rows carry the name and not the repos.
+
+    `name_only` is the halt: it is on a time limit, so an agent whose name
+    has no tag and that is not in the registry is passed over from the list
+    row alone, with no extra call.
+    """
     ident = str(item.get("id") or "")
+    name = str(item.get("name") or "")
+    known = ident in registry_ids or tag_match(name, instance, all_instances)
+    if name_only and not known:
+        return False
     if not any_repo and not cloud_repos(item):
         return True
-    if all_idle or ident in registry_ids:
+    if all_idle or known:
         return False
-    if warp_role(str(item.get("name") or "")):
+    if untagged and warp_role(name):
         return False
     return not cloud_prompt(item)
 
 
 def _merge_detail(item: dict, detail: dict) -> dict:
     merged = dict(item)
-    for field in ("name", "status", "repos", "prompt", "url", "updatedAt", "repository", "repo", "git"):
+    for field in ("name", "status", "repos", "prompt", "url", "updatedAt", "repository", "repo", "git", "latestRunId"):
         value = detail.get(field)
         if value not in (None, "", []):
             merged[field] = value
     return merged
+
+
+def protected_ids(doc: dict) -> set:
+    """Cloud ids of this run's parent. Cleanup never cancels or archives the orchestrator.
+
+    The latest parent stays protected after a pause or a stop, so the
+    conversation that ran the work is still there to read. A parent that a
+    later start or resume replaced is an ordinary idle agent.
+    """
+    found = set()
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "parent":
+            continue
+        if row.get("superseded"):
+            continue
+        for key in ("id", "cloudId"):  # a parent has one VM
+            ident = str(row.get(key) or "")
+            if _cloud_id(ident):
+                found.add(ident)
+    return found
+
+
+def _recorded_links(doc: dict) -> list:
+    """Cloud ids the registry holds that are ended and not archived. The parent is never one."""
+    ended = []
+    kept = protected_ids(doc)
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("archived"):
+            continue
+        gone = row.get("state") in {"ended", "stopped"} or bool(row.get("ended"))
+        left = row.get("retired") if isinstance(row.get("retired"), list) else []
+        done = row.get("archivedIds") if isinstance(row.get("archivedIds"), list) else []
+        for ident in row_cloud_ids(row):
+            if ident in ended or ident in kept or ident in done:
+                continue
+            if gone or ident in left:
+                ended.append(ident)
+    return ended
+
+
+def tag_scope(data: dict, tag_override: str = "") -> tuple:
+    """(instance, any, foreign) for a listing or a cleanup.
+
+    `foreign` is true when `--tag` names something other than this beam's
+    own instance. Then this beam's registry is left out of it.
+    """
+    own = instance_id(data)
+    wanted, every = parse_tag(tag_override)
+    if every:
+        return own, True, False
+    if wanted and wanted != own:
+        return wanted, False, True
+    return own, False, False
+
+
+def scope_text(instance: str, every: bool, untagged: bool = False, all_idle: bool = False) -> str:
+    if all_idle:
+        return "every idle agent"
+    text = "any Warp run" if every else ("[%s]" % tag(instance))
+    return text + (" and untagged Warp roles" if untagged else "")
+
+
+def select_cloud(
+    data: dict,
+    beam_path: Optional[Path],
+    secret: str,
+    transport: Optional[Callable] = None,
+    origin: Optional[str] = None,
+    self_id: Optional[str] = None,
+    tag_override: str = "",
+    untagged: bool = False,
+    all_idle: bool = False,
+    any_repo: bool = False,
+    running: bool = False,
+    cancel_loose: bool = False,
+    name_only: bool = False,
+    skip: Optional[set] = None,
+    deadline: Optional[float] = None,
+    tick: Optional[Callable] = None,
+    started: float = 0.0,
+) -> dict:
+    """The cloud agents a listing or a cleanup is about. Reads, never writes.
+
+    Returns `error` (a line, or empty), `matches` as (agent, kind) with kind
+    `archive`, `cancel`, or `skip:<reason>`, the repo key, and whether the
+    time limit cut the read short.
+    """
+    doc = registry(data, beam_path)
+    instance, every, foreign = tag_scope(data, tag_override)
+    root = Path(beam_path).resolve().parent.parent if beam_path is not None else None
+    remote = origin if origin is not None else origin_url(root)
+    origin_key = repo_key(remote)
+    found = {"error": "", "matches": [], "origin": origin_key, "late": False, "instance": instance, "every": every, "foreign": foreign}
+    if not any_repo and not origin_key:
+        found["error"] = "no origin; nothing matched"
+        return found
+    ok, items, err = list_cloud(secret, transport=transport)
+    if not ok:
+        found["error"] = str(err)
+        return found
+    mine = current_agent_id() if self_id is None else self_id
+    registry_ids = set() if foreign else _registry_cloud_ids(doc)
+    guarded = protected_ids(doc)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if deadline is not None and tick is not None and tick() - started > deadline:
+            found["late"] = True
+            break
+        ident = str(item.get("id") or "")
+        if skip and ident in skip:
+            continue
+        if _needs_detail(item, registry_ids, all_idle, any_repo, untagged=untagged, name_only=name_only, instance=instance, all_instances=every) and ident:
+            detail = fetch_agent(ident, secret, transport=transport)
+            if detail:
+                item = _merge_detail(item, detail)
+        kind = classify_cloud(
+            item,
+            origin_key,
+            registry_ids,
+            all_idle=all_idle,
+            any_repo=any_repo,
+            self_id=mine,
+            running=running,
+            protected=guarded,
+            untagged=untagged,
+            instance=instance,
+            all_instances=every,
+            cancel_loose=cancel_loose,
+        )
+        if kind:
+            found["matches"].append((item, kind))
+    return found
+
+
+def out_lines(
+    data: dict,
+    beam_path: Optional[Path] = None,
+    key: Optional[str] = None,
+    transport: Optional[Callable] = None,
+    origin: Optional[str] = None,
+    self_id: Optional[str] = None,
+    tag_override: str = "",
+    untagged: bool = False,
+    all_idle: bool = False,
+    any_repo: bool = False,
+) -> list:
+    """What is still out: the registry, then the tagged cloud agents with their status. Changes nothing.
+
+    This is `/warp-list`. The cloud half needs CURSOR_API_KEY. `--tag` names
+    another run's tag, or `all` for any Warp run. `--untagged` adds agents
+    from before the tag.
+    """
+    doc = registry(data, beam_path)
+    instance, every, foreign = tag_scope(data, tag_override)
+    lines = [instance_line(data)]
+    scope = scope_text(instance, every, untagged, all_idle)
+    if foreign:
+        lines.append("list: tag %s is not this run. This run's registry is left out." % scope)
+    else:
+        rows = [row for row in _rows(doc) if isinstance(row, dict) and row.get("id")]
+        lines.extend(_row_line(row) for row in rows)
+        live = sum(1 for row in rows if row.get("state") in _LIVE)
+        lines.append("registry: live=%d ended=%d" % (live, len(rows) - live))
+    secret = api_key() if key is None else key
+    if not secret:
+        lines.append("cloud: not read. Set %s in the environment to list cloud agents." % ENV_KEY)
+        if not foreign:
+            for ident in _recorded_links(doc):
+                lines.append("cloud: link %s" % agent_url(ident))
+        return lines
+    found = select_cloud(
+        data,
+        beam_path,
+        secret,
+        transport=transport,
+        origin=origin,
+        self_id=self_id,
+        tag_override=tag_override,
+        untagged=untagged,
+        all_idle=all_idle,
+        any_repo=any_repo,
+        running=True,
+        cancel_loose=False,
+    )
+    if found["error"]:
+        lines.append("cloud: %s" % found["error"])
+        return lines
+    busy = idle = kept = 0
+    for item, kind in found["matches"]:
+        lines.append(cloud_match_line(item, found["origin"]))
+        if kind == "cancel":
+            busy += 1
+        elif kind == "archive":
+            idle += 1
+        else:
+            kept += 1
+            lines.append("list: kept %s reason=%s" % (item.get("id"), kind.split(":", 1)[1]))
+    lines.append("out: tag %s running=%d idle=%d kept=%d" % (scope, busy, idle, kept))
+    if busy or idle:
+        lines.append("out: /warp-cleanup cancels the running ones and archives all %d." % (busy + idle))
+    else:
+        lines.append("out: nothing to clean up.")
+    return lines
 
 
 def cleanup(
@@ -1034,105 +1621,903 @@ def cleanup(
     any_repo: bool = False,
     origin: Optional[str] = None,
     self_id: Optional[str] = None,
+    running: bool = False,
+    force: bool = False,
+    untagged: bool = False,
+    all_instances: bool = False,
+    name_only: bool = False,
+    listing: bool = True,
+    deadline: Optional[float] = None,
+    clock: Optional[Callable] = None,
+    skip: Optional[set] = None,
+    tag_override: str = "",
 ) -> list:
-    """List registered agents. `--cloud` without `--apply` is a dry run.
+    """Cancel and archive cloud agents. `--cloud` without `--apply` is a dry run.
 
     A cloud agent is in scope when its repository matches this repo's origin
-    and it is in `.warp/agents.json` or its name or prompt is a Warp role.
-    `--all-idle` drops the role check and stays on this repo. `--any-repo`
-    drops the repo check. RUNNING, ACTIVE, and this process are never archived.
+    and it is in `.warp/agents.json`, or its name starts with this
+    instance's tag, `[warp:<instance>]`. `--tag` names another run's tag,
+    or `all` for the tag of any Warp run. `--untagged` adds agents from
+    before the tag, matched loosely on Warp role words. `--all-idle` drops
+    the match and stays on this repo. `--any-repo` drops the repo check.
+    This process and this run's parent are never touched. A RUNNING or
+    ACTIVE agent stays unless `--running`, which cancels its run first.
+    `--running` is refused while this run is running, unless `--force`:
+    pause or stop first. An agent that only matched loosely and is still
+    running is also left unless `--force`.
     """
+    import time
+
+    tick = clock or time.monotonic
+    started = tick()
     doc = registry(data, beam_path)
-    lines = list_lines(data, beam_path)
+    if all_instances and not tag_override:
+        tag_override = "all"
+    instance, every, foreign = tag_scope(data, tag_override)
+    lines = list_lines(data, beam_path) if listing and not foreign else []
     secret = api_key() if key is None else key
-    ended = []
-    for row in _rows(doc):
-        if not isinstance(row, dict) or not _cloud_id(str(row.get("id") or "")):
-            continue
-        if row.get("state") in {"ended", "stopped"} or row.get("ended"):
-            ended.append(str(row["id"]))
     if not secret:
         lines.append("cleanup: no %s; archive in the Cursor UI" % ENV_KEY)
-        for ident in ended:
-            lines.append("cleanup: link %s" % agent_url(ident))
+        if not foreign:
+            for ident in _recorded_links(doc):
+                lines.append("cleanup: link %s" % agent_url(ident))
         if cloud:
             lines.append("cleanup: cloud list needs %s" % ENV_KEY)
-        flush(data, beam_path)
         return lines
     if not cloud:
         lines.append("cleanup: dry-run" if not apply else "cleanup: cloud required to archive")
-        flush(data, beam_path)
         return lines
-    root = None
-    if beam_path is not None:
-        root = Path(beam_path).resolve().parent.parent
-    remote = origin if origin is not None else origin_url(root)
-    origin_key = repo_key(remote)
-    mine = "" if self_id is None else self_id
-    if self_id is None:
-        mine = current_agent_id()
-    if not any_repo and not origin_key:
-        lines.append("cleanup: no origin; nothing matched")
-        lines.append("cleanup: count 0")
-        lines.append("cleanup: dry-run" if not apply else "cleanup: archived 0")
-        flush(data, beam_path)
+    if foreign and listing:
+        lines.append("cleanup: tag [%s] is not this run. Nothing checks whether that run is still going." % tag(instance))
+    elif running and spawns_open(data) and not force:
+        lines.append("cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.")
+        running = False
+    if listing:
+        lines.append("cleanup: tag %s" % scope_text(instance, every, untagged, all_idle))
+    found = select_cloud(
+        data,
+        beam_path,
+        secret,
+        transport=transport,
+        origin=origin,
+        self_id=self_id,
+        tag_override=tag_override,
+        untagged=untagged,
+        all_idle=all_idle,
+        any_repo=any_repo,
+        running=running,
+        cancel_loose=force,
+        name_only=name_only,
+        skip=skip,
+        deadline=deadline,
+        tick=tick,
+        started=started,
+    )
+    if found["error"]:
+        lines.append("cleanup: %s" % found["error"])
+        if found["error"].startswith("no origin"):
+            lines.append("cleanup: count 0")
+            lines.append("cleanup: dry-run" if not apply else "cleanup: archived 0")
         return lines
-    ok, items, err = list_cloud(secret, transport=transport)
-    if not ok:
-        lines.append("cleanup: %s" % err)
-        flush(data, beam_path)
-        return lines
-    registry_ids = _registry_cloud_ids(doc)
+    late = found["late"]
     chosen = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
+    for item, kind in found["matches"]:
         ident = str(item.get("id") or "")
-        if _needs_detail(item, registry_ids, all_idle, any_repo) and ident:
-            detail = fetch_agent(ident, secret, transport=transport)
-            if detail:
-                item = _merge_detail(item, detail)
-        kind = classify_cloud(
-            item,
-            origin_key,
-            registry_ids,
-            all_idle=all_idle,
-            any_repo=any_repo,
-            self_id=mine,
-        )
-        if not kind:
-            continue
-        lines.append(cloud_match_line(item, origin_key))
-        if kind == "archive":
-            chosen.append(item)
+        lines.append(cloud_match_line(item, found["origin"]))
+        if kind in {"archive", "cancel"}:
+            chosen.append((item, kind))
+            if kind == "cancel" and not apply:
+                lines.append("cleanup: would cancel %s" % ident)
         elif kind.startswith("skip:"):
             lines.append("cleanup: skip %s reason=%s" % (ident, kind.split(":", 1)[1]))
     lines.append("cleanup: count %d" % len(chosen))
     if not apply:
         lines.append("cleanup: dry-run")
-        flush(data, beam_path)
+        if late:
+            lines.append("cleanup: list cut short; run it again")
         return lines
     archived = 0
+    marked = []
     seen = set()
-    for item in chosen:
+    for item, kind in chosen:
         ident = str(item.get("id") or "")
         if not ident or ident in seen:
             continue
+        if deadline is not None and tick() - started > deadline:
+            late = True
+            break
         seen.add(ident)
+        if kind == "cancel":
+            done, status = cancel_run(ident, secret, transport=transport, run_id=str(item.get("latestRunId") or ""))
+            if not done:
+                lines.append("cleanup: cancel failed %s (%s) %s" % (ident, status, agent_url(ident)))
+                continue
+            lines.append("cleanup: cancelled %s" % ident)
         posted, status = archive_id(ident, secret, transport=transport)
         if posted:
             archived += 1
-            end_id(doc, ident, beam_mod.coerce_now(now)[1], "archived")
-            for row in _rows(doc):
-                if isinstance(row, dict) and row.get("id") == ident:
-                    row["state"] = "ended"
-                    row["archived"] = True
+            marked.append(ident)
             lines.append("cleanup: archived %s" % ident)
         else:
             lines.append("cleanup: archive failed %s (%s) %s" % (ident, status, agent_url(ident)))
     lines.append("cleanup: archived %d" % archived)
-    flush(data, beam_path)
+    if late:
+        lines.append("cleanup: cut short; run /warp-cleanup for the rest")
+    if not foreign:
+        _commit_archived(data, beam_path, marked, beam_mod.coerce_now(now)[1])
     return lines
+
+
+def _stop_cloud(ident: str, secret: str, transport: Optional[Callable]) -> tuple:
+    """Cancel one cloud agent's run if it has one going, then archive it.
+
+    Returns (archived, lines). An agent that cannot be read is left alone
+    and reported, so a running agent is never archived without a cancel.
+    """
+    detail = fetch_agent(ident, secret, transport=transport)
+    if not detail:
+        return False, ["cleanup: unreachable %s %s" % (ident, agent_url(ident))]
+    status = str(detail.get("status") or "").strip().upper()
+    if status == "ARCHIVED":
+        return True, []
+    lines = []
+    if status in _BUSY_STATUS:
+        done, code = cancel_run(ident, secret, transport=transport, run_id=str(detail.get("latestRunId") or ""))
+        if not done:
+            return False, ["cleanup: cancel failed %s (%s) %s" % (ident, code, agent_url(ident))]
+        lines.append("cleanup: cancelled %s" % ident)
+    posted, code = archive_id(ident, secret, transport=transport)
+    if not posted:
+        return False, lines + ["cleanup: archive failed %s (%s) %s" % (ident, code, agent_url(ident))]
+    return True, lines + ["cleanup: archived %s" % ident]
+
+
+def _commit_archived(data: dict, beam_path: Optional[Path], idents: list, stamp: str) -> None:
+    """Record archived agents on the registry as it is now.
+
+    The API calls take seconds. Another process may have written the
+    registry meanwhile, so it is read again before the marks go on.
+    """
+    if not idents:
+        return
+    doc = registry(data, beam_path)
+    for ident in idents:
+        _mark_archived(doc, ident, stamp)
+    flush(data, beam_path)
+
+
+def _mark_archived(doc: dict, ident: str, stamp: str) -> None:
+    """Record one archived cloud agent. A VM a row left behind does not end the row."""
+    for row in _rows(doc):
+        if not isinstance(row, dict):
+            continue
+        left = row.get("retired") if isinstance(row.get("retired"), list) else []
+        if ident in left:
+            left.remove(ident)
+            done = row.setdefault("archivedIds", [])
+            if ident not in done:
+                done.append(ident)
+            continue
+        if row.get("id") == ident or row.get("cloudId") == ident:
+            if row.get("state") in _LIVE or not row.get("ended"):
+                row["ended"] = stamp
+                row["endReason"] = "archived"
+            row["state"] = "ended"
+            row["archived"] = True
+
+
+def retire(
+    data: dict,
+    beam_path: Optional[Path] = None,
+    now=None,
+    key: Optional[str] = None,
+    transport: Optional[Callable] = None,
+) -> list:
+    """Cancel and archive cloud agents a ticket left behind.
+
+    A fix round that starts on a new VM leaves the previous VM idle. That
+    VM is retired here, on the next pass, so a ticket never holds more than
+    one cloud agent. Without CURSOR_API_KEY this prints the link once.
+    """
+    doc = registry(data, beam_path)
+    waiting = []
+    for row in _rows(doc):
+        if not isinstance(row, dict) or not isinstance(row.get("retired"), list):
+            continue
+        for ident in list(row["retired"]):
+            if _cloud_id(str(ident)):
+                waiting.append((row, str(ident)))
+    if not waiting:
+        return []
+    secret = api_key() if key is None else key
+    guarded = protected_ids(doc)
+    mine = current_agent_id()
+    stamp = beam_mod.coerce_now(now)[1]
+    lines = []
+    todo = []
+    changed = False
+    for row, ident in waiting:
+        if ident in guarded or ident == mine:
+            row["retired"].remove(ident)
+            changed = True
+        elif not secret:
+            linked = row.setdefault("linked", [])
+            if ident not in linked:
+                linked.append(ident)
+                lines.append("cleanup: link %s" % agent_url(ident))
+                changed = True
+        elif ident not in todo:
+            todo.append(ident)
+    if changed:
+        flush(data, beam_path)
+    archived = []
+    for ident in todo:
+        ok, said = _stop_cloud(ident, secret, transport)
+        lines.extend(said)
+        if ok:
+            archived.append(ident)
+    _commit_archived(data, beam_path, archived, stamp)
+    return lines
+
+
+HALT_DEADLINE_SECONDS = 45.0
+
+
+def halt_state(data: dict) -> str:
+    """`paused`, `stopped`, `done`, or empty while the run may spawn."""
+    if spawns_open(data):
+        return ""
+    state = data.get("runState") or ("paused" if data.get("paused") else "running")
+    if state == "stopped":
+        return "stopped"
+    if data.get("paused") or state == "paused":
+        return "paused"
+    return "done"
+
+
+def halted_meanwhile(data: dict, beam_path: Optional[Path]) -> Optional[dict]:
+    """The beam on disk, when it was paused or stopped after `data` was read. Else None.
+
+    A pass reads the beam, works for a while, and writes it back. A pause
+    from another process in between must not be written over.
+    """
+    if beam_path is None or halt_state(data) in {"paused", "stopped"}:
+        return None
+    try:
+        disk = beam_mod.load_json(Path(beam_path))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(disk, dict) or halt_state(disk) not in {"paused", "stopped"}:
+        return None
+    return disk
+
+
+def halt_local(data: dict, beam_path: Optional[Path] = None, reason: str = "stopped", now=None) -> list:
+    """End every registered agent and free every Shuttle slot. No network.
+
+    Pause and stop are the same teardown. Each agent exits at its next reap
+    check. A ticket that had a Shuttle out is marked so the next start or
+    resume launches a new one without counting a recovery.
+    """
+    lines = stop_all(data, now=now, beam_path=beam_path, reason=reason)
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for ticket in tickets.values():
+        if not isinstance(ticket, dict) or ticket.get("status") in _SETTLED:
+            continue
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+        out = bool(shuttle and shuttle.get("pending"))
+        # A status that is Shuttle work with no slot marked is the same thing:
+        # a Shuttle was meant to be on it. Left alone, the watchdog would call
+        # it a dead worker after the pause.
+        if not out and ticket.get("status") not in beam_mod.SHUTTLE_WORK:
+            continue
+        if shuttle is not None:
+            shuttle["pending"] = False
+        ticket["needsReplacement"] = True
+        ticket["haltResume"] = True
+    lines.append("halt: %s agents=%d" % (reason, len(lines)))
+    return lines
+
+
+def halt_cloud(
+    data: dict,
+    beam_path: Optional[Path] = None,
+    now=None,
+    key: Optional[str] = None,
+    transport: Optional[Callable] = None,
+    origin: Optional[str] = None,
+    self_id: Optional[str] = None,
+    deadline: Optional[float] = HALT_DEADLINE_SECONDS,
+    clock: Optional[Callable] = None,
+) -> list:
+    """Cancel and archive this run's cloud agents after a halt.
+
+    With CURSOR_API_KEY: every cloud agent in the registry, and every agent
+    in this repo whose name carries the `[warp]` tag, has its run cancelled
+    and is archived. This process and this run's parent stay. Without the
+    key it prints one link per recorded cloud agent.
+    """
+    import time
+
+    secret = api_key() if key is None else key
+    tick = clock or time.monotonic
+    started = tick()
+    lines = []
+    handled = set()
+    if secret:
+        # The agents this run recorded come first, by id. They do not depend
+        # on the account's agent list, which can be long or fail to load.
+        lines, handled = _halt_registered(data, beam_path, secret, transport, now, self_id, deadline, tick, started)
+    left = None if deadline is None else max(deadline - (tick() - started), 0.0)
+    lines.extend(
+        cleanup(
+            data,
+            beam_path=beam_path,
+            cloud=bool(secret),
+            apply=bool(secret),
+            key=secret,
+            transport=transport,
+            now=now,
+            origin=origin,
+            self_id=self_id,
+            running=True,
+            force=True,
+            name_only=True,
+            listing=False,
+            deadline=left,
+            clock=clock,
+            skip=handled,
+        )
+    )
+    return lines
+
+
+def _halt_registered(
+    data: dict,
+    beam_path: Optional[Path],
+    secret: str,
+    transport: Optional[Callable],
+    now,
+    self_id: Optional[str],
+    deadline: Optional[float],
+    tick: Callable,
+    started: float,
+) -> tuple:
+    """Cancel and archive every cloud agent in the registry, by id. Returns (lines, ids handled)."""
+    doc = registry(data, beam_path)
+    guarded = protected_ids(doc)
+    mine = current_agent_id() if self_id is None else self_id
+    stamp = beam_mod.coerce_now(now)[1]
+    lines = []
+    handled = set()
+    wanted = []
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") == "parent":
+            continue
+        done = row.get("archivedIds") if isinstance(row.get("archivedIds"), list) else []
+        for ident in row_cloud_ids(row):
+            if ident in wanted or ident in guarded or ident == mine or ident in done:
+                continue
+            if row.get("archived") and ident in {row.get("id"), row.get("cloudId")}:
+                continue
+            wanted.append(ident)
+    archived = []
+    for ident in wanted:
+        if deadline is not None and tick() - started > deadline:
+            break
+        handled.add(ident)
+        ok, said = _stop_cloud(ident, secret, transport)
+        lines.extend(said)
+        if ok:
+            archived.append(ident)
+    _commit_archived(data, beam_path, archived, stamp)
+    return lines, handled
+
+
+def finish(data: dict, beam_path: Optional[Path] = None, now=None, key: Optional[str] = None, transport: Optional[Callable] = None) -> list:
+    """Every ticket is merged or parked. Tear the run down once."""
+    if spawns_open(data) or halt_state(data) != "done":
+        return []
+    doc = registry(data, beam_path)
+    if doc.get("finishedAt"):
+        return []
+    if not any(isinstance(row, dict) and row.get("id") for row in _rows(doc)):
+        return []
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    lines = halt_local(data, beam_path=beam_path, reason="done", now=now)
+    doc = registry(data, beam_path)
+    doc["finishedAt"] = now_s
+    flush(data, beam_path)
+    lines.extend(halt_cloud(data, beam_path=beam_path, now=now, key=key, transport=transport))
+    return lines
+
+
+def note_parent(data: dict, now=None, beam_path: Optional[Path] = None, cloud_id: Optional[str] = None) -> str:
+    """Record this parent session. An earlier live parent is ended first: one parent per run."""
+    doc = registry(data, beam_path)
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    session = str(data.get("parentSession") or "")
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "parent":
+            continue
+        row["superseded"] = True
+        if row.get("state") in _LIVE:
+            row["state"] = "ended"
+            row["ended"] = now_s
+            row["endReason"] = "replaced"
+    cloud = current_agent_id() if cloud_id is None else cloud_id
+    ident = cloud or ("parent:%s" % session)
+    doc.setdefault("agents", []).append(
+        {
+            "id": ident,
+            "ticket": "",
+            "role": "parent",
+            "session": session,
+            "started": now_s,
+            "ended": None,
+            "state": "running",
+        }
+    )
+    doc.pop("finishedAt", None)
+    flush(data, beam_path)
+    return ident
+
+
+def parent_superseded(data: dict, session: str, beam_path: Optional[Path] = None) -> bool:
+    """True when a later /warp-start or /warp-resume took the run over."""
+    wanted = str(session or "").strip()
+    if not wanted:
+        return False
+    doc = registry(data, beam_path)
+    mine = None
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "parent":
+            continue
+        if str(row.get("session") or "") == wanted or str(row.get("id") or "") == wanted:
+            mine = row
+    if mine is None:
+        return False
+    return bool(mine.get("superseded")) or mine.get("endReason") == "replaced"
+
+
+_REAP_GONE = {"dead", "replaced", "stopped", "paused", "done", "archived", "merged", "parked", "closed", "settled"}
+
+
+def reap_reason(
+    data: dict,
+    agent_id: str = "",
+    ticket_id: str = "",
+    role: str = "shuttle",
+    now=None,
+    beam_path: Optional[Path] = None,
+    strict_local: bool = False,
+) -> str:
+    """Why this agent must exit now. Empty means carry on.
+
+    The run is paused, stopped, or finished. The ticket is merged or parked.
+    The agent's own row was ended by a halt, a replacement, or an archive.
+    A Shuttle whose return was recorded more than staleMinutes ago and that
+    was not resumed is not supposed to be running either.
+    """
+    halted = halt_state(data)
+    doc = registry(data, beam_path)
+    ident = str(agent_id or "").strip()
+    if role == "parent":
+        if halted:
+            return halted
+        return "replaced" if parent_superseded(data, ident, beam_path=beam_path) else ""
+    if halted:
+        return halted
+    if role == "listener":
+        return ""
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    ticket = tickets.get(ticket_id) if ticket_id else None
+    if isinstance(ticket, dict) and ticket.get("status") in _SETTLED:
+        return "settled"
+    mine = None
+    if ident:
+        for row in _rows(doc):
+            if not isinstance(row, dict) or row.get("role") not in {"shuttle", None, ""}:
+                continue
+            if str(row.get("id") or "") != ident and str(row.get("cloudId") or "") != ident:
+                continue
+            if ticket_id and str(row.get("ticket") or "") not in {"", str(ticket_id)}:
+                continue
+            mine = row
+    if mine is None:
+        if isinstance(ticket, dict) and ident:
+            owner = str(ticket.get("agent") or "")
+            if owner and owner != ident and live_rows(doc, str(ticket_id), "shuttle"):
+                return "replaced"
+            # checkout.py launch records a row before it prints a prompt. An id
+            # with no row, on a ticket someone else owns, was not launched by
+            # the parent. Origin can lag, so only the local registry decides.
+            if strict_local and owner and owner != ident:
+                return "not-launched"
+        return ""
+    if mine.get("archived"):
+        return "archived"
+    here = current_agent_id()
+    if here and (here in (mine.get("retired") or []) or here in (mine.get("archivedIds") or [])):
+        # Same agent id, but this is a VM the ticket already left.
+        return "replaced"
+    if mine.get("state") in _LIVE:
+        return ""
+    reason = str(mine.get("endReason") or "ended")
+    if reason in _REAP_GONE:
+        return "replaced" if reason == "dead" else reason
+    if mine.get("halted"):
+        # Started before a pause or a stop. The run moved on without it.
+        return "halted"
+    if reason == "returned":
+        _now_dt, now_s = beam_mod.coerce_now(now)
+        age = _minutes_between(str(mine.get("ended") or ""), now_s)
+        if age is not None and age > stale_minutes(data):
+            return "not-resumed"
+    return ""
+
+
+def reap_lines(reason: str, ticket_id: str = "", role: str = "shuttle") -> list:
+    """What the agent reads. One answer: continue, or exit and how."""
+    if not reason:
+        return ["reap: continue"]
+    if role == "parent":
+        tail = "End this turn. Do not start an agent. Do not subscribe, set a timer, or wait."
+    elif role == "listener":
+        tail = "Return `listen: stopped`. Do not read the channel. Do not start an agent, subscribe, set a timer, or sleep."
+    else:
+        tail = (
+            "Return `result: %s stopped %s`. Do not start an agent, subscribe, set a timer, or wait."
+            % (ticket_id or "<id>", reason)
+        )
+    return ["reap: exit %s" % reason, "reap: stop now. %s" % tail]
+
+
+def reap(
+    data: dict,
+    agent_id: str = "",
+    ticket_id: str = "",
+    role: str = "shuttle",
+    now=None,
+    beam_path: Optional[Path] = None,
+    record: bool = True,
+) -> list:
+    """The self-check every Warp agent runs first and at each checkpoint.
+
+    On exit the agent's row is ended, so the registry shows who is gone.
+    """
+    reason = reap_reason(
+        data,
+        agent_id,
+        ticket_id,
+        role,
+        now=now,
+        beam_path=beam_path,
+        strict_local=bool(record and beam_path is not None),
+    )
+    if reason and record and beam_path is not None and agent_id:
+        doc = registry(data, beam_path)
+        _now_dt, now_s = beam_mod.coerce_now(now)
+        changed = False
+        for row in _rows(doc):
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or "") != str(agent_id) and str(row.get("cloudId") or "") != str(agent_id):
+                continue
+            if row.get("reaped"):
+                continue
+            row["reaped"] = now_s
+            if row.get("state") in _LIVE:
+                row["state"] = "ended"
+                row["ended"] = now_s
+                row["endReason"] = reason
+            changed = True
+        if changed:
+            flush(data, beam_path)
+            try:
+                beam_mod.journal(Path(beam_path), {"type": "reap", "agent": agent_id, "ticket": ticket_id, "reason": reason})
+            except OSError:
+                pass
+    return reap_lines(reason, ticket_id, role)
+
+
+def bind_cloud(data: dict, agent_id: str, ticket_id: str, beam_path: Optional[Path], cloud: Optional[str] = None) -> bool:
+    """Store a Shuttle's cloud agent id on its row, so a halt can cancel it by id.
+
+    `cloud` is the id the Shuttle wrote in its ticket folder. Without it this
+    reads the id of the VM running the command. A worktree Shuttle shares the
+    parent's VM, so the parent's own id is never bound to a Shuttle.
+    """
+    found = current_agent_id() if cloud is None else str(cloud or "").strip()
+    if not _cloud_id(found):
+        return False
+    if cloud is not None and found == current_agent_id():
+        # The folder was written on this VM, so the id is the parent's own.
+        return False
+    doc = registry(data, beam_path)
+    for row in _rows(doc):
+        if isinstance(row, dict) and row.get("role") == "parent" and found in {row.get("id"), row.get("cloudId")}:
+            return False
+    target = None
+    for row in _rows(doc):
+        if not isinstance(row, dict) or str(row.get("id") or "") != str(agent_id):
+            continue
+        if ticket_id and str(row.get("ticket") or "") not in {"", str(ticket_id)}:
+            continue
+        target = row
+    if target is None or target.get("cloudId") == found:
+        return False
+    if found in (target.get("retired") or []) or found in (target.get("archivedIds") or []):
+        # A VM the ticket already left wrote again. It never becomes the live one.
+        return False
+    previous = str(target.get("cloudId") or "")
+    if _cloud_id(previous) and previous not in (target.get("archivedIds") or []):
+        # The ticket moved to a new VM. The one it left is retired on the next pass.
+        left = target.setdefault("retired", [])
+        if previous not in left:
+            left.append(previous)
+    target["cloudId"] = found
+    flush(data, beam_path)
+    return True
+
+
+def remote_state(root: Path) -> tuple:
+    """(beam, registry) from origin's base branch, for a Shuttle on its own VM. (None, None) on a miss."""
+    import state_commit
+
+    root = Path(root)
+    base = "main"
+    try:
+        local = json.loads((root / ".warp" / "beam.json").read_text())
+        base = state_commit._base_name(root, local.get("config") or {}) or "main"
+    except (OSError, ValueError):
+        try:
+            base = state_commit._base_name(root, {}) or "main"
+        except Exception:
+            base = "main"
+    try:
+        subprocess.run(["git", "-C", str(root), "fetch", "-q", "origin", base], capture_output=True, text=True, timeout=45)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+
+    def show(rel: str):
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(root), "show", "origin/%s:%s" % (base, rel)],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        try:
+            loaded = json.loads(out.stdout)
+        except ValueError:
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
+    beam = show(".warp/beam.json")
+    if beam is None:
+        return None, None
+    return beam, show(".warp/agents.json") or _empty()
+
+
+def reap_from(
+    root: Path,
+    agent_id: str = "",
+    ticket_id: str = "",
+    role: str = "shuttle",
+    remote: bool = False,
+    beam_path: Optional[Path] = None,
+) -> list:
+    """Reap check from a checkout. `remote` reads origin's base branch and writes nothing."""
+    if remote:
+        beam, doc = remote_state(Path(root))
+        if beam is None:
+            return ["reap: continue (no beam on origin)"]
+        beam.pop("_agentBeam", None)
+        beam.pop("_agentSig", None)
+        beam["agentRegistry"] = doc
+        return reap(beam, agent_id, ticket_id, role, beam_path=None, record=False)
+    path = Path(beam_path) if beam_path is not None else Path(root) / ".warp" / "beam.json"
+    if not path.is_file():
+        return ["reap: continue (no beam at %s)" % path]
+    try:
+        data = beam_mod.load_json(path)
+    except (OSError, ValueError):
+        return ["reap: continue (beam unreadable)"]
+    return reap(data, agent_id, ticket_id, role, beam_path=path)
+
+
+SPAWN_FILE = "spawned.json"
+
+
+def checkout_root(path: Path) -> Path:
+    """The main checkout for a path that may be a git worktree of it."""
+    path = Path(path)
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return path
+    common = out.stdout.strip()
+    if out.returncode != 0 or not common:
+        return path
+    common_path = Path(common)
+    if common_path.name == ".git":
+        return common_path.parent
+    return path
+
+
+def hook_root(payload: dict) -> Optional[Path]:
+    """The checkout that owns the live beam, from a hook payload."""
+    candidates = []
+    roots = payload.get("workspace_roots") if isinstance(payload, dict) else None
+    if isinstance(roots, list):
+        candidates.extend(str(item) for item in roots if item)
+    for value in (os.environ.get("CURSOR_PROJECT_DIR", ""), os.getcwd()):
+        if value:
+            candidates.append(value)
+    for raw in candidates:
+        base = checkout_root(Path(raw).expanduser())
+        if (base / ".warp" / "beam.json").is_file():
+            return base
+    return None
+
+
+def _spawn_marks(beam_path: Path, update: Optional[Callable] = None) -> dict:
+    """Read, and optionally change, the spawn marks under a file lock."""
+    import fcntl
+
+    path = Path(beam_path).parent / SPAWN_FILE
+    lock_path = Path(beam_path).parent / ".spawned.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            marks = {}
+            if path.is_file():
+                try:
+                    loaded = json.loads(path.read_text())
+                    if isinstance(loaded, dict):
+                        marks = loaded
+                except (OSError, ValueError):
+                    marks = {}
+            if update is not None and update(marks):
+                beam_mod.atomic_write(path, json.dumps(marks, indent=2) + "\n")
+            return marks
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _row_key(row: dict) -> str:
+    return "%s|%s|%s" % (row.get("id") or "", row.get("started") or "", row.get("resumedAt") or "")
+
+
+def _deny(message: str) -> dict:
+    return {"permission": "deny", "user_message": message}
+
+
+def hook_start(payload: dict, root: Optional[Path] = None, now=None) -> dict:
+    """subagentStart. Deny a Warp launch the gate did not issue. Everything else is allowed.
+
+    A launch is a prompt Warp printed: SUBAGENT <id>, IMPLEMENT <id>, or
+    LISTEN once. It is denied while the run is paused, stopped, or finished,
+    when the ticket is merged or parked, when `checkout.py launch` did not
+    record a row for it, and when that row already started a different
+    subagent. WARP_SPAWN_GATE=off allows everything.
+    """
+    allow = {"permission": "allow"}
+    if os.environ.get("WARP_SPAWN_GATE", "").strip().casefold() in {"off", "0", "false", "no"}:
+        return allow
+    if not isinstance(payload, dict):
+        return allow
+    role, tid = launch_marker(str(payload.get("task") or ""))
+    if not role:
+        return allow
+    base = Path(root) if root is not None else hook_root(payload)
+    if base is None:
+        return allow
+    beam_path = base / ".warp" / "beam.json"
+    try:
+        data = beam_mod.load_json(beam_path)
+    except (OSError, ValueError):
+        return allow
+    if not isinstance(data, dict):
+        return allow
+    halted = halt_state(data)
+    if halted:
+        word = "finished" if halted == "done" else halted
+        return _spawn_denied(beam_path, role, tid, halted, "Warp is %s. No Warp agent may start. /warp-resume or /warp-start opens the run." % word)
+    doc = load_file(beam_path)
+    call = str(payload.get("tool_call_id") or "")
+    sub = str(payload.get("subagent_id") or "")
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    if role == "listener":
+        raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+        if raw.get("state") != "running" or not raw.get("pollStartedAt"):
+            return _spawn_denied(beam_path, role, tid, "not-due", "No listener poll is due. Start the listener only on `listener: poll`.")
+        rows = [row for row in _rows(doc) if isinstance(row, dict) and row.get("role") == "listener" and row.get("state") in _LIVE]
+    else:
+        tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+        ticket = tickets.get(tid)
+        if not isinstance(ticket, dict):
+            return allow
+        if ticket.get("status") in _SETTLED:
+            return _spawn_denied(beam_path, role, tid, "settled", "Ticket %s is %s. Nothing starts for it." % (tid, ticket.get("status")))
+        rows = live_rows(doc, tid, "shuttle")
+        if not rows:
+            return _spawn_denied(
+                beam_path,
+                role,
+                tid,
+                "no-launch",
+                "No launch was issued for %s. Only the parent starts a Shuttle, and only after `checkout.py launch --id %s`." % (tid, tid),
+            )
+    if not rows:
+        return allow
+    key = _row_key(rows[-1])
+    verdict = {}
+
+    def update(marks: dict) -> bool:
+        seen = marks.get(key)
+        if isinstance(seen, dict):
+            same = (call and call == seen.get("call")) or (sub and sub == seen.get("agent"))
+            known = bool(seen.get("call") or seen.get("agent"))
+            if same or not known or not (call or sub):
+                return False
+            verdict["deny"] = True
+            return False
+        marks[key] = {"call": call, "agent": sub, "at": now_s, "ticket": tid, "role": role}
+        for old in [name for name in marks if name != key][:-200]:
+            marks.pop(old, None)
+        return True
+
+    _spawn_marks(beam_path, update)
+    if verdict.get("deny"):
+        what = "The listener poll" if role == "listener" else "Ticket %s" % tid
+        return _spawn_denied(beam_path, role, tid, "duplicate", "%s already has its agent. Do not start a second one." % what)
+    return allow
+
+
+def _spawn_denied(beam_path: Path, role: str, tid: str, reason: str, message: str) -> dict:
+    try:
+        beam_mod.journal(Path(beam_path), {"type": "spawn-denied", "role": role, "ticket": tid, "reason": reason})
+    except OSError:
+        pass
+    return _deny(message)
+
+
+def hook_stop(payload: dict, root: Optional[Path] = None) -> dict:
+    """subagentStop. Journal which Warp agent ended. Never asks for a follow-up."""
+    if not isinstance(payload, dict):
+        return {}
+    role, tid = launch_marker(str(payload.get("task") or ""))
+    if not role:
+        return {}
+    base = Path(root) if root is not None else hook_root(payload)
+    if base is None:
+        return {}
+    try:
+        beam_mod.journal(
+            base / ".warp" / "beam.json",
+            {
+                "type": "subagent-end",
+                "role": role,
+                "ticket": tid,
+                "status": str(payload.get("status") or ""),
+                "minutes": int((payload.get("duration_ms") or 0) / 60000) if isinstance(payload.get("duration_ms"), (int, float)) else None,
+            },
+        )
+    except OSError:
+        pass
+    return {}
 
 
 def check_line(data: dict) -> str:
@@ -1144,25 +2529,180 @@ def check_line(data: dict) -> str:
     return "spawn: closed done"
 
 
+SELECTION_HELP = """\
+/warp-list and /warp-cleanup take the same selection:
+
+  (none)            This run: the registry, and cloud agents in this repo
+                    tagged [warp:<instance>].
+  --tag <instance>  Another run's agents in place of this one's. a1b2c3,
+                    warp:a1b2c3, and [warp:a1b2c3] are the same.
+  --tag all         Agents tagged for any Warp run. --tag '*' is the same.
+                    Quote the star.
+  --untagged        Also agents with no Warp tag, from before 1.5.0, matched
+                    loosely on Warp role words in the name or prompt
+                    (Shuttle, IMPLEMENT, fix, rebase, listener, Bugbot).
+                    This can match someone else's agent.
+  --all-idle        Every idle agent in this repo, tagged or not.
+  --any-repo        Do not limit to this repo.
+
+Other agents in the repo are not matched, whatever words are in their names,
+and neither are another Warp run's. The agent running the command
+(reason=self) and this run's parent (reason=parent) are never touched.
+The cloud agents need CURSOR_API_KEY in the environment. It is never written.
+
+?, help, -h, and --help print this text and do nothing else. Quote ? if the
+shell expands it.
+"""
+
+LIST_HELP = (
+    """\
+/warp-list: what this Warp run still has out, running or idle. It changes
+nothing.
+
+It prints:
+  instance: warp:<instance> host=<host> machine=<machine id>
+  agent: ...                 one line per row in .warp/agents.json
+  registry: live=<n> ended=<n>
+  cloud: id= name= repo= status= updated= <link>
+                             one line per matching cloud agent. status=ACTIVE
+                             is still running. status=IDLE is not.
+  list: kept <id> reason=parent|self|running-untagged|status
+  out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>
+
+Without CURSOR_API_KEY it prints the registry, `cloud: not read.`, and a
+link for each recorded cloud agent.
+
+"""
+    + SELECTION_HELP
+    + """
+examples:
+  /warp-list
+  /warp-list --tag a1b2c3
+  /warp-list --tag all
+  /warp-list --untagged
+  python3 scripts/agents.py list --beam .warp/beam.json
+  python3 scripts/agents.py list --beam .warp/beam.json --tag all --untagged
+"""
+)
+
+CLEANUP_HELP = (
+    """\
+/warp-cleanup: cancel and archive what this Warp run still has out.
+/warp-list shows the same agents first and changes nothing.
+
+The slash command runs:
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+
+For each matching cloud agent:
+  status=ACTIVE or RUNNING   its run is cancelled, then it is archived
+                             (cleanup: cancelled <id>, cleanup: archived <id>)
+  status=IDLE                it is archived
+Archive is reversible in the Cursor UI. Warp never deletes an agent.
+
+While this run is running, the idle ones are archived and the running ones
+are left: `cleanup: --running refused while the run is running`. /warp-pause
+or /warp-stop first, or pass --force. An agent that only matched --untagged
+and is still running is left (reason=running-untagged) unless --force,
+because it may be someone else's.
+
+  --cloud     Read the account's cloud agents. Needed for anything below.
+  --apply     Act. Without it this is a dry run: each match, `cleanup: would
+              cancel <id>` for the running ones, and `cleanup: count`.
+  --running   Also cancel the run of a RUNNING or ACTIVE match before the
+              archive. Without it a running agent is skipped.
+  --force     Cancel running agents while this run is running, and cancel a
+              running agent that only matched loosely.
+
+"""
+    + SELECTION_HELP
+    + """
+examples:
+  /warp-cleanup
+  /warp-cleanup --tag a1b2c3
+  /warp-cleanup --tag all
+  /warp-cleanup --untagged
+  /warp-cleanup --force
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud                      (dry run)
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+  python3 scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --untagged
+"""
+)
+
+
+def _read_hook_input() -> dict:
+    import sys
+
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return {}
+    try:
+        loaded = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def main(argv: Optional[list] = None) -> int:
     import usage
 
     parser = argparse.ArgumentParser(
-        description="Warp agent registry and cleanup",
+        description="Warp agent registry, reap check, and cleanup",
         epilog=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("list", "check", "cleanup", "stop"):
-        cmd = sub.add_parser(name)
+    texts = {"list": LIST_HELP, "cleanup": CLEANUP_HELP}
+    for name in ("list", "check", "cleanup", "stop", "reap"):
+        if name in texts:
+            # The whole text, not only the flags: `/warp-list ?` and
+            # `/warp-cleanup ?` print the same help the command files carry.
+            cmd = sub.add_parser(name, description=texts[name], formatter_class=argparse.RawDescriptionHelpFormatter)
+        else:
+            cmd = sub.add_parser(name)
         cmd.add_argument("--beam", default=".warp/beam.json")
+        if name in {"list", "cleanup"}:
+            cmd.add_argument("--tag", default="", help="Another run's tag in place of this beam's: a1b2c3, warp:a1b2c3, or all for the tag of any Warp run.")
+            cmd.add_argument("--untagged", action="store_true", help="Also match agents with no Warp tag, from before 1.5.0, loosely, on Warp role words in the name or prompt.")
+            cmd.add_argument("--all-idle", action="store_true", help="Drop the match. Every idle agent in this repo, unless --any-repo.")
+            cmd.add_argument("--any-repo", action="store_true", help="Include other repositories.")
+        if name == "list":
+            cmd.add_argument("--cloud", action="store_true", help="Accepted and not needed. The cloud agents are listed whenever CURSOR_API_KEY is set.")
         if name == "cleanup":
             cmd.add_argument("--cloud", action="store_true", help="Read GET /v1/agents. Without --apply this is a dry run.")
-            cmd.add_argument("--apply", action="store_true", help="Archive the dry-run matches. IDLE only.")
-            cmd.add_argument("--all-idle", action="store_true", help="Drop the Warp role check. Still this repo unless --any-repo.")
-            cmd.add_argument("--any-repo", action="store_true", help="Include other repositories. Use with --all-idle for every idle agent.")
+            cmd.add_argument("--apply", action="store_true", help="Archive the dry-run matches.")
+            cmd.add_argument("--running", action="store_true", help="Also cancel the run of a RUNNING or ACTIVE match, then archive it. Pause or stop first.")
+            cmd.add_argument("--force", action="store_true", help="Allow --running while this run is running, and cancel a running agent that only matched loosely.")
+        if name == "reap":
+            cmd.add_argument("--id", default="", help="This agent's id from the prompt line `agent:`.")
+            cmd.add_argument("--ticket", default="", help="The ticket this Shuttle works on.")
+            cmd.add_argument("--role", default="shuttle", choices=["shuttle", "listener", "parent"])
+            cmd.add_argument("--root", default="", help="Checkout to read. Default is the beam's checkout.")
+            cmd.add_argument("--remote", action="store_true", help="Read the beam from origin's base branch. For a Shuttle on its own VM.")
+    sub.add_parser("hook-start", help="subagentStart hook. Reads the hook JSON on stdin.")
+    sub.add_parser("hook-stop", help="subagentStop hook. Reads the hook JSON on stdin.")
     args = parser.parse_args(usage.normalize_argv(argv))
+    if args.cmd == "hook-start":
+        try:
+            verdict = hook_start(_read_hook_input())
+        except Exception:
+            verdict = {"permission": "allow"}
+        print(json.dumps(verdict))
+        return 0
+    if args.cmd == "hook-stop":
+        try:
+            hook_stop(_read_hook_input())
+        except Exception:
+            pass
+        print("{}")
+        return 0
     path = Path(args.beam)
+    if args.cmd == "reap":
+        root = Path(args.root) if args.root else path.resolve().parent.parent
+        lines = reap_from(root, args.id, args.ticket, args.role, remote=bool(args.remote), beam_path=None if args.remote else path)
+        for line in lines:
+            print(line)
+        return 3 if lines and lines[0].startswith("reap: exit") else 0
     if not path.is_file():
         print("agents: no beam at %s" % path)
         return 2
@@ -1171,11 +2711,18 @@ def main(argv: Optional[list] = None) -> int:
         print(check_line(data))
         return 0
     if args.cmd == "list":
-        for line in list_lines(data, path):
+        for line in out_lines(
+            data,
+            beam_path=path,
+            tag_override=args.tag,
+            untagged=args.untagged,
+            all_idle=args.all_idle,
+            any_repo=args.any_repo,
+        ):
             print(line)
         return 0
     if args.cmd == "stop":
-        for line in stop_all(data, beam_path=path):
+        for line in halt_local(data, beam_path=path, reason="stopped"):
             print(line)
         beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
         return 0
@@ -1186,6 +2733,10 @@ def main(argv: Optional[list] = None) -> int:
         apply=args.apply,
         all_idle=args.all_idle,
         any_repo=args.any_repo,
+        running=args.running,
+        force=args.force,
+        untagged=args.untagged,
+        tag_override=args.tag,
     ):
         print(line)
     return 0

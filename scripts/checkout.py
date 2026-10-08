@@ -3,7 +3,7 @@
 
 Default (`subagentVm: false`): `launch` fetches the base branch and adds a
 git worktree at `<worktreeRoot>/<id>`. `worktreeRoot` defaults to
-`.warp/worktrees`, which `/warp-init` gitignores. `maxLocalSubagents`
+`.warp/worktrees`, which `/warp-init` gitignores. `maxAgents`
 (default 18) is the only shared-machine cap. `memoryCheck` defaults to
 false, so `free -g` is not read. `true` lets `free -g` lower that cap.
 `runner: local` forces `subagentVm` false and `launch` back to `worktree`.
@@ -147,15 +147,16 @@ def branch_state(root: Path, branch: str, base: str) -> str:
     return "work"
 
 
-def launch_lines(ticket: dict, config: Optional[dict], branch: str, state: str) -> list:
+def launch_lines(ticket: dict, config: Optional[dict], branch: str, state: str, instance: str = "") -> list:
     """IMPLEMENT prompt for the optional new Agent mode. The branch does not have to exist.
 
     This script cannot create the Agent. It does not call a Cloud Agents API.
     """
     del branch
-    prompt = orchestrator.implement_prompt(ticket, config, branch_state=state)
+    prompt = orchestrator.implement_prompt(ticket, config, branch_state=state, instance=instance)
     ticket_id = ticket.get("id") or ""
     return prompt.splitlines() + [
+        "name: %s" % orchestrator.agent_name(ticket, instance),
         "launch: one new Agent per ticket",
         "refuse: in-process",
         "optional: Cloud Agents API",
@@ -296,6 +297,11 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
         return 2
     import agents
 
+    refused = agents.launch_refused(data, ticket)
+    if refused:
+        for line in refused:
+            print(line)
+        return 2
     for line in agents.note_checkout(data, ticket, beam_path=path):
         print(line)
     ticket["branch"] = branch
@@ -304,7 +310,9 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
     ticket["isolation"] = "vm"
     ticket["agent"] = ticket.get("agent") or ("subagent:%s" % ticket_id)
     _note_live(data, ticket)
-    _save(path, data)
+    instance = agents.ensure_instance(data, path)
+    if not _save_launch(path, data, ticket_id):
+        return 2
     had = False
     if _is_git(root):
         had = _local_branch(root, branch) or bool(_remote_branch(root, branch))
@@ -312,7 +320,10 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
         print("reused: branch %s" % branch)
     else:
         print("branch: %s" % branch)
-    print(orchestrator.subagent_vm_prompt(ticket, data.get("config") or {}, branch, reused=had))
+    print("for the parent: %s" % orchestrator.VM_INSTRUCTION)
+    print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
+    print(orchestrator.PROMPT_MARK)
+    print(orchestrator.subagent_vm_prompt(ticket, data.get("config") or {}, branch, reused=had, instance=instance))
     return 0
 
 
@@ -323,6 +334,11 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
         return 2
     import agents
 
+    refused = agents.launch_refused(data, ticket)
+    if refused:
+        for line in refused:
+            print(line)
+        return 2
     for line in agents.note_checkout(data, ticket, beam_path=path):
         print(line)
     if not _is_git(root):
@@ -340,7 +356,9 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     ticket["isolation"] = "worktree"
     ticket["agent"] = ticket.get("agent") or ("subagent:%s" % ticket_id)
     _note_live(data, ticket)
-    _save(path, data)
+    instance = agents.ensure_instance(data, path)
+    if not _save_launch(path, data, ticket_id):
+        return 2
     if kind == "reused" or listed:
         print("reused: worktree %s" % wt)
     else:
@@ -350,7 +368,10 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     else:
         print("created: branch %s" % branch)
     print("base: %s" % start)
-    prompt = orchestrator.subagent_prompt(ticket, data.get("config") or {}, branch, str(wt), str(root))
+    prompt = orchestrator.subagent_prompt(ticket, data.get("config") or {}, branch, str(wt), str(root), instance=instance)
+    print("for the parent: %s" % orchestrator.SUBAGENT_INSTRUCTION)
+    print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
+    print(orchestrator.PROMPT_MARK)
     print(prompt)
     return 0
 
@@ -366,20 +387,43 @@ def _launch_agent(root: Path, path: Path, data: dict, ticket: dict, branch: str,
         return 2
     import agents
 
+    refused = agents.launch_refused(data, ticket)
+    if refused:
+        for line in refused:
+            print(line)
+        return 2
     for line in agents.note_checkout(data, ticket, beam_path=path):
         print(line)
     ticket["branch"] = branch
     ticket["checkout"] = "cloud-vm"
     _note_live(data, ticket)
-    _save(path, data)
+    instance = agents.ensure_instance(data, path)
+    if not _save_launch(path, data, ticket_id):
+        return 2
     state = branch_state(root, branch, base)
-    for line in launch_lines(ticket, data.get("config") or {}, branch, state):
+    for line in launch_lines(ticket, data.get("config") or {}, branch, state, instance=instance):
         print(line)
     return 0
 
 
 def _load(path: Path) -> dict:
     return json.loads(path.read_text())
+
+
+def _save_launch(path: Path, data: dict, ticket_id: str) -> bool:
+    """Save a launch, unless the run was paused or stopped while it ran. False means no prompt."""
+    import agents
+
+    disk = agents.halted_meanwhile(data, path)
+    if disk is None:
+        _save(path, data)
+        return True
+    state = agents.halt_state(disk)
+    agents.halt_local(disk, beam_path=path, reason=state)
+    _save(path, disk)
+    print("spawn: closed %s" % ticket_id)
+    print("refuse: Warp was %s while this launch ran. No agent starts." % state)
+    return False
 
 
 def _save(path: Path, beam: dict) -> None:
@@ -813,7 +857,7 @@ def main(argv: Optional[list] = None) -> int:
                     print("memory: available %s GiB" % gib)
                 cap = orchestrator.local_subagent_cap(cfg, gib)
             else:
-                cap = orchestrator.max_local_subagents(cfg)
+                cap = orchestrator.shared_cap(cfg)
             room = orchestrator.local_room(data, cfg, skip_id=args.id, available=gib)
             holders = orchestrator.live_slot_holders(data, cfg, skip_id=args.id)
             shown = ", ".join(holders) if holders else "none"

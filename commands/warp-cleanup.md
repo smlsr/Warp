@@ -1,33 +1,54 @@
 ---
 name: warp-cleanup
-description: List registered Warp agents and dry-run or archive idle cloud agents for this repo
+description: Cancel and archive what this Warp run still has out. /warp-list shows it first
 ---
 
-List every agent in `.warp/agents.json`. With `CURSOR_API_KEY` set, a dry run lists idle cloud agents for this repo. `--apply` archives that list.
+Cancel the run of every agent this Warp run still has running, and archive all of them. Run this one command, pass along any options the user gave, and print its output as it is. `/warp-list` shows what it will act on and changes nothing.
+
+`/warp-cleanup ?` prints the help: what the command does and every option below. `help`, `-h`, and `--help` do the same. Run `python3 <plugin>/scripts/agents.py cleanup ?`, print that text, and do nothing else. It cancels nothing and archives nothing. Quote `?` if the shell expands it.
 
 ```bash
-python3 <plugin>/scripts/agents.py list --beam .warp/beam.json
-python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud
-python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
 ```
 
-The slash command can be missing from Cursor's plugin command index. This script does not need it:
+It needs `CURSOR_API_KEY` in the environment. The key is never written to the repo. Without it the command prints `cleanup: link https://cursor.com/agents/<id>` for each recorded cloud agent, to archive in the Cursor UI.
+
+What it does, for each cloud agent in this repo that is in `.warp/agents.json` or whose name starts with this run's tag, `[warp:<instance>]`:
+
+- `status=ACTIVE` or `RUNNING`: cancel its run (`POST /v1/agents/{id}/runs/{runId}/cancel`, `cleanup: cancelled <id>`), then archive it.
+- `status=IDLE`: archive it (`POST /v1/agents/{id}/archive`, `cleanup: archived <id>`).
+- The agent running the command stays (`reason=self`). This run's parent stays (`reason=parent`).
+
+Archive is reversible in the Cursor UI. Warp never deletes an agent. Other agents in the repo are not matched, whatever words are in their names, and neither are another Warp run's.
+
+While this run is running, the command archives the idle ones and leaves the running ones: `cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.` That is the safe order. `--force` cancels them anyway.
+
+## Options
+
+`/warp-list` and `/warp-cleanup` take the same selection.
+
+| Option | What it acts on |
+|---|---|
+| none | This run: the registry, and cloud agents tagged `[warp:<instance>]` |
+| `--tag <instance>` | Another run's agents in place of this one's. `a1b2c3`, `warp:a1b2c3`, and `[warp:a1b2c3]` are the same. Nothing checks whether that run is still going |
+| `--tag all` | Agents tagged for any Warp run. `--tag '*'` is the same. Quote the star |
+| `--untagged` | Also agents with no Warp tag, from before 1.5.0, matched loosely on Warp role words in the name or prompt (Shuttle, IMPLEMENT, fix, rebase, listener, Bugbot). An idle one is archived. One that is still running is left (`reason=running-untagged`), because it may be someone else's |
+| `--force` | Cancel running agents while this run is running, and cancel a running agent that only matched loosely |
+| `--all-idle` | Every idle agent in this repo, tagged or not |
+| `--any-repo` | Do not limit to this repo |
 
 ```bash
-python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json
-python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud
-python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply
-python3 .cursor/plugins/warp/scripts/agents.py ?
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --tag a1b2c3
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --tag all
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running --untagged
 ```
 
-`agents.py ?` prints the options. Quote `?` if the shell expands it. `--cloud` reads `GET /v1/agents`. Without `--apply` the command prints each match and changes nothing. `--apply` archives with `POST /v1/agents/{id}/archive`. The key is the environment variable `CURSOR_API_KEY` and is never written to the repo.
+Leave `--apply` off for a dry run: it prints each match, `cleanup: would cancel <id>` for the running ones, and `cleanup: count`, and changes nothing.
 
-A match is IDLE. Its repository is this checkout's origin. It is in `.warp/agents.json`, or its name or prompt is a Warp role: Shuttle, IMPLEMENT, fix, rebase, listener, or Warp-triggered Bugbot. The agent running the command stays. A RUNNING or ACTIVE agent stays. The dry run prints `cloud: id= name= repo= status= updated=` and the link, then `cleanup: count`.
+A pile of about 199 idle Shuttles, Bugbot runs, and listeners from a run before 1.5.0 carries no tag. `/warp-stop`, then `/warp-list --untagged` to read it, then `/warp-cleanup --untagged`.
 
-`--all-idle` includes every IDLE agent in this repo. `--all-idle --any-repo` includes every IDLE agent the key can see. Leave those flags off for a pile of Warp agents in this repo.
+You should rarely need this. `/warp-pause` and `/warp-stop` end every registered agent and, with the key, cancel and archive this run's cloud agents. Merge and park archive that ticket's agents. A fix round that moves to a new VM retires the VM it left. When every ticket is merged or parked, the same teardown runs once and the parent exits. `docs/LIFECYCLE.md` has the whole rule.
 
-Without the key, the command prints each ended registry cloud agent as `https://cursor.com/agents/<id>` so those agents can be archived in the Cursor UI.
+The slash command can be missing from Cursor's plugin command index. The script does not need it: `python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running`, and `python3 .cursor/plugins/warp/scripts/agents.py ?` prints the options. Quote `?` if the shell expands it.
 
-A pile of about 199 idle Shuttles, Bugbot runs, and listeners from an older run is cleared by the two commands above, from a checkout whose origin is this repo. Export `CURSOR_API_KEY`, run the dry run, then run the same command with `--apply`.
-
-Merge and park release that ticket's agents. `/warp-stop` marks every registered agent stopped and runs cleanup. When every ticket is merged or parked, the parent runs cleanup and exits. Nothing new is spawned while the run is paused or stopped.
+Do not dispatch. Do not merge. Do not start a listener.

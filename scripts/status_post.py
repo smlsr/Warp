@@ -19,6 +19,15 @@ from scan import write_status  # noqa: E402
 import herald_fmt as fmt  # noqa: E402
 
 
+def _instance(beam: dict) -> str:
+    """`warp:<instance> on <host>`, the same tag this run's agents carry."""
+    raw = beam.get("instance") if isinstance(beam.get("instance"), dict) else {}
+    ident = str(raw.get("id") or "").strip()
+    if not ident:
+        return "none yet"
+    return "warp:%s on %s" % (ident, raw.get("host") or "unknown host")
+
+
 def payload(beam_path: Path) -> dict:
     write_status(beam_path)
     beam = load_json(beam_path)
@@ -39,6 +48,7 @@ def payload(beam_path: Path) -> dict:
         "Status",
         facts=[
             ("Updated", utcnow()),
+            ("Instance", _instance(beam)),
             ("Run", str(beam.get("runState"))),
             ("Done", str(counts["done"])),
             ("Working", ", ".join(working) or "none"),

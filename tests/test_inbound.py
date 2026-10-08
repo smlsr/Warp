@@ -271,6 +271,43 @@ class InboundTests(unittest.TestCase):
         self.assertEqual(results[0]["ack"], "Received warp:status. Posting the digest.")
         self.assertEqual(inbound.drain(self.beam_path), [])
 
+    def test_a_message_an_earlier_poll_queued_is_not_acked_twice(self):
+        def accept(message_id):
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(SCRIPTS / "inbound.py"),
+                    "accept",
+                    "--beam",
+                    str(self.beam_path),
+                    "--text",
+                    "warp:status",
+                    "--message-id",
+                    message_id,
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        first = accept("200.1")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("ack: Received warp:status", first.stdout)
+        self.assertIn("queued", inbound.enqueue(self.beam_path, "warp:status", "shawn", "200.1", "slack"))
+        # The command is applied and stays in the file, so a later poll that reads
+        # the same message again still sees it.
+        inbound.apply_pending(self.beam_path)
+        acks = self.journal_types().count("ack")
+        second = accept("200.1")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("inbound: duplicate 200.1", second.stdout)
+        self.assertNotIn("ack:", second.stdout)
+        self.assertEqual(self.journal_types().count("ack"), acks)
+        self.assertTrue(inbound.already_queued(self.beam_path, "200.1"))
+        self.assertFalse(inbound.already_queued(self.beam_path, "200.2"))
+        self.assertFalse(inbound.already_queued(self.beam_path, None))
+
     def test_help_mentions_the_slot(self):
         proc = subprocess.run(
             [sys.executable, "-B", str(SCRIPTS / "inbound.py"), "?"],
@@ -298,22 +335,44 @@ class ListenerInstructionTests(unittest.TestCase):
             self.assertIn("not one per shuttle", folded)
             self.assertIn("not one per reed", folded)
             self.assertIn("must not keep reading while paused or stopped", folded)
+            # One poll, then return. The listener is never a loop.
+            self.assertIn("one poll", folded)
+            self.assertIn("inbound.py poll", text)
+            self.assertIn("inbound.py polled", text)
+            self.assertIn("listen: <count>", text)
+            self.assertIn("never start another agent of any kind", folded)
+            self.assertNotIn("recycle", folded)
+            self.assertNotIn("sleep \"$(", text)
+            self.assertNotIn("go back to step 1", folded)
         self.assertIn("Subagent", skill)
         self.assertIn("separate Agent", skill)
         self.assertNotIn("one Agent for the beam", skill)
-        self.assertIn("listener: already running", skill)
+        self.assertIn("listener: poll", skill)
+        self.assertIn("reap: exit", skill)
+        self.assertIn("--message-id", skill)
         self.assertIn("do not start a second", skill.lower())
         for text in (start, resume):
             self.assertIn("warp-listen", text)
-            self.assertIn("inbound.py claim", text)
+            self.assertIn("listener: poll", text)
+            self.assertIn("LISTEN once", text)
             self.assertIn("subagent", text.lower())
             self.assertIn("separate Agent", text)
             self.assertIn("do not start a second", text.lower())
-            self.assertIn("listener: already running", text)
             self.assertIn("beam: loaded from", text)
-        for text in (pause, stop):
+            self.assertIn("parent: session", text)
+            self.assertIn("parent-exit --beam .warp/beam.json --wait --session", text)
+            self.assertIn("prompt: pass every line below this one to the subagent, and nothing above it", text)
+            self.assertNotIn("inbound.py claim", text)
+            self.assertNotIn("recycle", text)
+        for text, state in ((pause, "paused"), (stop, "stopped")):
             self.assertIn("inbound.py release", text)
             self.assertIn("must not keep reading while paused or stopped", text)
+            self.assertIn("halt: %s agents=" % state, text)
+            self.assertIn("reap: exit %s" % state, text)
+            self.assertIn("CURSOR_API_KEY", text)
+            self.assertIn("cleanup: link", text)
+            self.assertIn("parent: exit", text)
+            self.assertIn("Plugin hooks do not run on cloud runners", text)
         self.assertNotIn("do not end the turn while awaiting approval", skill)
         self.assertNotIn("one reader per", skill)
         self.assertIn("does not merge", skill.lower())
