@@ -942,7 +942,18 @@ def stop_all(data: dict, now=None, beam_path: Optional[Path] = None, reason: str
             lines.append("stop: %s" % row["id"])
     raw = data.get("listener")
     if isinstance(raw, dict):
+        who = str(raw.get("holder") or "")
+        if who:
+            raw["previousHolder"] = who
+        try:
+            raw["generation"] = int(raw.get("generation") or 0) + 1
+        except (TypeError, ValueError):
+            raw["generation"] = 1
+        raw["holder"] = ""
         raw["state"] = "stopped"
+        raw["returnReason"] = "stopped"
+        raw["returnedAt"] = now_s
+        raw["awaitReturn"] = False
         raw.pop("pollStartedAt", None)
     if changed:
         flush(data, beam_path)
@@ -1475,7 +1486,7 @@ def cloud_match_line(item: dict, origin_key: str) -> str:
 
 
 _LAUNCH_RE = re.compile(r"(?m)^\s*(SUBAGENT|IMPLEMENT)\s+([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*$")
-_LISTEN_RE = re.compile(r"(?m)^\s*LISTEN\s+once\s*$")
+_LISTEN_RE = re.compile(r"(?m)^\s*LISTEN(?:\s+once)?\s*$")
 
 
 def launch_marker(text: str) -> tuple:
@@ -1490,7 +1501,7 @@ def launch_marker(text: str) -> tuple:
 
 
 def strict_role(text: str) -> bool:
-    """True only for a prompt Warp printed: SUBAGENT <id>, IMPLEMENT <id>, or LISTEN once."""
+    """True only for a prompt Warp printed: SUBAGENT <id>, IMPLEMENT <id>, or LISTEN."""
     return bool(launch_marker(text)[0])
 
 
@@ -2726,7 +2737,7 @@ def hook_start(payload: dict, root: Optional[Path] = None, now=None) -> dict:
     """subagentStart. Deny a Warp launch the gate did not issue. Everything else is allowed.
 
     A launch is a prompt Warp printed: SUBAGENT <id>, IMPLEMENT <id>, or
-    LISTEN once. It is denied while the run is paused, stopped, or finished,
+    LISTEN. It is denied while the run is paused, stopped, or finished,
     when the ticket is merged or parked, when `checkout.py launch` did not
     record a row for it, and when that row already started a different
     subagent. WARP_SPAWN_GATE=off allows everything.

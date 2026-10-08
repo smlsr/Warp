@@ -938,6 +938,7 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         print(was)
         print(agents.instance_line(beam))
         print("parent: session %s" % beam.get("parentSession"))
+        print("listener: not started. The next supervise issues it.")
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
         for line in session_lines:
             print(line)

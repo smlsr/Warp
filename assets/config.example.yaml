@@ -223,16 +223,26 @@ maxAlarmRepairs: 5
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 300
-# Seconds between channel reads. The listener is one poll: it reads Slack
-# and Teams once and returns. The parent starts the next poll this many
-# seconds after the last one finished. It is also the longest the parent
-# waits between passes (orchestrator.py parent-exit --wait). Nothing sleeps
-# in a loop. No slackChannel and no teamsChannel means no listener at all.
-listenerStaleMinutes: 15
-# A poll that was started and never reported back is issued again after
-# this many minutes. The window is also at least one poll plus a minute.
-# Pause and stop do not issue a poll. /warp-init appends this key when the
-# file does not have it yet.
+# Longest the parent waits between passes (orchestrator.py parent-exit
+# --wait) when nothing else wakes it. Channel reads use the two intervals
+# below, not this. The wait also returns on a ticket folder, the inbound
+# queue, and the listener return stamp.
+listenerFastSeconds: 15
+# Seconds inbound.py wait sleeps after a cycle that queued a command.
+# The sleep is in Python, in 2-second steps.
+listenerSlowSeconds: 60
+# Seconds inbound.py wait sleeps after an empty read.
+listenerOrphanMinutes: 5
+# A listener.parentSeenAt older than this makes the listener exit orphaned.
+# The parent writes that stamp. A stale stamp does not start a replacement.
+listenerMaxMinutes: 60
+# Rotate a generation after this many minutes, or listenerMaxReads,
+# whichever comes first. The parent starts the next one from the return stamp.
+listenerMaxReads: 60
+# Successful poll --lease calls in one generation before rotation.
+listenerModel: ""
+# Empty: the listener inherits the parent's model (model: inherit).
+# A slug is printed as model: <slug>. agents/listener.md has no model key.
 reportOnComplete: true
 # true: when every ticket is merged, done, skipped, blocked, or alarmed, or the run
 # is stopped, write .warp/warp-complete.html and ask Herald to post the totals.

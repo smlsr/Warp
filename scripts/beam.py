@@ -1430,7 +1430,7 @@ def _unique_id(prefix: str, number: int, current: Optional[str]) -> tuple:
 
 
 def _recover_listener(data: dict, beam_path: Path, now: datetime, now_s: str, stale: int, lines: list, events: list) -> bool:
-    """The listener is one poll the parent starts from `orchestrator.py supervise`.
+    """The listener is one background subagent the parent starts from `orchestrator.py supervise`.
 
     The watchdog does not start it, reserve an id for it, or clear its flag,
     and it prints no listener line. Shuttle recovery is unchanged.
@@ -1529,7 +1529,7 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
 def watchdog(beam_path: Path, now=None) -> list:
     """Detect dead Shuttles. Reserve at most one replacement each.
 
-    The listener is one poll the parent starts from `orchestrator.py supervise`.
+    The listener is one background subagent the parent starts from `orchestrator.py supervise`.
     This prints no listener line and never starts one.
     Paused and stopped runs change nothing. A fresh Shuttle heartbeat is left alone.
     The caller launches the Shuttle named on each `shuttle: replace` line.
@@ -1703,7 +1703,12 @@ def default_config() -> dict:
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,
         "staleMinutes": DEFAULT_STALE_MINUTES,
-        "listenerStaleMinutes": 15,
+        "listenerFastSeconds": 15,
+        "listenerSlowSeconds": 60,
+        "listenerOrphanMinutes": 5,
+        "listenerMaxMinutes": 60,
+        "listenerMaxReads": 60,
+        "listenerModel": "",
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "maxSpawnsPerTicket": 8,
         "maxSpawnsPerHour": 40,
@@ -1773,7 +1778,7 @@ Unfinished work is launched before anything from the ready queue. Parked
 tickets do not count. Do not hand-edit beam.json.
 heartbeat writes lastSeenAt and the agent id for one Shuttle, then prints
 the reap line: reap: continue, or reap: exit <reason>, which means stop
-now. The listener is one poll and records it with inbound.py polled.
+now. The listener is one background subagent. The parent writes listener.parentSeenAt. A stale heartbeat does not start one.
 watchdog runs on every Warp tick and on start and resume. A Shuttle is dead when lastSeenAt is
 older than staleMinutes, or it never heartbeated and the claim is older
 than that. watchdog re-dispatches a dead Shuttle once. It never starts a

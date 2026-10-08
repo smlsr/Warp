@@ -2,26 +2,30 @@
 """Parse, acknowledge, and apply one inbound warp: command.
 
 Warp has no Slack webhook and does not run plugin hooks on cloud runners.
-The listener (skills/warp-listen) is one poll: the parent starts it when
-`orchestrator.py supervise` prints `listener: poll`. It reads Slack and
-Teams once, runs this script for each warp: command, records the poll with
-`polled`, and returns. It does not loop and it does not sleep. This script
-does not call Slack. It writes the ack to .warp/inbound-ack.json before it
-changes the beam. Herald posts that ack, then the action runs.
+Slack stays on the plugin's MCP tools. There is no bot token. The listener
+is one background subagent on the parent's checkout. `subagentVm` does not
+apply to it. It holds a generation lease, reads Slack and Teams, then
+`wait` sleeps in Python between reads. A second copy fails the lease before
+it reads. This script does not call Slack. It writes the ack to
+.warp/inbound-ack.json before it changes the beam. The listener posts that
+ack. The parent applies the queued command.
 
-The poll is tracked at beam["listener"]:
-  state          running while one poll is out, stopped between polls and
-                 while the run is paused or stopped
-  agentId        `listener` for a poll the parent started
-  pollStartedAt  set by supervise when the poll is issued, cleared by polled
-  lastSeenAt     the last finished poll. `.warp/listener.json` has the same
-                 time as lastPollAt
-  cursor         the newest message the last poll read, when it reported one
+The listener is tracked at beam["listener"]:
+  state            running while a holder has the lease, stopped between
+  generation       the lease number. A copy whose --lease does not match exits
+  holder           who holds the lease. Empty when the generation has exited
+  parentSeenAt     written by the parent wait and by supervise. A stale stamp
+                   is an orphan: the listener exits and does not get replaced
+                   until a parent is alive and the return stamp is in
+  returnReason     polled, rotated, orphaned, or stopped. The return stamp
+  cursor           the newest message the last read reported
 
-  python3 scripts/inbound.py poll --beam .warp/beam.json
+  python3 scripts/inbound.py poll --beam .warp/beam.json --lease 1 --holder listener
+  python3 scripts/inbound.py wait --beam .warp/beam.json --lease 1 --holder listener
+  python3 scripts/inbound.py take --beam .warp/beam.json --holder chat
   python3 scripts/inbound.py accept --beam .warp/beam.json --text "warp:proceed XV-01"
   python3 scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:status" --message-id 1
-  python3 scripts/inbound.py polled --beam .warp/beam.json --count 1 --cursor 1759850000.000100
+  python3 scripts/inbound.py returned --beam .warp/beam.json --reason rotated --lease 1 --holder listener
   python3 scripts/inbound.py apply-pending --beam .warp/beam.json
   python3 scripts/inbound.py release --beam .warp/beam.json
 """
@@ -32,8 +36,9 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import beam  # noqa: E402
@@ -51,6 +56,12 @@ ACK_NAME = "inbound-ack.json"
 PENDING_NAME = "pending-commands.jsonl"
 LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
+EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped")
+DEFAULT_FAST_SECONDS = 15
+DEFAULT_SLOW_SECONDS = 60
+DEFAULT_ORPHAN_MINUTES = 5
+DEFAULT_MAX_MINUTES = 60
+DEFAULT_MAX_READS = 60
 
 
 def _root(beam_path: Path) -> Path:
@@ -154,14 +165,26 @@ def write_listener_file(
     pid: Optional[str] = None,
     reason: str = "poll",
     when: Optional[str] = None,
+    generation: Optional[int] = None,
+    holder: Optional[str] = None,
+    return_reason: Optional[str] = None,
+    returned_at: Optional[str] = None,
 ) -> dict:
-    """Heartbeat the parent supervises. pid or agent id, last poll time, reason."""
+    """The return stamp and the last read. The parent watches this file."""
     body = {
         "agentId": agent_id,
         "pid": str(pid) if pid else None,
         "lastPollAt": when or beam.utcnow(),
         "reason": reason or "poll",
     }
+    if generation is not None:
+        body["generation"] = int(generation)
+    if holder is not None:
+        body["holder"] = holder
+    if return_reason is not None:
+        body["returnReason"] = return_reason
+    if returned_at:
+        body["returnedAt"] = returned_at
     path = listener_file(beam_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     beam.atomic_write(path, json.dumps(body, indent=2) + "\n")
@@ -203,25 +226,53 @@ def poll_seconds(beam_path: Path) -> int:
 
 
 def release(beam_path: Path) -> str:
-    """Stop the one listener. Idempotent. Does not launch another."""
+    """Stop the one listener and expire its lease. Idempotent. Does not launch another."""
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return "listener: no beam at %s" % beam_path
-    data = beam.load_json(beam_path)
-    cur = listener_of(data)
-    if cur["state"] != "running":
-        return "listener: already stopped"
-    data["listener"] = {
-        "state": "stopped",
-        "agentId": cur.get("agentId"),
-        "pid": cur.get("pid"),
-        "startedAt": cur.get("startedAt"),
-        "stoppedAt": beam.utcnow(),
-    }
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    beam.journal(beam_path, {"type": "listener-stop", "agentId": cur.get("agentId")})
-    who = cur.get("agentId") or ""
-    return ("listener: stopped %s" % who).rstrip()
+
+    def run() -> str:
+        data = beam.load_json(beam_path)
+        raw = _raw(data)
+        cur = listener_of(data)
+        holder = str(raw.get("holder") or "")
+        if cur["state"] != "running" and not holder:
+            return "listener: already stopped"
+        now = beam.utcnow()
+        if holder:
+            raw["previousHolder"] = holder
+        try:
+            raw["generation"] = int(raw.get("generation") or 0) + (1 if holder or cur["state"] == "running" else 0)
+        except (TypeError, ValueError):
+            raw["generation"] = 1
+        raw["holder"] = ""
+        raw["state"] = "stopped"
+        raw["agentId"] = cur.get("agentId") or raw.get("agentId")
+        raw["pid"] = cur.get("pid")
+        raw["startedAt"] = cur.get("startedAt") or raw.get("startedAt")
+        raw["stoppedAt"] = now
+        raw["returnReason"] = "stopped"
+        raw["returnedAt"] = now
+        raw["awaitReturn"] = False
+        raw.pop("pollStartedAt", None)
+        data["listener"] = raw
+        _finish_row(data, beam_path, now, "stopped")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        write_listener_file(
+            beam_path,
+            raw.get("agentId") or LISTENER_ID,
+            reason="stopped",
+            when=now,
+            generation=raw.get("generation"),
+            holder="",
+            return_reason="stopped",
+            returned_at=now,
+        )
+        beam.journal(beam_path, {"type": "listener-stop", "agentId": raw.get("agentId"), "reason": "stopped"})
+        who = raw.get("agentId") or ""
+        return ("listener: stopped %s" % who).rstrip()
+
+    return _locked(beam_path, run)
 
 
 LISTENER_ID = "listener"
@@ -238,55 +289,278 @@ _LOOP_KEYS = (
 )
 
 
-def begin_poll(data: dict, now_s: str) -> dict:
-    """Mark one poll as out. The caller holds the lock and writes the beam."""
+def _raw(data: dict) -> dict:
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    raw = dict(raw)
+    return dict(raw)
+
+
+def _locked(beam_path: Path, fn):
+    """Run fn while holding `.listener.lock`. The lock is not re-entrant."""
+    import fcntl
+
+    beam_path = Path(beam_path)
+    lock_path = beam_path.parent / ".listener.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            return fn()
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _int_field(raw: dict, key: str) -> int:
+    try:
+        return int(raw.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def generation_of(data: dict) -> int:
+    return _int_field(_raw(data), "generation")
+
+
+def holder_of(data: dict) -> str:
+    return str(_raw(data).get("holder") or "")
+
+
+def _cfg_int(data: dict, beam_path: Path, key: str, default: int) -> int:
+    return beam.config_int(data if isinstance(data, dict) else {}, beam_path, key, default)
+
+
+def fast_seconds(data: dict, beam_path: Path) -> int:
+    return max(1, _cfg_int(data, beam_path, "listenerFastSeconds", DEFAULT_FAST_SECONDS))
+
+
+def slow_seconds(data: dict, beam_path: Path) -> int:
+    return max(1, _cfg_int(data, beam_path, "listenerSlowSeconds", DEFAULT_SLOW_SECONDS))
+
+
+def orphan_minutes(data: dict, beam_path: Path) -> int:
+    return max(1, _cfg_int(data, beam_path, "listenerOrphanMinutes", DEFAULT_ORPHAN_MINUTES))
+
+
+def max_minutes(data: dict, beam_path: Path) -> int:
+    return max(1, _cfg_int(data, beam_path, "listenerMaxMinutes", DEFAULT_MAX_MINUTES))
+
+
+def max_reads(data: dict, beam_path: Path) -> int:
+    return max(1, _cfg_int(data, beam_path, "listenerMaxReads", DEFAULT_MAX_READS))
+
+
+def listener_model(data: dict, beam_path: Path) -> str:
+    """`listenerModel` when set. Empty means the listener inherits the parent's model."""
+    cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
+    val = cfg.get("listenerModel")
+    path = Path(beam_path).parent / "config.yaml"
+    if path.is_file():
+        match = re.search(r"^listenerModel:[ \t]*(.*?)[ \t]*(#.*)?$", path.read_text(), re.M)
+        if match and match.group(1).strip():
+            val = match.group(1).strip().strip("\"'")
+    if val in (None, ""):
+        return ""
+    return str(val).strip()
+
+
+def set_parent_seen(data: dict, now_s: str) -> None:
+    """Record that the parent is alive. The caller holds the lock and writes the beam."""
+    raw = _raw(data)
+    raw["parentSeenAt"] = now_s
+    data["listener"] = raw
+
+
+def touch_parent(beam_path: Path, now_s: str) -> bool:
+    """Write `listener.parentSeenAt`. False when the run should not keep a listener."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return False
+
+    def run() -> bool:
+        import orchestrator
+
+        data = beam.load_json(beam_path)
+        if not isinstance(data, dict) or not orchestrator.listener_should_run(data):
+            return False
+        set_parent_seen(data, now_s)
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return True
+
+    return _locked(beam_path, run)
+
+
+def lease_matches(data: dict, generation, holder: Optional[str]) -> bool:
+    who = str(holder or "").strip()
+    if not who:
+        return False
+    try:
+        gen = int(generation)
+    except (TypeError, ValueError):
+        return False
+    return gen == generation_of(data) and who == holder_of(data) and holder_of(data) != ""
+
+
+def _may_stamp(data: dict, holder: Optional[str]) -> bool:
+    """True when this copy is the one that should write the return stamp.
+
+    A holder that already belongs to someone else is left alone. The copy
+    that was invalidated, and the copy that still holds the lease, may stamp.
+    """
+    who = str(holder or "").strip()
+    if not who:
+        return False
+    raw = _raw(data)
+    current = str(raw.get("holder") or "")
+    if current and current != who:
+        return False
+    if current == who:
+        return True
+    previous = str(raw.get("previousHolder") or "")
+    return previous in {"", who}
+
+
+def _finish_row(data: dict, beam_path: Path, now_s: str, reason: str) -> None:
+    try:
+        import agents
+
+        agents.note_listener_done(data, now=now_s, beam_path=beam_path, reason=reason)
+    except Exception:
+        pass
+
+
+def stamp_return(data: dict, beam_path: Path, reason: str, now_s: str, holder: Optional[str] = None) -> dict:
+    """Record that this generation exited. The caller writes the beam.
+
+    The parent starts the next listener only after this stamp, and only when
+    no holder is live.
+    """
+    if reason not in EXIT_REASONS:
+        reason = "stopped"
+    raw = _raw(data)
+    if holder and not str(raw.get("previousHolder") or "") and str(raw.get("holder") or "") == str(holder):
+        raw["previousHolder"] = str(holder)
+    raw["holder"] = ""
+    raw["state"] = "stopped"
+    raw["stoppedAt"] = now_s
+    raw["lastSeenAt"] = now_s
+    raw["returnReason"] = reason
+    raw["returnedAt"] = now_s
+    raw["awaitReturn"] = False
+    raw.pop("pollStartedAt", None)
+    data["listener"] = raw
+    _finish_row(data, beam_path, now_s, reason)
+    write_listener_file(
+        beam_path,
+        raw.get("agentId") or LISTENER_ID,
+        pid=raw.get("pid"),
+        reason=reason,
+        when=now_s,
+        generation=generation_of(data),
+        holder="",
+        return_reason=reason,
+        returned_at=now_s,
+    )
+    return raw
+
+
+def return_ready(data: dict) -> bool:
+    """True when the previous generation wrote an exit stamp and nobody holds the lease."""
+    raw = _raw(data)
+    return str(raw.get("returnReason") or "") in EXIT_REASONS and not str(raw.get("holder") or "")
+
+
+def begin_generation(data: dict, now_s: str, holder: str = LISTENER_ID) -> dict:
+    """Start the next generation. The caller holds the lock and writes the beam."""
+    raw = _raw(data)
     for key in _LOOP_KEYS:
         raw.pop(key, None)
+    raw["generation"] = _int_field(raw, "generation") + 1
+    raw["holder"] = holder
+    raw["previousHolder"] = ""
     raw["state"] = "running"
     raw["agentId"] = LISTENER_ID
     raw["startedAt"] = now_s
+    raw["generationStartedAt"] = now_s
     raw["stoppedAt"] = None
     raw["pollStartedAt"] = now_s
-    raw["polls"] = int(raw.get("polls") or 0) + 1
+    raw["polls"] = _int_field(raw, "polls") + 1
+    raw["reads"] = 0
+    raw["returnReason"] = ""
+    raw["returnedAt"] = ""
+    raw["awaitReturn"] = False
+    raw["interval"] = "slow"
     data["listener"] = raw
     return raw
 
 
-def end_poll(data: dict, now_s: str, count: Optional[int] = None, cursor: str = "") -> dict:
-    """The poll is back. The slot is stopped until supervise issues the next one."""
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    raw = dict(raw)
+def begin_poll(data: dict, now_s: str) -> dict:
+    """Mark one generation as out. The caller holds the lock and writes the beam."""
+    return begin_generation(data, now_s, LISTENER_ID)
+
+
+def expire_lease(data: dict, now_s: str) -> dict:
+    """Bump the generation and clear the holder. Do not start a replacement.
+
+    The old copy exits at its next poll or wait and writes the return stamp.
+    The parent starts the next copy only from that stamp.
+    """
+    raw = _raw(data)
+    who = str(raw.get("holder") or "")
+    if who:
+        raw["previousHolder"] = who
+    raw["generation"] = _int_field(raw, "generation") + 1
+    raw["holder"] = ""
     raw["state"] = "stopped"
     raw["stoppedAt"] = now_s
-    raw["lastSeenAt"] = now_s
+    raw["awaitReturn"] = True
+    raw["returnReason"] = ""
+    raw["returnedAt"] = ""
     raw.pop("pollStartedAt", None)
+    data["listener"] = raw
+    return raw
+
+
+def end_poll(data: dict, now_s: str, count: Optional[int] = None, cursor: str = "", beam_path: Optional[Path] = None) -> dict:
+    """The generation is back. The slot stays empty until the return stamp is seen."""
+    raw = _raw(data)
     if count is not None:
         raw["lastCount"] = int(count)
     if cursor:
         raw["cursor"] = str(cursor)
     data["listener"] = raw
-    return raw
+    if beam_path is None:
+        raw["state"] = "stopped"
+        raw["stoppedAt"] = now_s
+        raw["lastSeenAt"] = now_s
+        raw["returnReason"] = "polled"
+        raw["returnedAt"] = now_s
+        raw["holder"] = ""
+        raw["awaitReturn"] = False
+        raw.pop("pollStartedAt", None)
+        data["listener"] = raw
+        return raw
+    return stamp_return(data, Path(beam_path), "polled", now_s)
 
 
 def polled(beam_path: Path, count: int = 0, cursor: str = "") -> str:
-    """The listener's last step. Records the finished poll and frees the slot."""
+    """The listener exited cleanly. Writes the return stamp and frees the lease."""
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return "listener: no beam at %s" % beam_path
-    data = beam.load_json(beam_path)
-    now = beam.utcnow()
-    raw = end_poll(data, now, count=count, cursor=cursor)
-    try:
-        import agents
 
-        agents.note_listener_done(data, now=now, beam_path=beam_path, reason="polled")
-    except Exception:
-        pass
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    write_listener_file(beam_path, raw.get("agentId") or LISTENER_ID, reason="polled", when=now)
-    return "listener: polled %d" % int(count or 0)
+    def run() -> str:
+        data = beam.load_json(beam_path)
+        now = beam.utcnow()
+        raw = _raw(data)
+        if count is not None:
+            raw["lastCount"] = int(count)
+        if cursor:
+            raw["cursor"] = str(cursor)
+        data["listener"] = raw
+        stamp_return(data, beam_path, "polled", now)
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return "listener: polled %d" % int(count or 0)
+
+    return _locked(beam_path, run)
 
 
 def channels(beam_path: Path) -> list:
@@ -301,22 +575,307 @@ def channels(beam_path: Path) -> list:
     return found
 
 
-def poll_lines(beam_path: Path) -> list:
-    """What one poll needs: the reap line, then each channel and where to read from."""
+def _stop_lines(reason: str) -> list:
+    return [
+        "reap: exit %s" % reason,
+        "reap: stop now. Return `listen: stopped`. Do not read the channel. Do not start an agent, subscribe, set a timer, or sleep.",
+        "listen: stopped",
+    ]
+
+
+def _moment(now, clock: Optional[Callable] = None):
+    if now is not None:
+        return beam.coerce_now(now)
+    if clock is not None:
+        dt = datetime.fromtimestamp(float(clock()), tz=timezone.utc)
+        return dt, dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return beam.coerce_now(None)
+
+
+def _age_seconds(stamp, now_dt) -> Optional[float]:
+    seen = beam.parse_ts(stamp) if stamp else None
+    if seen is None:
+        return None
+    return (now_dt - seen).total_seconds()
+
+
+def parent_orphaned(data: dict, beam_path: Path, now_dt) -> bool:
+    """True when the parent heartbeat is older than `listenerOrphanMinutes`.
+
+    A missing stamp is an orphan only once this generation has already been
+    out longer than that window. A generation that just started is not.
+    """
+    raw = _raw(data)
+    limit = orphan_minutes(data, beam_path) * 60.0
+    seen = _age_seconds(raw.get("parentSeenAt"), now_dt)
+    if seen is None:
+        started = _age_seconds(raw.get("generationStartedAt") or raw.get("pollStartedAt"), now_dt)
+        if started is None:
+            return False
+        return started > limit
+    return seen > limit
+
+
+def rotation_due(data: dict, beam_path: Path, now_dt) -> bool:
+    """True at `listenerMaxReads` or `listenerMaxMinutes`, whichever comes first."""
+    raw = _raw(data)
+    if _int_field(raw, "reads") >= max_reads(data, beam_path):
+        return True
+    age = _age_seconds(raw.get("generationStartedAt") or raw.get("pollStartedAt"), now_dt)
+    if age is None:
+        return False
+    return age >= max_minutes(data, beam_path) * 60.0
+
+
+def _apply_cursor(raw: dict, cursor: str = "", count: Optional[int] = None) -> None:
+    if cursor:
+        raw["cursor"] = str(cursor)
+    if count is not None:
+        raw["lastCount"] = int(count)
+
+
+def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=None) -> list:
+    """The reap line, then each channel, after the lease check.
+
+    Without `--lease` this is the reap line and the channels, for a poll
+    that was already issued. With `--lease` and `--holder`, a generation
+    that does not match or a holder that is someone else returns
+    `reap: exit superseded` before any channel line. A halted run returns
+    `reap: exit paused|stopped|done` the same way. Rotation and an orphaned
+    parent return before the read too.
+    """
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return ["listener: no beam at %s" % beam_path]
+    checked = lease is not None or holder not in (None, "")
+
+    def run() -> list:
+        import agents
+
+        lines = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
+        data = beam.load_json(beam_path)
+        now_dt, now_s = _moment(now)
+        if lines and lines[0].startswith("reap: exit"):
+            if checked and _may_stamp(data, holder):
+                reason = "stopped"
+                stamp_return(data, beam_path, reason, now_s, holder=holder)
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return lines
+        if not checked:
+            raw = _raw(data)
+            since = str(raw.get("cursor") or "")
+            for kind, channel in channels(beam_path):
+                lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
+            return lines
+        if not lease_matches(data, lease, holder):
+            if _may_stamp(data, holder):
+                stamp_return(data, beam_path, "stopped", now_s, holder=holder)
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return _stop_lines("superseded")
+        if parent_orphaned(data, beam_path, now_dt):
+            stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return _stop_lines("orphaned")
+        if rotation_due(data, beam_path, now_dt):
+            stamp_return(data, beam_path, "rotated", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return ["listen: rotate"]
+        raw = _raw(data)
+        raw["reads"] = _int_field(raw, "reads") + 1
+        raw["lastSeenAt"] = now_s
+        data["listener"] = raw
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        write_listener_file(
+            beam_path,
+            raw.get("agentId") or LISTENER_ID,
+            reason="running",
+            when=now_s,
+            generation=generation_of(data),
+            holder=holder_of(data),
+            return_reason="",
+        )
+        since = str(raw.get("cursor") or "")
+        for kind, channel in channels(beam_path):
+            lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
+        return lines
+
+    return _locked(beam_path, run)
+
+
+def _wait_check(beam_path: Path, lease, holder: Optional[str], now) -> Optional[list]:
+    """An early exit from wait, or None to keep sleeping. The caller holds the lock."""
     import agents
 
-    lines = agents.reap_from(_root(beam_path), LISTENER_ID, "", "listener", beam_path=beam_path)
-    if lines and lines[0].startswith("reap: exit"):
-        return lines
     data = beam.load_json(beam_path)
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    since = str(raw.get("cursor") or raw.get("lastSeenAt") or "")
-    for kind, channel in channels(beam_path):
-        lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
-    return lines
+    now_dt, now_s = _moment(now)
+    lines = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
+    if lines and lines[0].startswith("reap: exit"):
+        if _may_stamp(data, holder):
+            stamp_return(data, beam_path, "stopped", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        reason = lines[0].split()[-1]
+        return _stop_lines(reason)
+    if not lease_matches(data, lease, holder):
+        if _may_stamp(data, holder):
+            stamp_return(data, beam_path, "stopped", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return _stop_lines("superseded")
+    if parent_orphaned(data, beam_path, now_dt):
+        stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return _stop_lines("orphaned")
+    if rotation_due(data, beam_path, now_dt):
+        stamp_return(data, beam_path, "rotated", now_s, holder=holder)
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return ["listen: rotate"]
+    return None
+
+
+def wait_for(
+    beam_path: Path,
+    lease,
+    holder: str,
+    fast: bool = False,
+    cursor: str = "",
+    count: Optional[int] = None,
+    sleep: Optional[Callable] = None,
+    clock: Optional[Callable] = None,
+    step: float = 2.0,
+    now=None,
+) -> list:
+    """Sleep between reads, in `step` seconds, and return early.
+
+    `listenerFastSeconds` after a cycle that queued a command, otherwise
+    `listenerSlowSeconds`. One empty read uses the slow interval. The sleep
+    is in this process. Halt, a generation mismatch, an orphaned parent, and
+    rotation all return before the interval is up.
+    """
+    import time
+
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return ["listener: no beam at %s" % beam_path]
+    nap = sleep or time.sleep
+    tick = clock or time.time
+
+    def arm() -> int:
+        data = beam.load_json(beam_path)
+        raw = _raw(data)
+        _apply_cursor(raw, cursor, count)
+        raw["interval"] = "fast" if fast else "slow"
+        data["listener"] = raw
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return fast_seconds(data, beam_path) if fast else slow_seconds(data, beam_path)
+
+    limit = float(_locked(beam_path, arm))
+    began = float(tick())
+    while True:
+        if clock is not None:
+            moment = datetime.fromtimestamp(float(tick()), tz=timezone.utc)
+        else:
+            moment = now
+        found = _locked(beam_path, lambda moment=moment: _wait_check(beam_path, lease, holder, moment))
+        if found:
+            return found
+        waited = float(tick()) - began
+        if waited >= limit:
+            return ["listen: wait"]
+        nap(max(0.0, min(float(step), limit - waited)))
+
+
+def take_lease(beam_path: Path, holder: str, now=None) -> str:
+    """Claim the lease for a listener chat. Any other copy exits at its next wake."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return "listener: no beam at %s" % beam_path
+    who = str(holder or "").strip()
+    if not who:
+        return "listener: take needs --holder"
+
+    def run() -> str:
+        import agents
+
+        data = beam.load_json(beam_path)
+        _now_dt, now_s = _moment(now)
+        raw = _raw(data)
+        previous = str(raw.get("holder") or "")
+        raw["previousHolder"] = previous
+        raw["generation"] = _int_field(raw, "generation") + 1
+        raw["holder"] = who
+        raw["state"] = "running"
+        raw["agentId"] = who
+        raw["startedAt"] = now_s
+        raw["generationStartedAt"] = now_s
+        raw["stoppedAt"] = None
+        raw["pollStartedAt"] = now_s
+        raw["reads"] = 0
+        raw["returnReason"] = ""
+        raw["returnedAt"] = ""
+        raw["awaitReturn"] = False
+        raw["polls"] = _int_field(raw, "polls") + 1
+        data["listener"] = raw
+        try:
+            agents.note_listener_poll(data, now=now_s, beam_path=beam_path)
+        except Exception:
+            pass
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        write_listener_file(
+            beam_path,
+            who,
+            reason="running",
+            when=now_s,
+            generation=raw["generation"],
+            holder=who,
+            return_reason="",
+        )
+        beam.journal(beam_path, {"type": "listener-lease", "holder": who, "generation": raw["generation"], "previous": previous or None})
+        return "listener: lease generation=%s holder=%s" % (raw["generation"], who)
+
+    return _locked(beam_path, run)
+
+
+def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str] = None, now=None) -> str:
+    """Write the return stamp for this generation. Refuses a lease this copy does not hold."""
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return "listener: no beam at %s" % beam_path
+    if reason not in EXIT_REASONS:
+        return "listener: return needs a reason"
+
+    def run() -> str:
+        data = beam.load_json(beam_path)
+        _now_dt, now_s = _moment(now)
+        if lease is not None or holder not in (None, ""):
+            if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
+                return "listener: return refused"
+        raw = _raw(data)
+        if str(raw.get("returnReason") or "") == reason and not str(raw.get("holder") or ""):
+            return "listener: returned %s" % reason
+        stamp_return(data, beam_path, reason, now_s, holder=holder)
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return "listener: returned %s" % reason
+
+    return _locked(beam_path, run)
+
+
+def pending_is_newer(beam_path: Path, since: float) -> bool:
+    """True when the inbound queue was written after `since`."""
+    path = Path(beam_path).parent / PENDING_NAME
+    try:
+        return path.is_file() and path.stat().st_mtime > since
+    except OSError:
+        return False
+
+
+def return_is_newer(data: dict, since: float) -> bool:
+    """True when the return stamp landed after `since` and nobody holds the lease."""
+    if not return_ready(data):
+        return False
+    raw = _raw(data)
+    stamp = beam.parse_ts(raw.get("returnedAt"))
+    if stamp is None:
+        return False
+    return stamp.timestamp() > since
 
 
 def first_command_line(text: str) -> str:
@@ -751,14 +1310,19 @@ examples:
   python3 scripts/inbound.py apply-pending --beam .warp/beam.json
 
 poll prints the reap line and each channel with the `since` mark to read
-from. `reap: exit` means return without reading. polled is the listener's
-last step: it records the finished poll, the count of warp: commands, and
-the newest message read, and sets listener.state to stopped. The listener
-is one poll. It does not loop, and it does not sleep. `orchestrator.py
-supervise` prints `listener: poll` when the next one is due, every
-pollSeconds. interval prints pollSeconds. release sets listener.state to
-stopped. The listener must not keep reading while paused or stopped. One
-listener Subagent for the beam, not one per ticket, and not a separate Agent.
+from. `--lease` and `--holder` check the generation first. A mismatch prints
+`reap: exit superseded` and no channel line. `reap: exit paused`, `stopped`,
+or `done` means the run is halted: return `listen: stopped` without reading.
+`listen: rotate` means this generation hit `listenerMaxMinutes` or
+`listenerMaxReads`. wait sleeps in 2-second steps for `listenerFastSeconds`
+after a cycle that queued a command (`--fast`) and `listenerSlowSeconds`
+otherwise, and returns early on halt, a bad lease, an orphaned parent, or
+rotation. take bumps the generation so a listener chat is the only holder.
+returned writes the return stamp (`polled`, `rotated`, `orphaned`, `stopped`).
+The parent starts the next listener only from that stamp. interval prints
+pollSeconds, the cap on the parent wait. release expires the lease. The
+listener must not keep reading while paused or stopped. One listener
+Subagent for the beam, on the parent's checkout. `subagentVm` does not apply.
 claim and heartbeat are for a listener someone starts by hand. A run does
 not use them. `listener: already running <id>` from claim means do not
 start a second. heartbeat writes listener.lastSeenAt and
@@ -802,13 +1366,33 @@ def main(argv: Optional[list] = None) -> int:
     pi = sub.add_parser("interval")
     pi.add_argument("--beam", default=".warp/beam.json")
 
-    ppo = sub.add_parser("poll", help="reap line and the channels for one poll")
+    ppo = sub.add_parser("poll", help="reap line and the channels for one read")
     ppo.add_argument("--beam", default=".warp/beam.json")
+    ppo.add_argument("--lease", default=None, help="generation this copy holds")
+    ppo.add_argument("--holder", default=None, help="holder id that must match the beam")
 
-    ppd = sub.add_parser("polled", help="record one finished poll")
+    pw = sub.add_parser("wait", help="sleep between reads and return early on halt, lease, orphan, or rotation")
+    pw.add_argument("--beam", default=".warp/beam.json")
+    pw.add_argument("--lease", required=True)
+    pw.add_argument("--holder", required=True)
+    pw.add_argument("--fast", action="store_true", help="the cycle just queued a command")
+    pw.add_argument("--cursor", default="", help="newest message read, so the next poll starts after it")
+    pw.add_argument("--count", type=int, default=None)
+
+    pt = sub.add_parser("take", help="bump the generation and hold the lease")
+    pt.add_argument("--beam", default=".warp/beam.json")
+    pt.add_argument("--holder", required=True)
+
+    prr = sub.add_parser("returned", help="write the return stamp for this generation")
+    prr.add_argument("--beam", default=".warp/beam.json")
+    prr.add_argument("--reason", required=True, choices=list(EXIT_REASONS))
+    prr.add_argument("--lease", default=None)
+    prr.add_argument("--holder", default=None)
+
+    ppd = sub.add_parser("polled", help="write a polled return stamp and free the lease")
     ppd.add_argument("--beam", default=".warp/beam.json")
-    ppd.add_argument("--count", type=int, default=0, help="warp: commands this poll accepted")
-    ppd.add_argument("--cursor", default="", help="newest message read, so the next poll starts after it")
+    ppd.add_argument("--count", type=int, default=0, help="warp: commands this generation accepted")
+    ppd.add_argument("--cursor", default="", help="newest message read, so the next read starts after it")
 
     ps = sub.add_parser("status")
     ps.add_argument("--beam", default=".warp/beam.json")
@@ -868,12 +1452,29 @@ def main(argv: Optional[list] = None) -> int:
         print(poll_seconds(beam_path))
         return 0
     if args.cmd == "poll":
-        lines = poll_lines(beam_path)
+        lines = poll_lines(beam_path, lease=args.lease, holder=args.holder)
+        for line in lines:
+            print(line)
+        if lines and lines[0].startswith("listener: no beam"):
+            return 1
+        if lines and (lines[0].startswith("reap: exit") or lines[0] == "listen: rotate"):
+            return 3 if lines[0].startswith("reap: exit") else 0
+        return 0
+    if args.cmd == "wait":
+        lines = wait_for(beam_path, lease=args.lease, holder=args.holder, fast=args.fast, cursor=args.cursor, count=args.count)
         for line in lines:
             print(line)
         if lines and lines[0].startswith("listener: no beam"):
             return 1
         return 3 if lines and lines[0].startswith("reap: exit") else 0
+    if args.cmd == "take":
+        line = take_lease(beam_path, args.holder)
+        print(line)
+        return 1 if line.startswith("listener: no beam") or line.startswith("listener: take needs") else 0
+    if args.cmd == "returned":
+        line = mark_returned(beam_path, args.reason, lease=args.lease, holder=args.holder)
+        print(line)
+        return 0 if line.startswith("listener: returned ") else 1
     if args.cmd == "polled":
         line = polled(beam_path, count=args.count, cursor=args.cursor)
         print(line)

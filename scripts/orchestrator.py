@@ -39,18 +39,25 @@ API. This plugin does not call that API.
 parent-exit prints parent: stay while any ticket is not merged or parked.
 parent: exit is when every ticket is merged or parked, or the run is paused
 or stopped. parent-exit --wait blocks first: until a ticket folder changes,
-the listener is due, or pollSeconds pass. That is the one wait in a run.
---session is the id scan.py start printed. A later start or resume takes the
-run over, and this prints parent: exit superseded.
-The listener is one poll. supervise prints listener: poll when the last poll
-is older than pollSeconds, then the prompt for it. Start exactly one, in the
-foreground. listener: hold means a poll is
-out or the next one is not due. A poll that never reports is issued again
-after listenerStaleMinutes. listener: idle means paused, stopped, or every
-ticket is merged or parked. listener: none means no slackChannel or
-teamsChannel is set, so no listener is started.
---returned is the line the listener returned: listen: <count>, or listen: stopped.
-listen: stopped does not start another poll.
+the inbound queue changes, the listener writes its return stamp, the run
+halts, or pollSeconds pass. That is the one wait in a run. It also writes
+listener.parentSeenAt every step. --session is the id scan.py start printed.
+A later start or resume takes the run over, and this prints parent: exit
+superseded.
+The listener is one background subagent on the parent's checkout. subagentVm
+does not apply to it. supervise prints listener: poll and the prompt when
+no holder is live and the previous generation's return stamp is in, or when
+none has started. Start that one in the background and do not wait for it.
+listener: hold reason=live means one already holds the lease: do not start
+a second. listener: hold reason=await-return means the lease was bumped and
+the return stamp is not in yet: do not start a second. A stale heartbeat
+does not start one. listener: idle means paused, stopped, or every ticket
+is merged or parked. listener: none means no slackChannel or teamsChannel
+is set, so no listener is started.
+--returned is the line the listener returned. listen: stopped idles only
+the pass that still had the generation out, or when the run should not
+listen. A later pass with the same line starts the next generation when
+the return stamp is in.
 The same pass drives each ticket: implementing, pr-open, reviewing, fixing,
 ready, merging, then merged or parked. Opening a pull request is not done.
   python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned "listen: 0" --now 2026-01-01T00:00:00Z --provider provider.json
@@ -605,8 +612,9 @@ def effective_text(config: Optional[dict], env: Optional[dict] = None) -> str:
 RETIRED_KEYS = {
     "maxLocalSubagents": "maxAgents is the one cap on agents that run at once, on this machine or on their own VMs",
     "maxFixWorkers": "a fix is an agent like any other and counts against maxAgents",
-    "listenerRestartNote": "the listener is one poll and is never restarted",
-    "maxListenerRestartsPerHour": "the listener is one poll and is never restarted",
+    "listenerRestartNote": "one background listener is replaced only from its return stamp",
+    "maxListenerRestartsPerHour": "one background listener is replaced only from its return stamp",
+    "listenerStaleMinutes": "a stale listener heartbeat does not start another listener. The return stamp does",
 }
 
 
@@ -1474,7 +1482,6 @@ def ticket_keeps_parent(ticket: dict) -> bool:
     return rollup in _CHECK_PENDING or ci in _CHECK_PENDING
 
 
-DEFAULT_LISTENER_STALE_MINUTES = 15
 _LISTENER_STOP = {"pause", "stop", "warp:pause", "warp:stop"}
 
 
@@ -1523,52 +1530,6 @@ def parent_may_exit(beam: dict) -> bool:
     return not listener_should_run(beam)
 
 
-def listener_stale_minutes(data: dict, beam_path: Path) -> int:
-    """Minutes before a quiet heartbeat means the listener died.
-
-    The window is at least `listenerStaleMinutes` and at least one poll plus
-    a minute, so a listener sleeping for `pollSeconds` is still alive.
-    """
-    import beam as beam_mod
-
-    configured = beam_mod.config_int(data, beam_path, "listenerStaleMinutes", DEFAULT_LISTENER_STALE_MINUTES)
-    poll = beam_mod.config_int(data, beam_path, "pollSeconds", 300)
-    poll_minutes = (max(int(poll), 0) + 59) // 60
-    return max(int(configured), poll_minutes + 1)
-
-
-def _read_listener_file(beam_path: Path) -> dict:
-    path = Path(beam_path).parent / "listener.json"
-    if not path.is_file():
-        return {}
-    try:
-        loaded = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _minutes_since(stamp, now_dt) -> Optional[float]:
-    import beam as beam_mod
-
-    seen = beam_mod.parse_ts(stamp) if stamp else None
-    if seen is None:
-        return None
-    return (now_dt - seen).total_seconds() / 60.0
-
-
-def _polled_since(last, pending) -> bool:
-    import beam as beam_mod
-
-    if not last or not pending:
-        return False
-    last_dt = beam_mod.parse_ts(str(last))
-    pending_dt = beam_mod.parse_ts(str(pending))
-    if last_dt is None or pending_dt is None:
-        return False
-    return last_dt > pending_dt
-
-
 def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
     """One parent pass: the listener, then the ticket pipeline.
 
@@ -1615,13 +1576,14 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
 
 
 def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None) -> list:
-    """Issue one listener poll when it is due. Never a second one.
+    """Start one background listener when the return stamp says the last one exited.
 
-    The listener is one poll: read the channel once, enqueue, return.
-    `listener: poll` means start exactly one. `listener: hold` means a poll
-    is out, or the next one is not due yet. `listener: idle` means the run
-    is paused, stopped, or finished. `listener: none` means no channel is
-    configured.
+    `listener: poll` means start exactly one, in the background, and do not
+    wait for it. `listener: hold reason=live` means a holder is already up.
+    `listener: hold reason=await-return` means the lease was bumped and the
+    return stamp is not in yet. Neither starts a second. `listener: idle`
+    means the run is paused, stopped, or finished. `listener: none` means
+    no channel is configured.
     """
     import fcntl
 
@@ -1641,94 +1603,94 @@ def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None
 
 
 LISTENER_CONTRACT = (
-    "You are the Warp listener for one poll. Read each channel once, queue each warp: command, "
-    "record the poll, and return `listen: <count>`. You never start another agent of any kind. "
-    "You never loop, sleep, set a timer, subscribe, or wait for a reply."
+    "You are the Warp listener. Stay up on the parent's checkout. subagentVm does not apply. "
+    "You never start another agent of any kind. "
+    "Each cycle runs inbound.py poll --lease, reads each channel once, posts each ack, enqueues, "
+    "then inbound.py wait. The wait sleeps in Python. You do not shell-sleep, set a timer, or subscribe. "
+    "On reap: exit, listen: rotate, or listen: stopped, return that line. The script already wrote the return stamp."
 )
 
 
 def listener_prompt(beam_path: Path) -> list:
-    """The lines the parent passes to the one listener subagent for this poll."""
+    """The lines the parent passes to the one background listener. It does not wait."""
     beam_file = Path(beam_path).resolve()
     scripts = scripts_dir()
     import agents as agents_mod
+    import inbound
 
     try:
-        instance = agents_mod.instance_id(_load(Path(beam_path)))
+        data = _load(Path(beam_path))
+        instance = agents_mod.instance_id(data)
     except (OSError, ValueError):
+        data = {}
         instance = ""
     name = agents_mod.tag_name(role="listener", instance=instance)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    generation = raw.get("generation") or 1
+    holder = raw.get("holder") or inbound.LISTENER_ID
+    slug = inbound.listener_model(data, Path(beam_path))
     body = [
         name,
-        "LISTEN once",
+        "LISTEN",
         "beam: %s" % beam_file,
         "agent: listener",
+        "lease: %s" % generation,
+        "holder: %s" % holder,
+        "background: true",
         LISTENER_CONTRACT,
-        "First: python3 %s/inbound.py poll --beam %s" % (scripts, beam_file),
-        "Last: python3 %s/inbound.py polled --beam %s --count <count> --cursor <newest message id>" % (scripts, beam_file),
+        "First: python3 %s/inbound.py poll --beam %s --lease %s --holder %s" % (scripts, beam_file, generation, holder),
+        "Then: python3 %s/inbound.py wait --beam %s --lease %s --holder %s" % (scripts, beam_file, generation, holder),
+        "Exit: python3 %s/inbound.py returned --beam %s --reason <polled|rotated|orphaned|stopped> --lease %s --holder %s"
+        % (scripts, beam_file, generation, holder),
     ]
-    head = "listener: start one foreground warp-listen subagent named `%s` with the %d lines below, and wait for it" % (name, len(body))
+    if slug:
+        body.insert(6, "model: %s" % slug)
+        model_note = "model: %s" % slug
+    else:
+        model_note = "model: inherit"
+    head = (
+        "listener: start one background warp-listen subagent named `%s` with the %d lines below, and do not wait for it. %s"
+        % (name, len(body), model_note)
+    )
     return [head] + body
 
 
-def _seconds_since(stamp, now_dt) -> Optional[float]:
-    minutes = _minutes_since(stamp, now_dt)
-    return None if minutes is None else minutes * 60.0
-
-
-def listener_last_poll(data: dict, beam_path: Path) -> str:
-    """When the last poll finished: `.warp/listener.json`, else the beam."""
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    file_body = _read_listener_file(beam_path)
-    return str(file_body.get("lastPollAt") or raw.get("lastSeenAt") or "")
-
-
-def listener_poll_due(data: dict, beam_path: Path, now_dt) -> str:
-    """`poll`, `hold`, `idle`, or `none` for this moment. Changes nothing.
-
-    `none` means no slackChannel or teamsChannel is configured, so there is
-    nothing to read and no listener is ever started.
-    """
-    import beam as beam_mod
-    import inbound
-
-    if not listener_should_run(data):
-        return "idle"
-    if not inbound.channels(beam_path):
-        return "none"
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    out = raw.get("pollStartedAt")
-    if out:
-        age = _minutes_since(out, now_dt)
-        if age is not None and age <= listener_stale_minutes(data, beam_path):
-            return "hold"
-        return "poll"
-    last = listener_last_poll(data, beam_path)
-    if last:
-        waited = _seconds_since(last, now_dt)
-        poll = max(int(beam_mod.config_int(data, beam_path, "pollSeconds", 300)), 0)
-        if waited is not None and waited < poll:
-            return "hold"
-    return "poll"
-
-
 def begin_listener_poll(data: dict, beam_path: Path, now=None) -> None:
-    """Record that one poll is out. The caller writes the beam."""
+    """Record that one generation is out. The caller writes the beam. Does not replace a live holder."""
     import agents as agents_mod
     import beam as beam_mod
     import inbound
 
-    now_dt, now_s = beam_mod.coerce_now(now)
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    if raw.get("pollStartedAt"):
-        beam_mod.journal(Path(beam_path), {"type": "listener-poll-lost", "startedAt": raw.get("pollStartedAt")})
-        agents_mod.note_listener_done(data, now=now_dt, beam_path=beam_path, reason="lost")
-    inbound.begin_poll(data, now_s)
-    agents_mod.note_listener_poll(data, now=now_dt, beam_path=beam_path)
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    raw = inbound.begin_generation(data, now_s, inbound.LISTENER_ID)
+    agents_mod.note_listener_poll(data, now=now, beam_path=beam_path)
+    inbound.write_listener_file(
+        beam_path,
+        inbound.LISTENER_ID,
+        reason="running",
+        when=now_s,
+        generation=raw.get("generation"),
+        holder=raw.get("holder") or "",
+        return_reason="",
+    )
+
+
+def _returned_reason(folded: str) -> str:
+    if "rotate" in folded:
+        return "rotated"
+    if "orphan" in folded:
+        return "orphaned"
+    if "stopped" in folded or folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
+        return "stopped"
+    return "polled"
+
+
+def _explicit_stop(folded: str) -> bool:
+    """A pause or stop command. `listen: stopped` is the listener's own exit line."""
+    return folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop")
 
 
 def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -> list:
-    import agents as agents_mod
     import inbound
 
     data = beam_mod.load_json(beam_path)
@@ -1736,19 +1698,39 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
     returned_text = (returned or "").strip()
     folded = returned_text.casefold()
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    closing_stop = False
     if returned_text and raw.get("pollStartedAt"):
-        # The listener came back without recording the poll. Record it here.
-        inbound.end_poll(data, now_s)
-        agents_mod.note_listener_done(data, now=now_dt, beam_path=beam_path, reason="returned")
+        # This pass still has the generation that returned. Record it once.
+        # A later pass with the same line does not idle the run.
+        reason = _returned_reason(folded)
+        inbound.stamp_return(data, beam_path, reason, now_s, holder=raw.get("holder") or inbound.LISTENER_ID)
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-        inbound.write_listener_file(beam_path, inbound.LISTENER_ID, reason="returned", when=now_s)
+        closing_stop = listener_returned_stop(folded)
     if not listener_should_run(data):
         return ["listener: idle"]
-    if listener_returned_stop(folded):
+    if _explicit_stop(folded):
         return ["listener: idle"]
-    decision = listener_poll_due(data, beam_path, now_dt)
-    if decision != "poll":
-        return ["listener: %s" % decision]
+    if closing_stop:
+        # The one pass that still had the generation out. The next pass starts
+        # again when the run should still listen.
+        return ["listener: idle"]
+    if not inbound.channels(beam_path):
+        return ["listener: none"]
+    inbound.set_parent_seen(data, now_s)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    holder = str(raw.get("holder") or "")
+    if holder:
+        started = beam_mod.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt"))
+        age = None if started is None else (now_dt - started).total_seconds()
+        if age is not None and age >= inbound.max_minutes(data, beam_path) * 60:
+            inbound.expire_lease(data, now_s)
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return ["listener: hold reason=live holder=%s generation=%s" % (holder, inbound.generation_of(data))]
+    if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
     return ["listener: poll"]
@@ -1763,13 +1745,15 @@ def parent_wait(
 ) -> str:
     """Block until the next pass has something to do. The one wait in a run.
 
-    Returns `ticket <id>` when a ticket folder changed since the last pass
-    started, `poll` when the listener is due, `halt` when the run was
-    paused, stopped, or finished meanwhile, and `timeout` after pollSeconds.
+    Returns `ticket <id>` when a ticket folder changed, `command` when the
+    inbound queue changed, `return` when the listener wrote its return
+    stamp, `halt` when the run was paused, stopped, or finished, and
+    `timeout` after pollSeconds. Each step writes `listener.parentSeenAt`.
     """
     import time
 
     import beam as beam_mod
+    import inbound
 
     nap = sleep or time.sleep
     tick = clock or time.time
@@ -1777,10 +1761,18 @@ def parent_wait(
     began = tick()
     since = None
     while True:
+        now_dt = datetime.fromtimestamp(tick(), tz=timezone.utc)
+        now_s = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            alive = inbound.touch_parent(path, now_s)
+        except (OSError, ValueError):
+            alive = False
+        if not alive:
+            return "halt"
         try:
             data = _load(path)
         except (OSError, ValueError):
-            data = {}
+            return "halt"
         if not isinstance(data, dict) or not listener_should_run(data):
             return "halt"
         if since is None:
@@ -1793,14 +1785,14 @@ def parent_wait(
         changed = _changed_ticket(path, since)
         if changed:
             return "ticket %s" % changed
-        now_dt = datetime.fromtimestamp(tick(), tz=timezone.utc)
-        if listener_poll_due(data, path, now_dt) == "poll":
-            return "poll"
+        if inbound.pending_is_newer(path, since):
+            return "command"
+        if inbound.return_is_newer(data, since):
+            return "return"
         waited = tick() - began
         if waited >= cap:
             return "timeout"
         nap(max(0.1, min(step, cap - waited)))
-
 
 def _changed_ticket(beam_path: Path, since: float) -> str:
     """The first ticket whose status folder was written after `since`."""
