@@ -1596,7 +1596,7 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
     if ticket.get("agent") and ticket["agent"] != agent:
         import agents
 
-        for line in agents.reap_lines("replaced", args.id):
+        for line in agents.reap_lines("replaced", args.id, agent_id=agent):
             print(line)
         sys.exit(f"{args.id}: heartbeat agent {agent} does not own the ticket ({ticket['agent']})")
     stamp = utcnow()

@@ -365,7 +365,7 @@ Status is written straight into the parent checkout. Only that subagent writes i
 
 `state.json` is the current state: when it started, when it last changed, the last heartbeat, the pull request, the check result, the error text, the alarm reason, and any paths that escaped the lock. `log.jsonl` is an append-only mini log. Each line has a timestamp, a state, and the error text.
 
-The subagent writes that directory in the parent checkout and does not push it. `ticket_state.py append --id <id> --state <state> --root <parent>` does that. It prints `reap: continue` or `reap: exit <reason>`, so the subagent reads whether to go on every time it writes its state. On `reap: exit` the subagent stops and returns `result: <id> stopped <reason>`. The command does not commit `.warp/beam.json`. Optional `launch: agent` may still pass `--push`.
+The subagent writes that directory in the parent checkout and does not push it. `ticket_state.py append --id <id> --state <state> --root <parent>` does that. It prints `reap: continue` or `reap: exit <reason>`, so the subagent reads whether to go on every time it writes its state. On `reap: exit` the subagent stops and returns `result: <id> stopped <reason> agent=<agent>`. The command does not commit `.warp/beam.json`. Optional `launch: agent` may still pass `--push`.
 
 Every tick reads a worktree ticket's directory from the parent checkout. It fetches an agent-mode branch and reads only that ticket's directory. It patches the live beam. It does not replace the live beam with a file from the branch. A second tick applies the same lines once. Paused and stopped runs do not fetch and do not relaunch.
 
@@ -492,7 +492,7 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 **`spawn: closed <id>` and no prompt.** `checkout.py launch` printed `refuse: ...` and exited 2 because the run is paused, stopped, or finished, or that ticket is merged or parked. Start nothing. `/warp-resume` or `/warp-start` opens the run again.
 
-**A Shuttle returned `result: <id> stopped <reason>`.** It read `reap: exit <reason>` and stopped. `paused` and `stopped` are a halt. `settled` means the ticket is merged or parked. `replaced` means the parent started another Shuttle for that ticket. `not-launched` means no launch was recorded for that agent id: something other than the parent started it. This is not a dead worker and is not counted as a recovery. The reasons are in [docs/LIFECYCLE.md](docs/LIFECYCLE.md).
+**A Shuttle returned `result: <id> stopped <reason> agent=<agent>`.** The parent stamps `reaped` on that agent only. A late line from a replaced VM does not end the new Shuttle. It read `reap: exit <reason>` and stopped. `paused` and `stopped` are a halt. `settled` means the ticket is merged or parked. `replaced` means the parent started another Shuttle for that ticket. `not-launched` means no launch was recorded for that agent id: something other than the parent started it. This is not a dead worker and is not counted as a recovery. The reasons are in [docs/LIFECYCLE.md](docs/LIFECYCLE.md).
 
 **No listener starts.** `listener: none` means no `slackChannel` or `teamsChannel` is set. `listener: hold` means a poll is out or the next one is not due. `listener: idle` means the run is paused, stopped, or finished. The listener is one poll every `pollSeconds`, not a loop.
 

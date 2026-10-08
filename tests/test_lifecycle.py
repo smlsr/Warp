@@ -572,9 +572,9 @@ class ReapTests(Base):
 
     def test_each_role_is_told_how_to_exit(self):
         self.assertEqual(agents.reap_lines(""), ["reap: continue"])
-        shuttle = agents.reap_lines("paused", "T-1")
+        shuttle = agents.reap_lines("paused", "T-1", agent_id="subagent:T-1")
         self.assertEqual(shuttle[0], "reap: exit paused")
-        self.assertIn("result: T-1 stopped paused", shuttle[1])
+        self.assertIn("result: T-1 stopped paused agent=subagent:T-1", shuttle[1])
         listener = agents.reap_lines("paused", role="listener")
         self.assertIn("listen: stopped", listener[1])
         self.assertIn("Do not read the channel", listener[1])
@@ -684,11 +684,12 @@ class ReapTests(Base):
             "--root",
             str(self.tmp),
             "--line",
-            "result: T-1 stopped settled",
+            "result: T-1 stopped settled agent=subagent:T-1",
             cwd=self.tmp,
         )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("result: ok T-1", out.stdout)
+        self.assertNotIn("reap: stale", out.stdout)
         row = self.rows()[0]
         self.assertEqual(row["state"], "ended")
         self.assertEqual(row["endReason"], "settled")
@@ -706,7 +707,7 @@ class ReapTests(Base):
             "--root",
             str(self.tmp),
             "--line",
-            "result: T-1 stopped settled",
+            "result: T-1 stopped settled agent=subagent:T-1",
             cwd=self.tmp,
         )
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
@@ -730,7 +731,7 @@ class ReapTests(Base):
             "--root",
             str(self.tmp),
             "--line",
-            "result: T-1 stopped paused",
+            "result: T-1 stopped paused agent=subagent:T-1",
             cwd=self.tmp,
         )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -758,6 +759,96 @@ class ReapTests(Base):
         row = self.rows()[0]
         self.assertNotIn("reaped", row)
         self.assertEqual(row["state"], "starting")
+
+    def test_a_stopped_result_with_no_agent_does_not_end_the_live_row(self):
+        self.started()
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped settled",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("reap: stale T-1 agent=unknown left subagent:T-1", out.stdout)
+        row = self.rows()[0]
+        self.assertEqual(row["state"], "starting")
+        self.assertNotIn("reaped", row)
+        journal = (self.warp / "journal.jsonl").read_text()
+        self.assertIn('"type":"reap-stale"', journal)
+        self.assertNotIn('"type":"reap",', journal)
+
+    def test_the_ticket_folder_cloud_agent_names_the_row(self):
+        data = self.started()
+        doc = agents.registry(data, self.path)
+        doc["agents"][0]["cloudId"] = "bc-live"
+        agents.flush(data, self.path)
+        folder = self.warp / "tickets" / "T-1"
+        folder.mkdir(parents=True)
+        (folder / "state.json").write_text(json.dumps({"id": "T-1", "cloudAgent": "bc-live"}) + "\n")
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped settled",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertNotIn("reap: stale", out.stdout)
+        row = self.rows()[0]
+        self.assertEqual(row["state"], "ended")
+        self.assertEqual(row["endReason"], "settled")
+        self.assertTrue(row["reaped"])
+
+    def test_a_late_stopped_result_from_a_replaced_vm_leaves_the_new_shuttle_live(self):
+        data = self.started()
+        doc = agents.registry(data, self.path)
+        doc["agents"][0]["cloudId"] = "bc-old"
+        agents.flush(data, self.path)
+        launched = agents.launch_lines(
+            data, data["tickets"]["T-1"], "restart", replacing=True, beam_path=self.path, now=LATER
+        )
+        self.save(data)
+        self.assertTrue(any(line.startswith("agent=shuttle-T-1-r1") or "shuttle-T-1-r1" in line for line in launched))
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped replaced agent=bc-old",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("reap: stale T-1 agent=bc-old left shuttle-T-1-r1", out.stdout)
+        rows = {row["id"]: row for row in self.rows()}
+        old = rows["subagent:T-1"]
+        new = rows["shuttle-T-1-r1"]
+        self.assertEqual(old["state"], "ended")
+        self.assertEqual(old["endReason"], "dead")
+        self.assertTrue(old["reaped"])
+        self.assertEqual(new["state"], "starting")
+        self.assertNotIn("reaped", new)
+        journal = (self.warp / "journal.jsonl").read_text()
+        self.assertEqual(journal.count('"type":"reap",'), 1)
+        self.assertIn('"type":"reap-stale"', journal)
+        self.assertIn('"live":"shuttle-T-1-r1"', journal)
 
 
 class ClearTests(Base):

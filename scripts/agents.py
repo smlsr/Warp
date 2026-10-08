@@ -556,11 +556,50 @@ def note_returned(data: dict, ticket: dict, now=None, beam_path: Optional[Path] 
 
 
 def stopped_result(line: str) -> tuple:
-    """`(ticket id, reason)` from `result: <id> stopped <reason>`. Empty when it is not that line."""
+    """`(ticket id, reason, agent id)` from `result: <id> stopped <reason> agent=<agent>`.
+
+    The agent id is empty when the line does not name one. An empty ticket id
+    means this is not a stopped result.
+    """
     parts = (line or "").strip().split()
     if len(parts) < 3 or parts[0].casefold() != "result:" or parts[2].casefold() != "stopped":
-        return "", ""
-    return parts[1], (parts[3] if len(parts) > 3 else "")
+        return "", "", ""
+    reason = ""
+    agent = ""
+    for token in parts[3:]:
+        if token.casefold().startswith("agent=") and not agent:
+            agent = token.split("=", 1)[1]
+            continue
+        if not reason:
+            reason = token
+    return parts[1], reason, agent
+
+
+def _same_agent(row: dict, agent_id: str) -> bool:
+    """True when this row is the agent, by registry id or cloud id. Same match as `reap`."""
+    return agent_id in {str(row.get("id") or ""), str(row.get("cloudId") or "")}
+
+
+def _log_stale_result(ticket_id: str, agent_id: str, reason: str, live: list, beam_path: Optional[Path]) -> None:
+    """The stopped result is not the Shuttle that is live now. Leave that row alone."""
+    left = ",".join(str(row.get("id") or "") for row in live) or "none"
+    producer = agent_id or "unknown"
+    print("reap: stale %s agent=%s left %s" % (ticket_id, producer, left))
+    if beam_path is None:
+        return
+    try:
+        beam_mod.journal(
+            Path(beam_path),
+            {
+                "type": "reap-stale",
+                "agent": producer,
+                "ticket": ticket_id,
+                "reason": reason or "stopped",
+                "live": left,
+            },
+        )
+    except OSError:
+        pass
 
 
 def note_stopped_result(
@@ -569,22 +608,23 @@ def note_stopped_result(
     line: str,
     now=None,
     beam_path: Optional[Path] = None,
+    agent_id: str = "",
 ) -> bool:
-    """End the Shuttle and stamp `reaped` when the parent records `result: <id> stopped <reason>`.
+    """Stamp `reaped` on the Shuttle that returned `result: <id> stopped <reason>`.
 
-    A worktree Shuttle already did this when it read `reap: exit` on this
-    checkout. A Shuttle on its own VM ran `reap --remote`, which writes
-    nothing, so the parent is the one that records the exit. A row a halt
+    The line's `agent=` is that Shuttle's registry id or cloud id. `agent_id`
+    is the ticket folder's `cloudAgent` when the line does not name one.
+    Only the row that matches is ended, and only while it is still live.
+    A late result from a halted or replaced VM does not end the Shuttle that
+    replaced it. That result is journaled as `reap-stale`. A row a halt
     already ended keeps its end reason. A second record does not move the stamp.
     """
-    named, reason = stopped_result(line)
+    named, reason, line_agent = stopped_result(line)
     tid = str(ticket_id or "")
     if not named or named != tid:
         return False
+    producer = str(line_agent or agent_id or "").strip()
     doc = registry(data, beam_path)
-    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    ticket = tickets.get(tid) if isinstance(tickets.get(tid), dict) else {}
-    agent = str(ticket.get("agent") or "")
     matches = []
     for row in _rows(doc):
         if not isinstance(row, dict) or row.get("role") not in {"shuttle", None, ""}:
@@ -592,16 +632,13 @@ def note_stopped_result(
         if str(row.get("ticket") or "") != tid:
             continue
         matches.append(row)
-    if not matches:
-        return False
     live = [row for row in matches if row.get("state") in _LIVE and not row.get("ended")]
-    if live:
-        chosen = live
-    elif agent:
-        chosen = [row for row in matches if agent in {str(row.get("id") or ""), str(row.get("cloudId") or "")}]
-        chosen = chosen or [matches[-1]]
-    else:
-        chosen = [matches[-1]]
+    chosen = [row for row in matches if producer and _same_agent(row, producer)]
+    left = [row for row in live if row not in chosen]
+    if not producer or not chosen or left:
+        _log_stale_result(tid, producer, reason, left or live, beam_path)
+    if not producer or not chosen:
+        return False
     _now_dt, now_s = beam_mod.coerce_now(now)
     stamped = None
     changed = False
@@ -624,7 +661,7 @@ def note_stopped_result(
                 Path(beam_path),
                 {
                     "type": "reap",
-                    "agent": str(stamped.get("id") or agent),
+                    "agent": str(stamped.get("id") or producer),
                     "ticket": tid,
                     "reason": reason or "stopped",
                 },
@@ -2236,7 +2273,7 @@ def reap_reason(
     return ""
 
 
-def reap_lines(reason: str, ticket_id: str = "", role: str = "shuttle") -> list:
+def reap_lines(reason: str, ticket_id: str = "", role: str = "shuttle", agent_id: str = "") -> list:
     """What the agent reads. One answer: continue, or exit and how."""
     if not reason:
         return ["reap: continue"]
@@ -2245,10 +2282,10 @@ def reap_lines(reason: str, ticket_id: str = "", role: str = "shuttle") -> list:
     elif role == "listener":
         tail = "Return `listen: stopped`. Do not read the channel. Do not start an agent, subscribe, set a timer, or sleep."
     else:
-        tail = (
-            "Return `result: %s stopped %s`. Do not start an agent, subscribe, set a timer, or wait."
-            % (ticket_id or "<id>", reason)
-        )
+        line = "result: %s stopped %s" % (ticket_id or "<id>", reason)
+        if str(agent_id or "").strip():
+            line += " agent=%s" % str(agent_id).strip()
+        tail = "Return `%s`. Do not start an agent, subscribe, set a timer, or wait." % line
     return ["reap: exit %s" % reason, "reap: stop now. %s" % tail]
 
 
@@ -2297,7 +2334,7 @@ def reap(
                 beam_mod.journal(Path(beam_path), {"type": "reap", "agent": agent_id, "ticket": ticket_id, "reason": reason})
             except OSError:
                 pass
-    return reap_lines(reason, ticket_id, role)
+    return reap_lines(reason, ticket_id, role, agent_id)
 
 
 def bind_cloud(data: dict, agent_id: str, ticket_id: str, beam_path: Optional[Path], cloud: Optional[str] = None) -> bool:

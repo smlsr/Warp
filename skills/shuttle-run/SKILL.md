@@ -20,7 +20,7 @@ python3 <plugin>/scripts/agents.py reap --beam <parent>/.warp/beam.json --id <ag
 python3 <plugin>/scripts/agents.py reap --remote --id <agent> --ticket <id>
 ```
 
-The first form is for a worktree. The second is for a dedicated VM: it reads the beam from origin's base branch and writes nothing. `reap: continue` means carry on. `reap: exit <reason>` means the run was paused or stopped, the ticket is merged or parked, or the parent replaced you. Stop now. Do not commit, push, or open anything more. Return `result: <id> stopped <reason>`. Do not start another step.
+The first form is for a worktree. The second is for a dedicated VM: it reads the beam from origin's base branch and writes nothing. `reap: continue` means carry on. `reap: exit <reason>` means the run was paused or stopped, the ticket is merged or parked, or the parent replaced you. Stop now. Do not commit, push, or open anything more. Return `result: <id> stopped <reason> agent=<agent>`. `<agent>` is your registry id or your cloud id. Do not start another step.
 
 `ticket_state.py append` prints the same `reap:` line after every state you write. Read it every time. That is how a pause reaches you in the middle of a step.
 

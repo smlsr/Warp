@@ -191,9 +191,9 @@ python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --appl
 
 Agents it did not reach still exit at their next reap check.
 
-## A Shuttle returned `result: <id> stopped <reason>`
+## A Shuttle returned `result: <id> stopped <reason> agent=<agent>`
 
-That line is a clean stop, not a failure. The Shuttle read `reap: exit <reason>` from its reap check (`agents.py reap`, or the same line from `ticket_state.py append` or `beam.py heartbeat`), did not commit, push, or open anything more, and returned. Do not relaunch the ticket because of it. It is not a dead worker: no recovery is counted and `worker-died` is not raised.
+That line is a clean stop, not a failure. `<agent>` is the registry id or the cloud id of the Shuttle that read `reap: exit`. The parent stamps `reaped` on that row only. A late line from a halted or replaced VM does not end the Shuttle that replaced it; it is journaled as `reap-stale`. The Shuttle read `reap: exit <reason>` from its reap check (`agents.py reap`, or the same line from `ticket_state.py append` or `beam.py heartbeat`), did not commit, push, or open anything more, and returned. Do not relaunch the ticket because of it. It is not a dead worker: no recovery is counted and `worker-died` is not raised.
 
 | Reason | Meaning | What to do |
 |---|---|---|

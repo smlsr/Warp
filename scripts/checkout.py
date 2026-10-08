@@ -804,8 +804,24 @@ def record_result(
         return "worker-died"
     import agents
 
-    agents.note_stopped_result(data, tid, line, beam_path=beam_path)
+    _named, _reason, line_agent = agents.stopped_result(line)
+    folder_agent = "" if line_agent else _cloud_agent_from_folder(root, tid)
+    agents.note_stopped_result(data, tid, line, beam_path=beam_path, agent_id=folder_agent)
     return "ok"
+
+
+def _cloud_agent_from_folder(root: Optional[Path], tid: str) -> str:
+    """The VM id in this ticket's state.json. Empty when the folder has none."""
+    if root is None or not tid:
+        return ""
+    path = Path(root) / ".warp" / "tickets" / str(tid) / "state.json"
+    try:
+        body = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("cloudAgent") or "").strip()
 
 
 def main(argv: Optional[list] = None) -> int:

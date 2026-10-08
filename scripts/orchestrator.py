@@ -1198,7 +1198,8 @@ WORKER_CONTRACT = (
 )
 REAP_RULE = (
     "Run the reap check first, and read the reap line after every state you write. "
-    "`reap: exit` means stop now and return `result: %s stopped <reason>`."
+    "`reap: exit` means stop now and return `result: %s stopped <reason> agent=%s`. "
+    "That agent id is yours. A later Shuttle on this ticket is not ended by your line."
 )
 PROMPT_MARK = "prompt: pass every line below this one to the subagent, and nothing above it"
 
@@ -1329,7 +1330,7 @@ def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused
             "Fetch the latest main, clone it, and create %s yourself." % branch,
             "First step: run `hostname` and `free -g`. Report that output with your branch name and working directory.",
             WORKER_CONTRACT,
-            REAP_RULE % tid,
+            REAP_RULE % (tid, agent),
             "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
             "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
             "The parent patches the beam from that folder. The parent's disk is not shared.",
@@ -1371,7 +1372,7 @@ def subagent_prompt(
             "Work only inside %s." % worktree,
             "Commit, push, and open the pull request from that worktree.",
             "Never merge. Never touch the parent checkout %s. Never call Jira or Slack." % parent,
-            REAP_RULE % tid,
+            REAP_RULE % (tid, agent),
             "python3 %s/agents.py reap --beam %s/.warp/beam.json --id %s --ticket %s" % (scripts, parent, agent, tid),
             "Write state with this command. Do not pass --push. It prints the reap line too:",
             "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
@@ -1433,7 +1434,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         [
             "agent: %s" % agent,
             WORKER_CONTRACT,
-            REAP_RULE % tid,
+            REAP_RULE % (tid, agent),
             "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
         ]
     )
