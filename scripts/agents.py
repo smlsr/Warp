@@ -555,6 +555,85 @@ def note_returned(data: dict, ticket: dict, now=None, beam_path: Optional[Path] 
     end_ticket(data, ticket, "returned", now=now, beam_path=beam_path)
 
 
+def stopped_result(line: str) -> tuple:
+    """`(ticket id, reason)` from `result: <id> stopped <reason>`. Empty when it is not that line."""
+    parts = (line or "").strip().split()
+    if len(parts) < 3 or parts[0].casefold() != "result:" or parts[2].casefold() != "stopped":
+        return "", ""
+    return parts[1], (parts[3] if len(parts) > 3 else "")
+
+
+def note_stopped_result(
+    data: dict,
+    ticket_id: str,
+    line: str,
+    now=None,
+    beam_path: Optional[Path] = None,
+) -> bool:
+    """End the Shuttle and stamp `reaped` when the parent records `result: <id> stopped <reason>`.
+
+    A worktree Shuttle already did this when it read `reap: exit` on this
+    checkout. A Shuttle on its own VM ran `reap --remote`, which writes
+    nothing, so the parent is the one that records the exit. A row a halt
+    already ended keeps its end reason. A second record does not move the stamp.
+    """
+    named, reason = stopped_result(line)
+    tid = str(ticket_id or "")
+    if not named or named != tid:
+        return False
+    doc = registry(data, beam_path)
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    ticket = tickets.get(tid) if isinstance(tickets.get(tid), dict) else {}
+    agent = str(ticket.get("agent") or "")
+    matches = []
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") not in {"shuttle", None, ""}:
+            continue
+        if str(row.get("ticket") or "") != tid:
+            continue
+        matches.append(row)
+    if not matches:
+        return False
+    live = [row for row in matches if row.get("state") in _LIVE and not row.get("ended")]
+    if live:
+        chosen = live
+    elif agent:
+        chosen = [row for row in matches if agent in {str(row.get("id") or ""), str(row.get("cloudId") or "")}]
+        chosen = chosen or [matches[-1]]
+    else:
+        chosen = [matches[-1]]
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    stamped = None
+    changed = False
+    for row in chosen:
+        if row.get("reaped"):
+            continue
+        row["reaped"] = now_s
+        stamped = row
+        changed = True
+        if row.get("state") in _LIVE:
+            row["state"] = "ended"
+            row["ended"] = now_s
+            row["endReason"] = reason or "stopped"
+    if not changed:
+        return False
+    flush(data, beam_path)
+    if beam_path is not None and stamped is not None:
+        try:
+            beam_mod.journal(
+                Path(beam_path),
+                {
+                    "type": "reap",
+                    "agent": str(stamped.get("id") or agent),
+                    "ticket": tid,
+                    "reason": reason or "stopped",
+                },
+            )
+        except OSError:
+            pass
+    return True
+
+
 def note_closed(data: dict, ticket: dict, reason: str, now=None, beam_path: Optional[Path] = None) -> None:
     end_ticket(data, ticket, reason, now=now, beam_path=beam_path)
 

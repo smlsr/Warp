@@ -143,9 +143,9 @@ It prints `reap: continue`, or `reap: exit <reason>` and one line saying how to 
 | `not-resumed` | the turn returned more than `staleMinutes` ago and the parent did not resume it |
 | `not-launched` | no launch was recorded for this id: something other than the parent started it |
 
-A Shuttle in a worktree reads the parent's beam on disk. A Shuttle on its own VM passes `--remote`, which reads the beam and the registry from origin's base branch and writes nothing. Pause and stop push both before they return, and start and resume push before they print a `start` line, so the remote check sees the run as it is.
+A Shuttle in a worktree reads the parent's beam on disk. On `reap: exit` that check ends the agent's row and stamps `reaped`, so `agents.py list` shows who is gone.
 
-On exit the agent's row is ended and `reaped` is stamped, so `agents.py list` shows who is gone.
+A Shuttle on its own VM passes `--remote`, which reads the beam and the registry from origin's base branch and writes nothing. Pause and stop push both before they return, and start and resume push before they print a `start` line, so the remote check sees the run as it is. The VM does not end the row and does not stamp `reaped`. It returns `result: <id> stopped <reason>`. The parent records that line with `checkout.py result`, which ends the row when it is still live and stamps `reaped`. A row a halt already ended keeps its end reason. A second record leaves the stamp where it is.
 
 ### 4. The halt
 
@@ -208,7 +208,7 @@ The parent runs passes in one turn until `parent: exit`.
    - `start <id> ...`: run `checkout.py launch --id <id>` and start one subagent with the lines below the `prompt:` mark. Start the ready ones together, up to `maxAgents`, in the background so the pass goes on. A foreground batch also works: the pass continues when they return.
    - `resume <id> ...`: send that same Shuttle the follow-up. Do not start a second one.
    - Everything else (`bugbot: request`, `merge:`, `herald:`, `jira: MUST DO`, `slack:`) is the parent's own work.
-3. When a Shuttle returns, record its line (`checkout.py result`, `checkout.py verify`, `session_note.py --type subagent-stop`).
+3. When a Shuttle returns, record its line (`checkout.py result`, `checkout.py verify`, `session_note.py --type subagent-stop`). `result: <id> stopped <reason>` is how a VM Shuttle reports `reap: exit`. `checkout.py result` ends that row when it is still live and stamps `reaped`.
 4. `orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>`. This is the one wait in a run. It blocks until a ticket folder changes, the listener is due, the run halts, or `pollSeconds` pass, and prints `pass: ticket <id>`, `pass: poll`, `pass: halt`, or `pass: timeout`.
    - `parent: stay`: run the next pass now.
    - `parent: exit`: run `session_note.py --type session-stop` and end the turn. Start nothing.
@@ -253,7 +253,7 @@ The parent's own cloud agent is never bound to a Shuttle and never archived.
 | `state` | `starting`, `running`, `ended`, or `stopped` |
 | `endReason` | `returned`, `dead`, `replaced`, `merged`, `parked`, `paused`, `stopped`, `done`, `archived`, `polled`, `lost` |
 | `halted` | the row is from before a pause or a stop, and is never resumed |
-| `reaped` | when the agent read `reap: exit` |
+| `reaped` | when the agent read `reap: exit`. A worktree Shuttle stamps it. A VM Shuttle does not: the parent stamps it from `result: <id> stopped <reason>` |
 | `cloudId`, `retired`, `archivedIds` | the VM the Shuttle is on, VMs it left, and VMs already archived |
 | `superseded` | a parent row a later start replaced |
 | `polls` | how many polls the listener row has run |

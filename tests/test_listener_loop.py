@@ -152,6 +152,18 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertEqual(self.file()["lastPollAt"], plus(NOW, 1))
         self.assertEqual(self.listener_rows()[0]["endReason"], "returned")
 
+    def test_listen_stopped_does_not_start_another_poll(self):
+        data = self.beam()
+        data["config"]["pollSeconds"] = 0
+        self.write(data)
+        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: poll"])
+        lines = orchestrator.supervise_listener(self.beam_path, returned="listen: stopped", now=plus(NOW, 1))
+        self.assertEqual(lines, ["listener: idle"])
+        self.assertNotIn("pollStartedAt", self.beam()["listener"])
+        self.assertEqual(self.file()["reason"], "returned")
+        # A count with pollSeconds 0 is due at once. stopped is not that line.
+        self.assertEqual(orchestrator.supervise_listener(self.beam_path, returned="listen: 0", now=plus(NOW, 2)), ["listener: poll"])
+
     def test_a_lost_poll_is_issued_again_only_after_the_stale_window(self):
         orchestrator.supervise_listener(self.beam_path, now=NOW)
         self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 14)), ["listener: hold"])

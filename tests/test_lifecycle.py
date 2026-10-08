@@ -671,6 +671,94 @@ class ReapTests(Base):
         self.assertEqual((vm / ".warp" / "agents.json").read_text(), before, "the VM's clone is not written")
         self.assertEqual(git("status", "--porcelain", cwd=vm).stdout.strip(), "")
 
+    def test_the_parent_stamps_reaped_when_a_remote_shuttle_returns_stopped(self):
+        self.started()
+        self.assertNotIn("reaped", self.rows()[0])
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped settled",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("result: ok T-1", out.stdout)
+        row = self.rows()[0]
+        self.assertEqual(row["state"], "ended")
+        self.assertEqual(row["endReason"], "settled")
+        self.assertTrue(row["reaped"])
+        journal = (self.warp / "journal.jsonl").read_text()
+        self.assertEqual(journal.count('"type":"reap"'), 1)
+        self.assertIn('"reason":"settled"', journal)
+        again = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped settled",
+            cwd=self.tmp,
+        )
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(self.rows()[0]["reaped"], row["reaped"])
+        self.assertEqual((self.warp / "journal.jsonl").read_text().count('"type":"reap"'), 1)
+
+    def test_a_halted_row_keeps_its_end_reason_when_the_parent_stamps_reaped(self):
+        data = self.started()
+        self.halt(data, "paused")
+        row = self.rows()[0]
+        self.assertEqual(row["state"], "stopped")
+        self.assertEqual(row["endReason"], "paused")
+        self.assertNotIn("reaped", row)
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 stopped paused",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        stamped = self.rows()[0]
+        self.assertEqual(stamped["state"], "stopped")
+        self.assertEqual(stamped["endReason"], "paused")
+        self.assertTrue(stamped["reaped"])
+
+    def test_an_ordinary_result_does_not_stamp_reaped(self):
+        self.started()
+        out = run(
+            "checkout.py",
+            "result",
+            "--beam",
+            str(self.path),
+            "--id",
+            "T-1",
+            "--root",
+            str(self.tmp),
+            "--line",
+            "result: T-1 ok",
+            cwd=self.tmp,
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        row = self.rows()[0]
+        self.assertNotIn("reaped", row)
+        self.assertEqual(row["state"], "starting")
+
 
 class ClearTests(Base):
     """/warp-cleanup is the clear you run yourself."""

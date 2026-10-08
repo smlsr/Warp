@@ -792,6 +792,7 @@ def record_result(
     root: Optional[Path] = None,
     hostname: str = "",
     cwd: str = "",
+    beam_path: Optional[Path] = None,
 ) -> str:
     ticket = _ticket(data, tid)
     line = (text or "").strip()
@@ -801,6 +802,9 @@ def record_result(
     if _result_failed(line, forced):
         orchestrator.note_subagent_failure(ticket)
         return "worker-died"
+    import agents
+
+    agents.note_stopped_result(data, tid, line, beam_path=beam_path)
     return "ok"
 
 
@@ -884,6 +888,7 @@ def main(argv: Optional[list] = None) -> int:
             root=root,
             hostname=getattr(args, "hostname", "") or "",
             cwd=getattr(args, "cwd", "") or "",
+            beam_path=path,
         )
         _save(path, data)
         if outcome == "worker-died":

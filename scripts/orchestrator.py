@@ -49,6 +49,8 @@ out or the next one is not due. A poll that never reports is issued again
 after listenerStaleMinutes. listener: idle means paused, stopped, or every
 ticket is merged or parked. listener: none means no slackChannel or
 teamsChannel is set, so no listener is started.
+--returned is the line the listener returned: listen: <count>, or listen: stopped.
+listen: stopped does not start another poll.
 The same pass drives each ticket: implementing, pr-open, reviewing, fixing,
 ready, merging, then merged or parked. Opening a pull request is not done.
   python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned "listen: 0" --now 2026-01-01T00:00:00Z --provider provider.json
@@ -1475,6 +1477,18 @@ DEFAULT_LISTENER_STALE_MINUTES = 15
 _LISTENER_STOP = {"pause", "stop", "warp:pause", "warp:stop"}
 
 
+def listener_returned_stop(text: str) -> bool:
+    """True when the listener's return means do not start another poll.
+
+    The listener returns `listen: <count>` or `listen: stopped`. `pause`,
+    `stop`, `warp:pause`, and `warp:stop` are the same idle.
+    """
+    folded = (text or "").strip().casefold()
+    if folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
+        return True
+    return folded == "listen: stopped" or folded.startswith("listen: stopped ")
+
+
 def pipeline_unfinished(beam: dict) -> bool:
     """True while any ticket is not merged, done, parked, or skipped."""
     if not isinstance(beam, dict):
@@ -1729,7 +1743,7 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         inbound.write_listener_file(beam_path, inbound.LISTENER_ID, reason="returned", when=now_s)
     if not listener_should_run(data):
         return ["listener: idle"]
-    if folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
+    if listener_returned_stop(folded):
         return ["listener: idle"]
     decision = listener_poll_due(data, beam_path, now_dt)
     if decision != "poll":
@@ -2064,7 +2078,7 @@ def main(argv: Optional[list] = None) -> int:
 
     ps = sub.add_parser("supervise")
     ps.add_argument("--beam", required=True)
-    ps.add_argument("--returned", default=None, help="line the listener returned: listen: N, pause, or stop")
+    ps.add_argument("--returned", default=None, help="line the listener returned: listen: N, or listen: stopped")
     ps.add_argument("--now", default=None, help="timestamp for tests")
     ps.add_argument("--provider", default=None, help="JSON file of id to pull request, checks, and Bugbot")
 
