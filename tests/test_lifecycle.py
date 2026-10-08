@@ -1165,12 +1165,9 @@ class InstanceTests(Base):
         self.assertEqual(minted["createdAt"], NOW)
 
     def test_one_laptop_gives_each_checkout_its_own_instance(self):
-        # A cloud VM reports its agent id from the environment and the metadata
-        # socket. This case is the laptop path, so that report stays empty.
-        with mock.patch.object(agents, "current_agent_id", return_value=""):
-            first = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
-            second = agents.mint_instance(self.tmp / "b" / ".warp" / "beam.json")
-            again = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
+        first = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
+        second = agents.mint_instance(self.tmp / "b" / ".warp" / "beam.json")
+        again = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
         for minted in (first, second):
             self.assertRegex(minted["id"], r"^[0-9a-f]{6}$")
             self.assertTrue(minted["machine"].startswith("local-"))
