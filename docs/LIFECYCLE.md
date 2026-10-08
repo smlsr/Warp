@@ -4,13 +4,13 @@ This is how Warp starts agents, how they end, and how a run is torn down. It is 
 
 ## The rule
 
-One agent is long-lived: the parent. The parent is the only agent that starts another agent, and the only agent that waits. Every other agent does one step and returns one line. That is tick-and-return.
+One agent is long-lived: the parent. The parent is the only agent that starts another agent, and the only agent that waits. A Shuttle does one step and returns one line. The listener is one background subagent on the parent's checkout and does not start agents. That is tick-and-return for every Shuttle.
 
 | Agent | Lives for | Started by | Returns |
 |---|---|---|---|
 | Parent (the orchestrator) | the run | you, with `/warp-start` or `/warp-resume` | ends its turn on `parent: exit` |
 | Shuttle | one step of one ticket: implement, fix, restart, or repair | the parent, from `checkout.py launch` | `result: <id> ok ...`, `failed ...`, or `stopped <reason> agent=<agent>` |
-| Listener | one poll of Slack and Teams | the parent, on `listener: poll` | `listen: <count>` |
+| Listener | the run, one background subagent on the parent's checkout | the parent, on `listener: poll`, and only after the return stamp | `listen: stopped`, `listen: rotate`, or `reap: exit <reason>` |
 
 Reed and Herald are roles. The parent usually plays them in its own turn. When it starts one as a subagent, the same rule holds: one step, one return, and it starts nothing.
 
@@ -216,13 +216,14 @@ The parent runs passes in one turn until `parent: exit`.
 
 1. `inbound.py apply-pending`. Queued `warp:` commands are applied. A pause or stop here is the halt above.
 2. `orchestrator.py supervise --beam .warp/beam.json`. The first line is the listener. The rest is the pipeline.
-   - `listener: poll`, then the prompt: start one `warp-listen` subagent in the foreground with those lines and wait for it. It returns `listen: <count>`. Run `inbound.py apply-pending` again.
-   - `listener: hold`: a poll is out, or the next one is not due. `listener: idle`: the run is paused, stopped, or finished. `listener: none`: no `slackChannel` or `teamsChannel` is set. Start nothing.
+   - `listener: poll`, then the prompt (`LISTEN`): start one `warp-listen` subagent in the background with those lines and do not wait. `subagentVm` does not apply. When `listenerModel` is unset the head line says `model: inherit`. When it is set the head line says `model: <slug>`.
+   - `listener: hold reason=live holder=<id> generation=<n>`: that holder already has the lease. `listener: hold reason=await-return generation=<n>`: the lease was bumped and the return stamp is not in. Start nothing. A stale heartbeat does not start one.
+   - `listener: idle`: the run is paused, stopped, or finished. `listener: none`: no `slackChannel` or `teamsChannel` is set. Start nothing.
    - `start <id> ...`: run `checkout.py launch --id <id>` and start one subagent with the lines below the `prompt:` mark. Start the ready ones together, up to `maxAgents`, in the background so the pass goes on. A foreground batch also works: the pass continues when they return.
    - `resume <id> ...`: send that same Shuttle the follow-up. Do not start a second one.
    - Everything else (`bugbot: request`, `merge:`, `herald:`, `jira: MUST DO`, `slack:`) is the parent's own work.
 3. When a Shuttle returns, record its line (`checkout.py result`, `checkout.py verify`, `session_note.py --type subagent-stop`). `result: <id> stopped <reason> agent=<agent>` is how a VM Shuttle reports `reap: exit`. `checkout.py result` ends that agent's row when it is still live and stamps `reaped`. A result whose agent is not the live Shuttle is `reap-stale` and leaves the new row alone.
-4. `orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>`. This is the one wait in a run. It blocks until a ticket folder changes, the listener is due, the run halts, or `pollSeconds` pass, and prints `pass: ticket <id>`, `pass: poll`, `pass: halt`, or `pass: timeout`.
+4. `orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>`. This is the one wait in a run. It blocks until a ticket folder changes, the inbound queue changes, the listener writes its return stamp, the run halts, or `pollSeconds` pass, and prints `pass: ticket <id>`, `pass: command`, `pass: return`, `pass: halt`, or `pass: timeout`. Each step writes `listener.parentSeenAt`. `pollSeconds` is that cap, not the channel-read interval.
    - `parent: stay`: run the next pass now.
    - `parent: exit`: run `session_note.py --type session-stop` and end the turn. Start nothing.
    - `parent: exit superseded`: a later `/warp-start` or `/warp-resume` owns the run. End the turn at once.
@@ -231,18 +232,24 @@ The parent runs passes in one turn until `parent: exit`.
 
 If the parent's turn dies, nothing restarts it. Workers finish their step, write their ticket folder, and return. Run `/warp-resume`. State comes from the base branch plus the ticket folders.
 
-## The listener is one poll
+## The listener is one background subagent
 
-The listener does not loop and does not sleep. `supervise` issues one poll when the last one finished more than `pollSeconds` ago.
+One listener stays up on the parent's checkout. `subagentVm` does not apply. `supervise` prints `listener: poll` when no holder is live and the previous generation's return stamp is in (`polled`, `rotated`, `orphaned`, or `stopped`), or when none has started. The parent starts that one in the background and does not wait. A gap of zero listeners is preferred over two. Lease expiry bumps the generation and does not start the replacement in the same moment. The repair sweep does not start one. `listenerStaleMinutes` is retired: a stale heartbeat does not start another listener.
 
 ```bash
-python3 <plugin>/scripts/inbound.py poll --beam .warp/beam.json
-python3 <plugin>/scripts/inbound.py accept --beam .warp/beam.json --text "warp:proceed XV-01" --by <who> --source slack
-python3 <plugin>/scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:proceed XV-01" --by <who> --source slack
-python3 <plugin>/scripts/inbound.py polled --beam .warp/beam.json --count 1 --cursor <newest message id>
+python3 <plugin>/scripts/inbound.py poll --beam .warp/beam.json --lease <gen> --holder listener
+python3 <plugin>/scripts/inbound.py accept --beam .warp/beam.json --text "warp:proceed XV-01" --by <who> --source slack --message-id <ts>
+python3 <plugin>/scripts/inbound.py enqueue --beam .warp/beam.json --text "warp:proceed XV-01" --by <who> --source slack --message-id <ts>
+python3 <plugin>/scripts/inbound.py wait --beam .warp/beam.json --lease <gen> --holder listener --cursor <newest> --count 1
 ```
 
-`poll` prints the reap line, then `listen: slack channel=<name> since=<cursor>` for each channel. The listener reads messages after that mark, accepts and queues each `warp:` command, posts the ack, runs `polled`, and returns. A poll that never reports is issued again after `listenerStaleMinutes`. The registry keeps one `listener` row for the run, with a `polls` count. Polls are not spawns and never count against a spawn cap.
+`poll --lease` runs before any read. A generation or holder mismatch prints `reap: exit superseded` and no channel line. A halt prints `reap: exit paused`, `stopped`, or `done` the same way. An orphaned parent (`listener.parentSeenAt` older than `listenerOrphanMinutes`, default 5) prints `reap: exit orphaned`. Rotation at `listenerMaxMinutes` or `listenerMaxReads` (default 60) prints `listen: rotate`. Otherwise it prints `reap: continue` and `listen: slack channel=<name> since=<cursor>` for each channel. The listener reads messages after that mark, accepts and queues each `warp:` command, and posts the ack. A duplicate Slack ts prints `inbound: duplicate` and writes no second ack. `wait` sleeps in Python in 2-second steps, `listenerFastSeconds` (15) after a queued command and `listenerSlowSeconds` (60) after an empty read, and returns early on halt, a lease mismatch, an orphan, or rotation. Pause and stop reap it within about 2 seconds. A read already in flight finishes, then the next poll reaps it. `listen: wait` means poll again with the same lease. The script writes the return stamp on the way out. The parent starts the next generation only from that stamp.
+
+`/warp-listen` is a chat you open yourself. `inbound.py take --holder chat` bumps the generation so any other copy exits superseded at its next wake. Same loop. The parent only applies, woken by the pending file.
+
+`listen: stopped` idles only the supervise pass that still had `pollStartedAt` set, or when the run should not listen. A later pass with the same argument starts the next generation when tickets are still open. Explicit `pause`, `stop`, `warp:pause`, and `warp:stop` still idle.
+
+The registry keeps one `listener` row for the run, with a `polls` count. A generation is not a spawn and never counts against a spawn cap. Slack stays on the plugin's MCP tools. There is no bot token. `agents/listener.md` sets `is_background: true` and no model key. A live run still has to confirm that `is_background` and the model field work.
 
 ## One ticket, one cloud agent
 
@@ -283,10 +290,10 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 |---|---|---|
 | `instance: warp:<instance> host=<host> machine=<id>` | `scan.py start`, `resume`, `status`, `version.py`, `agents.py list` | which Warp run this is. Its agents carry that tag |
 | `parent: session <id>` | `scan.py start`, `scan.py resume` | keep this id for `parent-exit --session` |
-| `pass: ticket <id>` / `poll` / `halt` / `timeout` | `parent-exit --wait` | why the wait ended |
+| `pass: ticket <id>` / `command` / `return` / `halt` / `timeout` | `parent-exit --wait` | why the wait ended |
 | `pass: aborted. The run was <state> during this pass.` | `supervise` | a pause or stop landed mid-pass. Start nothing from it |
 | `parent: stay` / `parent: exit` / `parent: exit superseded` | `parent-exit` | run another pass, or end the turn |
-| `listener: poll` / `hold` / `idle` / `none` | `supervise` | start one poll, or start nothing |
+| `listener: poll` / `hold reason=live` / `hold reason=await-return` / `idle` / `none` | `supervise` | start one background listener, or start nothing |
 | `listen: <kind> channel=<name> since=<cursor>` | `inbound.py poll` | where the listener reads from |
 | `listener: polled <n>` | `inbound.py polled` | the poll is recorded |
 | `spawn: closed <id>` and `refuse: ...` | `checkout.py launch` | no prompt was printed |

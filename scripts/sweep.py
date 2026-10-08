@@ -152,32 +152,25 @@ def _orphan_locks(data: dict, findings: list, actions: list, lines: list) -> Non
 
 
 def _listener(data: dict, beam_path: Optional[Path], now: str, findings: list, actions: list, skipped: list, lines: list) -> None:
-    """A poll that is overdue past the stale window. Issue one unless one is out."""
+    """Notice a listener that is not mid-read. Do not start one.
+
+    The return stamp is the only start. A stale heartbeat and this sweep
+    used to issue `listener: poll`, which is how a second copy appeared.
+    """
     if beam_path is None:
         return
-    import beam as beam_mod
-    import orchestrator
-
-    path = Path(beam_path)
-    last = orchestrator.listener_last_poll(data, path)
-    limit = orchestrator.listener_stale_minutes(data, path)
-    if not last or _minutes(last, now) <= limit:
-        return
-    findings.append({"kind": "listener", "id": "listener", "detail": "stale"})
-    now_dt, _now_s = beam_mod.coerce_now(now)
-    decision = orchestrator.listener_poll_due(data, path, now_dt)
-    if decision in {"idle", "none"}:
-        lines.append("listener: %s" % decision)
-        return
-    if decision == "hold":
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    holder = str(raw.get("holder") or "")
+    if holder or raw.get("pollStartedAt"):
+        findings.append({"kind": "listener", "id": "listener", "detail": "live"})
         skipped.append({"kind": "listener", "id": "listener", "reason": "running"})
         lines.append("sweep: skip listener running")
         return
-    orchestrator.begin_listener_poll(data, path, now=now_dt)
-    actions.append({"kind": "listener", "id": "listener"})
-    lines.append("listener: poll")
-    lines.extend(orchestrator.listener_prompt(path))
-    lines.append("sweep: action listener poll")
+    last = str(raw.get("lastSeenAt") or raw.get("returnedAt") or "")
+    if not last or _minutes(last, now) <= 0:
+        return
+    findings.append({"kind": "listener", "id": "listener", "detail": "idle"})
+    lines.append("sweep: finding listener idle")
 
 
 def _beam_sync(data: dict, pending: dict, findings: list, actions: list, skipped: list, lines: list) -> None:

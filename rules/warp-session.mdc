@@ -23,13 +23,13 @@ If it says there is no beam, stop and tell the user to run `/warp-ingest`. If th
 
 One agent is long-lived: the parent, the session that ran `/warp-start` or `/warp-resume`. It is the only agent that starts another agent, and the only agent that waits. Every other Warp agent does one step and returns one line. `docs/LIFECYCLE.md` is the rule.
 
-If you are a Shuttle or the listener: do not start an agent, subscribe, set a timer, loop, sleep, or wait. Run the reap check from your prompt first, and stop on `reap: exit`.
+If you are a Shuttle: do not start an agent, subscribe, set a timer, loop, sleep, or wait. Run the reap check from your prompt first, and stop on `reap: exit`. The listener is the one background subagent on the parent's checkout. `subagentVm` does not apply to it. It runs `inbound.py poll --lease` before every read and `inbound.py wait` between reads. The wait sleeps in Python. It does not start an agent. It stops on `reap: exit`.
 
 ```bash
 python3 <plugin>/scripts/agents.py reap --beam .warp/beam.json --id <agent> --ticket <id>
 ```
 
-If you are the parent: start a Shuttle only from the prompt `checkout.py launch` prints, start the listener only on `listener: poll`, and wait only with this command at the end of each pass.
+If you are the parent: start a Shuttle only from the prompt `checkout.py launch` prints, start the listener only on `listener: poll` (one background subagent, and do not wait for it), and wait only with this command at the end of each pass. `listener: hold reason=live` and `listener: hold reason=await-return` mean do not start a second. A stale heartbeat does not start one. The return stamp does.
 
 ```bash
 python3 <plugin>/scripts/orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>

@@ -1,7 +1,7 @@
 {
   "name": "warp",
   "displayName": "Warp",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, and commit the beam without secrets.",
   "author": { "name": "HumanifyOS" },
   "publisher": "HumanifyOS",
@@ -63,6 +63,7 @@
     "./commands/warp-jira-match.md",
     "./commands/warp-jira-view.md",
     "./commands/warp-list.md",
+    "./commands/warp-listen.md",
     "./commands/warp-pause.md",
     "./commands/warp-proceed.md",
     "./commands/warp-report.md",

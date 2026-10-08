@@ -1,4 +1,4 @@
-"""The listener is one poll. The parent issues it, and is the only thing that waits."""
+"""The listener is one background agent. A new one starts only from the return stamp."""
 
 import json
 import os
@@ -106,104 +106,133 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertEqual(self.beam()["listener"]["lastSeenAt"], body["lastPollAt"])
         self.assertEqual(inbound.poll_seconds(self.beam_path), 300)
 
-    def test_supervise_issues_one_poll_and_a_second_call_holds(self):
+    def test_supervise_issues_one_listener_and_a_second_call_holds(self):
         first = orchestrator.supervise_listener(self.beam_path, now=NOW)
         self.assertEqual(first, ["listener: poll"])
         raw = self.beam()["listener"]
         self.assertEqual(raw["state"], "running")
         self.assertEqual(raw["agentId"], "listener")
+        self.assertEqual(raw["holder"], "listener")
+        self.assertEqual(raw["generation"], 1)
         self.assertEqual(raw["pollStartedAt"], NOW)
+        self.assertEqual(raw["parentSeenAt"], NOW)
         for step in range(3):
             again = orchestrator.supervise_listener(self.beam_path, now=plus(NOW, step))
-            self.assertEqual(again, ["listener: hold"])
+            self.assertEqual(again, ["listener: hold reason=live holder=listener generation=1"])
         rows = self.listener_rows()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], "listener")
         self.assertEqual(rows[0]["state"], "running")
         self.assertEqual(rows[0]["polls"], 1)
 
-    def test_polled_closes_the_poll_and_the_next_one_is_due_after_poll_seconds(self):
+    def test_polled_writes_the_return_stamp_and_the_next_generation_starts(self):
         orchestrator.supervise_listener(self.beam_path, now=NOW)
         self.assertEqual(inbound.polled(self.beam_path, count=2, cursor="1759850000.000100"), "listener: polled 2")
         raw = self.beam()["listener"]
         self.assertEqual(raw["state"], "stopped")
+        self.assertEqual(raw["returnReason"], "polled")
         self.assertNotIn("pollStartedAt", raw)
+        self.assertEqual(raw["holder"], "")
         self.assertEqual(raw["lastCount"], 2)
         self.assertEqual(raw["cursor"], "1759850000.000100")
         self.assertEqual(self.file()["reason"], "polled")
         self.assertEqual(self.listener_rows()[0]["state"], "ended")
         self.assertEqual(self.listener_rows()[0]["endReason"], "polled")
-        # pollSeconds is 300. Four minutes after the poll is too soon. Six is due.
+        # The stamp is in and nobody holds the lease, so the next pass starts.
+        # A quiet heartbeat does not. Four minutes is not a second start by itself.
         self.pin(plus(NOW, -4))
-        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: hold"])
-        self.pin(plus(NOW, -6))
         self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: poll"])
         rows = self.listener_rows()
-        self.assertEqual(len(rows), 1, "one listener row for the run, not one per poll")
+        self.assertEqual(len(rows), 1, "one listener row for the run, not one per generation")
         self.assertEqual(rows[0]["polls"], 2)
+        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: hold reason=live holder=listener generation=2"])
 
-    def test_returned_closes_a_poll_the_listener_did_not_record(self):
+    def test_returned_closes_a_generation_the_listener_did_not_record(self):
         orchestrator.supervise_listener(self.beam_path, now=NOW)
         lines = orchestrator.supervise_listener(self.beam_path, returned="listen: 0", now=plus(NOW, 1))
-        self.assertEqual(lines, ["listener: hold"])
+        self.assertEqual(lines, ["listener: poll"])
         raw = self.beam()["listener"]
-        self.assertNotIn("pollStartedAt", raw)
-        self.assertEqual(raw["lastSeenAt"], plus(NOW, 1))
-        self.assertEqual(self.file()["lastPollAt"], plus(NOW, 1))
-        self.assertEqual(self.listener_rows()[0]["endReason"], "returned")
+        self.assertEqual(raw["generation"], 2)
+        self.assertEqual(raw["holder"], "listener")
+        self.assertEqual(self.file()["returnReason"], "")
 
-    def test_listen_stopped_does_not_start_another_poll(self):
+    def test_listen_stopped_idles_one_pass_and_a_later_pass_starts(self):
+        """Carrying `listen: stopped` must not idle every later pass."""
         data = self.beam()
         data["config"]["pollSeconds"] = 0
         self.write(data)
         self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: poll"])
         lines = orchestrator.supervise_listener(self.beam_path, returned="listen: stopped", now=plus(NOW, 1))
         self.assertEqual(lines, ["listener: idle"])
-        self.assertNotIn("pollStartedAt", self.beam()["listener"])
-        self.assertEqual(self.file()["reason"], "returned")
-        # A count with pollSeconds 0 is due at once. stopped is not that line.
-        self.assertEqual(orchestrator.supervise_listener(self.beam_path, returned="listen: 0", now=plus(NOW, 2)), ["listener: poll"])
+        raw = self.beam()["listener"]
+        self.assertNotIn("pollStartedAt", raw)
+        self.assertEqual(raw["returnReason"], "stopped")
+        self.assertEqual(raw["holder"], "")
+        self.assertEqual(self.file()["reason"], "stopped")
+        # The same argument on the next pass, with tickets still open, starts again.
+        again = orchestrator.supervise_listener(self.beam_path, returned="listen: stopped", now=plus(NOW, 2))
+        self.assertEqual(again, ["listener: poll"])
+        self.assertEqual(self.beam()["listener"]["generation"], 2)
+        self.assertEqual(self.beam()["listener"]["holder"], "listener")
 
-    def test_a_lost_poll_is_issued_again_only_after_the_stale_window(self):
+    def test_a_stale_heartbeat_does_not_start_another_listener(self):
         orchestrator.supervise_listener(self.beam_path, now=NOW)
-        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 14)), ["listener: hold"])
-        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 16)), ["listener: poll"])
-        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 17)), ["listener: hold"])
-        journal = (self.tmp / ".warp" / "journal.jsonl").read_text()
-        self.assertEqual(journal.count("listener-poll-lost"), 1)
+        self.assertEqual(
+            orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 16)),
+            ["listener: hold reason=live holder=listener generation=1"],
+        )
+        self.assertEqual(self.beam()["listener"]["generation"], 1)
+        journal = self.tmp / ".warp" / "journal.jsonl"
+        if journal.is_file():
+            self.assertNotIn("listener-poll-lost", journal.read_text())
         rows = self.listener_rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["polls"], 2)
+        self.assertEqual(rows[0]["polls"], 1)
 
-    def test_a_short_stale_window_still_covers_one_poll(self):
+    def test_listener_intervals_default_when_unset(self):
         data = self.beam()
-        data["config"]["listenerStaleMinutes"] = 2
-        self.write(data)
-        # pollSeconds 300 makes the window 6 minutes.
-        self.assertEqual(orchestrator.listener_stale_minutes(data, self.beam_path), 6)
+        self.assertEqual(inbound.fast_seconds(data, self.beam_path), 15)
+        self.assertEqual(inbound.slow_seconds(data, self.beam_path), 60)
+        self.assertEqual(inbound.orphan_minutes(data, self.beam_path), 5)
+        self.assertEqual(inbound.max_minutes(data, self.beam_path), 60)
+        self.assertEqual(inbound.max_reads(data, self.beam_path), 60)
+        self.assertEqual(inbound.listener_model(data, self.beam_path), "")
 
-    def test_the_pass_prints_the_prompt_for_the_one_poll(self):
+    def test_the_pass_prints_the_prompt_for_one_background_listener(self):
         lines = orchestrator.supervise(self.beam_path, now=NOW, provider={})
         at = lines.index("listener: poll")
-        self.assertEqual(
-            lines[at + 1],
-            "listener: start one foreground warp-listen subagent named `[warp] listener` with the 7 lines below, and wait for it",
-        )
-        prompt = lines[at + 2 : at + 9]
+        self.assertIn("start one background warp-listen subagent named `[warp] listener`", lines[at + 1])
+        self.assertIn("do not wait for it", lines[at + 1])
+        self.assertIn("model: inherit", lines[at + 1])
+        self.assertNotIn("subagentVm", lines[at + 1])
+        prompt = lines[at + 2 : at + 2 + 10]
         self.assertEqual(prompt[0], "[warp] listener")
-        self.assertEqual(prompt[1], "LISTEN once")
+        self.assertEqual(prompt[1], "LISTEN")
+        self.assertNotIn("LISTEN once", prompt)
         self.assertEqual(prompt[2], "beam: %s" % self.beam_path.resolve())
         self.assertEqual(prompt[3], "agent: listener")
-        self.assertIn("You never start another agent of any kind", prompt[4])
-        self.assertIn("never loop, sleep, set a timer", prompt[4])
-        self.assertIn("inbound.py poll --beam %s" % self.beam_path.resolve(), prompt[5])
-        self.assertIn("inbound.py polled --beam %s" % self.beam_path.resolve(), prompt[6])
+        self.assertEqual(prompt[4], "lease: 1")
+        self.assertEqual(prompt[5], "holder: listener")
+        self.assertEqual(prompt[6], "background: true")
+        self.assertIn("subagentVm does not apply", prompt[7])
+        self.assertIn("You never start another agent of any kind", prompt[7])
+        self.assertIn("inbound.py poll --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[8])
+        self.assertIn("inbound.py wait --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[9])
         self.assertEqual(agents.launch_marker("\n".join(prompt)), ("listener", ""))
         self.assertTrue(agents.has_tag("\n".join(prompt)))
         again = orchestrator.supervise(self.beam_path, now=NOW, provider={})
-        self.assertIn("listener: hold", again)
-        self.assertNotIn("LISTEN once", again)
+        self.assertIn("listener: hold reason=live holder=listener generation=1", again)
+        self.assertNotIn("\nLISTEN\n", "\n".join(again))
         self.assertEqual(self.beam()["pass"]["count"], 2)
+
+    def test_listener_model_is_carried_when_set(self):
+        data = self.beam()
+        data["config"]["listenerModel"] = "composer-2.5"
+        self.write(data)
+        lines = orchestrator.listener_prompt(self.beam_path)
+        # No generation is out yet, so the prompt still names the default holder.
+        self.assertIn("model: composer-2.5", lines[0])
+        self.assertIn("model: composer-2.5", lines)
 
     def test_no_channel_means_no_listener(self):
         (self.tmp / ".warp" / "config.yaml").write_text("messenger: both\n")
@@ -320,17 +349,27 @@ class ParentWaitTests(unittest.TestCase):
         self.assertGreaterEqual(self.clock.now - self.start, 10)
         self.assertGreaterEqual(self.clock.naps, 2)
 
-    def test_default_limit_is_poll_seconds_and_the_listener_coming_due_ends_the_wait(self):
-        # At 300 seconds the next poll is due, which is also the default limit.
-        self.assertIn(self.wait(), {"poll", "timeout"})
+    def test_default_limit_is_poll_seconds_and_a_quiet_listener_does_not_end_it(self):
+        # A listener that is already up is not a reason to wake. The cap is pollSeconds.
+        self.assertEqual(self.wait(), "timeout")
         self.assertLessEqual(self.clock.now - self.start, 302)
         self.assertGreaterEqual(self.clock.now - self.start, 298)
+        self.assertTrue(self.beam()["listener"].get("parentSeenAt"))
 
-    def test_a_listener_that_is_due_returns_at_once(self):
+    def test_a_pending_command_wakes_the_wait(self):
+        path = self.tmp / ".warp" / "pending-commands.jsonl"
+        path.write_text('{"id":"1","text":"warp:status","applied":false}\n')
+        os.utime(path, (self.start + 5, self.start + 5))
+        self.assertEqual(self.wait(limit=60), "command")
+        self.assertEqual(self.clock.naps, 0)
+
+    def test_a_return_stamp_wakes_the_wait(self):
         data = self.beam()
-        data["listener"]["lastSeenAt"] = plus(NOW, -10)
+        data["listener"]["returnReason"] = "rotated"
+        data["listener"]["returnedAt"] = plus(NOW, 1)
+        data["listener"]["holder"] = ""
         self.write(data)
-        self.assertEqual(self.wait(), "poll")
+        self.assertEqual(self.wait(limit=60), "return")
         self.assertEqual(self.clock.naps, 0)
 
     def test_a_ticket_folder_written_since_the_pass_started_returns_at_once(self):
@@ -420,7 +459,202 @@ class ParentWaitTests(unittest.TestCase):
         )
         self.assertIn("--returned", help_text.stdout)
         self.assertIn("--wait", help_text.stdout)
-        self.assertIn("listenerStaleMinutes", help_text.stdout)
+        self.assertIn("reason=await-return", help_text.stdout)
+        self.assertIn("listener.parentSeenAt", help_text.stdout)
+        self.assertNotIn("listenerStaleMinutes", help_text.stdout)
+
+
+class ListenerLeaseTests(unittest.TestCase):
+    """The generation lease, the orphan exit, rotation, and the reap on pause."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        warp = self.tmp / ".warp"
+        warp.mkdir()
+        (warp / "config.yaml").write_text("messenger: slack\nslackChannel: warp-run\n")
+        self.beam_path = warp / "beam.json"
+        self.beam_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "runState": "running",
+                    "tickets": {"T-1": {"id": "T-1", "status": "review"}},
+                    "gates": [],
+                    "config": {
+                        "listenerFastSeconds": 4,
+                        "listenerSlowSeconds": 6,
+                        "listenerOrphanMinutes": 5,
+                        "listenerMaxMinutes": 60,
+                        "listenerMaxReads": 60,
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    def beam(self):
+        return json.loads(self.beam_path.read_text())
+
+    def write(self, data):
+        self.beam_path.write_text(json.dumps(data) + "\n")
+
+    def start(self):
+        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: poll"])
+
+    def test_a_mismatched_lease_exits_before_a_read(self):
+        self.start()
+        self.assertEqual(inbound.take_lease(self.beam_path, "chat", now=NOW), "listener: lease generation=2 holder=chat")
+        lines = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(lines[0], "reap: exit superseded")
+        self.assertFalse(any(line.startswith("listen: slack") for line in lines))
+        raw = self.beam()["listener"]
+        self.assertEqual(raw["holder"], "chat")
+        self.assertEqual(raw["generation"], 2)
+        self.assertEqual(raw.get("returnReason") or "", "")
+
+    def test_a_halted_lease_exits_before_a_read(self):
+        self.start()
+        data = self.beam()
+        data["runState"] = "stopped"
+        self.write(data)
+        lines = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(lines[0], "reap: exit stopped")
+        self.assertFalse(any(line.startswith("listen: slack") for line in lines))
+        paused = self.beam()
+        paused["runState"] = "paused"
+        paused["paused"] = True
+        paused["listener"]["holder"] = "listener"
+        paused["listener"]["generation"] = 1
+        paused["listener"]["state"] = "running"
+        paused["listener"]["pollStartedAt"] = NOW
+        self.write(paused)
+        lines = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(lines[0], "reap: exit paused")
+        self.assertFalse(any(line.startswith("listen: slack") for line in lines))
+
+    def test_an_orphaned_parent_exits_and_stamps(self):
+        self.start()
+        data = self.beam()
+        data["listener"]["parentSeenAt"] = plus(NOW, -6)
+        self.write(data)
+        lines = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(lines[0], "reap: exit orphaned")
+        self.assertIn("listen: stopped", lines)
+        self.assertFalse(any(line.startswith("listen: slack") for line in lines))
+        self.assertEqual(self.beam()["listener"]["returnReason"], "orphaned")
+        self.assertEqual(self.beam()["listener"]["holder"], "")
+
+    def test_no_respawn_before_the_return_stamp(self):
+        data = self.beam()
+        data["config"]["listenerMaxMinutes"] = 1
+        self.write(data)
+        self.start()
+        held = orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 2))
+        self.assertEqual(held, ["listener: hold reason=await-return generation=2"])
+        self.assertEqual(self.beam()["listener"]["holder"], "")
+        self.assertTrue(self.beam()["listener"]["awaitReturn"])
+        still = orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 3))
+        self.assertEqual(still, ["listener: hold reason=await-return generation=2"])
+        self.assertNotEqual(still, ["listener: poll"])
+        stamped = inbound.mark_returned(self.beam_path, "rotated", lease=1, holder="listener", now=plus(NOW, 3))
+        self.assertEqual(stamped, "listener: returned rotated")
+        self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 4)), ["listener: poll"])
+        self.assertEqual(self.beam()["listener"]["generation"], 3)
+        self.assertEqual(self.beam()["listener"]["holder"], "listener")
+
+    def test_rotation_at_max_reads(self):
+        data = self.beam()
+        data["config"]["listenerMaxReads"] = 2
+        self.write(data)
+        self.start()
+        self.assertEqual(inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)[0], "reap: continue")
+        self.assertEqual(inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)[0], "reap: continue")
+        self.assertEqual(self.beam()["listener"]["reads"], 2)
+        rotated = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(rotated, ["listen: rotate"])
+        self.assertEqual(self.beam()["listener"]["returnReason"], "rotated")
+        self.assertEqual(self.beam()["listener"]["holder"], "")
+
+    def test_wait_uses_the_fast_interval_then_the_slow_one(self):
+        self.start()
+        clock = Clock(epoch(NOW))
+
+        def nap(seconds):
+            clock.sleep(seconds)
+
+        fast = inbound.wait_for(
+            self.beam_path, lease=1, holder="listener", fast=True, sleep=nap, clock=clock.time, step=2, now=None
+        )
+        self.assertEqual(fast, ["listen: wait"])
+        self.assertEqual(self.beam()["listener"]["interval"], "fast")
+        self.assertGreaterEqual(clock.now - epoch(NOW), 4)
+        started = clock.now
+        slow = inbound.wait_for(
+            self.beam_path, lease=1, holder="listener", fast=False, sleep=nap, clock=clock.time, step=2
+        )
+        self.assertEqual(slow, ["listen: wait"])
+        self.assertEqual(self.beam()["listener"]["interval"], "slow")
+        self.assertGreaterEqual(clock.now - started, 6)
+
+    def test_wait_reaps_on_pause_and_on_stop_within_one_step(self):
+        self.start()
+        for state in ("paused", "stopped"):
+            data = self.beam()
+            data["runState"] = "running"
+            data["paused"] = False
+            data["listener"]["holder"] = "listener"
+            data["listener"]["generation"] = 1
+            data["listener"]["state"] = "running"
+            data["listener"]["pollStartedAt"] = NOW
+            data["listener"]["generationStartedAt"] = NOW
+            data["listener"]["parentSeenAt"] = NOW
+            data["listener"]["returnReason"] = ""
+            data["listener"]["reads"] = 0
+            self.write(data)
+            clock = Clock(epoch(NOW))
+            beam_path = self.beam_path
+
+            def nap(seconds, state=state):
+                clock.sleep(seconds)
+                live = json.loads(beam_path.read_text())
+                live["runState"] = state
+                live["paused"] = state != "running"
+                beam_path.write_text(json.dumps(live) + "\n")
+
+            lines = inbound.wait_for(
+                self.beam_path, lease=1, holder="listener", fast=False, sleep=nap, clock=clock.time, step=2
+            )
+            self.assertEqual(lines[0], "reap: exit %s" % state, lines)
+            self.assertIn("listen: stopped", lines)
+            self.assertEqual(clock.naps, 1)
+            self.assertLessEqual(clock.now - epoch(NOW), 2.0)
+
+    def test_a_duplicate_slack_ts_writes_no_second_ack(self):
+        first = inbound.accept(self.beam_path, "warp:status", by="shawn", source="slack")
+        self.assertIn("Posting the digest", first["ack"])
+        inbound.enqueue(self.beam_path, "warp:status", "shawn", "200.1", "slack")
+        acks = (self.tmp / ".warp" / "journal.jsonl").read_text().count('"type": "ack"')
+        dup = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(SCRIPTS / "inbound.py"),
+                "accept",
+                "--beam",
+                str(self.beam_path),
+                "--text",
+                "warp:status",
+                "--message-id",
+                "200.1",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(dup.returncode, 0, dup.stderr)
+        self.assertIn("inbound: duplicate 200.1", dup.stdout)
+        self.assertNotIn("ack:", dup.stdout)
+        self.assertEqual((self.tmp / ".warp" / "journal.jsonl").read_text().count('"type": "ack"'), acks)
 
 
 if __name__ == "__main__":
