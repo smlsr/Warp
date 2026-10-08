@@ -1165,9 +1165,17 @@ class InstanceTests(Base):
         self.assertEqual(minted["createdAt"], NOW)
 
     def test_one_laptop_gives_each_checkout_its_own_instance(self):
+        cloud = agents.current_agent_id()
         first = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
         second = agents.mint_instance(self.tmp / "b" / ".warp" / "beam.json")
         again = agents.mint_instance(self.tmp / "a" / ".warp" / "beam.json")
+        # On a cloud VM the machine id is this process's agent id, for every checkout.
+        if cloud:
+            for minted in (first, second, again):
+                self.assertEqual(minted["machine"], cloud)
+            self.assertEqual(first["id"], second["id"])
+            self.assertEqual(first["id"], again["id"])
+            return
         for minted in (first, second):
             self.assertRegex(minted["id"], r"^[0-9a-f]{6}$")
             self.assertTrue(minted["machine"].startswith("local-"))
