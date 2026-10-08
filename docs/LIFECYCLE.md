@@ -192,8 +192,21 @@ python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --appl
 | `--untagged` | Also agents with no Warp tag, from before 1.5.0, matched loosely on Warp role words in the name or prompt (Shuttle, IMPLEMENT, fix, rebase, listener, Bugbot) |
 | `--all-idle` | Every idle agent in this repo |
 | `--any-repo` | Do not limit to this repo |
+| `--scan <words>` | Every cloud agent the key can see whose name, summary or description, or first prompt contains one of the words. Ignores the repo filter and the tag and registry rules |
 
-The agent running the command and this run's parent are never touched. While this run is running, `/warp-cleanup` archives the idle ones and refuses the running ones: pause or stop first, or pass `--force`. An agent that only matched loosely and is still running is left alone (`reason=running-untagged`) unless `--force`, because it may be someone else's.
+```bash
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json --scan="Jira","Fix","Bugbot"
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json --scan Jira,Fix,Bugbot
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json --scan Jira --scan Fix
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --scan Jira,Fix,Bugbot
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --force --scan Jira,Fix,Bugbot
+```
+
+`--scan="Jira","Fix","Bugbot"`, `--scan Jira,Fix,Bugbot`, and `--scan Jira --scan Fix` are the same three words. Matching is case-insensitive. Each list match prints id, name, repo, status, updated time, `word=` and `field=` (`name`, `summary`, `description`, or `prompt`), and a link, then `scan: count`. `--scan` crosses repos: it pages through every agent the key can see, so check that list before `--apply`.
+
+Without `--apply`, cleanup is a dry run. It prints `cleanup: would archive <id>` for an idle match and `cleanup: would cancel <id>` for a running match that `--force` would cancel, then `cleanup: count`, and changes nothing. With `--apply`, idle matches are archived. A RUNNING or ACTIVE match is left (`reason=running-scan`) unless `--force`, which cancels it and then archives it. The refusal while this run is running still applies: pause or stop first, or pass `--force`. Archive only. Warp never deletes an agent. The agent running the command (`reason=self`) and this run's parent (`reason=parent`) are never matched.
+
+The agent running the command and this run's parent are never touched. While this run is running, `/warp-cleanup` archives the idle ones and refuses the running ones: pause or stop first, or pass `--force`. An agent that only matched loosely and is still running is left alone (`reason=running-untagged`) unless `--force`, because it may be someone else's. A running `--scan` match is left alone (`reason=running-scan`) unless `--force`.
 
 Archive is reversible in the Cursor UI. Warp never deletes an agent.
 

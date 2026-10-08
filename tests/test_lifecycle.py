@@ -925,7 +925,7 @@ class ClearTests(Base):
         for word in ("--running", "reap", "not-launched", "runs/{runId}/cancel"):
             self.assertIn(word, helped.stdout)
         sub = run("agents.py", "cleanup", "--help")
-        for flag in ("--cloud", "--apply", "--running", "--force", "--all-idle", "--any-repo"):
+        for flag in ("--cloud", "--apply", "--running", "--force", "--all-idle", "--any-repo", "--scan"):
             self.assertIn(flag, sub.stdout)
 
 
@@ -1295,15 +1295,15 @@ class ListTests(Base):
         self.assertIn("instance: warp:a1b2c3", out.stdout)
         self.assertIn("cloud: not read.", out.stdout)
         helped = run("agents.py", "list", "--help")
-        for flag in ("--tag", "--untagged", "--all-idle", "--any-repo"):
+        for flag in ("--tag", "--untagged", "--all-idle", "--any-repo", "--scan"):
             self.assertIn(flag, helped.stdout)
         cleaned = run("agents.py", "cleanup", "--help")
-        for flag in ("--tag", "--untagged", "--running", "--force", "--apply", "--cloud"):
+        for flag in ("--tag", "--untagged", "--running", "--force", "--apply", "--cloud", "--scan"):
             self.assertIn(flag, cleaned.stdout)
         self.assertNotIn("--all-instances", cleaned.stdout)
 
     def test_question_mark_prints_the_full_help_and_does_nothing(self):
-        rows = ("--tag <instance>", "--tag all", "--untagged", "--all-idle", "--any-repo", "reason=parent", "CURSOR_API_KEY")
+        rows = ("--tag <instance>", "--tag all", "--untagged", "--all-idle", "--any-repo", "--scan", "reason=parent", "CURSOR_API_KEY", "crosses repos")
         for forms in (["?"], ["help"], ["--beam", str(self.path), "?"]):
             listed = run("agents.py", "list", *forms)
             self.assertEqual(listed.returncode, 0, listed.stdout + listed.stderr)
@@ -1321,7 +1321,7 @@ class ListTests(Base):
             # A real run prints the tag it matched and reads the registry. Help does neither.
             self.assertNotIn("cleanup: tag ", cleaned.stdout)
             self.assertNotIn("agent: ", cleaned.stdout)
-            for row in rows + ("--apply", "--running", "--force", "reason=running-untagged", "/warp-cleanup --untagged"):
+            for row in rows + ("--apply", "--running", "--force", "reason=running-untagged", "reason=running-scan", "would archive", "/warp-cleanup --untagged"):
                 self.assertIn(row, cleaned.stdout, row)
         self.assertEqual((self.warp / "agents.json").read_text(), before)
         for name in ("warp-list.md", "warp-cleanup.md"):
@@ -1329,7 +1329,7 @@ class ListTests(Base):
             stem = name[:-3]
             self.assertIn("`/%s ?` prints the help" % stem, text)
             self.assertIn("do nothing else", text)
-            for row in ("`--tag <instance>`", "`--tag all`", "`--untagged`", "`--all-idle`", "`--any-repo`"):
+            for row in ("`--tag <instance>`", "`--tag all`", "`--untagged`", "`--all-idle`", "`--any-repo`", "`--scan"):
                 self.assertIn(row, text, "%s: %s" % (name, row))
 
 

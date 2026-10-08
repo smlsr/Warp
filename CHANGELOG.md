@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+- `/warp-list` and `/warp-cleanup` take `--scan`. It matches one or more words, case-insensitive, in an agent's name, summary or description, and first prompt, whatever the Cloud Agents API returns. `--scan="Jira","Fix","Bugbot"`, `--scan Jira,Fix,Bugbot`, and `--scan Jira --scan Fix` are the same. It ignores the repo filter and the tag and registry rules and pages through every agent the key can see, so read the list before `--apply`. Each match prints id, name, repo, status, updated time, the word, the field, and a link, then a count. The agent running the command (`reason=self`) and this run's parent (`reason=parent`) are never matched. Without `--apply`, cleanup is a dry run: `cleanup: would archive` and `cleanup: would cancel`, then a count. With `--apply`, idle matches are archived. A RUNNING or ACTIVE match is left (`reason=running-scan`) unless `--force`, which cancels it and then archives it. The refusal while the run is running still applies. Archive only. Warp never deletes an agent.
+
 ## 1.5.0
 
 - Agents still piled up after 1.4.20, and some kept waking and respawning. The listener was a subagent that looped and slept, and the parent restarted it whenever its heartbeat went stale, so each restart left the old loop behind. A Shuttle's prompt carried the parent's line `Start one subagent per ticket`, so a worker could start workers. No prompt forbade a worker from waiting on its pull request, setting a timer, or subscribing. `/warp-pause` ended nothing. `/warp-stop` marked rows stopped and then ran cleanup without `--cloud --apply`, so it never archived an agent. Cleanup skipped every agent that was still running. The registry was stored twice, on the beam and in `.warp/agents.json`, and a write from one process was lost when another saved its older copy.

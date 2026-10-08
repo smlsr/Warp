@@ -505,3 +505,229 @@ class RegistryTests(unittest.TestCase):
         )
         self.assertTrue(any(line == "cleanup: cloud required to archive" for line in held))
         self.assertEqual(posted_urls(calls), [])
+
+
+def paging_transport(pages, details=None):
+    """GET /v1/agents pages. `pages` is a list of item lists. Cursor 0 is the first."""
+    calls = []
+    details = details or {}
+
+    def transport(method, url, key, body=None):
+        calls.append((method, url, key))
+        if method == "POST":
+            return 200, {}
+        if "/v1/agents?" in url:
+            cursor = "0"
+            if "cursor=" in url:
+                cursor = url.split("cursor=", 1)[1].split("&", 1)[0]
+            index = int(cursor) if str(cursor).isdigit() else 0
+            batch = pages[index] if index < len(pages) else []
+            nxt = str(index + 1) if index + 1 < len(pages) else ""
+            return 200, {"items": batch, "nextCursor": nxt}
+        ident = url.rstrip("/").rsplit("/", 1)[-1]
+        return 200, details.get(ident, {})
+
+    return calls, transport
+
+
+class ScanTests(unittest.TestCase):
+    """`--scan` matches words across every repo and leaves self and parent alone."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = self.tmp / "beam.json"
+        self.data = beam_of(ticket())
+        self.data["instance"] = {"id": "a1b2c3", "host": "laptop", "machine": "local-laptop-1"}
+        self.data["runState"] = "paused"
+        self.data["paused"] = True
+        self.path.write_text(json.dumps(self.data, indent=2) + "\n")
+        rows = [
+            {"id": "bc-parent", "ticket": "", "role": "parent", "state": "stopped", "ended": NOW},
+            {"id": "bc-reg", "ticket": "T-1", "role": "shuttle", "state": "ended", "ended": NOW},
+        ]
+        (self.tmp / "agents.json").write_text(json.dumps({"agents": rows, "spawns": []}) + "\n")
+        self.words = ["Jira", "Fix", "Bugbot"]
+        self.by_name = cloud_item("bc-name", "jira import", repo=OTHER)
+        self.by_summary = cloud_item("bc-summary", "garden notes")
+        self.by_summary["summary"] = "Contains FIX notes"
+        self.by_summary["description"] = "plain"
+        self.by_summary["prompt"] = {"text": "nothing here"}
+        self.by_description = cloud_item("bc-description", "garden notes")
+        self.by_description["summary"] = "plain"
+        self.by_description["description"] = "left by BUGBOT"
+        self.by_description["prompt"] = {"text": "nothing here"}
+        self.by_prompt = cloud_item("bc-prompt", "garden notes")
+        self.idle = cloud_item("bc-idle", "Jira idle")
+        self.running = cloud_item("bc-run", "Fix the flaky test", status="RUNNING")
+        self.running["latestRunId"] = "run-9"
+        self.active = cloud_item("bc-active", "bugbot review", status="ACTIVE")
+        self.active["latestRunId"] = "run-8"
+        self.self_item = cloud_item("bc-self", "Jira self")
+        self.parent_item = cloud_item("bc-parent", "Bugbot parent")
+        self.tagged = cloud_item("bc-tagged", "[warp:a1b2c3] T-1 implement")
+        self.registry_only = cloud_item("bc-reg", "garden notes")
+        self.detail = {
+            "bc-prompt": {
+                "id": "bc-prompt",
+                "name": "garden notes",
+                "status": "IDLE",
+                "summary": "plain",
+                "description": "plain",
+                "prompt": {"text": "please Jira this"},
+            }
+        }
+
+    def pages(self):
+        # The other-repo name match is on the second page, so a scan that
+        # stops after one page, or that drops other repos, misses it.
+        return [
+            [self.by_summary, self.by_description, self.idle, self.running, self.self_item, self.registry_only],
+            [self.by_name, self.by_prompt, self.parent_item, self.tagged, self.active],
+        ]
+
+    def listed(self):
+        calls, transport = paging_transport(self.pages(), self.detail)
+        lines = agents.out_lines(
+            self.data,
+            beam_path=self.path,
+            key="test-key",
+            transport=transport,
+            origin=ORIGIN,
+            self_id="bc-self",
+            scan_words=self.words,
+        )
+        self.assertEqual(posted_urls(calls), [])
+        return lines, calls
+
+    def cleaned(self, apply=False, force=False, running=False, live=False):
+        data = json.loads(self.path.read_text())
+        if live:
+            data["runState"] = "running"
+            data["paused"] = False
+        calls, transport = paging_transport(self.pages(), self.detail)
+        lines = agents.cleanup(
+            data,
+            beam_path=self.path,
+            cloud=True,
+            apply=apply,
+            key="test-key",
+            transport=transport,
+            now=NOW,
+            origin=ORIGIN,
+            self_id="bc-self",
+            running=running,
+            force=force,
+            scan_words=self.words,
+        )
+        return lines, posted_urls(calls), calls
+
+    def test_scan_words_parse_in_all_three_forms(self):
+        self.assertEqual(agents.parse_scan(["Jira,Fix,Bugbot"]), ["Jira", "Fix", "Bugbot"])
+        self.assertEqual(agents.parse_scan(["Jira, Fix, Bugbot"]), ["Jira", "Fix", "Bugbot"])
+        self.assertEqual(agents.parse_scan(['"Jira","Fix","Bugbot"']), ["Jira", "Fix", "Bugbot"])
+        self.assertEqual(agents.parse_scan(["'Jira','Fix','Bugbot'"]), ["Jira", "Fix", "Bugbot"])
+        self.assertEqual(agents.parse_scan(["Jira", "Fix", "Bugbot"]), ["Jira", "Fix", "Bugbot"])
+        self.assertEqual(agents.parse_scan(["Jira", "jira"]), ["Jira"])
+        self.assertEqual(agents.parse_scan([" Fix "]), ["Fix"])
+        import io
+        from contextlib import redirect_stdout
+
+        forms = (
+            ["--scan", "Jira,Fix,Bugbot"],
+            ["--scan=Jira,Fix,Bugbot"],
+            ['--scan="Jira","Fix","Bugbot"'],
+            ["--scan", "Jira", "--scan", "Fix", "--scan", "Bugbot"],
+        )
+        for form in forms:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = agents.main(["list", "--beam", str(self.path), *form])
+            self.assertEqual(code, 0, buf.getvalue())
+            self.assertIn("scan: words Jira, Fix, Bugbot", buf.getvalue(), form)
+
+    def test_scan_matches_each_field_across_repos_and_pages(self):
+        lines, calls = self.listed()
+        cloud = [line for line in lines if line.startswith("cloud:")]
+        ids = [line.split()[1][3:] for line in cloud]
+        self.assertEqual(
+            ids,
+            ["bc-summary", "bc-description", "bc-idle", "bc-run", "bc-name", "bc-prompt", "bc-active"],
+        )
+        self.assertTrue(any("id=bc-name" in line and "word=Jira" in line and "field=name" in line and "repo=github.com/acme/other" in line for line in cloud))
+        self.assertTrue(any("id=bc-summary" in line and "word=Fix" in line and "field=summary" in line for line in cloud))
+        self.assertTrue(any("id=bc-description" in line and "word=Bugbot" in line and "field=description" in line for line in cloud))
+        self.assertTrue(any("id=bc-prompt" in line and "word=Jira" in line and "field=prompt" in line for line in cloud))
+        self.assertTrue(any("id=bc-idle" in line and "status=IDLE" in line and "updated=%s" % UPDATED in line and "https://cursor.com/agents/bc-idle" in line for line in cloud))
+        self.assertIn("list: kept bc-run reason=running-scan", lines)
+        self.assertIn("list: kept bc-active reason=running-scan", lines)
+        self.assertIn("list: kept bc-self reason=self", lines)
+        self.assertIn("list: kept bc-parent reason=parent", lines)
+        self.assertNotIn("bc-reg", ids)
+        self.assertNotIn("bc-tagged", ids)
+        self.assertNotIn("bc-self", ids)
+        self.assertNotIn("bc-parent", ids)
+        self.assertIn("scan: count 7", lines)
+        self.assertIn("scan: crosses repos. Check this list before --apply.", lines)
+        self.assertTrue(any("cursor=1" in url for method, url, _key in calls if method == "GET"))
+
+    def test_scan_dry_run_is_the_default_and_running_stays_without_force(self):
+        lines, posted, _calls = self.cleaned(apply=False)
+        self.assertEqual(posted, [])
+        self.assertIn("cleanup: dry-run", lines)
+        self.assertIn("cleanup: would archive bc-idle", lines)
+        self.assertIn("cleanup: would archive bc-name", lines)
+        self.assertIn("cleanup: skip bc-run reason=running-scan", lines)
+        self.assertIn("cleanup: skip bc-active reason=running-scan", lines)
+        self.assertNotIn("cleanup: would cancel bc-run", lines)
+        self.assertIn("cleanup: skip bc-self reason=self", lines)
+        self.assertIn("cleanup: skip bc-parent reason=parent", lines)
+        self.assertIn("cleanup: count 5", lines)
+        self.assertFalse(any(line.startswith("cleanup: archived") for line in lines))
+        self.assertIn("cleanup: scan crosses repos. Check the list before --apply.", lines)
+        forced, forced_posts, _calls = self.cleaned(apply=False, force=True)
+        self.assertEqual(forced_posts, [])
+        self.assertIn("cleanup: would archive bc-idle", forced)
+        self.assertIn("cleanup: would cancel bc-run", forced)
+        self.assertIn("cleanup: would cancel bc-active", forced)
+        self.assertIn("cleanup: count 7", forced)
+        self.assertIn("cleanup: dry-run", forced)
+
+    def test_scan_apply_archives_idle_and_leaves_running_unless_force(self):
+        lines, posted, _calls = self.cleaned(apply=True)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-idle/archive", posted)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-name/archive", posted)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-summary/archive", posted)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-description/archive", posted)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-prompt/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-run/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-active/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-self/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-parent/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-reg/archive", posted)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-tagged/archive", posted)
+        self.assertFalse(any("cancel" in url for url in posted))
+        self.assertFalse(any("delete" in url.lower() for url in posted))
+        self.assertIn("cleanup: skip bc-run reason=running-scan", lines)
+        self.assertIn("cleanup: archived bc-idle", lines)
+        forced, forced_posts, _calls = self.cleaned(apply=True, force=True)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-run/runs/run-9/cancel", forced_posts)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-run/archive", forced_posts)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-active/runs/run-8/cancel", forced_posts)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-active/archive", forced_posts)
+        self.assertLess(forced_posts.index("https://api.cursor.com/v1/agents/bc-run/runs/run-9/cancel"), forced_posts.index("https://api.cursor.com/v1/agents/bc-run/archive"))
+        self.assertIn("cleanup: cancelled bc-run", forced)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-self/archive", forced_posts)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-parent/archive", forced_posts)
+        self.assertFalse(any("delete" in url.lower() for url in forced_posts))
+
+    def test_scan_still_refuses_running_while_the_run_is_running(self):
+        lines, posted, _calls = self.cleaned(apply=True, running=True, live=True)
+        self.assertIn("cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.", lines)
+        self.assertNotIn("https://api.cursor.com/v1/agents/bc-run/archive", posted)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-idle/archive", posted)
+        self.assertIn("cleanup: skip bc-run reason=running-scan", lines)
+        forced, forced_posts, _calls = self.cleaned(apply=True, running=True, force=True, live=True)
+        self.assertNotIn("cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.", forced)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-run/runs/run-9/cancel", forced_posts)
+        self.assertIn("https://api.cursor.com/v1/agents/bc-run/archive", forced_posts)
