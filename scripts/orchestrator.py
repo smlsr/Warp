@@ -38,14 +38,22 @@ launch: agent is the optional IMPLEMENT prompt for a future Cloud Agents
 API. This plugin does not call that API.
 parent-exit prints parent: stay while any ticket is not merged or parked.
 parent: exit is when every ticket is merged or parked, or the run is paused
-or stopped. The listener stays up for that same window.
-supervise prints listener: start when the listener returned or its heartbeat
-file is older than listenerStaleMinutes. listener: hold means one is alive.
-listener: idle means paused, stopped, or every ticket is merged or parked.
-A restart is logged. Herald gets one note when restarts repeat.
+or stopped. parent-exit --wait blocks first: until a ticket folder changes,
+the listener is due, or pollSeconds pass. That is the one wait in a run.
+--session is the id scan.py start printed. A later start or resume takes the
+run over, and this prints parent: exit superseded.
+The listener is one poll. supervise prints listener: poll when the last poll
+is older than pollSeconds, then the prompt for it. Start exactly one, in the
+foreground. listener: hold means a poll is
+out or the next one is not due. A poll that never reports is issued again
+after listenerStaleMinutes. listener: idle means paused, stopped, or every
+ticket is merged or parked. listener: none means no slackChannel or
+teamsChannel is set, so no listener is started.
+--returned is the line the listener returned: listen: <count>, or listen: stopped.
+listen: stopped does not start another poll.
 The same pass drives each ticket: implementing, pr-open, reviewing, fixing,
 ready, merging, then merged or parked. Opening a pull request is not done.
-  python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned recycle --now 2026-01-01T00:00:00Z --provider provider.json
+  python3 scripts/orchestrator.py supervise --beam .warp/beam.json --returned "listen: 0" --now 2026-01-01T00:00:00Z --provider provider.json
 """
 
 from __future__ import annotations
@@ -54,8 +62,9 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # Statuses that still hold lock paths. A green PR stays here until merge or park.
 LOCK_HELD = {
@@ -452,8 +461,8 @@ def note_pr_opened(ticket: dict, url: str, when: Optional[str] = None) -> None:
 def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
     """True while a review is still waiting on the check rollup.
 
-    Launch caps do not use this. maxAgents, maxLocalSubagents, and
-    maxFixWorkers count live Shuttles only. Locks stay until merge or park.
+    Launch caps do not use this. maxAgents counts live Shuttles only.
+    Locks stay until merge or park.
     Opening a pull request means the Shuttle finished. review with a green
     rollup, awaiting_approval, and merging do not hold this review flag.
     """
@@ -576,14 +585,47 @@ def override_note(config: Optional[dict], env: Optional[dict] = None) -> str:
 
 
 def effective_text(config: Optional[dict], env: Optional[dict] = None) -> str:
-    """Values after runner overrides. This is what start, version, and status print."""
-    return "effective: runner=%s subagentVm=%s memoryCheck=%s maxLocalSubagents=%s launch=%s" % (
+    """Values after runner overrides. This is what start, version, and status print.
+
+    The two caps are both here. maxAgents is how many agents run at once.
+    maxInProgress is how many tickets are open at once.
+    """
+    import beam as beam_mod
+
+    return "effective: runner=%s subagentVm=%s memoryCheck=%s maxAgents=%s maxInProgress=%s launch=%s" % (
         runner_name(config, env),
         "true" if subagent_vm(config, env) else "false",
         "true" if memory_check(config) else "false",
-        max_local_subagents(config),
+        shared_cap(config),
+        beam_mod.max_in_progress(config),
         launch_mode(config, env),
     )
+
+
+RETIRED_KEYS = {
+    "maxLocalSubagents": "maxAgents is the one cap on agents that run at once, on this machine or on their own VMs",
+    "maxFixWorkers": "a fix is an agent like any other and counts against maxAgents",
+    "listenerRestartNote": "the listener is one poll and is never restarted",
+    "maxListenerRestartsPerHour": "the listener is one poll and is never restarted",
+}
+
+
+def retired_notes(root) -> list:
+    """One line per retired key still set in `.warp/config.yaml`. The key is ignored."""
+    import prompt_gate
+
+    path = Path(root) / ".warp" / "config.yaml"
+    if not path.is_file():
+        return []
+    try:
+        found = prompt_gate.yaml_scalars(path.read_text())
+    except OSError:
+        return []
+    lines = []
+    for key in sorted(RETIRED_KEYS):
+        if key in found and str(found[key]).strip() != "":
+            lines.append("config: %s: %s is retired and ignored. %s. Remove it from .warp/config.yaml." % (key, found[key], RETIRED_KEYS[key][0].upper() + RETIRED_KEYS[key][1:]))
+    return lines
 
 
 def _flag(value, default: bool) -> bool:
@@ -638,15 +680,17 @@ def worktree_root_name(config: Optional[dict]) -> str:
     return raw or ".warp/worktrees"
 
 
-def max_local_subagents(config: Optional[dict]) -> int:
-    """Cap for subagents that share this machine. Default is 18, the same as maxAgents."""
-    raw = (config or {}).get("maxLocalSubagents")
-    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
-        return 18
+def shared_cap(config: Optional[dict]) -> int:
+    """maxAgents as a number. The same cap applies on this machine and across VMs.
+
+    There is no separate cap for agents that share a machine. memoryCheck
+    can lower it here when memory is tight. Unset means the default, 18.
+    """
     try:
-        return max(1, int(raw))
+        cap = agent_cap(config)
     except (TypeError, ValueError):
-        return 18
+        cap = None
+    return 18 if cap is None else cap
 
 
 def available_gib(text: Optional[str] = None) -> Optional[int]:
@@ -671,9 +715,9 @@ def available_gib(text: Optional[str] = None) -> Optional[int]:
 
 
 def local_subagent_cap(config: Optional[dict], available: Optional[int] = None) -> int:
-    """Shared-machine cap. `free -g` applies only when memoryCheck is true."""
-    cap = max_local_subagents(config)
-    if not memory_check(config) or available is None:
+    """maxAgents on a shared machine. `free -g` lowers it only when memoryCheck is true."""
+    cap = shared_cap(config)
+    if cap < 1 or not memory_check(config) or available is None:
         return cap
     # Two GiB each. A machine that reports 0 still runs one, and does not crash.
     mem_slots = 1 if available < 2 else available // 2
@@ -768,14 +812,14 @@ def local_in_use(beam: dict, config: Optional[dict], skip_id: Optional[str] = No
 def local_room(beam: dict, config: Optional[dict], skip_id: Optional[str] = None, available: Optional[int] = None) -> int:
     """How many more shared-machine subagents may start.
 
-    memoryCheck false uses maxLocalSubagents alone and does not read `free -g`.
+    memoryCheck false uses maxAgents alone and does not read `free -g`.
     """
     if memory_check(config):
         if available is None:
             available = available_gib()
         cap = local_subagent_cap(config, available)
     else:
-        cap = max_local_subagents(config)
+        cap = shared_cap(config)
     return max(0, cap - local_in_use(beam, config, skip_id=skip_id))
 
 
@@ -1144,6 +1188,32 @@ VM_LINE = (
     "not a git worktree on this machine."
 )
 
+WORKER_CONTRACT = (
+    "You are one worker for one ticket. Do this step and return one line. "
+    "You never start another agent of any kind. "
+    "You never subscribe to anything, set a timer, loop, sleep, or wait on the pull request, CI, Bugbot, Slack, or an approval. "
+    "The parent does all the waiting. "
+    "If this conversation is woken later by anything that is not a new step from the parent "
+    "(a CI result, a pull-request comment, a timer), run the reap check and return. Do not act on it."
+)
+REAP_RULE = (
+    "Run the reap check first, and read the reap line after every state you write. "
+    "`reap: exit` means stop now and return `result: %s stopped <reason> agent=%s`. "
+    "That agent id is yours. A later Shuttle on this ticket is not ended by your line."
+)
+PROMPT_MARK = "prompt: pass every line below this one to the subagent, and nothing above it"
+
+
+def scripts_dir() -> str:
+    """Absolute path of the plugin scripts that are running. Valid on this machine only."""
+    return str(Path(__file__).resolve().parent)
+
+
+def agent_of(ticket: dict) -> str:
+    tid = str(ticket.get("id") or "")
+    return str(ticket.get("agent") or "").strip() or ("subagent:%s" % tid)
+
+
 SUBAGENT_INSTRUCTION = (
     "Start one subagent per ticket in its own worktree, in parallel up to maxAgents. "
     "The subagent works only inside that worktree. "
@@ -1162,7 +1232,7 @@ VM_INSTRUCTION = (
     "The parent patches the beam from that folder. "
     "It never merges. It never touches the parent checkout. It never calls Jira or Slack. "
     "It returns one line. "
-    "A same hostname is a worktree on this machine: shared-machine rules and maxLocalSubagents."
+    "A same hostname is a worktree on this machine: shared-machine rules and maxAgents."
 )
 
 TICKET_AGENT_INSTRUCTION = (
@@ -1216,9 +1286,28 @@ def path_inside_locks(path: str, locks: list, append_only: Optional[list] = None
     return False
 
 
-def _prompt_head(ticket: dict, branch: str) -> list:
+def agent_name(ticket: dict, instance: str = "") -> str:
+    """The tagged name for this ticket's Shuttle: `[warp:<instance>] <ticket> <step>`."""
+    import agents as agents_mod
+
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "").strip() or "implement"
+    return agents_mod.tag_name(str(ticket.get("id") or ""), step, instance=instance)
+
+
+def name_line(name: str) -> str:
+    """The line that tells the parent what to call the agent it starts."""
+    return (
+        "name: %s\n"
+        "for the parent: give the subagent exactly that name (its title or description). "
+        "Cursor has no tag field, so the name is how /warp-cleanup, pause, and stop find this Warp run's agents among all the others."
+    ) % name
+
+
+def _prompt_head(ticket: dict, branch: str, instance: str = "") -> list:
     tid = str(ticket.get("id") or "")
     return [
+        agent_name(ticket, instance),
         "SUBAGENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
@@ -1228,18 +1317,22 @@ def _prompt_head(ticket: dict, branch: str) -> list:
     ]
 
 
-def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False) -> str:
+def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False, instance: str = "") -> str:
     """Prompt that asks for a dedicated VM. Isolation is not a subagent setting."""
     del config
     tid = str(ticket.get("id") or "")
-    lines = _prompt_head(ticket, branch)
+    agent = agent_of(ticket)
+    lines = _prompt_head(ticket, branch, instance)
     lines.extend(
         [
+            "agent: %s" % agent,
             VM_LINE,
-            "Start one subagent per ticket on its own dedicated VM, in parallel up to maxAgents.",
             "Fetch the latest main, clone it, and create %s yourself." % branch,
             "First step: run `hostname` and `free -g`. Report that output with your branch name and working directory.",
-            "Write .warp/tickets/%s/ on your own branch and push it." % tid,
+            WORKER_CONTRACT,
+            REAP_RULE % (tid, agent),
+            "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
+            "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
             "The parent patches the beam from that folder. The parent's disk is not shared.",
             "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.",
             "Never merge. Never touch the parent checkout. Never call Jira or Slack.",
@@ -1259,24 +1352,30 @@ def subagent_prompt(
     branch: str,
     worktree: str,
     parent: str,
+    instance: str = "",
 ) -> str:
     """Prompt for one subagent in a git worktree on this machine. The path is absolute."""
     del config
     tid = str(ticket.get("id") or "")
+    agent = agent_of(ticket)
     state_dir = str(Path(parent) / ".warp" / "tickets" / tid)
-    lines = _prompt_head(ticket, branch)
+    scripts = scripts_dir()
+    lines = _prompt_head(ticket, branch, instance)
     lines.extend(
         [
+            "agent: %s" % agent,
             "worktree: %s" % worktree,
             "parent: %s" % parent,
             "state: %s/state.json" % state_dir,
             "log: %s/log.jsonl" % state_dir,
-            SUBAGENT_INSTRUCTION,
+            WORKER_CONTRACT,
             "Work only inside %s." % worktree,
             "Commit, push, and open the pull request from that worktree.",
             "Never merge. Never touch the parent checkout %s. Never call Jira or Slack." % parent,
-            "Write state with this command. Do not pass --push:",
-            "python3 scripts/ticket_state.py append --id %s --state coding --root %s" % (tid, parent),
+            REAP_RULE % (tid, agent),
+            "python3 %s/agents.py reap --beam %s/.warp/beam.json --id %s --ticket %s" % (scripts, parent, agent, tid),
+            "Write state with this command. Do not pass --push. It prints the reap line too:",
+            "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=%s memory=<available-gib>"
             % (tid, branch, worktree),
             "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,
@@ -1285,7 +1384,7 @@ def subagent_prompt(
     return "\n".join(lines)
 
 
-def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: str = "missing") -> str:
+def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: str = "missing", instance: str = "") -> str:
     """IMPLEMENT prompt for one new Agent. The branch does not have to exist yet.
 
     branch_state is missing, beam-only, or work. A beam-only branch is the
@@ -1309,6 +1408,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
     else:
         clone = "Clone main so .cursor rules load, then create %s from that main." % branch
     lines = [
+        agent_name(ticket, instance),
         "IMPLEMENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
@@ -1329,6 +1429,15 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         lines.append("stale-beam: %s" % branch)
     elif branch_state == "work":
         lines.append("branch-kept: %s" % branch)
+    agent = agent_of(ticket)
+    lines.extend(
+        [
+            "agent: %s" % agent,
+            WORKER_CONTRACT,
+            REAP_RULE % (tid, agent),
+            "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -1366,9 +1475,19 @@ def ticket_keeps_parent(ticket: dict) -> bool:
 
 
 DEFAULT_LISTENER_STALE_MINUTES = 15
-DEFAULT_LISTENER_RESTART_NOTE = 3
-LISTENER_RESTART_NOTE = "Listener kept restarting. One listener is running."
 _LISTENER_STOP = {"pause", "stop", "warp:pause", "warp:stop"}
+
+
+def listener_returned_stop(text: str) -> bool:
+    """True when the listener's return means do not start another poll.
+
+    The listener returns `listen: <count>` or `listen: stopped`. `pause`,
+    `stop`, `warp:pause`, and `warp:stop` are the same idle.
+    """
+    folded = (text or "").strip().casefold()
+    if folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
+        return True
+    return folded == "listen: stopped" or folded.startswith("listen: stopped ")
 
 
 def pipeline_unfinished(beam: dict) -> bool:
@@ -1459,8 +1578,13 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     """
     import pipeline
 
+    import beam as beam_mod
+
     path = Path(beam_path)
+    started = beam_mod.coerce_now(now)[1]
     lines = supervise_listener(path, returned=returned, now=now)
+    if lines == ["listener: poll"]:
+        lines.extend(listener_prompt(path))
     if not path.is_file():
         return lines
     data = _load(path)
@@ -1469,15 +1593,35 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     if provider is None:
         provider = pipeline.live_provider(data, path)
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
+    import agents as agents_mod
+
+    disk = agents_mod.halted_meanwhile(data, path)
+    if disk is not None:
+        # A pause or a stop landed while this pass was working. Keep it. End
+        # anything this pass recorded, and tell the parent to start nothing.
+        state = agents_mod.halt_state(disk)
+        agents_mod.halt_local(disk, beam_path=path, reason=state, now=now)
+        _save(path, disk)
+        return [
+            "pass: aborted. The run was %s during this pass." % state,
+            "pass: start nothing from this pass. Run parent-exit.",
+            "listener: idle",
+        ]
+    # parent-exit --wait returns as soon as a ticket folder is newer than this.
+    prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
+    data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
     _save(path, data)
     return lines
 
 
 def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None) -> list:
-    """Start exactly one listener, or hold the one that is already alive.
+    """Issue one listener poll when it is due. Never a second one.
 
-    The parent calls this when the listener Subagent returns and on each
-    pass. A second call does not start a second listener.
+    The listener is one poll: read the channel once, enqueue, return.
+    `listener: poll` means start exactly one. `listener: hold` means a poll
+    is out, or the next one is not due yet. `listener: idle` means the run
+    is paused, stopped, or finished. `listener: none` means no channel is
+    configured.
     """
     import fcntl
 
@@ -1496,90 +1640,227 @@ def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -> list:
-    data = beam_mod.load_json(beam_path)
-    now_dt, now_s = beam_mod.coerce_now(now)
-    if not listener_should_run(data):
-        return ["listener: idle"]
-    returned_text = (returned or "").strip()
-    folded = returned_text.casefold()
-    if folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
-        return ["listener: idle"]
-    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
-    file_body = _read_listener_file(beam_path)
-    last = file_body.get("lastPollAt") or raw.get("lastSeenAt")
-    stale = listener_stale_minutes(data, beam_path)
-    age = _minutes_since(last, now_dt)
-    fresh = age is not None and age <= stale
-    pending = raw.get("pendingStart")
-    pending_age = _minutes_since(pending, now_dt)
-    pending_fresh = pending_age is not None and pending_age <= stale
-    polled = _polled_since(last, pending)
-    agent = raw.get("agentId") or file_body.get("agentId") or ""
-    if pending_fresh and not polled:
-        return ["listener: hold %s" % agent] if agent else ["listener: hold"]
-    if pending and polled:
-        raw.pop("pendingStart", None)
-        data["listener"] = raw
-    if returned_text:
-        reason = "recycle" if folded == "recycle" else "returned"
-    elif not fresh:
-        reason = "missing" if age is None else "stale"
-    else:
-        if pending and polled:
-            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-        return ["listener: hold %s" % agent] if agent else ["listener: hold"]
+LISTENER_CONTRACT = (
+    "You are the Warp listener for one poll. Read each channel once, queue each warp: command, "
+    "record the poll, and return `listen: <count>`. You never start another agent of any kind. "
+    "You never loop, sleep, set a timer, subscribe, or wait for a reply."
+)
+
+
+def listener_prompt(beam_path: Path) -> list:
+    """The lines the parent passes to the one listener subagent for this poll."""
+    beam_file = Path(beam_path).resolve()
+    scripts = scripts_dir()
     import agents as agents_mod
 
-    decision = agents_mod.listener_decision(
-        data,
-        now=now_dt,
-        beam_path=beam_path,
-        returned=returned_text,
-    )
-    if decision == "closed":
-        return ["listener: idle"]
-    if decision == "backoff":
-        return ["listener: backoff"]
-    if decision == "cap":
-        lines = ["listener: cap"]
-        if not raw.get("restartCapped"):
-            raw["restartCapped"] = True
-            data["listener"] = raw
-            lines.append("herald: Listener restart cap reached. No new listener.")
-            agents_mod.cap_listener(data, now=now_dt, beam_path=beam_path)
-            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-        return lines
-    note_after = beam_mod.config_int(data, beam_path, "listenerRestartNote", DEFAULT_LISTENER_RESTART_NOTE)
-    if note_after < 1:
-        note_after = DEFAULT_LISTENER_RESTART_NOTE
-    count = int(raw.get("restarts") or 0) + 1
-    raw["restarts"] = count
-    raw["pendingStart"] = now_s
-    raw["lastRestartReason"] = reason
-    lines = [
-        "listener: start reason=%s" % reason,
-        "listener: restart %s reason=%s" % (count, reason),
+    try:
+        instance = agents_mod.instance_id(_load(Path(beam_path)))
+    except (OSError, ValueError):
+        instance = ""
+    name = agents_mod.tag_name(role="listener", instance=instance)
+    body = [
+        name,
+        "LISTEN once",
+        "beam: %s" % beam_file,
+        "agent: listener",
+        LISTENER_CONTRACT,
+        "First: python3 %s/inbound.py poll --beam %s" % (scripts, beam_file),
+        "Last: python3 %s/inbound.py polled --beam %s --count <count> --cursor <newest message id>" % (scripts, beam_file),
     ]
-    if count >= note_after and not raw.get("restartNoted"):
-        raw["restartNoted"] = True
-        lines.append("herald: %s" % LISTENER_RESTART_NOTE)
-        beam_mod.atomic_write(
-            beam_path.parent / "listener-note.json",
-            json.dumps({"at": now_s, "lines": [LISTENER_RESTART_NOTE]}, indent=2) + "\n",
-        )
-    data["listener"] = raw
-    agents_mod.note_listener_restart(data, now=now_dt, beam_path=beam_path, previous=str(agent or ""))
+    head = "listener: start one foreground warp-listen subagent named `%s` with the %d lines below, and wait for it" % (name, len(body))
+    return [head] + body
+
+
+def _seconds_since(stamp, now_dt) -> Optional[float]:
+    minutes = _minutes_since(stamp, now_dt)
+    return None if minutes is None else minutes * 60.0
+
+
+def listener_last_poll(data: dict, beam_path: Path) -> str:
+    """When the last poll finished: `.warp/listener.json`, else the beam."""
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    file_body = _read_listener_file(beam_path)
+    return str(file_body.get("lastPollAt") or raw.get("lastSeenAt") or "")
+
+
+def listener_poll_due(data: dict, beam_path: Path, now_dt) -> str:
+    """`poll`, `hold`, `idle`, or `none` for this moment. Changes nothing.
+
+    `none` means no slackChannel or teamsChannel is configured, so there is
+    nothing to read and no listener is ever started.
+    """
+    import beam as beam_mod
+    import inbound
+
+    if not listener_should_run(data):
+        return "idle"
+    if not inbound.channels(beam_path):
+        return "none"
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    out = raw.get("pollStartedAt")
+    if out:
+        age = _minutes_since(out, now_dt)
+        if age is not None and age <= listener_stale_minutes(data, beam_path):
+            return "hold"
+        return "poll"
+    last = listener_last_poll(data, beam_path)
+    if last:
+        waited = _seconds_since(last, now_dt)
+        poll = max(int(beam_mod.config_int(data, beam_path, "pollSeconds", 300)), 0)
+        if waited is not None and waited < poll:
+            return "hold"
+    return "poll"
+
+
+def begin_listener_poll(data: dict, beam_path: Path, now=None) -> None:
+    """Record that one poll is out. The caller writes the beam."""
+    import agents as agents_mod
+    import beam as beam_mod
+    import inbound
+
+    now_dt, now_s = beam_mod.coerce_now(now)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    if raw.get("pollStartedAt"):
+        beam_mod.journal(Path(beam_path), {"type": "listener-poll-lost", "startedAt": raw.get("pollStartedAt")})
+        agents_mod.note_listener_done(data, now=now_dt, beam_path=beam_path, reason="lost")
+    inbound.begin_poll(data, now_s)
+    agents_mod.note_listener_poll(data, now=now_dt, beam_path=beam_path)
+
+
+def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -> list:
+    import agents as agents_mod
+    import inbound
+
+    data = beam_mod.load_json(beam_path)
+    now_dt, now_s = beam_mod.coerce_now(now)
+    returned_text = (returned or "").strip()
+    folded = returned_text.casefold()
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    if returned_text and raw.get("pollStartedAt"):
+        # The listener came back without recording the poll. Record it here.
+        inbound.end_poll(data, now_s)
+        agents_mod.note_listener_done(data, now=now_dt, beam_path=beam_path, reason="returned")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        inbound.write_listener_file(beam_path, inbound.LISTENER_ID, reason="returned", when=now_s)
+    if not listener_should_run(data):
+        return ["listener: idle"]
+    if listener_returned_stop(folded):
+        return ["listener: idle"]
+    decision = listener_poll_due(data, beam_path, now_dt)
+    if decision != "poll":
+        return ["listener: %s" % decision]
+    begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    beam_mod.journal(
-        beam_path,
-        {
-            "type": "listener-restart",
-            "reason": reason,
-            "restarts": count,
-            "agentId": raw.get("agentId"),
-        },
-    )
+    return ["listener: poll"]
+
+
+def parent_wait(
+    beam_path: Path,
+    limit: Optional[int] = None,
+    sleep: Optional[Callable] = None,
+    clock: Optional[Callable] = None,
+    step: float = 2.0,
+) -> str:
+    """Block until the next pass has something to do. The one wait in a run.
+
+    Returns `ticket <id>` when a ticket folder changed since the last pass
+    started, `poll` when the listener is due, `halt` when the run was
+    paused, stopped, or finished meanwhile, and `timeout` after pollSeconds.
+    """
+    import time
+
+    import beam as beam_mod
+
+    nap = sleep or time.sleep
+    tick = clock or time.time
+    path = Path(beam_path)
+    began = tick()
+    since = None
+    while True:
+        try:
+            data = _load(path)
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict) or not listener_should_run(data):
+            return "halt"
+        if since is None:
+            mark = data.get("pass") if isinstance(data.get("pass"), dict) else {}
+            stamp = beam_mod.parse_ts(mark.get("startedAt"))
+            since = stamp.timestamp() if stamp is not None else began
+        poll = max(int(beam_mod.config_int(data, path, "pollSeconds", 300)), 0)
+        cap = poll if limit is None or limit < 0 else int(limit)
+        cap = max(0, min(cap, 3600))
+        changed = _changed_ticket(path, since)
+        if changed:
+            return "ticket %s" % changed
+        now_dt = datetime.fromtimestamp(tick(), tz=timezone.utc)
+        if listener_poll_due(data, path, now_dt) == "poll":
+            return "poll"
+        waited = tick() - began
+        if waited >= cap:
+            return "timeout"
+        nap(max(0.1, min(step, cap - waited)))
+
+
+def _changed_ticket(beam_path: Path, since: float) -> str:
+    """The first ticket whose status folder was written after `since`."""
+    folder = Path(beam_path).parent / "tickets"
+    if not folder.is_dir():
+        return ""
+    for item in sorted(folder.iterdir()):
+        for name in ("state.json", "log.jsonl"):
+            target = item / name
+            try:
+                if target.is_file() and target.stat().st_mtime > since:
+                    return item.name
+            except OSError:
+                continue
+    return ""
+
+
+def parent_exit(
+    beam_path: Path,
+    session: str = "",
+    wait: Optional[int] = None,
+    sleep: Optional[Callable] = None,
+    clock: Optional[Callable] = None,
+) -> list:
+    """`parent: stay` or `parent: exit` for the end of a pass.
+
+    `--wait` blocks first, so one pass runs per change or per pollSeconds.
+    `--session` is the id `scan.py start` printed: a later start or resume
+    takes the run over, and the earlier parent exits.
+    """
+    import agents as agents_mod
+
+    path = Path(beam_path)
+    data = _load(path)
+    lines = []
+
+    def verdict(current: dict) -> list:
+        if agents_mod.parent_superseded(current, session, beam_path=path):
+            return ["parent: exit superseded", "parent: a later /warp-start or /warp-resume owns this run. End this turn."]
+        if parent_may_exit(current):
+            out = ["parent: exit"]
+            try:
+                done = agents_mod.finish(current, beam_path=path)
+            except Exception as exc:
+                done = ["cleanup: skipped (%s)" % exc]
+            if done:
+                out.extend(done)
+                _save(path, current)
+            return out
+        return []
+
+    out = verdict(data)
+    if out:
+        return out
+    if wait is not None:
+        lines.append("pass: %s" % parent_wait(path, limit=wait, sleep=sleep, clock=clock))
+        out = verdict(_load(path))
+        if out:
+            return lines + out
+    lines.append("parent: stay")
     return lines
 
 
@@ -1651,6 +1932,12 @@ def format_dispatch(data: dict) -> list:
     return lines
 
 
+def _instance(beam: dict) -> str:
+    import agents as agents_mod
+
+    return agents_mod.instance_id(beam)
+
+
 def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) -> list:
     """What to start after a dispatch loop: base fix first, then ready tickets.
 
@@ -1699,7 +1986,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
             **launch,
         }
         if action.get("launch") == "new-agent":
-            action["instruction"] = implement_prompt(ticket, cfg)
+            action["instruction"] = implement_prompt(ticket, cfg, instance=_instance(beam))
         elif checkout == "worktree":
             action["instruction"] = "\n".join(
                 [
@@ -1714,7 +2001,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                 ]
             )
         else:
-            action["instruction"] = subagent_vm_prompt(ticket, cfg, action["branch"])
+            action["instruction"] = "\n".join([VM_INSTRUCTION, subagent_vm_prompt(ticket, cfg, action["branch"], instance=_instance(beam))])
         actions.append(action)
     return actions
 
@@ -1787,10 +2074,12 @@ def main(argv: Optional[list] = None) -> int:
 
     px = sub.add_parser("parent-exit")
     px.add_argument("--beam", required=True)
+    px.add_argument("--wait", nargs="?", type=int, const=-1, default=None, help="block until a ticket folder changes, the listener is due, or this many seconds pass (default pollSeconds)")
+    px.add_argument("--session", default="", help="the parent session id scan.py start printed")
 
     ps = sub.add_parser("supervise")
     ps.add_argument("--beam", required=True)
-    ps.add_argument("--returned", default=None, help="word the listener returned: recycle, pause, or stop")
+    ps.add_argument("--returned", default=None, help="line the listener returned: listen: N, or listen: stopped")
     ps.add_argument("--now", default=None, help="timestamp for tests")
     ps.add_argument("--provider", default=None, help="JSON file of id to pull request, checks, and Bugbot")
 
@@ -1870,16 +2159,8 @@ def main(argv: Optional[list] = None) -> int:
         _save(path, data)
         return 0
     if args.cmd == "parent-exit":
-        data = _load(Path(args.beam))
-        if parent_may_exit(data):
-            print("parent: exit")
-            import agents as agents_mod
-
-            path = Path(args.beam)
-            for line in agents_mod.cleanup(data, beam_path=path):
-                print(line)
-        else:
-            print("parent: stay")
+        for line in parent_exit(Path(args.beam), session=args.session, wait=args.wait):
+            print(line)
         return 0
     if args.cmd == "supervise":
         provider = None

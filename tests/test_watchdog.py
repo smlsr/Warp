@@ -94,7 +94,7 @@ class WatchdogTests(unittest.TestCase):
             },
         )
         first = self.lines()
-        self.assertIn("listener: subagent", first)
+        self.assertEqual([line for line in first if line.startswith("listener:")], [])
         self.assertNotIn("listener: replace", "\n".join(first))
         self.assertNotIn("Listener died", "\n".join(first))
         listener = self.load()["listener"]
@@ -103,7 +103,7 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(listener["lastSeenAt"], STALE)
         self.assertFalse((self.repo / ".warp" / "recovery.json").exists())
         second = self.lines()
-        self.assertIn("listener: subagent", second)
+        self.assertEqual([line for line in second if line.startswith("listener:")], [])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
 
     def test_fresh_heartbeat_is_left_alone(self):
@@ -117,7 +117,7 @@ class WatchdogTests(unittest.TestCase):
             },
         )
         got = self.lines()
-        self.assertEqual(got, ["listener: subagent"])
+        self.assertEqual(got, [])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
         self.assertEqual(self.load()["listener"]["lastSeenAt"], FRESH)
         self.assertFalse((self.repo / ".warp" / "recovery.json").exists())
@@ -127,13 +127,13 @@ class WatchdogTests(unittest.TestCase):
             tickets={},
             listener={"state": "running", "agentId": "listener-1", "startedAt": STALE},
         )
-        self.assertEqual(self.lines(), ["listener: subagent"])
+        self.assertEqual(self.lines(), [])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-1")
         self.write(
             tickets={},
             listener={"state": "running", "agentId": "listener-9", "startedAt": FRESH},
         )
-        self.assertEqual(self.lines(), ["listener: subagent"])
+        self.assertEqual(self.lines(), [])
         self.assertEqual(self.load()["listener"]["agentId"], "listener-9")
 
     def test_paused_and_stopped_do_not_replace(self):
@@ -243,7 +243,7 @@ class WatchdogTests(unittest.TestCase):
             listener={"state": "stopped"},
         )
         got = self.lines()
-        self.assertIn("listener: subagent", got)
+        self.assertIn("shuttle: alive WV-01", got)
         self.assertNotIn("shuttle: replace", "\n".join(got))
         self.assertEqual(self.load()["tickets"]["WV-01"]["status"], "coding")
 

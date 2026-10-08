@@ -637,8 +637,17 @@ def write_status(beam_path: Path) -> None:
             working.append(row)
         else:
             left.append(row)
+    import agents
+
+    instance = beam.get("instance") if isinstance(beam.get("instance"), dict) else {}
     payload = {
         "updatedAt": utcnow(),
+        "instance": {
+            "tag": agents.tag(agents.instance_id(beam)) if agents.instance_id(beam) else None,
+            "id": agents.instance_id(beam) or None,
+            "host": instance.get("host"),
+            "machine": instance.get("machine"),
+        },
         "runState": beam.get("runState"),
         "paused": beam.get("paused"),
         "done": done,
@@ -663,6 +672,8 @@ def write_status(beam_path: Path) -> None:
         _effective_status(beam, beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent),
         "",
         f"Updated {payload['updatedAt']} · runState={payload['runState']}",
+        "",
+        "Instance " + agents.instance_line(beam)[len("instance: "):],
         "",
         f"Done {len(done)} · working {len(working)} · left {len(left)}",
         "",
@@ -815,8 +826,59 @@ def bundle(beam_path: Path, dest: Path) -> None:
     print(f"wrote {dest}")
 
 
+def _was(beam: dict) -> str:
+    """One line on where a start or a resume is coming from."""
+    prior = beam.get("runState") or ("paused" if beam.get("paused") else "stopped")
+    reason = str(beam.get("pauseReason") or "").strip()
+    if prior == "running" and not beam.get("paused"):
+        return "run: was already running. This session takes it over."
+    if prior == "paused" or (prior == "running" and beam.get("paused")):
+        return "run: was paused%s. Continuing." % (" (%s)" % reason if reason else "")
+    return "run: was stopped%s. Starting." % (" (%s)" % reason if reason and reason != "stop" else "")
+
+
+def go(beam_path: Path, reason: Optional[str], force: bool = False) -> int:
+    """`start` and `resume`. They are the same command.
+
+    Load the beam from main when this checkout has none, run the prompt
+    gate, set the run running, then start unfinished work before anything
+    new. It does not matter whether the run was paused, stopped, or already
+    running.
+    """
+    import pipeline
+    import prompt_gate
+    import resume_hint
+    import state_commit
+
+    for line in state_commit.load_main_beam(beam_path):
+        print(line)
+    gate = prompt_gate.gate_start(beam_path, force=force)
+    if gate != 0:
+        return gate
+    resume_hint.print_hint(beam_path)
+    for line in orchestrator_notes(beam_path):
+        print(line)
+    set_run(beam_path, "running", reason)
+    print(pipeline.unfinished_line(load_json(beam_path)))
+    for line in pipeline.cold_start(beam_path):
+        print(line)
+    print_open_work(beam_path)
+    return 0
+
+
+def orchestrator_notes(beam_path: Path) -> list:
+    """Config keys that are retired and still in `.warp/config.yaml`."""
+    try:
+        import orchestrator
+
+        return orchestrator.retired_notes(beam_path.resolve().parent.parent)
+    except Exception:
+        return []
+
+
 def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report: bool = True) -> None:
     beam = load_json(beam_path)
+    was = _was(beam)
     beam["runState"] = state
     beam["paused"] = state != "running"
     beam["pauseReason"] = reason
@@ -828,11 +890,17 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
 
         session_lines = pipeline.open_parent_session(beam)
     stop_lines = []
-    if state == "stopped":
-        beam["stoppedAt"] = utcnow()
+    if state == "running":
         import agents
 
-        stop_lines = agents.stop_all(beam, beam_path=beam_path)
+        agents.ensure_instance(beam, beam_path)
+        agents.note_parent(beam, beam_path=beam_path)
+    if state == "stopped":
+        beam["stoppedAt"] = utcnow()
+    if state in {"paused", "stopped"}:
+        import agents
+
+        stop_lines = agents.halt_local(beam, beam_path=beam_path, reason=state)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": state, "reason": reason})
     if state in {"paused", "stopped"}:
@@ -848,23 +916,44 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         try:
             import update_state
 
-            update_state.update_state(beam_path)
+            def halt_again(doc: dict) -> None:
+                # The sync loads main's beam. Apply the halt to that one too,
+                # before it is written and pushed.
+                agents.halt_local(doc, beam_path=beam_path, reason=state)
+
+            update_state.update_state(beam_path, finalize=halt_again)
+        except Exception as e:
+            print("state: not synced (%s)" % e)
+    if state == "running":
+        # A Shuttle on its own VM reads the beam from origin. Push the new
+        # state before any start line, or it would still read the pause.
+        try:
+            import state_commit
+
+            state_commit.publish_base(beam_path.resolve().parent.parent, str(beam_path.resolve()))
         except Exception as e:
             print("state: not synced (%s)" % e)
     print(state)
     if state == "running":
+        print(was)
+        print(agents.instance_line(beam))
+        print("parent: session %s" % beam.get("parentSession"))
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
         for line in session_lines:
             print(line)
         for line in watchdog(beam_path):
             print(line)
-    if state == "stopped":
+    if state in {"paused", "stopped"}:
         for line in stop_lines:
             print(line)
         import agents
 
-        for line in agents.cleanup(beam, beam_path=beam_path):
-            print(line)
+        try:
+            for line in agents.halt_cloud(beam, beam_path=beam_path):
+                print(line)
+        except Exception as e:
+            print("cleanup: skipped (%s)" % e)
+    if state == "stopped":
         try:
             import report
 
@@ -892,7 +981,12 @@ Several matches and no single folder with plan files exits 3 and scans
 nothing. No plan exits 2. --max-agents defaults to 18 and --model to
 claude-sonnet-5-5-high; the live cap and slug are maxAgents and model in
 config. start, stop, pause, and resume take --beam and --reason.
-start --force starts a cloud run even when the MCP allow list is missing
+start and resume are the same command. Either one sets the run running
+from paused, from stopped, or when it is already running, prints where it
+came from (run: was paused. Continuing.), and starts unfinished work before
+any new ticket (unfinished: ...). pause and stop are the same teardown:
+every agent is ended. stop also writes the completion report.
+--force starts a cloud run even when the MCP allow list is missing
 the Jira or Slack tools. Without --force, that start does not claim.
 import --keep-status keeps status for ids that still exist (the default).
 
@@ -929,7 +1023,7 @@ def main() -> None:
         sp = sub.add_parser(name)
         sp.add_argument("--beam", default=".warp/beam.json")
         sp.add_argument("--reason")
-        if name == "start":
+        if name in {"start", "resume"}:
             sp.add_argument("--force", action="store_true", help="start even if a cloud run would prompt for MCP tools")
     import usage
 
@@ -1095,36 +1189,10 @@ def main() -> None:
         write_status(Path(args.beam))
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
-    elif args.cmd == "start":
-        import prompt_gate
-        import resume_hint
-        import state_commit
-
-        for line in state_commit.load_main_beam(Path(args.beam)):
-            print(line)
-        gate = prompt_gate.gate_start(Path(args.beam), force=bool(getattr(args, "force", False)))
-        if gate != 0:
-            sys.exit(gate)
-        resume_hint.print_hint(Path(args.beam))
-        set_run(Path(args.beam), "running", args.reason)
-        import pipeline
-
-        for line in pipeline.cold_start(Path(args.beam)):
-            print(line)
-        print_open_work(Path(args.beam))
-    elif args.cmd == "resume":
-        import resume_hint
-        import state_commit
-
-        for line in state_commit.load_main_beam(Path(args.beam)):
-            print(line)
-        resume_hint.print_hint(Path(args.beam))
-        set_run(Path(args.beam), "running", args.reason)
-        import pipeline
-
-        for line in pipeline.cold_start(Path(args.beam)):
-            print(line)
-        print_open_work(Path(args.beam))
+    elif args.cmd in {"start", "resume"}:
+        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)))
+        if code != 0:
+            sys.exit(code)
     elif args.cmd == "pause":
         set_run(Path(args.beam), "paused", args.reason)
     elif args.cmd == "stop":

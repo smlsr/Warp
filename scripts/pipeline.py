@@ -568,7 +568,7 @@ def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
 
 
 def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
-    """Start fix Shuttles up to the fix-worker cap, highest priority first.
+    """Start fix Shuttles up to maxAgents, highest priority first.
 
     maxInProgress is not consulted. An open pull request that needs a fix
     goes first: a conflict, CI that never started, red CI, then Bugbot
@@ -661,8 +661,8 @@ def _replacement_step(ticket: dict) -> str:
 def dispatch_replacements(data: dict, lines: list) -> None:
     """Start dead Shuttle replacements after fix workers, up to the live caps.
 
-    maxInProgress does not apply. A fix replacement also stays inside
-    maxFixWorkers. Past maxRecoveries the ticket alarms and does not start.
+    maxInProgress does not apply. Past maxRecoveries the ticket alarms and
+    does not start.
     """
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
         return
@@ -692,7 +692,10 @@ def _launch_replacement(data: dict, ticket: dict, lines: list, step: str) -> Non
     cap = _int((data.get("config") or {}).get("maxRecoveries"), 5)
     count = int(ticket.get("recoveries") or 0)
     tid = ticket.get("id")
-    if count >= cap:
+    # Pause or stop ended this Shuttle on purpose. That is not a dead worker:
+    # no recovery is counted and nobody is told a worker died.
+    halted = bool(ticket.pop("haltResume", None))
+    if count >= cap and not halted:
         ticket["needsReplacement"] = False
         clear_shuttle(ticket)
         ticket["status"] = "alarm"
@@ -710,8 +713,11 @@ def _launch_replacement(data: dict, ticket: dict, lines: list, step: str) -> Non
     ticket.pop("lastSeenAt", None)
     ticket["needsReplacement"] = False
     mark_shuttle(ticket, step, data)
-    started = _start_lines(data, ticket, step, "replace", replacing=True)
+    started = _start_lines(data, ticket, step, "resume after halt" if halted else "replace", replacing=True)
     if started and started[0].startswith("spawn:"):
+        lines.extend(started)
+        return
+    if halted:
         lines.extend(started)
         return
     number = int(ticket.get("recoveries") or 0) + 1
@@ -722,11 +728,67 @@ def _launch_replacement(data: dict, ticket: dict, lines: list, step: str) -> Non
     lines.extend(started)
 
 
-def cold_start(beam_path) -> list:
-    """Start or resume. Fill live slots: fixes, then dead Shuttle replacements.
+def unfinished(data: dict) -> dict:
+    """Work this run already started and has not merged or parked, by what it needs next.
 
-    A Shuttle already out keeps its slot. Room left under the caps is filled
-    immediately. maxInProgress does not hold either of these.
+    `fix` needs a fix Shuttle. `shuttle` had a Shuttle that was halted or
+    died and needs a new one. `out` has a live Shuttle. `waiting` needs no
+    agent right now: it waits on review, checks, an approval, or the merge
+    queue.
+    """
+    import beam as beam_mod
+
+    found = {"fix": [], "shuttle": [], "out": [], "waiting": []}
+    cfg = data.get("config") or {}
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for tid in sorted(tickets, key=lambda item: str(item)):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict) or not beam_mod.ticket_in_progress(ticket):
+            continue
+        name = str(ticket.get("id") or tid)
+        if orchestrator.shuttle_is_live(ticket, data):
+            found["out"].append(name)
+        elif ticket.get("needsReplacement"):
+            found["shuttle"].append(name)
+        elif _fix_class(ticket, cfg):
+            found["fix"].append(name)
+        else:
+            found["waiting"].append(name)
+    return found
+
+
+def unfinished_line(data: dict) -> str:
+    """What start and resume print before they launch anything."""
+    import beam as beam_mod
+
+    found = unfinished(data)
+    total = sum(len(ids) for ids in found.values())
+    if not total:
+        return "unfinished: none. New tickets start from the ready queue."
+    cfg = data.get("config") or {}
+    return (
+        "unfinished: %d open. %d need a fix, %d need a Shuttle, %d have a Shuttle out, %d wait on review or checks. "
+        "These start first, up to maxAgents %d. New tickets start after, while fewer than maxInProgress %d are open."
+        % (
+            total,
+            len(found["fix"]),
+            len(found["shuttle"]),
+            len(found["out"]),
+            len(found["waiting"]),
+            beam_mod.configured_cap(cfg),
+            beam_mod.max_in_progress(cfg),
+        )
+    )
+
+
+def cold_start(beam_path) -> list:
+    """Start or resume. Unfinished work first, then the ready queue.
+
+    The order is fixed: open pull requests that need a fix, then tickets
+    whose Shuttle was halted or died, then new tickets. All three draw on
+    one cap, maxAgents, so a new ticket starts only in a slot unfinished
+    work did not need. A Shuttle already out keeps its slot. maxInProgress
+    holds only the new tickets.
     """
     import beam as beam_mod
 
@@ -1302,8 +1364,13 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
         import agents
 
-        if not agents.spawns_open(data):
-            lines.extend(agents.cleanup_settled(data, beam_path=beam_path, now=now))
+        try:
+            lines.extend(agents.retire(data, beam_path=beam_path, now=now))
+            if not agents.spawns_open(data):
+                lines.extend(agents.finish(data, beam_path=beam_path, now=now))
+        except Exception as exc:
+            # Archiving is housekeeping. It never costs the pass its result.
+            lines.append("cleanup: skipped (%s)" % exc)
         return lines
     finally:
         data.pop("_fixDefer", None)

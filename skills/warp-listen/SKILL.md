@@ -1,57 +1,49 @@
 ---
 name: warp-listen
-description: "One channel listener Subagent of the parent turn. Loops on Slack and Teams until the Warp loop is paused or stopped. Does not merge or implement tickets."
+description: "One poll of Slack and Teams for warp: commands, as a Subagent of the parent turn. Reads once, queues, records the poll, and returns. Does not loop, merge, or implement tickets."
 ---
 
 # Warp listener
 
-You are a Subagent of the parent orchestrator. You share the parent's session and the parent's checkout. You are not a separate Agent. Do not start a separate Agent for the listener. One listener for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. One listener while the loop is running. Each ticket is one subagent in its own worktree, started by the parent, never by you.
+You are a Subagent of the parent orchestrator, started for one poll. You share the parent's session and the parent's checkout. You are not a separate Agent. Do not start a separate Agent for the listener. One listener for the beam. Not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. Each ticket is one subagent in its own worktree, started by the parent, never by you.
 
-You do not implement tickets. The listener does not merge, and it does not write product code. You read Slack and Teams, acknowledge `warp:` commands, and post the acks. The parent applies proceed. You apply pause and stop by running the script, then you return.
+You never start another agent of any kind. You never loop, sleep, set a timer, subscribe, or wait for a reply. You read each channel once, queue what you find, record the poll, and return one line. The parent starts the next poll when it is due. Do not start a second.
 
-`/warp-start` and `/warp-resume` launch you when `inbound.py claim --turn <turn>` prints `listener: started <id>`. `listener: already running <id>` means this parent turn already started you. Do not start a second. A running flag left by the previous turn does not block the next pass: a new `--turn` takes the slot. `/warp-pause` and `/warp-stop` stop you. You must not keep reading while paused or stopped.
+You do not implement tickets. The listener does not merge, and it does not write product code. You read Slack and Teams, acknowledge `warp:` commands, and post the acks. The parent applies them.
 
-A Cursor subagent turn can end on its own. You still loop until the Warp loop is paused or stopped. You do not return after one poll. You return only for pause, stop, or the word `recycle`. The parent starts one replacement when you return or when `.warp/listener.json` goes stale.
+The parent starts you only when `orchestrator.py supervise` prints `listener: poll`, with the prompt that follows it: `LISTEN once`, the absolute beam path, and the two commands below. `/warp-pause` and `/warp-stop` close the poll. You must not keep reading while paused or stopped.
 
-The slot is `listener` on the beam: `state` (`running` or `stopped`), `agentId`, optional `turn`, optional `pid`, `startedAt`, and `lastSeenAt`. The heartbeat file is `.warp/listener.json`: `agentId` or `pid`, `lastPollAt`, and `reason`.
+## The poll
 
-## Claim
-
-The parent claims you. If you claim, use the same turn id the parent gave you.
+1. Ask whether to go on, and where to read from.
 
 ```bash
-python3 <plugin>/scripts/inbound.py claim --beam .warp/beam.json --agent-id <id> --turn <turn>
-python3 <plugin>/scripts/inbound.py status --beam .warp/beam.json
+python3 <plugin>/scripts/inbound.py poll --beam .warp/beam.json
 ```
 
-If status is `listener: running` for a different id, return that fact to the parent. Do not read the channel for a slot you do not own.
+`reap: exit <reason>` means the run is paused, stopped, or finished. Do not read the channel. Return `listen: stopped`. Otherwise it prints `reap: continue` and one line per channel: `listen: slack channel=<name> since=<cursor>` and `listen: teams channel=<name> since=<cursor>`.
 
-## Loop
+2. Read the messages after `since` in each channel it printed, once. Slack: `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. Teams: `teams_read_channel`, `teams_read_thread`, and `teams_search_channels`. An empty `since` means read the recent messages. Call an MCP tool only when `scripts/mcp_allow.py` prints `allow`.
 
-Repeat this until the loop is paused or stopped. Do not return in the middle of it.
-
-1. If `inbound.py status` prints `listener: stopped`, or the beam `runState` is paused or stopped, or `agents.py check` prints `spawn: closed`, return. That is a stop. Do not keep reading. Do not start another listener.
-2. Read new messages in `slackChannel` with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. When `messenger` is `teams` or `both`, also read `teamsChannel` with `teams_read_channel`, `teams_read_thread`, and `teams_search_channels`. Call an MCP tool only when `scripts/mcp_allow.py` prints `allow`.
-3. For each new `warp:` message, run `inbound.py accept`, post the `ack:` sentence from `.warp/inbound-ack.json` in that channel, then enqueue the command. You do not merge. You do not call `proceed.py`. The parent runs `inbound.py apply-pending` and merges a proceed.
+3. For each new `warp:` message, run `inbound.py accept`, post the `ack:` sentence from `.warp/inbound-ack.json` in that channel, then enqueue the command. Pass the channel's message id to both. `inbound: duplicate <id>` means an earlier poll already queued that message: do not post an ack and do not enqueue it. You do not merge. You do not call `proceed.py`. The parent runs `inbound.py apply-pending` and merges a proceed.
 
 ```bash
 python3 <plugin>/scripts/inbound.py accept --beam .warp/beam.json \
-  --text "warp:proceed XV-01" --by <who> --source slack
+  --text "warp:proceed XV-01" --by <who> --source slack --message-id <id>
 python3 <plugin>/scripts/inbound.py enqueue --beam .warp/beam.json \
-  --text "warp:proceed XV-01" --by <who> --source slack
+  --text "warp:proceed XV-01" --by <who> --source slack --message-id <id>
 ```
 
-4. For `warp:pause` and `warp:stop`, post the ack, then run `inbound.py apply` for that same text, then return. You must not keep reading while paused or stopped.
-5. Write the heartbeat, then sleep with the shell. The interval is `pollSeconds`. Do not pause inside the model.
+4. `warp:pause` and `warp:stop` are queued the same way. Post the ack and enqueue. The parent applies them the moment you return, and that pause or stop ends every agent.
+
+5. Record the poll. `--count` is how many `warp:` commands you queued. `--cursor` is the id of the newest message you read, so the next poll starts after it.
 
 ```bash
-python3 <plugin>/scripts/inbound.py heartbeat --beam .warp/beam.json \
-  --agent-id <id> --pid <pid> --reason poll
-sleep "$(python3 <plugin>/scripts/inbound.py interval --beam .warp/beam.json)"
+python3 <plugin>/scripts/inbound.py polled --beam .warp/beam.json --count <count> --cursor <newest message id>
 ```
 
-6. Go back to step 1.
+6. Return one line: `listen: <count>`. Then stop. Do not read again.
 
-If your context is getting large, write the heartbeat with `--reason recycle` and return the single word `recycle`. Do not start the replacement yourself. The parent does that. There is one listener, never several.
+If a read fails, still run `polled` with the count you have and no `--cursor`, and return `listen: <count> failed <why>`. The next poll reads from the old mark.
 
-`inbound.py ?` prints claim, release, accept, apply, handle, enqueue, drain, and apply-pending.
+`inbound.py ?` prints poll, polled, accept, enqueue, apply, apply-pending, release, and status. `claim` and `heartbeat` are for a listener someone starts by hand. `listener: already running` from `claim` means do not start a second. A run does not use them.

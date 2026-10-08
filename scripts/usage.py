@@ -51,6 +51,9 @@ SWITCHES = {
     "--apply",
     "--all-idle",
     "--any-repo",
+    "--running",
+    "--remote",
+    "--untagged",
 }
 
 

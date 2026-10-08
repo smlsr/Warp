@@ -15,7 +15,7 @@ Read the output to the user.
 
 - `Warp v<version>` means the project copy and the source copy match.
 - `installed:` is `.cursor/plugins/warp`. `source:` is the plugin tree this command ran from. `recorded:` is `.warp/version`, written by `/warp-init`.
-- `effective:` is the runner, `subagentVm`, `memoryCheck`, `maxLocalSubagents`, and `launch` after a local runner overrides cloud-only settings. A `note:` line above it means `runner: local` forced `subagentVm` false or `launch` back to `worktree`. Status prints the same values.
+- `effective:` is the runner, `subagentVm`, `memoryCheck`, the two caps (`maxAgents` is agents that run at once, `maxInProgress` is tickets open at once), and `launch` after a local runner overrides cloud-only settings. `instance:` is the tag this run's agents carry. A `config:` line names a retired key that is still in `.warp/config.yaml` and is ignored. A `note:` line above it means `runner: local` forced `subagentVm` false or `launch` back to `worktree`. Status prints the same values.
 - `plugin is vOLD, repo copy is vNEW: run /warp-upgrade` means the project copy is older. Init does not overwrite plugin files. `/warp-upgrade` replaces the plugin copy and leaves `.warp/config.yaml` and the beam alone.
 - The output always ends with the upgrade script, for a command list that does not show `/warp-upgrade`. Read these lines to the user. They do not need the slash command:
 

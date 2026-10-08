@@ -128,14 +128,21 @@ class CloudHookTests(unittest.TestCase):
         self.assertEqual(paused.returncode, 0, paused.stderr + paused.stdout)
         self.assertIn("noted session-stop", paused.stdout)
         types = [json.loads(line)["type"] for line in (self.warp / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(types[-3:], ["pause", "session-stop", "update-state"])
+        # beam.py pause is the same code as scan.py pause.
+        self.assertEqual(types[-3:], ["paused", "session-stop", "update-state"])
         self.assertIn("commit: none", paused.stdout)
+        self.assertIn("halt: paused agents=", paused.stdout)
 
-        resumed = run("beam.py", "resume", "--beam", str(path), cwd=self.repo)
+        # beam.py resume is scan.py resume: the same gate, the same unfinished-work check.
+        refused = run("beam.py", "resume", "--beam", str(path), cwd=self.repo)
+        self.assertEqual(refused.returncode, 2, refused.stderr + refused.stdout)
+        resumed = run("beam.py", "resume", "--beam", str(path), "--force", cwd=self.repo)
         self.assertEqual(resumed.returncode, 0, resumed.stderr + resumed.stdout)
         self.assertNotIn("session-stop", resumed.stdout)
         types = [json.loads(line)["type"] for line in (self.warp / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(types[-1], "resume")
+        self.assertIn("running", types[-3:])
+        self.assertIn("run: was paused (hold). Continuing.", resumed.stdout)
+        self.assertIn("unfinished: ", resumed.stdout)
 
     def test_start_prints_the_resume_hint(self):
         self.write_beam()

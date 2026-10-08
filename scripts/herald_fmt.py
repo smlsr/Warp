@@ -2,10 +2,13 @@
 """One formatter for every message Herald posts.
 
 The channel is shared across repos, so each message opens with a header that
-names its source: `Warp | <repo> / <project>`. The repo comes from the origin
-remote (else the folder name). The project is `projectName` in
-.warp/config.yaml, else `jiraProject`, else the workspace folder name. If the
-project is the same word as the repo, only the repo is shown.
+names its source: `Warp | <repo> / <project> | warp:<instance>`. The repo
+comes from the origin remote (else the folder name). The project is
+`projectName` in .warp/config.yaml, else `jiraProject`, else the workspace
+folder name. If the project is the same word as the repo, only the repo is
+shown. The instance is the six characters on the beam that name this Warp
+run. It is the same tag its agents carry, so two runs in one channel, in one
+repo or in different ones, are told apart. No instance yet means no suffix.
 
 `render` returns three views of one message:
   text    plain text, for .warp/outbox.md and connectors that take text only
@@ -112,11 +115,24 @@ def project_name(root: Path, cfg: dict) -> Optional[str]:
     return None
 
 
+def instance_tag(root: Path) -> str:
+    """`warp:<instance>` from the beam in this checkout. Empty when the beam has none yet."""
+    try:
+        data = json.loads((Path(root) / ".warp" / "beam.json").read_text())
+    except (OSError, ValueError):
+        return ""
+    raw = data.get("instance") if isinstance(data, dict) else None
+    ident = raw.get("id") if isinstance(raw, dict) else raw
+    ident = str(ident or "").strip().lower()
+    return f"warp:{ident}" if ident else ""
+
+
 def header(root: Path, cfg: Optional[dict] = None) -> str:
     root = root.resolve()
     cfg = cfg or read_config(root)
     proj = project_name(root, cfg)
-    return f"Warp | {repo_name(root)}" + (f" / {proj}" if proj else "")
+    tag = instance_tag(root)
+    return f"Warp | {repo_name(root)}" + (f" / {proj}" if proj else "") + (f" | {tag}" if tag else "")
 
 
 def version_label() -> str:

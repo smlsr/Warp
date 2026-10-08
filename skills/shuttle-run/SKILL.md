@@ -5,7 +5,24 @@ description: "Run one claimed ticket on its own VM, or in its own git worktree, 
 
 # Shuttle run
 
-You were started as one subagent. The prompt contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. If the beam `runState` is `paused` or `stopped`, or `python3 <plugin>/scripts/agents.py check --beam .warp/beam.json` prints `spawn: closed`, stop. Return `result: <id> stopped`. Do not start another step. A `resume` prompt is this same Shuttle, not a second one.
+You were started as one subagent, for one step of one ticket. The prompt contains the claim: ticket id, Jira key, locks, acceptance, branch `warp/<id>-<jira>`, and your agent id on the line `agent: <agent>`. A `resume` prompt is this same Shuttle, not a second one.
+
+## The contract
+
+You do this step and return one line. You never start another agent of any kind. You never subscribe to anything, set a timer, loop, sleep, or wait on the pull request, CI, Bugbot, Slack, or an approval. The parent does all the waiting: it requests Bugbot, watches CI, and sends you a fix step if one is needed. If this conversation is woken later by anything that is not a new step from the parent (a CI result, a pull-request comment, a timer), run the reap check and return. Do not act on it.
+
+## The reap check
+
+Run it first, before any other step. The exact command is in your prompt.
+
+```bash
+python3 <plugin>/scripts/agents.py reap --beam <parent>/.warp/beam.json --id <agent> --ticket <id>
+python3 <plugin>/scripts/agents.py reap --remote --id <agent> --ticket <id>
+```
+
+The first form is for a worktree. The second is for a dedicated VM: it reads the beam from origin's base branch and writes nothing. `reap: continue` means carry on. `reap: exit <reason>` means the run was paused or stopped, the ticket is merged or parked, or the parent replaced you. Stop now. Do not commit, push, or open anything more. Return `result: <id> stopped <reason> agent=<agent>`. `<agent>` is your registry id or your cloud id. Do not start another step.
+
+`ticket_state.py append` prints the same `reap:` line after every state you write. Read it every time. That is how a pause reaches you in the middle of a step.
 
 When the prompt says "Run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine", do that. Fetch the latest main, clone it, and create the branch yourself. First run `hostname` and `free -g`. Report that output with your branch name and working directory. Write `.warp/tickets/<id>/` on your branch and push it. The parent disk is not shared. Cloud MCP servers are the ones at cursor.com/agents, not the parent's session.
 
@@ -22,7 +39,7 @@ Optional `launch: agent` starts one new Agent from an IMPLEMENT prompt. Clone ma
 3. Read the preamble the plan names.
 4. Read `.warp/config.yaml` and the claim in the IMPLEMENT prompt. Status must be `claimed` or `recovering`, and `agent` must be you. Otherwise stop. If status is `recovering`, you are the replacement for a dead Shuttle. Keep a branch that has work beyond the beam commit, the pull request, `jira.startedAt`, and the locks. Do not open a second pull request. A branch that is only the beam commit is not that work: start from latest main. After the heartbeat below, set status back to `recoveryPriorStatus` and continue that work.
 5. Fetch the Jira issue if a key is set. Otherwise read the ticket in `CURSOR_PLAN.md`. Read every acceptance criterion.
-6. Heartbeat. Write status into the parent checkout by absolute path. Do not push that directory. Repeat at each status change and at least every 5 minutes while you are working, always inside `staleMinutes` (default 15). Do not commit `.warp/beam.json`. A failed turn returns `result: <id> failed <why>` so the parent can raise `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn.
+6. Heartbeat. Write status into the parent checkout by absolute path. Do not push that directory. Repeat at each status change and at least every 5 minutes while you are working, always inside `staleMinutes` (default 15). This is not a timer: write it between steps of work you are already doing, and read the `reap:` line it prints. Do not commit `.warp/beam.json`. A failed turn returns `result: <id> failed <why>` so the parent can raise `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn.
 
 ```bash
 python3 <plugin>/scripts/ticket_state.py append --id <id> --state started --agent <agent> --root <parent>
@@ -58,4 +75,4 @@ If Cursor asks you to press Allow or Run on a Jira or Slack tool, stop editing p
 
 Before an MCP tool that this skill does not name, run `python3 <plugin>/scripts/mcp_allow.py --server SERVER --tool TOOL --root .`. If it prints `ask`, do not call the tool. A missing hook is not permission to call it.
 
-When this Shuttle finishes, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`. That records the stop. The parent reconciles the ticket from the beam on the next tick.
+When this Shuttle finishes, run `python3 <plugin>/scripts/session_note.py --type subagent-stop --beam .warp/beam.json`. That records the stop. The parent reconciles the ticket from the beam on the next tick. Then return the result line and end. Do not wait for Bugbot, CI, a review, or a merge. Do not leave anything running: no background process, no timer, no subscription.

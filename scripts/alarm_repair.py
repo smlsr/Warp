@@ -64,7 +64,7 @@ examples:
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --now 2026-10-06T12:00:00Z
 
 Subcommand: next. One repair Shuttle at a time, for lock-escape only.
-alarmRepairMinutes (default 15) is how often a running listener opens a pass.
+alarmRepairMinutes (default 15) is how often the parent's pass opens a repair.
 maxAlarmRepairs (default 5) is the cap per ticket. A second tick is idempotent.
 Paused and stopped runs print alarm-repair: skipped and change nothing.
 When that pass opens and the ready set is empty, pending gates are
@@ -209,7 +209,7 @@ def _success_complete(ticket: dict, returned: bool) -> bool:
     """Merged, or back on the normal path with the alarm cleared and the shuttle done.
 
     While status is still shuttle work, the repair Shuttle is still working
-    unless the listener passed --returned.
+    unless the parent passed --returned.
     """
     status = ticket.get("status")
     if status in {"merged", "done"}:

@@ -605,6 +605,14 @@ def apply_directory(
         if _apply_event(beam_path, data, ticket, row, now, heralded, out):
             changed = True
     remote["seen"] = sorted(seen)
+    if state.get("cloudAgent"):
+        try:
+            import agents
+
+            owner = str(state.get("agent") or ticket.get("agent") or "")
+            agents.bind_cloud(data, owner, tid, beam_path, cloud=str(state.get("cloudAgent")))
+        except Exception:
+            pass
     snap_key = _state_key(state) if state else ""
     if state and snap_key and snap_key != remote.get("stateKey"):
         if _apply_heartbeat(ticket, str(state.get("heartbeatAt") or "")):
@@ -840,6 +848,12 @@ def append_status(
     body["updatedAt"] = stamp
     if agent:
         body["agent"] = agent
+    cloud = _cloud_agent() if push else ""
+    if cloud:
+        # A Shuttle that pushes its folder is on its own VM. The parent binds
+        # this id to the Shuttle's registry row, so pause and stop can cancel
+        # it by id. A worktree Shuttle shares the parent's VM and reports none.
+        body["cloudAgent"] = cloud
     if state == "heartbeat":
         body["heartbeatAt"] = stamp
         if not body.get("state"):
@@ -897,9 +911,38 @@ def append_status(
     print("ticket: %s" % tid)
     print("state: %s" % state)
     print("dir: .warp/tickets/%s" % tid)
-    if not push:
-        return 0
-    return _push_dir(root, tid, state)
+    code = 0 if not push else _push_dir(root, tid, state)
+    for line in _reap_lines(root, tid, agent or str(body.get("agent") or ""), remote=bool(push)):
+        print(line)
+    return code
+
+
+def _cloud_agent() -> str:
+    """This VM's Cursor cloud agent id. Empty on a laptop."""
+    try:
+        import agents
+
+        return agents.current_agent_id()
+    except Exception:
+        return ""
+
+
+def _reap_lines(root: Path, tid: str, agent: str, remote: bool = False) -> list:
+    """The reap answer for the Shuttle that just wrote its state.
+
+    A worktree Shuttle reads the parent's beam. A Shuttle that pushes its
+    folder is on its own VM and reads origin's base branch. No beam prints
+    nothing. A failed check never fails the state write.
+    """
+    try:
+        import agents
+
+        lines = agents.reap_from(Path(root), agent, tid, "shuttle", remote=remote)
+    except Exception:
+        return []
+    if lines and "(no beam" in lines[0]:
+        return []
+    return lines
 
 
 def _push_dir(root: Path, tid: str, summary: str) -> int:

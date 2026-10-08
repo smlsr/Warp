@@ -44,7 +44,6 @@ def ticket(tid, **extra):
 def beam(tickets, **config):
     cfg = {
         "maxAgents": 4,
-        "maxLocalSubagents": 4,
         "bugbotRequired": True,
         "maxFixAttempts": 3,
         "maxRecoveries": 3,

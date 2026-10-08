@@ -222,23 +222,26 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("spawn: cap C-1", blocked)
         self.assertEqual(blocked[0], "spawn: cap C-1")
 
-    def test_listener_restarts_back_off_and_then_cap(self):
-        data = beam_of(ticket(), maxListenerRestartsPerHour=2)
-        data["listener"] = {"restarts": 0}
+    def test_the_listener_is_one_registry_row_across_polls(self):
+        data = beam_of(ticket())
         self.save(data)
-        self.assertEqual(agents.listener_decision(data, now=NOW, beam_path=self.path), "start")
-        data["listener"]["restarts"] = 1
-        agents.note_listener_restart(data, now=NOW, beam_path=self.path)
-        self.assertEqual(agents.listener_backoff_minutes(1), 0)
-        second = "2026-10-06T12:10:00Z"
-        self.assertEqual(agents.listener_decision(data, now=second, beam_path=self.path), "start")
-        data["listener"]["restarts"] = 2
-        agents.note_listener_restart(data, now=second, beam_path=self.path)
-        self.assertEqual(agents.listener_decision(data, now=second, beam_path=self.path), "backoff")
-        after = "2026-10-06T12:13:00Z"
-        self.assertEqual(agents.listener_decision(data, now=after, beam_path=self.path), "cap")
-        agents.cap_listener(data, now=after, beam_path=self.path)
-        self.assertEqual(agents.listener_decision(data, now="2026-10-06T12:40:00Z", beam_path=self.path), "cap")
+        for minute in (0, 5, 10):
+            stamp = "2026-10-06T12:%02d:00Z" % minute
+            agents.note_listener_poll(data, now=stamp, beam_path=self.path)
+            doc = json.loads((self.tmp / "agents.json").read_text())
+            rows = [row for row in doc["agents"] if row.get("role") == "listener"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["state"], "running")
+            agents.note_listener_done(data, now=stamp, beam_path=self.path)
+        doc = json.loads((self.tmp / "agents.json").read_text())
+        rows = [row for row in doc["agents"] if row.get("role") == "listener"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "listener")
+        self.assertEqual(rows[0]["polls"], 3)
+        self.assertEqual(rows[0]["state"], "ended")
+        self.assertEqual(rows[0]["endReason"], "polled")
+        # Polls are not spawns. They never count against a spawn cap.
+        self.assertEqual(doc["spawns"], [])
 
     def test_bugbot_is_requested_once_per_commit(self):
         data = beam_of(ticket())
@@ -268,7 +271,6 @@ class RegistryTests(unittest.TestCase):
         data["paused"] = True
         lines = agents.launch_lines(data, data["tickets"]["T-1"], "implement", beam_path=self.path, now=NOW)
         self.assertEqual(lines, ["spawn: closed T-1"])
-        self.assertEqual(agents.listener_decision(data, now=NOW, beam_path=self.path), "closed")
         self.assertEqual(agents.check_line(data), "spawn: closed paused")
         stopped = agents.stop_all(data, now=NOW, beam_path=self.path)
         self.assertEqual(stopped, [])
@@ -291,8 +293,10 @@ class RegistryTests(unittest.TestCase):
     def write_registry(self, rows):
         (self.tmp / "agents.json").write_text(json.dumps({"agents": rows, "spawns": []}) + "\n")
 
-    def sweep(self, items, apply=False, all_idle=False, any_repo=False, details=None, self_id="", rows=None):
+    def sweep(self, items, apply=False, all_idle=False, any_repo=False, details=None, self_id="", rows=None, untagged=True, instance="", all_instances=False):
         data = beam_of(ticket())
+        if instance:
+            data["instance"] = {"id": instance, "host": "laptop", "machine": "local-laptop-1"}
         self.save(data)
         if rows:
             self.write_registry(rows)
@@ -309,6 +313,8 @@ class RegistryTests(unittest.TestCase):
             any_repo=any_repo,
             origin=ORIGIN,
             self_id=self_id,
+            untagged=untagged,
+            all_instances=all_instances,
         )
         return lines, posted_urls(calls)
 
@@ -374,6 +380,61 @@ class RegistryTests(unittest.TestCase):
         self.assertFalse(agents.warp_role("prefix tool"))
         self.assertTrue(agents.warp_role("IMPLEMENT T-1"))
         self.assertTrue(agents.warp_role("Warp-triggered Bugbot"))
+
+    def test_cleanup_matches_this_instances_tag_and_leaves_other_agents_alone(self):
+        rows = [{"id": "bc-reg", "ticket": "T-1", "role": "shuttle", "state": "ended", "ended": NOW}]
+        bare = {"id": "bc-bare", "name": "[warp:a1b2c3] T-5 fix", "status": "IDLE", "updatedAt": UPDATED}
+        items = [
+            cloud_item("bc-tagged", "[warp:a1b2c3] T-1 implement"),
+            cloud_item("bc-listener", "[WARP:A1B2C3] listener"),
+            bare,
+            cloud_item("bc-prompt", "worker", prompt="[warp:a1b2c3] T-2 fix\nSUBAGENT T-2\nticket: T-2"),
+            cloud_item("bc-reg", "garden notes"),
+            # Another Warp run in this same repo. Its agents are not this run's.
+            cloud_item("bc-other-warp", "[warp:ffffff] T-1 implement"),
+            cloud_item("bc-no-instance", "[warp] T-7 implement"),
+            # Agents from before the tag.
+            cloud_item("bc-marker", "worker", prompt="IMPLEMENT T-3\nticket: T-3"),
+            cloud_item("bc-shuttle", "Shuttle T-1"),
+            # Other people's agents in the same repo. Warp words in a name are not the tag.
+            cloud_item("bc-fix", "Fix flaky CI"),
+            cloud_item("bc-inline", "notes about [warp:a1b2c3] tags"),
+            cloud_item("bc-other-repo", "[warp:a1b2c3] T-9 implement", repo=OTHER),
+        ]
+        details = {"bc-bare": cloud_item("bc-bare", "[warp:a1b2c3] T-5 fix")}
+
+        def matched(**kwargs):
+            lines, posted = self.sweep(items, apply=True, rows=rows, details=details, instance="a1b2c3", **kwargs)
+            return {url.rsplit("/", 2)[-2] for url in posted}, lines
+
+        mine = {"bc-tagged", "bc-listener", "bc-bare", "bc-prompt", "bc-reg"}
+        archived, lines = matched(untagged=False)
+        self.assertEqual(archived, mine)
+        self.assertIn("cleanup: tag [warp:a1b2c3]", lines)
+        self.assertIn("cleanup: count 5", lines)
+        every_warp, lines = matched(untagged=False, all_instances=True)
+        self.assertEqual(every_warp, mine | {"bc-other-warp", "bc-no-instance"})
+        self.assertIn("cleanup: tag any Warp run", lines)
+        loose, _lines = matched(untagged=True)
+        self.assertEqual(loose, mine | {"bc-marker", "bc-shuttle", "bc-fix"})
+        self.assertNotIn("bc-other-warp", loose, "--untagged is not --all-instances")
+
+    def test_tag_names(self):
+        self.assertEqual(agents.tag("a1b2c3"), "warp:a1b2c3")
+        self.assertEqual(agents.tag(""), "warp")
+        self.assertEqual(agents.tag_name("T-1", "implement", instance="a1b2c3"), "[warp:a1b2c3] T-1 implement")
+        self.assertEqual(agents.tag_name(role="listener", instance="a1b2c3"), "[warp:a1b2c3] listener")
+        self.assertEqual(agents.tag_name("T-1", "fix"), "[warp] T-1 fix")
+        self.assertEqual(agents.tag_instance("[warp:A1B2C3] T-1 implement"), "a1b2c3")
+        self.assertEqual(agents.tag_instance("intro\n  [Warp:a1b2c3] listener\nLISTEN once"), "a1b2c3")
+        self.assertEqual(agents.tag_instance("[warp] T-1"), "")
+        for text in ("warp:a1b2c3 T-1", "[warping] T-1", "see [warp:a1b2c3] notes", "[warp:] T-1", ""):
+            self.assertIsNone(agents.tag_instance(text), text)
+        self.assertTrue(agents.tag_match("[warp:a1b2c3] T-1", "a1b2c3"))
+        self.assertFalse(agents.tag_match("[warp:ffffff] T-1", "a1b2c3"))
+        self.assertFalse(agents.tag_match("[warp] T-1", "a1b2c3"))
+        self.assertTrue(agents.tag_match("[warp:ffffff] T-1", "a1b2c3", all_instances=True))
+        self.assertTrue(agents.tag_match("[warp:ffffff] T-1", ""), "a beam with no instance yet matches any Warp tag")
 
     def test_cleanup_skips_self_and_running_agents(self):
         items = [

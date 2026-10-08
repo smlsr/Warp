@@ -84,11 +84,12 @@ def update_state_fallback() -> str:
 
 
 def cleanup_fallback() -> str:
-    """Script lines for a palette that does not list /warp-cleanup."""
+    """Script lines for a palette that does not list /warp-list or /warp-cleanup."""
     return (
         f"{CLEANUP_SCRIPT} list --beam .warp/beam.json\n"
         f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud\n"
         f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply --running\n"
         f"{CLEANUP_SCRIPT} ?"
     )
 
@@ -126,11 +127,20 @@ def describe(root: Path) -> str:
         lines.append(orchestrator.effective_text(cfg))
     except Exception as exc:
         lines.append("effective: unavailable (%s)" % exc)
+    try:
+        import agents
+
+        if beam_path.is_file():
+            lines.append(agents.instance_line(beam))
+        lines.extend(orchestrator.retired_notes(root))
+        lines.append("this machine: %s host=%s" % (agents.machine_id(), agents._hostname() or "unknown"))
+    except Exception as exc:
+        lines.append("instance: unavailable (%s)" % exc)
     lines.append("If /warp-upgrade is not in the command list:")
     lines.append(upgrade_fallback())
     lines.append("If /warp-update-state is not in the command list:")
     lines.append(update_state_fallback())
-    lines.append("If /warp-cleanup is not in the command list:")
+    lines.append("If /warp-list or /warp-cleanup is not in the command list:")
     lines.append(cleanup_fallback())
     return "\n".join(lines)
 
