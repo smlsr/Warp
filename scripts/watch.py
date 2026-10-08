@@ -380,6 +380,9 @@ def _escalate(data: dict, ticket: dict, action: str, lines: list) -> None:
     ticket["phase"] = "parked"
     ticket["alarm"] = "stalled"
     ticket["parkReason"] = reason
+    import agents
+
+    lines.extend(agents.release_ticket(data, ticket, "parked"))
     watch = _watch(ticket)
     watch["seenAlarm"] = "stalled"
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
@@ -394,15 +397,18 @@ def _run_action(data: dict, ticket: dict, action: str, lines: list, beam_path: O
     import pipeline
 
     tid = ticket.get("id")
+    if action == "bugbot":
+        import agents
+
+        if agents.same_commit_bugbot(ticket):
+            lines.append("bugbot: hold %s" % tid)
+            return
     watch = _watch(ticket)
     watch["fixerAttempts"] = int(watch.get("fixerAttempts") or 0) + 1
     watch["lastFix"] = action
     watch["lastFixAt"] = now
     if action == "bugbot":
-        pr = ticket.setdefault("pr", {})
-        pr["reviewCycle"] = int(pr.get("reviewCycle") or 0) + 1
-        pr["bugbotRequested"] = False
-        pipeline._request_bugbot(ticket, lines)
+        pipeline._request_bugbot(ticket, lines, data)
         lines.append("fixer: %s bugbot" % tid)
         return
     if action == "ci":

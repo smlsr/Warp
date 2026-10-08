@@ -598,6 +598,7 @@ class ScriptHelpTests(unittest.TestCase):
             "state_commit.py",
             "upgrade.py",
             "ticket_state.py",
+            "agents.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

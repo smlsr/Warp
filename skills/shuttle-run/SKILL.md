@@ -5,7 +5,7 @@ description: "Run one claimed ticket on its own VM, or in its own git worktree, 
 
 # Shuttle run
 
-You were started as one subagent. The prompt contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`.
+You were started as one subagent. The prompt contains the claim: ticket id, Jira key, locks, acceptance, and branch `warp/<id>-<jira>`. If the beam `runState` is `paused` or `stopped`, or `python3 <plugin>/scripts/agents.py check --beam .warp/beam.json` prints `spawn: closed`, stop. Return `result: <id> stopped`. Do not start another step. A `resume` prompt is this same Shuttle, not a second one.
 
 When the prompt says "Run in your own cloud environment on a dedicated VM with its own clone and branch, not a git worktree on this machine", do that. Fetch the latest main, clone it, and create the branch yourself. First run `hostname` and `free -g`. Report that output with your branch name and working directory. Write `.warp/tickets/<id>/` on your branch and push it. The parent disk is not shared. Cloud MCP servers are the ones at cursor.com/agents, not the parent's session.
 

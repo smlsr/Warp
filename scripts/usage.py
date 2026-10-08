@@ -47,6 +47,10 @@ SWITCHES = {
     "--force-external-id",
     "--open",
     "--partial",
+    "--cloud",
+    "--apply",
+    "--all-idle",
+    "--any-repo",
 }
 
 

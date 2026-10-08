@@ -198,6 +198,18 @@ maxRecoveries: 5
 # Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
 # worker-died and no new Shuttle starts. Branch, pull request, and
 # jira.startedAt stay. Default 5.
+maxSpawnsPerTicket: 8
+# New Shuttle spawns for one ticket. A resume of the Shuttle that returned
+# does not count. Past this cap the ticket is alarm spawn-cap and no new
+# Shuttle starts. Default 8.
+maxSpawnsPerHour: 40
+# New Shuttle and Bugbot spawns in the last 60 minutes, across the run.
+# Past this cap no ticket starts a new agent until an hour has passed.
+# Default 40.
+maxListenerRestartsPerHour: 8
+# Listener restarts in the last 60 minutes. Past this cap the listener
+# stays down and Herald posts once. Restarts also wait, longer each time,
+# up to 30 minutes. Default 8.
 alarmRepairMinutes: 15
 # How often the one listener looks for lock-escape alarms and starts one
 # repair. Only while the run is running. Pause and stop do not repair.

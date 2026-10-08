@@ -191,11 +191,30 @@ def _listener(data: dict, beam_path: Optional[Path], now: str, findings: list, a
         skipped.append({"kind": "listener", "id": "listener", "reason": "running"})
         lines.append("sweep: skip listener running")
         return
+    import agents
+
+    decision = agents.listener_decision(data, now=now, beam_path=beam_path)
+    if decision == "closed":
+        lines.append("listener: idle")
+        return
+    if decision == "backoff":
+        skipped.append({"kind": "listener", "id": "listener", "reason": "backoff"})
+        lines.append("listener: backoff")
+        lines.append("sweep: skip listener backoff")
+        return
+    if decision == "cap":
+        lines.append("listener: cap")
+        if not raw.get("restartCapped"):
+            agents.cap_listener(data, now=now, beam_path=beam_path)
+            lines.append("herald: Listener restart cap reached. No new listener.")
+        lines.append("sweep: skip listener cap")
+        return
     raw = dict(raw)
     raw["pendingStart"] = now
     raw["lastRestartReason"] = "sweep"
     raw["restarts"] = int(raw.get("restarts") or 0) + 1
     data["listener"] = raw
+    agents.note_listener_restart(data, now=now, beam_path=beam_path, previous=str(raw.get("agentId") or ""))
     actions.append({"kind": "listener", "id": "listener"})
     lines.append("listener: start reason=sweep")
     lines.append("sweep: action listener restart")

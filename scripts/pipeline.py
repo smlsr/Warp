@@ -299,6 +299,13 @@ def _drop_stale_results(pr: dict, new_sha: str) -> None:
     old = str(pr.get("headSha") or "").strip()
     if not new_sha:
         return
+    if new_sha and new_sha != old:
+        if old:
+            pr["bugbotRequested"] = False
+            pr["bugbotRequestedSha"] = ""
+            pr.pop("bugbotRequestedAt", None)
+        elif pr.get("bugbotRequestedAt") or pr.get("bugbotRequested"):
+            pr["bugbotRequestedSha"] = new_sha
     if old and old != new_sha:
         for field, sha_field, pending in (
             ("rollup", "rollupSha", "pending"),
@@ -438,6 +445,11 @@ def rebase_detail(ticket: dict) -> str:
 
 def start_rebase(data: dict, ticket: dict, lines: list) -> None:
     """Start a rebase Shuttle in this pass. A conflict does not wait for the stall timer."""
+    import agents
+
+    if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
+        lines.append("shuttle: hold %s" % ticket.get("id"))
+        return
     ticket["status"] = "fix"
     ticket["phase"] = "fixing"
     mark_shuttle(ticket, "fix", data)
@@ -447,7 +459,12 @@ def start_rebase(data: dict, ticket: dict, lines: list) -> None:
 
 def start_ci(data: dict, ticket: dict, lines: list) -> None:
     """The head has no check runs past the grace period. Ask for the workflow now."""
+    import agents
+
     tid = ticket.get("id")
+    if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
+        lines.append("shuttle: hold %s" % tid)
+        return
     ticket["status"] = "fix"
     ticket["phase"] = "fixing"
     mark_shuttle(ticket, "fix", data)
@@ -604,11 +621,10 @@ def _release_slot(ticket: dict) -> None:
 
 
 def open_parent_session(data: dict, now=None) -> list:
-    """Start or resume. A new parent session. Earlier subagent Shuttles are dead.
+    """Start or resume. A new parent session.
 
-    VM mode keeps a Shuttle with a fresh heartbeat or a start that is not
-    stale. Every released ticket loses its slot and waits for a replacement.
-    This does not launch anything.
+    A fresh heartbeat stays, in VM mode and in subagent mode. A stale heartbeat
+    loses its slot and waits for a replacement. This does not launch anything.
     """
     import uuid
 
@@ -684,23 +700,26 @@ def _launch_replacement(data: dict, ticket: dict, lines: list, step: str) -> Non
         lines.append("shuttle: alarm %s worker-died" % tid)
         lines.append("herald: %s worker died. Recovery cap reached." % tid)
         return
-    number = count + 1
-    new_agent, number = beam_mod._unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
     prev = ticket.get("status")
     if prev != "recovering":
         ticket["recoveryPriorStatus"] = prev
     ticket["status"] = "recovering"
-    ticket["agent"] = new_agent
-    ticket["recoveries"] = number
     stamp = beam_mod.utcnow()
     ticket["recoveredAt"] = stamp
     ticket["workerStartedAt"] = stamp
     ticket.pop("lastSeenAt", None)
+    ticket["needsReplacement"] = False
     mark_shuttle(ticket, step, data)
+    started = _start_lines(data, ticket, step, "replace", replacing=True)
+    if started and started[0].startswith("spawn:"):
+        lines.extend(started)
+        return
+    number = int(ticket.get("recoveries") or 0) + 1
+    ticket["recoveries"] = number
     branch = ticket.get("branch") or ""
-    lines.append("shuttle: replace %s agent=%s branch=%s" % (tid, new_agent, branch))
+    lines.append("shuttle: replace %s agent=%s branch=%s" % (tid, ticket.get("agent") or "", branch))
     lines.append("herald: %s worker died. A new Shuttle started." % tid)
-    lines.extend(_start_lines(data, ticket, step, "replace"))
+    lines.extend(started)
 
 
 def cold_start(beam_path) -> list:
@@ -765,19 +784,38 @@ def _returned(ticket: dict, snap: Optional[dict]) -> bool:
     return False
 
 
-def _start_lines(data: dict, ticket: dict, step: str, detail: str = "") -> list:
-    cfg = data.get("config") or {}
-    kind = orchestrator.dispatch_checkout(cfg, data)
-    branch = orchestrator.branch_name(ticket, cfg)
-    launch = orchestrator.launch_for(cfg, data)
-    extra = " launch=%s" % launch.get("launch")
-    if launch.get("refuseInProcess"):
-        extra += " refuse-in-process"
-    lines = [
-        "start %s checkout=%s branch=%s%s step=%s" % (ticket.get("id"), kind, branch, extra, step)
-    ]
-    if detail:
-        lines.append("fix: %s %s" % (ticket.get("id"), detail))
+def _beam_path(data: dict):
+    raw = data.get("_agentBeam") or ""
+    if raw:
+        return Path(raw)
+    root = data.get("_repoRoot")
+    if root:
+        return Path(root) / ".warp" / "beam.json"
+    return None
+
+
+def _release_ticket(data: dict, ticket: dict, reason: str) -> list:
+    """End this ticket's registered agents when it merges or parks."""
+    import agents
+
+    return agents.release_ticket(data, ticket, reason, beam_path=_beam_path(data))
+
+
+def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacing: bool = False) -> list:
+    """One Shuttle line. `resume` continues the ticket's agent. `start` is a new one."""
+    import agents
+
+    lines = agents.launch_lines(
+        data,
+        ticket,
+        step,
+        detail,
+        replacing=replacing,
+        beam_path=_beam_path(data),
+    )
+    if lines and (lines[0].startswith("spawn: cap") or lines[0].startswith("spawn: closed")):
+        shuttle = _shuttle(ticket)
+        shuttle["pending"] = False
     return lines
 
 
@@ -817,6 +855,7 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     outcome = orchestrator.note_failure(ticket, text, data.get("config") or {})
     if outcome == "parked":
         ticket["alarm"] = "parked"
+        lines.extend(_release_ticket(data, ticket, "parked"))
         clear_shuttle(ticket)
         _phase(ticket, "parked", lines)
         lines.append("herald: %s parked." % ticket.get("id"))
@@ -827,16 +866,21 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     lines.extend(_start_lines(data, ticket, "fix", text))
 
 
-def _request_bugbot(ticket: dict, lines: list) -> None:
+def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> None:
+    """Ask Bugbot once for the current head commit."""
+    import agents
+
     pr = ticket.setdefault("pr", {})
     cycle = int(pr.get("reviewCycle") or 0)
     rollup = str(pr.get("rollup") or "").strip().casefold()
-    if pr.get("bugbotRequested") and pr.get("bugbotRequestedCycle") == cycle:
+    if not agents.allow_bugbot(ticket):
         ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
         ticket["phase"] = "reviewing"
-        lines.append("review: wait %s" % ticket.get("id"))
+        lines.append("bugbot: hold %s" % ticket.get("id"))
         return
-    pr["bugbotRequested"] = True
+    if data is None:
+        data = {}
+    agents.note_bugbot(data, ticket, beam_path=_beam_path(data))
     pr["bugbotRequestedCycle"] = cycle
     ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
     _phase(ticket, "reviewing", lines)
@@ -844,12 +888,18 @@ def _request_bugbot(ticket: dict, lines: list) -> None:
 
 
 def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str = "") -> None:
+    import agents
+
+    if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
+        lines.append("shuttle: hold %s" % ticket.get("id"))
+        return
+    replacing = agents.confirmed_dead(ticket, data) and not bool(agents.can_resume(data, ticket, beam_path=_beam_path(data)))
     ticket["alarm"] = None
     ticket["status"] = "recovering"
     _phase(ticket, step_phase, lines)
     mark_shuttle(ticket, "restart", data)
-    lines.extend(_start_lines(data, ticket, "restart"))
-    if herald:
+    lines.extend(_start_lines(data, ticket, "restart", replacing=replacing))
+    if herald and not any(line.startswith("spawn:") for line in lines):
         lines.append(herald)
 
 
@@ -955,6 +1005,12 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
     """Consume one Shuttle return. `stop` means do not evaluate the phase again."""
     phase = ticket.get("phase")
     failed = bool((snap or {}).get("workerDied")) or str((snap or {}).get("result") or "").strip().casefold() == "failed"
+    import agents
+
+    if not failed:
+        agents.note_returned(data, ticket, beam_path=_beam_path(data))
+    else:
+        agents.note_closed(data, ticket, "dead", beam_path=_beam_path(data))
     clear_shuttle(ticket)
     if failed:
         orchestrator.note_subagent_failure(ticket)
@@ -1025,7 +1081,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
         return
     if phase == "pr-open":
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
-            _request_bugbot(ticket, lines)
+            _request_bugbot(ticket, lines, data)
             return
         ticket["phase"] = "reviewing"
         phase = "reviewing"
@@ -1051,7 +1107,7 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
             _hold_or_queue(ticket, lines)
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
-            _request_bugbot(ticket, lines)
+            _request_bugbot(ticket, lines, data)
             return
         if _conflicted(ticket):
             start_rebase(data, ticket, lines)
@@ -1087,6 +1143,9 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
             ticket["phase"] = "merged"
         return
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
+    import agents
+
+    agents.finish_bugbot(data, ticket, now=now, beam_path=_beam_path(data))
     _ensure_acs(data, ticket)
     if _recover_alarm(data, ticket, lines, deferred):
         return
@@ -1181,6 +1240,7 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         lines.append("not merged")
         return
     ticket["phase"] = "merged"
+    lines.extend(_release_ticket(data, ticket, "merged"))
     clear_shuttle(ticket)
     url = (ticket.get("pr") or {}).get("url") or ""
     key = ticket.get("jiraKey") or ""
@@ -1240,6 +1300,10 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         import watch
 
         lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
+        import agents
+
+        if not agents.spawns_open(data):
+            lines.extend(agents.cleanup_settled(data, beam_path=beam_path, now=now))
         return lines
     finally:
         data.pop("_fixDefer", None)

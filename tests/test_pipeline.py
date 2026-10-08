@@ -128,7 +128,7 @@ class BugbotMergeTests(unittest.TestCase):
             },
             now=NOW,
         )
-        self.assertIn("bugbot: request T-1", text(again))
+        self.assertIn("bugbot: hold T-1", text(again))
         self.assertEqual(row["attempts"], 1)
         self.assertNotEqual(row["status"], "parked")
 
@@ -286,7 +286,9 @@ class ParkAndRefillTests(unittest.TestCase):
                 {"P-1": {"bugbot": "fail", "findings": ["nit"], "rollup": "red", "acs": {"builds": "fail"}}},
                 now=NOW,
             )
-            if any(line.startswith("start ") and "step=fix" in line for line in lines):
+            if any(
+                (line.startswith("start ") or line.startswith("resume ")) and "step=fix" in line for line in lines
+            ):
                 starts += 1
                 self.assertLess(data["tickets"]["P-1"]["attempts"], 3)
                 pipeline.advance(data, {"P-1": {"returned": True, "bugbot": "running", "findings": [], "acs": {"builds": "fail"}}}, now=NOW)

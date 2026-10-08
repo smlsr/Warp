@@ -69,6 +69,8 @@ def upgrade_line(installed: str, source: str) -> str:
 UPGRADE_SCRIPT = "python3 .cursor/plugins/warp/scripts/upgrade.py"
 # The project copy of the insurance sync. It runs without /warp-update-state.
 UPDATE_STATE_SCRIPT = "python3 .cursor/plugins/warp/scripts/update_state.py"
+# The project copy of agent cleanup. It runs without /warp-cleanup.
+CLEANUP_SCRIPT = "python3 .cursor/plugins/warp/scripts/agents.py"
 
 
 def upgrade_fallback() -> str:
@@ -79,6 +81,16 @@ def upgrade_fallback() -> str:
 def update_state_fallback() -> str:
     """Script lines for a palette that does not list /warp-update-state."""
     return f"{UPDATE_STATE_SCRIPT} --beam .warp/beam.json\n{UPDATE_STATE_SCRIPT} ?"
+
+
+def cleanup_fallback() -> str:
+    """Script lines for a palette that does not list /warp-cleanup."""
+    return (
+        f"{CLEANUP_SCRIPT} list --beam .warp/beam.json\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply\n"
+        f"{CLEANUP_SCRIPT} ?"
+    )
 
 
 def describe(root: Path) -> str:
@@ -118,6 +130,8 @@ def describe(root: Path) -> str:
     lines.append(upgrade_fallback())
     lines.append("If /warp-update-state is not in the command list:")
     lines.append(update_state_fallback())
+    lines.append("If /warp-cleanup is not in the command list:")
+    lines.append(cleanup_fallback())
     return "\n".join(lines)
 
 
@@ -148,6 +162,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         "  python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n"
         "  python3 .cursor/plugins/warp/scripts/update_state.py ?\n"
         "That script is on a 1.4.12 install and does not need the slash command.\n"
+        "When /warp-cleanup is missing, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py ?\n"
+        "The --cloud line is a dry run for this repo: registry rows or Warp roles, IDLE only.\n"
+        "It leaves the agent running the command, and every RUNNING or ACTIVE agent.\n"
+        "--apply archives that list. --all-idle stays on this repo. --any-repo is the wide sweep.\n"
         "?, help, -h, and --help print this text.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

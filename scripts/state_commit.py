@@ -44,6 +44,7 @@ STATE_NAMES = (
     "status.json",
     "BOARD.md",
     "board.html",
+    "agents.json",
 )
 SECRET_KEYS = {
     "token",
