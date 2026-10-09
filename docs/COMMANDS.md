@@ -17,6 +17,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-list` | Show what this run still has out, running or idle. Changes nothing. `--scan` lists every agent the key can see that matches the words, in any repo | `agents.py list` `--beam` `--tag` `--untagged` `--all-idle` `--any-repo` `--scan` |
 | `/warp-cleanup` | Cancel the run of each agent `/warp-list` shows as running, and archive all of them. Without `--apply` it is a dry run. `--scan` archives idle word matches and leaves running ones unless `--force` | `agents.py cleanup` `--beam` `--cloud` `--apply` `--running` `--force` `--tag` `--untagged` `--all-idle` `--any-repo` `--scan` |
 | `/warp-update-state` | Load main and `.warp/tickets/<id>/`, keep parent pause, stop, and claims, push the beam | `update_state.py` `--beam` `--root` |
+| `/warp-sync` | Read Jira into the beam. Dry-run unless `--apply`. Does not dispatch | `jira_sync.py sync` `--beam` `--jira` `--prs` `--apply` `--force` `--id` |
 | `/warp` | One tick of the master loop, including the watchdog | the `warp` skill, `beam.py watchdog`. Not a script flag. |
 | `/warp-status` | List every ticket that is not merged, alarms and stalls first, and rewrite status and the board | `scan.py status`, `beam.py board` |
 | `/warp-status-post` | Post that digest | `status_post.py` `--beam` `--out` |
@@ -35,7 +36,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-upgrade` | Replace the project plugin copy. Leaves config and the beam | `upgrade.py` `--root` `--source` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
-`jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
+`jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `sync`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
 
 The orchestrator is the only merger. Shuttles and Reed do not merge. `orchestrator.py` is the policy the master loop runs. It does not edit ticket product code. Ready means every dependency and `after` id is merged on the base branch, and no lock overlaps an in-flight ticket, including a parent folder. The slot frees when the provider check rollup is green. Locks stay until merge or park. The merge queue is serial: rebase, check, merge, delete the branch, dispatch. Sizes outside `autoMergeSizes` still wait for `/warp-proceed` or `warp:proceed`. A red base branch stops merging. `queue --beam` prints the next merge candidate. `fail --beam --id --output` records a red check and parks once attempts reach `maxFixAttempts` (default 5). `rebuild --beam --facts` classifies `merged`, `in-flight`, and `pending` from git. `resolve --path --append-only --base --ours --theirs` keeps both sides for `appendOnlyPaths` and prints `send-back` for any other path. `dispatch --beam` recomputes pending gates, then prints starts after a freed slot, a merge, or a failure. A pending or stale-red gate turns green when every member is merged or done and no check is actually red, then the tick runs. G1 with members P-002, P-003, P-004, and P-018 stores `members merged: P-002, P-003, P-004, P-018`. The line is `G1 pending cleared. Members merged. Tick ran.` `record --beam --id --plan --result` stores the plan record and the result record. `checkCommand` empty means Bugbot and CI as configured. `make ci` is kept as the full check command (the space stays) and the result is stored on `pr.check`. A red `make ci` prints `send-back <id> fix` and a `start` line with the log. A green result does not. Past `maxFixAttempts` (default 5) the ticket parks. The name alone is not a red check. The cap is `maxAgents`. A project may set 18. `mergeQueue` defaults to false.
 
@@ -219,7 +220,8 @@ Tool names are in `scripts/mcp_tools.py`. Server name is `jiraMcp` (default `atl
 | When | Jira | Pull request |
 |---|---|---|
 | Claim | In Progress (`jiraInProgressStatus`) and a comment, if `jiraTransition` is true and the ticket has a key | none |
-| PR opened | comment with the link | connected mode only: GitHub `add_issue_comment` or `gh pr comment`. Bitbucket uses the comment tool on `bitbucketMcp` (unnamed here). |
+| Bugbot requested | In Review (`jiraInReviewStatus`). When Bugbot is off, this happens when the pull request opens instead. Empty `jiraInReviewStatus` skips it. A fix send-back stays here | none |
+| PR opened | comment with the link. Also the In Review move when Bugbot is off | connected mode only: GitHub `add_issue_comment` or `gh pr comment`. Bitbucket uses the comment tool on `bitbucketMcp` (unnamed here). |
 | Bugbot / CI | comment | connected mode only |
 | Waiting (`autoMerge` false, sizes not in `autoMergeSizes`) | After Bugbot pass and CI green: QA Ready (`jiraQaReadyStatus`) and a comment, "Bugbot clean, ready for manual review", with the findings-fixed count | connected mode only |
 | Merged, auto | Done (`jiraDoneStatus`) and a comment | connected mode only |

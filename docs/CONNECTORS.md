@@ -32,7 +32,11 @@ Those names, and the Slack, Teams, and GitHub names below, are defined once in `
 
 Key resolution, in order: a key already on the plan or in `.warp/jira-map.json`, then `jiraExternalIdField` and the other external-id names, then label `warp:<id>`, then a remote link, then `/warp-jira-match` for the summary. `/warp-jira-view` reads one issue. `/warp-jira-check` prints what was recorded. Details are in [GUIDE.md](GUIDE.md).
 
-`pick` matches the transition name, then the target status name, then (for In Progress and Done only) the status category. QA Ready is name-only. Never send a fixed transition id. An issue already in progress is left alone, and a Done issue is not reopened.
+`pick` matches the transition name, then the target status name, then (for In Progress and Done only) the status category. QA Ready and In Review are name-only. Never send a fixed transition id. An issue already in progress is left alone, and a Done issue is not reopened. In Review does not pull an issue back from QA Ready or Done.
+
+`/warp-sync` (`jira_sync.py sync`) reads Jira into the beam. Catchup goes the other way, and `/warp-update-state` does not read Jira. The script cannot call the Atlassian MCP: with no `--jira` file it prints the `getJiraIssue` fetches, and the agent passes the transcript back. Pull requests are looked up by branch through GitHub (`gh pr list --head`) or a `--prs` file for Bitbucket. A merged pull request wins over the Jira status. Dry-run is the default. `--apply` writes. A move to an earlier status needs `--force`. It does not dispatch and does not start a listener. `/warp-start` picks the work up on the unfinished-first pass.
+
+Status mapping uses the configured names. To Do (or category `new`) is `queued`. `jiraInProgressStatus` needs a Shuttle. `jiraInReviewStatus` is `reviewing`. `jiraQaReadyStatus` is `awaiting_approval`. `jiraDoneStatus` (or category `done`) is `merged`. When `jiraInReviewStatus` is empty, nothing maps to In Review, and a ticket with an open pull request stays `reviewing` from that lookup. That path does not set `jira.inReviewAt`. A ticket already in `fix` stays there while Jira is still In Review. A merged pull request wins when more than one pull request matches the ticket.
 
 Who moves the issue:
 
@@ -40,7 +44,8 @@ Who moves the issue:
 |---|---|---|
 | Scan | `scan.py` | Stores a Jira export `key`, a plan `jiraKey`, a map-file key, or one exact external-id, label, or remote-link match. A plan id such as `WV-01` stays unmapped until that match. No transition. |
 | Claim | dispatch or the Shuttle, from the `jira:` lines `beam.py set` prints | In Progress, plus a Jira comment (started, shuttle, branch). |
-| PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. |
+| Bugbot requested | the parent, when it prints `bugbot: request` | In Review (`jiraInReviewStatus`). When Bugbot is off, the pull request opening does this instead. An empty `jiraInReviewStatus` skips the move. A fix send-back stays in In Review. No matching transition warns and does not fail. |
+| PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. When Bugbot is off, this is also the In Review move. |
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
 | Waiting (sizes not in `autoMergeSizes`, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
 | Merge, auto (`autoMerge` true) | The orchestrator. Connected: `provider.py merge-pr`. A merge queue (`mergeQueue` or a GitHub ruleset) enqueues and does not mark the ticket merged. A direct merge that branch protection rejects is not marked merged. Local: `provider.py merge-local`, which sets merged only when the squash commit lands. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected) after a real merge. |
