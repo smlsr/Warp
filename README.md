@@ -151,6 +151,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-list` | Show what this run still has out, running or idle: the instance, every registry row, each tagged cloud agent with its status, and `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>`. Changes nothing. `--scan` lists word matches in any repo | `--beam`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-cleanup` | Cancel the run of each agent `/warp-list` shows as running, and archive all of them. Leave `--apply` off for a dry run. While the run is running it archives the idle ones and refuses the running ones unless `--force`. `--scan` archives idle word matches and leaves running ones unless `--force` | `--beam`, `--cloud`, `--apply`, `--running`, `--force`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
+| `/warp-sync` | Read Jira into the beam. Dry-run unless `--apply`. Does not dispatch | `--jira`, `--prs`, `--apply`, `--force` |
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | List open tickets, alarms and stalls first, and rewrite `.warp/STATUS.md` and the board | |
 | `/warp-status-post` | Post that digest to Slack or Teams | |
@@ -643,6 +644,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraExternalIdFallback` | `label` | `label`, `remote-link`, or `none` when the External ID field is missing. |
 | `jiraTransition` | `true` | On claim, move the Jira issue to In Progress (tickets with a Jira key only). `false` does not stop the run when the first ticket has no Jira issue. |
 | `jiraInProgressStatus` | `In Progress` | Target status name, matched by transition name, status name, then status category. |
+| `jiraInReviewStatus` | `In Review` | Bugbot request, or the pull request opening when Bugbot is off. A missing key keeps `In Review`. An empty string or null turns the move off. A fix send-back stays here. |
 | `jiraQaReadyStatus` | `QA Ready` | Manual path (sizes not in `autoMergeSizes`): Jira moves here after Bugbot is clean and CI is green, and waits here until the merge. |
 | `jiraDoneStatus` | `Done` | Jira moves here after the merge, auto or manual. |
 | `jiraDoneOnManualMerge` | `true` | `false` leaves a manual merge at QA Ready so QA can set Done. |

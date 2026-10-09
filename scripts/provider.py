@@ -569,6 +569,64 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
     return snap
 
 
+def lookup_pr(root: Path, branch: str) -> Optional[dict]:
+    """Pull request for a branch via `gh pr list --head`. None when gh cannot be asked.
+
+    A merged request wins over an open one. Bitbucket is not asked here; the
+    caller passes a --prs file for that host.
+    """
+    if not branch or not shutil.which("gh"):
+        return None
+    viewed = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--limit",
+            "10",
+            "--json",
+            "number,url,state,headRefOid,headRefName",
+        ],
+        root,
+    )
+    if viewed.returncode != 0:
+        return None
+    try:
+        rows = json.loads(viewed.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    rows = [row for row in rows if isinstance(row, dict)]
+    if not rows:
+        return None
+
+    def rank(row: dict) -> int:
+        state = str(row.get("state") or "").upper()
+        if state == "MERGED":
+            return 0
+        if state == "OPEN":
+            return 1
+        return 2
+
+    rows.sort(key=rank)
+    row = rows[0]
+    state = str(row.get("state") or "").upper()
+    return {
+        "number": row.get("number"),
+        "url": row.get("url") or "",
+        "state": state,
+        "sha": str(row.get("headRefOid") or ""),
+        "branch": str(row.get("headRefName") or branch),
+        "merged": state == "MERGED",
+        "open": state == "OPEN",
+    }
+
+
 def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:
     """Ask the configured provider. Unknown or unreachable stays pending."""
     if provider == "bitbucket":

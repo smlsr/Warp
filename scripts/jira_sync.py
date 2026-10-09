@@ -13,10 +13,12 @@ run is stopped. A later miss, after one ticket was moved to In Progress, is not.
   record-comment  store a Jira or pull-request comment id
   verify          per ticket: keyed or unmapped, why, and the one command that fixes it
   catchup         print the moves still owed; --write stores an inferred key
+  sync            read Jira (and pull requests) into the beam; dry-run unless --apply
 
 Settings (.warp/config.yaml, else the beam copy, else the defaults below):
   jiraTransition          true
   jiraInProgressStatus    "In Progress"
+  jiraInReviewStatus      "In Review"   missing key keeps this; empty or null turns the move off
   jiraQaReadyStatus       "QA Ready"
   jiraDoneStatus          "Done"
   jiraDoneOnManualMerge   true     manual merge moves to Done; false leaves QA Ready
@@ -75,6 +77,7 @@ LOOKUP_SOURCES = {"external", "label", "link", "summary"}
 DEFAULTS = {
     "jiraTransition": True,
     "jiraInProgressStatus": "In Progress",
+    "jiraInReviewStatus": "In Review",
     "jiraQaReadyStatus": "QA Ready",
     "jiraDoneStatus": "Done",
     "jiraDoneOnManualMerge": True,
@@ -93,7 +96,7 @@ DEFAULTS = {
     "bugbotManual": True,
     "maxFixAttempts": 5,
 }
-EVENTS = ["claim", "release", "qa-ready", "done"]
+EVENTS = ["claim", "release", "in-review", "qa-ready", "done"]
 COMMENT_EVENTS = ["claim", "pr-opened", "qa-ready", "merged", "bugbot", "bugbot-rerun", "ci", "alarm", "blocked"]
 GATED_STATUSES = {"awaiting_approval", "merging", "merged"}
 DONE = {"merged", "done"}
@@ -263,8 +266,33 @@ def apply_review(ticket: dict, cfg: Optional[dict], args) -> Optional[str]:
     return note
 
 
+_BLANK_STATUS = {"", "null", "none", "~", "nil"}
+
+
+def blank_status(value) -> str:
+    """An explicit empty status. A missing key is not passed here.
+
+    Empty string, JSON null, and the words null, none, and ~ are off.
+    """
+    if value is None or isinstance(value, bool):
+        return ""
+    text = str(value).strip().strip("\"'")
+    if text.lower() in _BLANK_STATUS:
+        return ""
+    return text
+
+
+def in_review_target(cfg: Optional[dict]) -> str:
+    """Configured In Review name. Empty means the move is off."""
+    return str((cfg or {}).get("jiraInReviewStatus") or "").strip()
+
+
 def settings(beam_path: Path, beam: Optional[dict] = None) -> dict:
-    """Defaults, then the beam's config copy, then .warp/config.yaml. A missing key keeps the default."""
+    """Defaults, then the beam's config copy, then .warp/config.yaml. A missing key keeps the default.
+
+    jiraInReviewStatus is the exception: a missing key stays "In Review", and an
+    explicit empty string or null stores "" so the In Review move does not run.
+    """
     out = dict(DEFAULTS)
     sources = [(beam or {}).get("config") or {}]
     cfg = beam_path.parent / "config.yaml"
@@ -278,9 +306,14 @@ def settings(beam_path: Path, beam: Optional[dict] = None) -> dict:
         sources.append(found)
     for src in sources:
         for key, default in DEFAULTS.items():
-            if key not in src or src[key] is None:
+            if key not in src:
                 continue
             v = src[key]
+            if key == "jiraInReviewStatus":
+                out[key] = blank_status(v)
+                continue
+            if v is None:
+                continue
             if key == "jiraKeyMap":
                 out[key] = parse_key_map(v)
             elif key == "jiraKeyPrefixes":
@@ -614,6 +647,21 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
             out["reason"] = "Warp did not move this issue, nothing to restore"
         else:
             out.update(action="transition", target=prev, kind="restore")
+    elif event == "in-review":
+        target = in_review_target(cfg)
+        if not target:
+            out["reason"] = "jiraInReviewStatus is empty; In Review is off"
+        elif jira.get("inReviewAt"):
+            out["reason"] = "already moved to In Review"
+        elif jira.get("qaReadyAt") or jira.get("doneAt"):
+            out["reason"] = "already past In Review"
+        else:
+            out.update(
+                action="transition",
+                target=target,
+                kind="review",
+                ahead=[cfg.get("jiraQaReadyStatus") or "QA Ready", cfg.get("jiraDoneStatus") or "Done"],
+            )
     elif event == "qa-ready":
         if auto:
             out["reason"] = "auto-merge ticket; it goes to Done after the merge, not QA Ready"
@@ -634,18 +682,28 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
     return out
 
 
-def pick(transitions: list[dict], target: str, current: Optional[dict] = None, allow_category: bool = True, kind: str = "start") -> dict:
+def pick(
+    transitions: list[dict],
+    target: str,
+    current: Optional[dict] = None,
+    allow_category: bool = True,
+    kind: str = "start",
+    ahead: Optional[list] = None,
+) -> dict:
     """Choose one of the transitions Jira offers. Names are matched case-insensitively.
 
-    kind: start (fall back to an in-progress category), qa (name only; a Done issue
-    is never pulled back), done (fall back to the done category), restore (name only).
+    kind: start (fall back to an in-progress category), review (name only; QA Ready
+    and Done are never pulled back), qa (name only; a Done issue is never pulled
+    back), done (fall back to the done category), restore (name only).
     Accepts Jira's shape ({id, name, to: {name, statusCategory: {key}}}) or a flat
     one ({id, name, toName, category}). `current` is {name, category}.
+    `ahead` is status names that are already past this move.
     """
     want = target.casefold()
     if not allow_category and kind == "start":
         kind = "restore"
     fallback = {"start": "indeterminate", "done": "done"}.get(kind)
+    later = {str(name).strip().casefold() for name in (ahead or []) if str(name).strip()}
     if current:
         cname = (current.get("name") or "").casefold()
         ccat = (current.get("category") or "").casefold()
@@ -657,7 +715,9 @@ def pick(transitions: list[dict], target: str, current: Optional[dict] = None, a
             return {"transition": None, "result": "skipped", "reason": f"issue is {current.get('name')}; not reopened"}
         if kind == "done" and ccat == "done":
             return {"transition": None, "result": "already", "reason": f"already {current.get('name')}"}
-        if kind == "qa" and ccat == "done":
+        if kind in {"qa", "review"} and ccat == "done":
+            return {"transition": None, "result": "skipped", "reason": f"issue is {current.get('name')}; not moved back to {target}"}
+        if kind == "review" and cname in later:
             return {"transition": None, "result": "skipped", "reason": f"issue is {current.get('name')}; not moved back to {target}"}
 
     def to_name(t):
@@ -743,6 +803,7 @@ def _comments(ticket: dict, where: str) -> dict:
 VERB = {
     "claim": "move to",
     "release": "move back to",
+    "in-review": "in review, so move to",
     "qa-ready": "ready for manual review and merge, so move to",
     "done": "merged, so move to",
 }
@@ -759,15 +820,27 @@ def instruction(p: dict) -> str:
             "If none fits, record --result no-transition. That writes .warp/outbox.md and Herald posts Jira not updated. "
             "The merge stands."
         )
+    elif p.get("event") == "in-review":
+        tail = (
+            "Pick by transition name, then by the target status name. "
+            "Do not use the status category: In Review and In Progress are both in progress. "
+            "If the issue is already QA Ready or Done, record --result skipped. "
+            "If nothing fits, record --result no-transition. That warns and does not fail. "
+            "Nothing else is blocked."
+        )
     elif p.get("event") == "claim":
         tail += (
             " If getJiraIssue says the issue was not found, record --result not-found. "
             "When no ticket in this run has jira.startedAt, that releases the claim and stops the run."
         )
+    ahead = ""
+    names = [str(name) for name in (p.get("ahead") or []) if str(name).strip()]
+    if names:
+        ahead = " --ahead \"" + ",".join(names) + "\""
     return (
         f"jira: {p['id']} ({p['jiraKey']}): {VERB[p['event']]} \"{p['target']}\" through the connected Jira MCP server. "
         f"Read the issue with {TOOL_ISSUE} and its transitions with {TOOL_TRANSITIONS} "
-        f"(or {TOOL_TRANSITIONS_ALT} if that is the name the server lists), then run: python3 {me} pick --kind {p['kind']} --target \"{p['target']}\" "
+        f"(or {TOOL_TRANSITIONS_ALT} if that is the name the server lists), then run: python3 {me} pick --kind {p['kind']} --target \"{p['target']}\"{ahead} "
         f"--current '<{{\"name\":..., \"category\":...}}>' --transitions '<json>'. "
         f"Call {TOOL_TRANSITION} with the id it picks (argument transition.id, or transitionId if that is the schema's field). "
         f"Then record: python3 {me} record --beam <beam> --id {p['id']} --event {p['event']} "
@@ -821,6 +894,9 @@ def _comment_action(ticket: dict, where: str, event: str, body: str) -> Optional
 def event_for(ticket: dict, prev: str, new: str) -> Optional[str]:
     if new == prev:
         return None
+    # A fix send-back stays in In Review. It never moves Jira back to In Progress.
+    if new == "fix":
+        return None
     if new == "claimed" and prev not in ACTIVE:
         return "claim"
     if new == "queued" and prev in ACTIVE:
@@ -830,6 +906,27 @@ def event_for(ticket: dict, prev: str, new: str) -> Optional[str]:
     if new in DONE and prev not in DONE:
         return "done"
     return None
+
+
+def review_due(ticket: dict, before: dict, cfg: dict) -> bool:
+    """True when this update should move Jira to In Review.
+
+    Bugbot on: the request just landed. Bugbot off: the pull request just opened.
+    Empty jiraInReviewStatus never asks. A ticket already in review, QA Ready,
+    or Done does not ask again.
+    """
+    if not in_review_target(cfg):
+        return False
+    jira = ticket.get("jira") or {}
+    if jira.get("inReviewAt") or jira.get("qaReadyAt") or jira.get("doneAt"):
+        return False
+    pr = ticket.get("pr") or {}
+    before = before or {}
+    if bugbot_applies(ticket, cfg):
+        asked = bool(pr.get("bugbotRequested") or pr.get("bugbotRequestedAt"))
+        return asked and not before.get("bugbotRequested")
+    url = pr.get("url")
+    return bool(url) and url != before.get("pr_url")
 
 
 def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) -> list[dict]:
@@ -843,6 +940,10 @@ def actions_for(ticket: dict, before: dict, cfg: dict, mode: str, root: Path) ->
     actions: list[dict] = []
     if event:
         p = plan(ticket, event, cfg)
+        if p["action"] == "transition":
+            actions.append({"type": "transition", "plan": p})
+    if review_due(ticket, before, cfg):
+        p = plan(ticket, "in-review", cfg)
         if p["action"] == "transition":
             actions.append({"type": "transition", "plan": p})
     bodies = _bodies(ticket, root, mode, prefixes, cfg)
@@ -993,6 +1094,7 @@ def _snapshot(prev, ticket: dict) -> dict:
         "branch": ticket.get("branch"),
         "agent": ticket.get("agent"),
         "sha": pr.get("sha"),
+        "bugbotRequested": bool(pr.get("bugbotRequested") or pr.get("bugbotRequestedAt")),
     }
 
 
@@ -1315,7 +1417,7 @@ def record(
         "error": failure,
         "detail": detail,
     }
-    marker = {"qa-ready": "qaReadyAt", "done": "doneAt"}.get(event)
+    marker = {"in-review": "inReviewAt", "qa-ready": "qaReadyAt", "done": "doneAt"}.get(event)
     if result == "moved":
         if event == "claim":
             jira["startedAt"] = now()
@@ -1348,7 +1450,7 @@ def record(
     }.get(result, result)
     note = f"Jira status not updated for {tid} ({key}): {why}." + (f" {error or detail}" if (error or detail) else "")
     if event != "release":
-        default = {"claim": "In Progress", "qa-ready": "QA Ready", "done": "Done"}.get(event, "In Progress")
+        default = {"claim": "In Progress", "in-review": "In Review", "qa-ready": "QA Ready", "done": "Done"}.get(event, "In Progress")
         note += f" Move {key} to \"{to or default}\" by hand if you want it to match."
         if event == "done":
             note += " The merge stands; Warp retries on the next tick."
@@ -1470,11 +1572,19 @@ def record_comment(beam_path: Path, tid: str, where: str, event: str, comment_id
 def _item_recorded(ticket: dict, item: dict) -> bool:
     jira = ticket.get("jira") or {}
     if item["type"] == "transition":
-        field = {"claim": "startedAt", "qa-ready": "qaReadyAt", "done": "doneAt"}.get(item["event"])
+        field = {"claim": "startedAt", "in-review": "inReviewAt", "qa-ready": "qaReadyAt", "done": "doneAt"}.get(item["event"])
         return bool(field and jira.get(field))
     where = item["where"]
     bucket = jira if where == "jira" else (ticket.get("pr") or {})
     return item["event"] in (bucket.get("comments") or {})
+
+
+def _review_expected(ticket: dict, cfg: dict) -> bool:
+    """The beam has already reached the moment In Review is owed."""
+    pr = ticket.get("pr") or {}
+    if bugbot_applies(ticket, cfg):
+        return bool(pr.get("bugbotRequested") or pr.get("bugbotRequestedAt"))
+    return bool(pr.get("url"))
 
 
 def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]:
@@ -1514,6 +1624,8 @@ def expected_items(ticket: dict, cfg: dict, mode: str) -> tuple[list[dict], str]
         items.append({"type": "comment", "where": "jira", "event": "pr-opened"})
         if _wants_pr(ticket, mode):
             items.append({"type": "comment", "where": "pr", "event": "pr-opened"})
+    if in_review_target(cfg) and _review_expected(ticket, cfg):
+        items.append({"type": "transition", "event": "in-review", "target": in_review_target(cfg)})
     if status == "awaiting_approval" and not auto:
         items.append({"type": "transition", "event": "qa-ready", "target": cfg["jiraQaReadyStatus"]})
         items.append({"type": "comment", "where": "jira", "event": "qa-ready"})
@@ -1562,6 +1674,7 @@ def diagnose(ticket: dict, cfg: dict, mode: str) -> dict:
         "recorded": {
             "startedAt": jira.get("startedAt"),
             "previousStatus": jira.get("previousStatus"),
+            "inReviewAt": jira.get("inReviewAt"),
             "qaReadyAt": jira.get("qaReadyAt"),
             "doneAt": jira.get("doneAt"),
             "lastSync": jira.get("lastSync"),
@@ -1611,7 +1724,7 @@ def format_diagnosis(row: dict, beam_path: Optional[Path] = None) -> str:
         "jiraMapping: needs mapping" if row.get("needsMapping") else "jiraMapping: mapped",
         f"beam: {row['status']}  autoMerge: {row['autoMerge']}  mode: {row['mode']}",
         f"bugbot: {rec.get('bugbot') or '(none)'}  ci: {rec.get('ci') or '(none)'}  findings fixed: {rec.get('bugbotFixed') or 0}",
-        f"recorded: startedAt={rec['startedAt'] or '(none)'} qaReadyAt={rec['qaReadyAt'] or '(none)'} doneAt={rec['doneAt'] or '(none)'}",
+        f"recorded: startedAt={rec['startedAt'] or '(none)'} inReviewAt={rec.get('inReviewAt') or '(none)'} qaReadyAt={rec['qaReadyAt'] or '(none)'} doneAt={rec['doneAt'] or '(none)'}",
         f"comments jira: {jira_comments}",
         f"comments pr: {pr_comments}",
         "should: " + ("; ".join(row["should"]) or "(nothing)"),
@@ -2771,17 +2884,531 @@ every project. jiraSite is stored when there is a single site. A value you
 already set is left alone. When nothing is chosen the warning is:
 jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)
 
-plan/record --event: claim, release, qa-ready, done.
+plan/record --event: claim, release, in-review, qa-ready, done.
 record --result: moved, already, skipped, unavailable, no-transition, failed, not-found.
 not-found on the first claimed ticket (no jira.startedAt anywhere in the run)
 releases that claim and stops the run. A later not-found does not. jiraTransition
 false does not stop the run.
 record-comment --where: jira or pr.
 record-comment --event: claim, pr-opened, qa-ready, merged, bugbot, bugbot-rerun, ci, alarm, blocked.
-pick --kind: start, qa, done, restore. --no-category skips the status-category match.
+pick --kind: start, review, qa, done, restore. --no-category skips the status-category match.
+--ahead is a comma-separated list of statuses already past this move (QA Ready, Done).
+
+sync reads Jira into the beam. It does not call Jira. Pass --jira with a
+getJiraIssue transcript. Pull requests come from gh pr list --head <branch>,
+or from --prs when the host is Bitbucket or gh is not available. A merged
+pull request wins over the Jira status. Dry-run is the default. --apply
+writes. --force allows a move to an earlier status. --id limits one ticket.
+--beam is the beam path. One line per ticket that differs, then a summary.
+sync does not dispatch and does not start a listener.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
+
+
+def queue_in_review(beam_path: Path, beam: dict, ticket: dict) -> str:
+    """MUST DO text for a Bugbot request. Empty when In Review is off or already recorded."""
+    try:
+        cfg = settings(beam_path, beam)
+        pr = ticket.get("pr") or {}
+        before = {
+            "status": ticket.get("status"),
+            "pr_url": pr.get("url"),
+            "bugbot": pr.get("bugbot"),
+            "bugbotRequested": False,
+            "ci": pr.get("ci"),
+            "alarm": ticket.get("alarm"),
+        }
+        if not review_due(ticket, before, cfg):
+            return ""
+        mode = _mode(beam_path)
+        root = _root(beam_path)
+        actions = [
+            action
+            for action in actions_for(ticket, before, cfg, mode, root)
+            if action.get("type") == "transition" and (action.get("plan") or {}).get("event") == "in-review"
+        ]
+        if not actions:
+            return ""
+        _write_todo(beam_path, [_todo_payload(ticket, actions, cfg, mode)])
+        _journal(beam_path, {"type": "jira-intent", "id": ticket.get("id"), "actions": ["in-review"]})
+        return render(ticket, actions, cfg)
+    except Exception as e:
+        return f"jira: skipped ({e})"
+
+
+_SYNC_RANK = {"queued": 0, "shuttle": 1, "reviewing": 2, "awaiting_approval": 3, "merged": 4}
+_SYNC_HELD = {"parked", "skipped", "alarm"}
+_SYNC_TO = {
+    "queued": "queued",
+    "shuttle": "claimed",
+    "reviewing": "reviewing",
+    "awaiting_approval": "awaiting_approval",
+    "merged": "merged",
+}
+
+
+def _fold_name(value) -> str:
+    return str(value or "").strip().casefold()
+
+
+def map_jira_status(name: str, category: str, cfg: dict) -> Optional[str]:
+    """Beam intent for a Jira status, using the configured names.
+
+    None when the name is not one of those statuses. An empty
+    jiraInReviewStatus matches nothing, so that name does not map.
+    """
+    folded = _fold_name(name)
+    cat = _fold_name(category)
+    if not folded and not cat:
+        return None
+    done = _fold_name((cfg or {}).get("jiraDoneStatus") or "Done")
+    if folded and folded == done:
+        return "merged"
+    if cat == "done":
+        return "merged"
+    qa = _fold_name((cfg or {}).get("jiraQaReadyStatus"))
+    if qa and folded == qa:
+        return "awaiting_approval"
+    review = _fold_name(in_review_target(cfg))
+    if review and folded == review:
+        return "reviewing"
+    progress = _fold_name((cfg or {}).get("jiraInProgressStatus") or "In Progress")
+    if progress and folded == progress:
+        return "shuttle"
+    if folded in {"to do", "todo", "backlog", "open"} or cat == "new":
+        return "queued"
+    return None
+
+
+def current_intent(ticket: dict) -> str:
+    """Where the beam already is, on the same scale as map_jira_status."""
+    status = str(ticket.get("status") or "queued")
+    if status in _SYNC_HELD:
+        return status
+    phase = str(ticket.get("phase") or "")
+    if status in {"merged", "done"} or phase == "merged":
+        return "merged"
+    if status == "awaiting_approval" or phase == "ready":
+        return "awaiting_approval"
+    if status in {"review", "bugbot_running"} or phase in {"reviewing", "pr-open"}:
+        return "reviewing"
+    if status in {"claimed", "recovering", "planning", "coding", "fix"} or phase in {"implementing", "fixing"}:
+        return "shuttle"
+    return "queued"
+
+
+def desired_intent(name: str, category: str, pr: Optional[dict], cfg: dict) -> Optional[str]:
+    """Jira status, then the pull request. A merged pull request wins.
+
+    When In Review is off, an open pull request is reviewing unless Jira is
+    already QA Ready or Done.
+    """
+    if pr and pr.get("merged"):
+        return "merged"
+    mapped = map_jira_status(name, category, cfg)
+    if mapped in {"awaiting_approval", "merged"}:
+        return mapped
+    if not in_review_target(cfg) and pr and pr.get("open"):
+        return "reviewing"
+    return mapped
+
+
+def _status_decision(current: str, desired: Optional[str], force: bool) -> str:
+    """change, refused, or same."""
+    if not desired or desired == current:
+        return "same"
+    if current in _SYNC_HELD and not force:
+        return "refused"
+    current_rank = _SYNC_RANK.get(current)
+    desired_rank = _SYNC_RANK.get(desired)
+    if current_rank is not None and desired_rank is not None and desired_rank < current_rank and not force:
+        return "refused"
+    return "change"
+
+
+def _sync_reason(intent: Optional[str], jira_name: str, pr: Optional[dict], cfg: dict) -> str:
+    if pr and pr.get("merged"):
+        number = pr.get("number")
+        return f"pr #{number} merged" if number else "pr merged"
+    if intent == "reviewing" and not in_review_target(cfg) and pr and pr.get("open"):
+        number = pr.get("number")
+        return f"pr #{number} open" if number else "pr open"
+    if intent == "shuttle":
+        return "needs a Shuttle"
+    if jira_name:
+        return f"jira {jira_name}"
+    return intent or ""
+
+
+def _one_jira_status(key: Optional[str], row) -> Optional[tuple]:
+    if isinstance(row, str):
+        norm = normalize_key(key or "")
+        return (norm, {"name": row, "category": ""}) if norm else None
+    if not isinstance(row, dict):
+        return None
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else row
+    status = fields.get("status") if isinstance(fields.get("status"), dict) else {}
+    name = status.get("name") or fields.get("statusName") or fields.get("name") or ""
+    if isinstance(fields.get("status"), str) and not status:
+        name = fields.get("status")
+    category = ""
+    raw_cat = status.get("statusCategory") if isinstance(status, dict) else None
+    if raw_cat is None:
+        raw_cat = fields.get("statusCategory") or fields.get("category")
+    if isinstance(raw_cat, dict):
+        category = raw_cat.get("key") or raw_cat.get("name") or ""
+    elif raw_cat:
+        category = str(raw_cat)
+    norm = normalize_key(str(row.get("key") or row.get("jiraKey") or key or ""))
+    if not norm or not str(name).strip():
+        return None
+    return norm, {"name": str(name), "category": str(category)}
+
+
+def parse_jira_statuses(data) -> dict:
+    """Issue key to {name, category}. Accepts a getJiraIssue transcript or a map."""
+    found: dict = {}
+
+    def take(key, row) -> None:
+        parsed = _one_jira_status(key, row)
+        if parsed:
+            found[parsed[0]] = parsed[1]
+
+    if isinstance(data, list):
+        for row in data:
+            take(None, row)
+        return found
+    if not isinstance(data, dict):
+        return found
+    rows = None
+    for slot in ("issues", "tickets"):
+        if isinstance(data.get(slot), list):
+            rows = data[slot]
+            break
+    if rows is not None:
+        for row in rows:
+            take(None, row)
+        return found
+    for key, row in data.items():
+        if key in {"generatedAt", "cloudId"}:
+            continue
+        take(str(key), row if not isinstance(row, str) else row)
+    return found
+
+
+def parse_prs(data) -> list:
+    """Pull requests keyed loosely by id, issue key, or branch."""
+    raw_rows: list = []
+    if isinstance(data, dict) and isinstance(data.get("pulls"), list):
+        data = data["pulls"]
+    if isinstance(data, dict):
+        for key, row in data.items():
+            if key in {"generatedAt"} or not isinstance(row, dict):
+                continue
+            copied = dict(row)
+            copied.setdefault("id", key)
+            raw_rows.append(copied)
+    elif isinstance(data, list):
+        raw_rows = [row for row in data if isinstance(row, dict)]
+    out = []
+    for row in raw_rows:
+        state = str(row.get("state") or "").upper()
+        merged = state == "MERGED" or bool(row.get("merged"))
+        opened = state == "OPEN" or bool(row.get("open"))
+        if merged:
+            opened = False
+        out.append(
+            {
+                "id": str(row.get("id") or row.get("ticket") or ""),
+                "key": normalize_key(str(row.get("key") or row.get("jiraKey") or "")) or "",
+                "branch": str(row.get("branch") or row.get("headRefName") or ""),
+                "number": row.get("number"),
+                "url": row.get("url") or "",
+                "state": state,
+                "sha": str(row.get("sha") or row.get("headRefOid") or ""),
+                "merged": merged,
+                "open": opened and not merged,
+            }
+        )
+    return out
+
+
+def match_pr(ticket: dict, rows: list, branch: str) -> Optional[dict]:
+    tid = str(ticket.get("id") or "")
+    key = str(ticket.get("jiraKey") or "")
+    for row in rows:
+        if row.get("id") and row["id"] in {tid, key}:
+            return row
+        if row.get("key") and key and row["key"] == key:
+            return row
+        if row.get("branch") and branch and row["branch"] == branch:
+            return row
+    return None
+
+
+def _pr_changed(ticket: dict, pr: Optional[dict]) -> bool:
+    if not pr:
+        return False
+    current = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if pr.get("url") and pr.get("url") != current.get("url"):
+        return True
+    sha = pr.get("sha") or ""
+    if sha and sha not in {current.get("sha") or "", current.get("headSha") or ""}:
+        return True
+    if pr.get("branch") and pr.get("branch") != ticket.get("branch"):
+        return True
+    if pr.get("number") is not None and pr.get("number") != current.get("number"):
+        return True
+    return False
+
+
+def _write_pr(ticket: dict, pr: Optional[dict]) -> None:
+    if not pr:
+        return
+    if pr.get("branch"):
+        ticket["branch"] = pr["branch"]
+    bucket = ticket.get("pr")
+    if not isinstance(bucket, dict):
+        bucket = {}
+        ticket["pr"] = bucket
+    if pr.get("url"):
+        bucket["url"] = pr["url"]
+    if pr.get("number") is not None:
+        bucket["number"] = pr["number"]
+    if pr.get("sha"):
+        bucket["sha"] = pr["sha"]
+        bucket["headSha"] = pr["sha"]
+
+
+def _write_intent(ticket: dict, intent: str, jira_name: str) -> None:
+    jira = ticket.get("jira")
+    if not isinstance(jira, dict):
+        jira = {}
+        ticket["jira"] = jira
+    if jira_name:
+        jira["status"] = jira_name
+    stamp = now()
+    if intent == "queued":
+        ticket["status"] = "queued"
+        ticket["phase"] = None
+        ticket["agent"] = None
+        ticket["needsReplacement"] = False
+        ticket.pop("haltResume", None)
+    elif intent == "shuttle":
+        if not ticket.get("agent"):
+            ticket["status"] = "claimed"
+            ticket["phase"] = "implementing"
+            ticket["needsReplacement"] = True
+            ticket["haltResume"] = True
+        jira["startedAt"] = jira.get("startedAt") or stamp
+    elif intent == "reviewing":
+        ticket["status"] = "review"
+        ticket["phase"] = "reviewing"
+        ticket["needsReplacement"] = False
+        jira["startedAt"] = jira.get("startedAt") or stamp
+        jira["inReviewAt"] = jira.get("inReviewAt") or stamp
+    elif intent == "awaiting_approval":
+        ticket["status"] = "awaiting_approval"
+        ticket["phase"] = "ready"
+        ticket["needsReplacement"] = False
+        jira["startedAt"] = jira.get("startedAt") or stamp
+        jira["inReviewAt"] = jira.get("inReviewAt") or stamp
+        jira["qaReadyAt"] = jira.get("qaReadyAt") or stamp
+    elif intent == "merged":
+        if ticket.get("status") != "done":
+            ticket["status"] = "merged"
+        ticket["phase"] = "merged"
+        ticket["needsReplacement"] = False
+        ticket["agent"] = None
+        jira["startedAt"] = jira.get("startedAt") or stamp
+        jira["doneAt"] = jira.get("doneAt") or stamp
+    ticket["updatedAt"] = stamp
+
+
+def _lookup_rows(beam_path: Path, beam: dict, cfg: dict, ids: list) -> tuple:
+    """Pull requests from gh, the way provider.py reads GitHub. Bitbucket waits for --prs."""
+    try:
+        import orchestrator
+        import provider
+    except Exception as e:
+        return [], f"sync: pr lookup skipped ({e})"
+    root = _root(beam_path)
+    try:
+        resolved = provider.resolve(root)
+    except Exception:
+        resolved = {}
+    if resolved.get("provider") == "bitbucket":
+        return [], "sync: pr lookup skipped (bitbucket; pass --prs)"
+    import shutil
+
+    if not shutil.which("gh"):
+        return [], "sync: pr lookup skipped (gh not available; pass --prs)"
+    rows = []
+    for tid in ids:
+        ticket = (beam.get("tickets") or {}).get(tid)
+        if not isinstance(ticket, dict):
+            continue
+        branch = orchestrator.branch_name(ticket, cfg)
+        found = provider.lookup_pr(root, branch)
+        if not found:
+            continue
+        row = dict(found)
+        row["id"] = tid
+        row["branch"] = row.get("branch") or branch
+        rows.append(row)
+    return rows, ""
+
+
+def sync_request(beam_path: Path, only_id: Optional[str] = None) -> str:
+    """What the agent fetches. Writes nothing."""
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    lines = [
+        "sync: fetch each issue with getJiraIssue (status name and status category).",
+        "sync: save the transcript and rerun with --jira <file>.",
+        "sync: dry-run until --apply. --force is required to move a ticket backward.",
+        "sync: no dispatch. /warp-start picks up unfinished work.",
+    ]
+    try:
+        import orchestrator
+    except Exception:
+        orchestrator = None
+    ids = [only_id] if only_id else list(beam.get("tickets") or {})
+    for tid in ids:
+        ticket = (beam.get("tickets") or {}).get(tid)
+        if not isinstance(ticket, dict):
+            continue
+        key = jira_key(ticket, prefixes_from(cfg))
+        if not key:
+            continue
+        branch = orchestrator.branch_name(ticket, cfg) if orchestrator else (ticket.get("branch") or "")
+        lines.append(f"sync: getJiraIssue {key}")
+        if branch:
+            lines.append(f"sync: pr {tid} branch {branch}")
+    lines.append(
+        "sync: GitHub looks up that branch with gh pr list --head <branch> --state all "
+        "--json number,url,state,headRefOid,headRefName"
+    )
+    lines.append("sync: Bitbucket, or no gh: pass the same fields in --prs <file>.")
+    return "\n".join(lines)
+
+
+def sync_beam(
+    beam_path: Path,
+    jira_map: dict,
+    pr_rows: list,
+    apply: bool,
+    force: bool,
+    only_id: Optional[str] = None,
+) -> str:
+    """Compare Jira and pull requests to the beam. Write only with apply."""
+    beam = _load(beam_path)
+    cfg = settings(beam_path, beam)
+    try:
+        import orchestrator
+    except Exception:
+        orchestrator = None
+    ids = [only_id] if only_id else list(beam.get("tickets") or {})
+    differ = refused = unchanged = 0
+    lines: list = []
+    changed = False
+    for tid in ids:
+        ticket = (beam.get("tickets") or {}).get(tid)
+        if not isinstance(ticket, dict):
+            lines.append(f"sync: {tid}: unknown ticket")
+            continue
+        key = jira_key(ticket, prefixes_from(cfg))
+        if not key:
+            continue
+        jira = jira_map.get(key)
+        branch = ""
+        if orchestrator:
+            branch = orchestrator.branch_name(ticket, cfg)
+        elif ticket.get("branch"):
+            branch = str(ticket.get("branch"))
+        pr = match_pr(ticket, pr_rows, branch)
+        if not jira and not pr:
+            continue
+        name = (jira or {}).get("name") or ""
+        category = (jira or {}).get("category") or ""
+        desired = desired_intent(name, category, pr, cfg)
+        current = current_intent(ticket)
+        decision = _status_decision(current, desired, force)
+        pr_diff = _pr_changed(ticket, pr)
+        if decision == "same" and not pr_diff:
+            unchanged += 1
+            continue
+        if decision == "refused":
+            refused += 1
+            lines.append(f"sync: {tid}: {ticket.get('status')} -> {_SYNC_TO.get(desired, desired)} refused without --force")
+            continue
+        differ += 1
+        old = ticket.get("status")
+        if decision == "change":
+            lines.append(f"sync: {tid}: {old} -> {_SYNC_TO.get(desired, desired)} ({_sync_reason(desired, name, pr, cfg)})")
+        else:
+            number = (pr or {}).get("number")
+            state = "merged" if (pr or {}).get("merged") else "open"
+            shown = f"#{number} " if number else ""
+            lines.append(f"sync: {tid}: pr {shown}{state} (status {old} unchanged)")
+        if apply:
+            if decision == "change" and desired:
+                _write_intent(ticket, desired, name)
+            if pr_diff or (decision == "change" and pr):
+                _write_pr(ticket, pr)
+            _journal(
+                beam_path,
+                {
+                    "type": "jira-sync",
+                    "id": tid,
+                    "from": old,
+                    "to": ticket.get("status"),
+                    "jira": name,
+                    "pr": (pr or {}).get("number"),
+                },
+            )
+            changed = True
+    lines.append(f"sync: {differ} differ, {refused} refused, {unchanged} unchanged")
+    if apply and changed:
+        import beam as beam_mod
+
+        beam["metrics"] = beam_mod.metrics(beam)
+        _save(beam_path, beam)
+        try:
+            beam_mod.refresh_outputs(beam_path, beam)
+        except Exception as e:
+            lines.append(f"sync: board skipped ({e})")
+        lines.append("sync: applied")
+    else:
+        lines.append("sync: dry-run")
+    lines.append("sync: no dispatch")
+    return "\n".join(lines)
+
+
+def sync_command(
+    beam_path: Path,
+    jira_path: Optional[str],
+    prs_path: Optional[str],
+    apply: bool,
+    force: bool,
+    only_id: Optional[str] = None,
+) -> str:
+    if not jira_path:
+        return sync_request(beam_path, only_id)
+    jira_map = parse_jira_statuses(json.loads(Path(jira_path).read_text()))
+    note = ""
+    if prs_path:
+        pr_rows = parse_prs(json.loads(Path(prs_path).read_text()))
+    else:
+        beam = _load(beam_path)
+        cfg = settings(beam_path, beam)
+        ids = [only_id] if only_id else list(beam.get("tickets") or {})
+        pr_rows, note = _lookup_rows(beam_path, beam, cfg, ids)
+    text = sync_beam(beam_path, jira_map, pr_rows, apply, force, only_id)
+    if note:
+        text = note + "\n" + text
+    return text
 
 
 def main() -> None:
@@ -2802,7 +3429,8 @@ def main() -> None:
     pk.add_argument("--transitions", help='JSON list, or {"transitions": [...]}')
     pk.add_argument("--transitions-file")
     pk.add_argument("--current", help='JSON {"name":..., "category":...}')
-    pk.add_argument("--kind", choices=["start", "qa", "done", "restore"], default="start")
+    pk.add_argument("--kind", choices=["start", "review", "qa", "done", "restore"], default="start")
+    pk.add_argument("--ahead", help="comma-separated statuses already past this move")
     pk.add_argument("--no-category", action="store_true")
     pr = sub.add_parser("record")
     pr.add_argument("--beam", default=".warp/beam.json")
@@ -2870,6 +3498,13 @@ def main() -> None:
     px.add_argument("--results", required=True, help="transcript with edits, issues, fields, and editmeta")
     px.add_argument("--force", action="store_true", help="record again when externalIdWritten is already set")
     px.add_argument("--force-external-id", action="store_true", help="replace a different non-empty External ID")
+    psync = sub.add_parser("sync", help="read Jira statuses into the beam; dry-run unless --apply")
+    psync.add_argument("--beam", default=".warp/beam.json")
+    psync.add_argument("--jira", help="getJiraIssue transcript (status name and category)")
+    psync.add_argument("--prs", help="pull requests by ticket id, issue key, or branch")
+    psync.add_argument("--apply", action="store_true", help="write the beam; default is a dry run")
+    psync.add_argument("--force", action="store_true", help="allow a move to an earlier status")
+    psync.add_argument("--id", help="one ticket")
     args = p.parse_args(usage.normalize_argv(None))
     try:
         if args.cmd == "plan":
@@ -2885,7 +3520,8 @@ def main() -> None:
             data = json.loads(raw)
             transitions = data.get("transitions", []) if isinstance(data, dict) else data
             current = json.loads(args.current) if args.current else None
-            print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind), indent=2))
+            ahead = [part.strip() for part in (args.ahead or "").split(",") if part.strip()]
+            print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind, ahead), indent=2))
         elif args.cmd == "record":
             print(record(Path(args.beam), args.id, args.event, args.result, args.frm, args.to, args.detail, args.error))
         elif args.cmd == "record-comment":
@@ -3007,6 +3643,17 @@ def main() -> None:
                     rows = jira_match._pairs_from_beam(loaded, settings(beam_path, loaded), args.ticket, [])
                     pairs = [(row["id"], row["key"]) for row in rows]
                 print(jira_match.prepare_write(beam_path, pairs, yes=bool(args.yes), force=bool(args.force_external_id)))
+        elif args.cmd == "sync":
+            print(
+                sync_command(
+                    Path(args.beam),
+                    args.jira,
+                    args.prs,
+                    bool(args.apply),
+                    bool(args.force),
+                    args.id,
+                )
+            )
         elif args.cmd == "resolve":
             beam_path = Path(args.beam)
             if args.ticket and args.key:

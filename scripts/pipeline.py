@@ -928,6 +928,18 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     lines.extend(_start_lines(data, ticket, "fix", text))
 
 
+def _queue_in_review(data: dict, ticket: dict, lines: list) -> None:
+    """Ask Jira to move to In Review when Bugbot is requested. Empty status does nothing."""
+    path = _beam_path(data)
+    if not path:
+        return
+    import jira_sync
+
+    text = jira_sync.queue_in_review(Path(path), data, ticket)
+    if text:
+        lines.extend(text.splitlines())
+
+
 def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> None:
     """Ask Bugbot once for the current head commit."""
     import agents
@@ -947,6 +959,7 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
     _phase(ticket, "reviewing", lines)
     lines.append("bugbot: request %s %s" % (ticket.get("id"), pr.get("url") or ""))
+    _queue_in_review(data, ticket, lines)
 
 
 def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str = "") -> None:

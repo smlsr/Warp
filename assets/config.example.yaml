@@ -140,6 +140,11 @@ jiraTransition: true
 # Needs the Jira MCP server; without it Warp logs a note and the claim goes on.
 jiraInProgressStatus: "In Progress"
 # Target status name. The transition is looked up by name or status category.
+jiraInReviewStatus: "In Review"
+# Fourth move. Bugbot request, or the pull request opening when Bugbot is off.
+# A missing key keeps In Review. An empty string or null turns the move off:
+# the issue stays where it is, and Bugbot, QA Ready, and Done still run.
+# jiraInReviewStatus: ""
 jiraRestoreOnRelease: false
 # true: when a claim is released back to queued, move the issue back to the status
 # it had before. false: leave it. Pause and stop never move an issue.

@@ -1028,6 +1028,7 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
         "branch": t.get("branch"),
         "agent": t.get("agent"),
         "sha": pr.get("sha"),
+        "bugbotRequested": bool(pr.get("bugbotRequested") or pr.get("bugbotRequestedAt")),
     }
     prev = t["status"]
     if args.agent is not None:
@@ -1068,6 +1069,10 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     refused_manual = args.status == "awaiting_approval" and bool(t.get("autoMerge"))
     if refused_manual:
         args.status = None
+    if getattr(args, "bugbot_requested", None):
+        stamp = utcnow()
+        t.setdefault("pr", {})["bugbotRequested"] = True
+        t["pr"]["bugbotRequestedAt"] = t["pr"].get("bugbotRequestedAt") or stamp
     note = jira_sync.apply_review(t, cfg, args)
     if note and note.startswith("refusing "):
         print(f"{args.id}: {note}")
@@ -1679,6 +1684,7 @@ def default_config() -> dict:
         "jiraExternalIdFallback": "label",
         "jiraTransition": True,
         "jiraInProgressStatus": "In Progress",
+        "jiraInReviewStatus": "In Review",
         "jiraRestoreOnRelease": False,
         "jiraQaReadyStatus": "QA Ready",
         "jiraDoneStatus": "Done",
@@ -1830,6 +1836,7 @@ def main() -> None:
     ps.add_argument("--proceeded-by", help="who said warp:proceed; stored on pr.proceededBy")
     ps.add_argument("--merge-method", help="merge method, default squash once status is merged")
     ps.add_argument("--bugbot")
+    ps.add_argument("--bugbot-requested", action="store_true", help="Bugbot was requested for the current head")
     ps.add_argument("--ci")
     ps.add_argument("--check-result", choices=["green", "red", "pending"], help="checkCommand result, stored on pr.check")
     ps.add_argument("--check-name", help="CI check name, for example make ci")
