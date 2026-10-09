@@ -3,7 +3,7 @@
 ## 1.5.3
 
 - `jiraInReviewStatus` (default `In Review`) is a fourth Jira move. It fires when Bugbot is requested. When Bugbot is off (`bugbotRequired` false, or `bugbotManual` false on a manual ticket), it fires when the pull request opens. A fix send-back stays in In Review and does not move back to In Progress. Sizes outside `autoMergeSizes` still move to QA Ready once review is clean. A missing key keeps `In Review`. An empty string or null (`""`, `null`, `~`, `none`) turns the move off: the issue stays where it is. Bugbot, review, fix send-backs, QA Ready, and Done still run. No matching transition warns and does not fail.
-- `/warp-sync` (`jira_sync.py sync`) reads Jira into the beam. Dry-run unless `--apply`. It looks up each ticket's branch and pull request. A merged pull request wins over the Jira status. A move to an earlier status needs `--force`. It does not dispatch and does not start a listener. When `jiraInReviewStatus` is empty, nothing maps to In Review, and a ticket with an open pull request stays reviewing from that lookup. `/warp-start` picks the work up on the unfinished-first pass.
+- `/warp-sync` (`jira_sync.py sync`) reads Jira into the beam. Dry-run unless `--apply`. It looks up each ticket's branch and pull request. A merged pull request wins over the Jira status, including when several pull requests match one ticket. A move to an earlier status needs `--force`. It does not dispatch and does not start a listener. When `jiraInReviewStatus` is empty, nothing maps to In Review, a ticket with an open pull request stays reviewing from that lookup, and `jira.inReviewAt` stays unset. A fix send-back stays in place while Jira is still In Review. `/warp-start` picks the work up on the unfinished-first pass.
 
 ## 1.5.2
 

@@ -2991,9 +2991,11 @@ def current_intent(ticket: dict) -> str:
         return "merged"
     if status == "awaiting_approval" or phase == "ready":
         return "awaiting_approval"
-    if status in {"review", "bugbot_running"} or phase in {"reviewing", "pr-open"}:
+    # A fix send-back is still In Review in Jira. Treating it as a Shuttle would
+    # let a later sync move the ticket back to review and drop the fix.
+    if status in {"review", "bugbot_running", "fix"} or phase in {"reviewing", "pr-open", "fixing"}:
         return "reviewing"
-    if status in {"claimed", "recovering", "planning", "coding", "fix"} or phase in {"implementing", "fixing"}:
+    if status in {"claimed", "recovering", "planning", "coding"} or phase == "implementing":
         return "shuttle"
     return "queued"
 
@@ -3135,16 +3137,32 @@ def parse_prs(data) -> list:
 
 
 def match_pr(ticket: dict, rows: list, branch: str) -> Optional[dict]:
+    """The pull request for this ticket. A merged request wins over an open one."""
     tid = str(ticket.get("id") or "")
     key = str(ticket.get("jiraKey") or "")
+    hits = []
     for row in rows:
+        matched = False
         if row.get("id") and row["id"] in {tid, key}:
-            return row
-        if row.get("key") and key and row["key"] == key:
-            return row
-        if row.get("branch") and branch and row["branch"] == branch:
-            return row
-    return None
+            matched = True
+        elif row.get("key") and key and row["key"] == key:
+            matched = True
+        elif row.get("branch") and branch and row["branch"] == branch:
+            matched = True
+        if matched:
+            hits.append(row)
+    if not hits:
+        return None
+
+    def rank(row: dict) -> int:
+        if row.get("merged"):
+            return 0
+        if row.get("open"):
+            return 1
+        return 2
+
+    hits.sort(key=rank)
+    return hits[0]
 
 
 def _pr_changed(ticket: dict, pr: Optional[dict]) -> bool:
@@ -3181,7 +3199,7 @@ def _write_pr(ticket: dict, pr: Optional[dict]) -> None:
         bucket["headSha"] = pr["sha"]
 
 
-def _write_intent(ticket: dict, intent: str, jira_name: str) -> None:
+def _write_intent(ticket: dict, intent: str, jira_name: str, cfg: Optional[dict] = None) -> None:
     jira = ticket.get("jira")
     if not isinstance(jira, dict):
         jira = {}
@@ -3207,13 +3225,17 @@ def _write_intent(ticket: dict, intent: str, jira_name: str) -> None:
         ticket["phase"] = "reviewing"
         ticket["needsReplacement"] = False
         jira["startedAt"] = jira.get("startedAt") or stamp
-        jira["inReviewAt"] = jira.get("inReviewAt") or stamp
+        # An empty jiraInReviewStatus did not move the issue. Leave inReviewAt
+        # unset so a later config does not look like the move already happened.
+        if in_review_target(cfg):
+            jira["inReviewAt"] = jira.get("inReviewAt") or stamp
     elif intent == "awaiting_approval":
         ticket["status"] = "awaiting_approval"
         ticket["phase"] = "ready"
         ticket["needsReplacement"] = False
         jira["startedAt"] = jira.get("startedAt") or stamp
-        jira["inReviewAt"] = jira.get("inReviewAt") or stamp
+        if in_review_target(cfg):
+            jira["inReviewAt"] = jira.get("inReviewAt") or stamp
         jira["qaReadyAt"] = jira.get("qaReadyAt") or stamp
     elif intent == "merged":
         if ticket.get("status") != "done":
@@ -3342,6 +3364,9 @@ def sync_beam(
         if decision == "refused":
             refused += 1
             lines.append(f"sync: {tid}: {ticket.get('status')} -> {_SYNC_TO.get(desired, desired)} refused without --force")
+            if apply and pr_diff:
+                _write_pr(ticket, pr)
+                changed = True
             continue
         differ += 1
         old = ticket.get("status")
@@ -3354,7 +3379,7 @@ def sync_beam(
             lines.append(f"sync: {tid}: pr {shown}{state} (status {old} unchanged)")
         if apply:
             if decision == "change" and desired:
-                _write_intent(ticket, desired, name)
+                _write_intent(ticket, desired, name, cfg)
             if pr_diff or (decision == "change" and pr):
                 _write_pr(ticket, pr)
             _journal(
@@ -3373,7 +3398,10 @@ def sync_beam(
     if apply and changed:
         import beam as beam_mod
 
-        beam["metrics"] = beam_mod.metrics(beam)
+        try:
+            beam["metrics"] = beam_mod.metrics(beam)
+        except Exception as e:
+            lines.append(f"sync: metrics skipped ({e})")
         _save(beam_path, beam)
         try:
             beam_mod.refresh_outputs(beam_path, beam)

@@ -36,7 +36,7 @@ Key resolution, in order: a key already on the plan or in `.warp/jira-map.json`,
 
 `/warp-sync` (`jira_sync.py sync`) reads Jira into the beam. Catchup goes the other way, and `/warp-update-state` does not read Jira. The script cannot call the Atlassian MCP: with no `--jira` file it prints the `getJiraIssue` fetches, and the agent passes the transcript back. Pull requests are looked up by branch through GitHub (`gh pr list --head`) or a `--prs` file for Bitbucket. A merged pull request wins over the Jira status. Dry-run is the default. `--apply` writes. A move to an earlier status needs `--force`. It does not dispatch and does not start a listener. `/warp-start` picks the work up on the unfinished-first pass.
 
-Status mapping uses the configured names. To Do (or category `new`) is `queued`. `jiraInProgressStatus` needs a Shuttle. `jiraInReviewStatus` is `reviewing`. `jiraQaReadyStatus` is `awaiting_approval`. `jiraDoneStatus` (or category `done`) is `merged`. When `jiraInReviewStatus` is empty, nothing maps to In Review, and a ticket with an open pull request stays `reviewing` from that lookup.
+Status mapping uses the configured names. To Do (or category `new`) is `queued`. `jiraInProgressStatus` needs a Shuttle. `jiraInReviewStatus` is `reviewing`. `jiraQaReadyStatus` is `awaiting_approval`. `jiraDoneStatus` (or category `done`) is `merged`. When `jiraInReviewStatus` is empty, nothing maps to In Review, and a ticket with an open pull request stays `reviewing` from that lookup. That path does not set `jira.inReviewAt`. A ticket already in `fix` stays there while Jira is still In Review. A merged pull request wins when more than one pull request matches the ticket.
 
 Who moves the issue:
 

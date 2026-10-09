@@ -212,6 +212,67 @@ class SyncCommandTests(unittest.TestCase):
         self.assertEqual(tickets["T-2"]["status"], "queued")
         self.assertEqual(tickets["T-3"]["status"], "review")
         self.assertEqual(tickets["T-3"]["phase"], "reviewing")
+        self.assertNotIn("inReviewAt", tickets["T-3"].get("jira") or {})
+
+    def test_fix_send_back_stays_while_jira_is_in_review(self):
+        beam = json.loads(self.beam.read_text())
+        beam["tickets"]["T-3"]["status"] = "fix"
+        beam["tickets"]["T-3"]["phase"] = "fixing"
+        self.beam.write_text(json.dumps(beam, indent=2) + "\n")
+        result = run(self.tmp, "sync", "--beam", str(self.beam), "--jira", str(self.jira), "--prs", str(self.prs), "--apply", "--id", "T-3")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("T-3:", result.stdout)
+        row = json.loads(self.beam.read_text())["tickets"]["T-3"]
+        self.assertEqual(row["status"], "fix")
+        self.assertEqual(row["phase"], "fixing")
+
+    def test_merged_pull_request_wins_over_an_open_one(self):
+        self.prs.write_text(
+            json.dumps(
+                [
+                    {"id": "T-2", "number": 1, "state": "OPEN", "url": "https://github.com/acme/app/pull/1", "sha": "old"},
+                    {
+                        "id": "T-2",
+                        "number": 12,
+                        "state": "MERGED",
+                        "url": "https://github.com/acme/app/pull/12",
+                        "sha": "abc1234",
+                        "branch": "warp/T-2-WAR-2",
+                    },
+                ]
+            )
+        )
+        result = run(self.tmp, "sync", "--beam", str(self.beam), "--jira", str(self.jira), "--prs", str(self.prs), "--apply", "--id", "T-2")
+        self.assertIn("sync: T-2: queued -> merged (pr #12 merged)", result.stdout)
+        row = json.loads(self.beam.read_text())["tickets"]["T-2"]
+        self.assertEqual(row["pr"]["number"], 12)
+        self.assertEqual(row["status"], "merged")
+
+    def test_refused_status_still_records_the_pull_request(self):
+        self.prs.write_text(
+            json.dumps(
+                {"T-6": {"number": 9, "url": "https://github.com/acme/app/pull/9", "state": "OPEN", "sha": "abc"}}
+            )
+        )
+        result = run(
+            self.tmp,
+            "sync",
+            "--beam",
+            str(self.beam),
+            "--jira",
+            str(self.jira),
+            "--prs",
+            str(self.prs),
+            "--apply",
+            "--id",
+            "T-6",
+        )
+        self.assertIn("refused without --force", result.stdout)
+        self.assertIn("sync: applied", result.stdout)
+        row = json.loads(self.beam.read_text())["tickets"]["T-6"]
+        self.assertEqual(row["status"], "awaiting_approval")
+        self.assertEqual(row["pr"]["url"], "https://github.com/acme/app/pull/9")
+        self.assertEqual(row["pr"]["sha"], "abc")
 
 
 if __name__ == "__main__":
