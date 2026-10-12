@@ -75,7 +75,7 @@ class CloudHookTests(unittest.TestCase):
     def test_resume_hint_when_the_beam_is_missing(self):
         proc = run("resume_hint.py", "--root", str(self.repo), cwd=self.repo)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "WARP: no .warp/beam.json — run /warp-ingest before /warp.\n")
+        self.assertEqual(proc.stdout, "WARP: no .warp/beam.json — run /warp-scan before /warp.\n")
 
     def test_session_stop_is_idempotent_and_skips_a_missing_warp_dir(self):
         empty = self.tmp / "empty"

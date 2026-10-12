@@ -5,6 +5,8 @@ description: Start Warp dispatch after a scan
 
 `/warp-start` and `/warp-resume` are the same command. Use either. It works from a stopped run, a paused run, and a run that is already running, and it says which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` There is nothing to refuse and nothing to choose.
 
+A named run (`run:` in `.warp/config.yaml`) cannot start until `/warp-scan` has run: start prints `refuse: <name> has no scan. Run /warp-scan [folder] first.` On a fresh checkout with no config, `scan.py start --run <name>` takes the run up from the repo first (see `docs/RUNS.md`).
+
 On a fresh checkout, fetch origin and load the beam from main before anything else. Do not start from an empty beam if main has one. Close the window, open a new one, and `/warp-start`: state comes from main plus each ticket folder.
 
 ```bash

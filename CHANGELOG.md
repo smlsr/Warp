@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+- Named runs. One repo can carry several Warp runs (`core`, `admin`, `ui`), each with its own beam, parent, tag, and branches. `/warp-init <name>` writes `run: <name>` to `.warp/config.yaml`. Details: `docs/RUNS.md`. Unnamed runs behave as before.
+- `/warp-init <name>` reads origin first. A new name prints `run: <name> is new.` and `next: /warp-scan [folder]`. A name the repo already has is taken up: it prints the saved config, folder, scan, state, parent last seen, and progress, restores the run's beam, journal, scan, stats, ticket folders, and config (machine keys such as `runner`, `launch`, and `worktreeRoot` stay local), and says `next: /warp-start`. A new agent after a lost agent picks up this way. A run that looks live (running, checkpoint 30 minutes old or less) prints a warning. One checkout runs one run; `--switch` keeps the old files in `.warp/previous-<old>/`, `--adopt` names an unnamed run that has state.
+- The run name is not the scan folder. `/warp-scan <folder>` saves `scanFolder` to the config, `/warp-scan` reuses it, and `/warp-scan /` clears it and scans the whole repo. `/warp-start` on a named run refuses until a scan has run.
+- A ticket id belongs to one run. A scan that finds an id another run owns refuses and writes nothing (exit 4). `--skip-owned` leaves those tickets out; tickets that depend on them wait until cross-run dependencies exist.
+- A named run saves to the repo under `.warp/runs/<name>/`: `config.yaml` (no machine keys, secrets, or webhooks), `beam.json`, `journal.jsonl`, `agents.json`, `scan.json`, `stats.json` (tokens, cost, minutes, attempts, and recoveries per ticket, and totals), the status and board files, and each ticket's `tickets/<id>/` folder. Local files stay at `.warp/`. A ticket's folder rides on its ticket branch. The parent publishes the shared files to the base branch after each merge and at a checkpoint (`checkpointMinutes`, default 10, or when status changes). Ticket branches are `warp/<name>/<id>-<jira>`.
+- A VM with no config finds its run from `WARP_RUN`, the beam, or the ticket branch name.
+- New config keys: `run`, `scanFolder`, `checkpointMinutes`.
+- `/warp-ingest` is gone; `/warp-scan` builds the plan. The cloud resume hint says `/warp-scan`.
+- Not in this version: gate ranges for `/warp-start`, `startAfter` and cross-run ticket dependencies, per-run `paths`, `/warp-runs`, `/warp-delete`, Slack addressing by run, and owner/`--takeover`.
+
 ## 1.5.3
 
 - `jiraInReviewStatus` (default `In Review`) is a fourth Jira move. It fires when Bugbot is requested. When Bugbot is off (`bugbotRequired` false, or `bugbotManual` false on a manual ticket), it fires when the pull request opens. A fix send-back stays in In Review and does not move back to In Progress. Sizes outside `autoMergeSizes` still move to QA Ready once review is clean. A missing key keeps `In Review`. An empty string or null (`""`, `null`, `~`, `none`) turns the move off: the issue stays where it is. Bugbot, review, fix send-backs, QA Ready, and Done still run. No matching transition warns and does not fail.

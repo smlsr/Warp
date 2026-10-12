@@ -2627,6 +2627,12 @@ def remote_state(root: Path) -> tuple:
             return None
         return loaded if isinstance(loaded, dict) else None
 
+    import runs
+
+    run = runs.current(root)
+    beam = show(runs.git_rel(run, ".warp/beam.json")) if run else None
+    if beam is not None:
+        return beam, show(runs.git_rel(run, ".warp/agents.json")) or _empty()
     beam = show(".warp/beam.json")
     if beam is None:
         return None, None

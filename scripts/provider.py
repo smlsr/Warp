@@ -203,7 +203,9 @@ def drop_ticket_beam(root: Path) -> None:
     If the base already has a beam, that copy is restored into the index.
     Ticket directories under `.warp/tickets/` are left staged.
     """
-    name = ".warp/beam.json"
+    import runs
+
+    name = runs.git_rel(runs.current(root), ".warp/beam.json")
     listed = _run(["git", "diff", "--cached", "--name-only", "--", name], root)
     if listed.returncode != 0 or name not in (listed.stdout or "").splitlines():
         return
@@ -222,9 +224,10 @@ def _live_payload(root: Path) -> dict:
     warp = root / ".warp"
     if not (warp / "beam.json").is_file():
         return {}
+    import runs
     import state_commit
 
-    return state_commit.state_payload(warp)
+    return state_commit.state_payload(warp, runs.current(root), extras=False)
 
 
 def _clean_state_edits(root: Path) -> Optional[str]:
@@ -234,7 +237,10 @@ def _clean_state_edits(root: Path) -> Optional[str]:
     listed = _run(["git", "status", "--porcelain", "--untracked-files=no"], root)
     if listed.returncode != 0:
         return "could not read git status"
-    allowed = {".warp/%s" % name for name in state_commit.STATE_NAMES}
+    import runs
+
+    run = runs.current(root)
+    allowed = {runs.git_rel(run, ".warp/%s" % name) for name in state_commit.STATE_NAMES}
     dirty = []
     blocked = []
     for line in (listed.stdout or "").splitlines():
@@ -258,8 +264,10 @@ def _clean_state_edits(root: Path) -> Optional[str]:
 
 def _stage_live(root: Path, payload: dict) -> None:
     """Put the parent's live state into the index. Never stages config.yaml."""
+    import state_commit
+
     for rel, text in payload.items():
-        if rel == ".warp/config.yaml" or rel.endswith("/config.yaml"):
+        if state_commit._is_local_config(rel):
             continue
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)

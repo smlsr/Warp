@@ -140,9 +140,9 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 
 | Command | What it does | Common flags |
 |---|---|---|
-| `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
+| `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools. `/warp-init <name>` names this checkout's run, or takes up a run of that name that is already in the repo | `--channel`, `--dry-run`, `--no-allow`, `--adopt`, `--switch` |
 | `/warp-upgrade` | Replace `.cursor/plugins/warp` with the current plugin. Does not touch config or the beam | `--root`, `--source` |
-| `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
+| `/warp-scan` | Read a plan into the beam and resolve Jira keys. `/warp-scan /` clears the saved folder | `--folder`, `--skip-owned` |
 | `/warp-start` | Set the run running, from a stopped run, a paused run, or a run that is already running, and print which (`run: was stopped. Starting.`). The same command as `/warp-resume`. This turn becomes the parent of the run and prints `parent: session <id>`. It loads main's beam on a fresh checkout, runs the watchdog, and starts unfinished work first (`unfinished:`). A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force` |
 | `/warp-pause` | End every agent in `.warp/agents.json`, free every Shuttle slot, close the listener's poll (`halt: paused agents=<n>`), then push that paused beam to main. With `CURSOR_API_KEY`, cancel and archive this run's cloud agents. Branches, worktrees, and pull requests stay. No completion report. Carry on with `/warp-start` or `/warp-resume` | `--reason` |
 | `/warp-resume` | The same command as `/warp-start`. On a paused run it prints `run: was paused (<reason>). Continuing.` A ticket that had a Shuttle out gets one new Shuttle on the same branch (`fix: <id> resume after halt`). Nothing from before the pause or the stop is resumed | `--reason`, `--force` |
@@ -157,7 +157,6 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-status-post` | Post that digest to Slack or Teams | |
 | `/warp-export` | Write `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json` | |
 | `/warp-import` | Replace the plan from a file. The run stays stopped | `--keep-status` |
-| `/warp-ingest` | Build the beam from a schedule you name | |
 | `/warp-jira-check` | Per ticket: keyed or unmapped, what is missing, one fix | `verify --link`, `verify --apply` |
 | `/warp-jira-view` | Every field on one issue, by key or plan id | `--comments`, `--links`, `--all`, `--full`, `--verbose`, `--json` |
 | `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--write-external-id` |
@@ -530,6 +529,10 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 - A name is matched against folder names, or the end of their paths, anywhere in the repo.
 - If a name matches several folders, Warp lists them, marks which have plan files, and scans nothing. If only one has plan files it uses that one and notes the others. Re-run with the full path to pick.
 - With no argument and plans in more than one folder, Warp prints the folders it found and uses the richest plan, as before.
+
+## Several runs in one repo
+
+`/warp-init admin` names a run. `core`, `admin`, and `ui` can each have their own checkout, parent, beam, and branches (`warp/admin/<id>`), and each saves its beam, state, stats, and config to `.warp/runs/<name>/` in the repo. A new agent that runs `/warp-init admin` finds that folder, prints what it found, restores it, and `/warp-start` carries on. A named run cannot start before `/warp-scan`. The run name is not the scan folder: the folder is optional and saved in the config, and `/warp-scan /` clears it. See [docs/RUNS.md](docs/RUNS.md).
 
 ## Session
 

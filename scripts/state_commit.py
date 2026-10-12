@@ -36,6 +36,8 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import runs  # noqa: E402
+
 HELP = __doc__
 STATE_NAMES = (
     "beam.json",
@@ -155,21 +157,39 @@ def _git(
     )
 
 
-def state_payload(warp: Path) -> dict:
+def _published_json(path: Path):
+    return json.dumps(sanitize(json.loads(path.read_text())), indent=2) + "\n"
+
+
+def state_payload(warp: Path, run: str = "", now: Optional[str] = None, extras: bool = True) -> dict:
     """Sanitized state file text, keyed by repo-relative path.
 
     The live files are not rewritten. `.warp/config.yaml` is never included.
+    A named run publishes under `.warp/runs/<run>/` and adds its scan, its
+    stats, a copy of its config without the machine keys and secrets, and the
+    state and log of every ticket this checkout has. `extras` false keeps
+    only the files a ticket branch needs: the beam, journal, and board.
     """
     payload = {}
+
+    def key(name: str) -> str:
+        return runs.git_rel(run, ".warp/%s" % name)
+
     beam = warp / "beam.json"
+    live = None
     if beam.is_file():
-        data = sanitize(json.loads(beam.read_text()))
-        payload[".warp/beam.json"] = json.dumps(data, indent=2) + "\n"
+        live = json.loads(beam.read_text())
+        data = sanitize(live)
+        if run and isinstance(data, dict):
+            data["run"] = run
+            if now:
+                data["checkpointAt"] = now
+        payload[key("beam.json")] = json.dumps(data, indent=2) + "\n"
     journal = warp / "journal.jsonl"
     if journal.is_file():
         text = sanitize_journal(journal.read_text())
         if text:
-            payload[".warp/journal.jsonl"] = text
+            payload[key("journal.jsonl")] = text
     for name in STATE_NAMES:
         if name in {"beam.json", "journal.jsonl"}:
             continue
@@ -177,20 +197,42 @@ def state_payload(warp: Path) -> dict:
         if not path.is_file():
             continue
         if name.endswith(".json"):
-            payload[".warp/%s" % name] = json.dumps(sanitize(json.loads(path.read_text())), indent=2) + "\n"
+            payload[key(name)] = _published_json(path)
         else:
-            payload[".warp/%s" % name] = redact_text(path.read_text())
+            payload[key(name)] = redact_text(path.read_text())
+    if run and extras:
+        scan = warp / "scan.json"
+        if scan.is_file():
+            try:
+                found = json.loads(scan.read_text())
+            except json.JSONDecodeError:
+                found = None
+            if isinstance(found, dict):
+                found.pop("root", None)
+                payload[key("scan.json")] = json.dumps(sanitize(found), indent=2) + "\n"
+        if isinstance(live, dict):
+            payload[key("stats.json")] = redact_text(json.dumps(runs.build_stats(live, run, now), indent=2) + "\n")
+        cfg = warp / "config.yaml"
+        if cfg.is_file():
+            payload[key("config.yaml")] = runs.mirror_config(cfg.read_text())
+        tickets = warp / "tickets"
+        if tickets.is_dir():
+            for folder in sorted(p for p in tickets.iterdir() if p.is_dir()):
+                for fname in ("state.json", "log.jsonl"):
+                    path = folder / fname
+                    if path.is_file():
+                        payload[key("tickets/%s/%s" % (folder.name, fname))] = redact_text(path.read_text())
     return payload
 
 
-def branch_has_beam(root: Path, branch: str) -> bool:
-    """True when that branch's tree contains .warp/beam.json."""
-    shown = _git(root, "cat-file", "-e", "%s:.warp/beam.json" % branch)
+def branch_has_beam(root: Path, branch: str, run: str = "") -> bool:
+    """True when that branch's tree contains the run's beam."""
+    shown = _git(root, "cat-file", "-e", "%s:%s" % (branch, runs.git_rel(run, ".warp/beam.json")))
     return shown.returncode == 0
 
 
-def _show_beam(root: Path, branch: str) -> Optional[dict]:
-    shown = _git(root, "show", "%s:.warp/beam.json" % branch)
+def _show_beam(root: Path, branch: str, run: str = "") -> Optional[dict]:
+    shown = _git(root, "show", "%s:%s" % (branch, runs.git_rel(run, ".warp/beam.json")))
     if shown.returncode != 0:
         return None
     try:
@@ -267,6 +309,13 @@ def _prepare_branch(root: Path, branch: str, base_name: str, remote: str) -> int
     return 0
 
 
+def _is_local_config(rel: str) -> bool:
+    """The machine's own config. A run's published copy lives under .warp/runs/ and is allowed."""
+    if "/runs/" in rel:
+        return False
+    return rel == ".warp/config.yaml" or rel.endswith("/config.yaml")
+
+
 def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) -> int:
     """Commit files onto branch without moving HEAD or the working tree."""
     tmp = Path(tempfile.mkdtemp(prefix="warp-publish-"))
@@ -281,7 +330,7 @@ def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) 
             return 2
         _git(root, "update-index", "--force-remove", ".warp/config.yaml", env=env)
         for rel, text in files.items():
-            if rel == ".warp/config.yaml" or rel.endswith("/config.yaml"):
+            if _is_local_config(rel):
                 continue
             blob = _git(root, "hash-object", "-w", "--stdin", input_text=text, env=env)
             if blob.returncode != 0 or not blob.stdout.strip():
@@ -335,7 +384,7 @@ def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) 
             pass
 
 
-def _push_branch(root: Path, branch: str, remote: str) -> int:
+def _push_branch(root: Path, branch: str, remote: str, run: str = "") -> int:
     names = _remote_names(root)
     if remote not in names:
         print("refuse: no remote %s; do not start the Agent on a fresh clone of main" % remote)
@@ -345,7 +394,7 @@ def _push_branch(root: Path, branch: str, remote: str) -> int:
         print("refuse: push of %s failed; do not start the Agent" % branch)
         print((pushed.stderr or pushed.stdout).strip())
         return 2
-    remote_beam = _git(root, "show", "%s/%s:.warp/beam.json" % (remote, branch))
+    remote_beam = _git(root, "show", "%s/%s:%s" % (remote, branch, runs.git_rel(run, ".warp/beam.json")))
     if remote_beam.returncode != 0:
         print("refuse: %s/%s has no .warp beam; do not start the Agent" % (remote, branch))
         return 2
@@ -380,10 +429,12 @@ def publish_ticket(
         print("refuse: unknown ticket %s; do not start the Agent" % ticket_id)
         return 2
     cfg = data.get("config") or {}
+    run = runs.current(root, data)
     branch = orchestrator.branch_name(ticket, cfg)
     base_name = _base_name(root, cfg)
-    payload = state_payload(warp)
-    if ".warp/beam.json" not in payload:
+    payload = state_payload(warp, run, extras=False)
+    beam_key = runs.git_rel(run, ".warp/beam.json")
+    if beam_key not in payload:
         print("refuse: no beam to publish; do not start the Agent")
         return 2
     if ".warp/config.yaml" in payload:
@@ -399,10 +450,10 @@ def publish_ticket(
     )
     if code != 0:
         return code
-    if not branch_has_beam(root, branch):
+    if not branch_has_beam(root, branch, run):
         print("refuse: branch %s has no .warp beam; do not start the Agent" % branch)
         return 2
-    published = _show_beam(root, branch)
+    published = _show_beam(root, branch, run)
     claim = ((published or {}).get("tickets") or {}).get(ticket_id)
     if not isinstance(claim, dict):
         print("refuse: branch %s beam has no claim for %s; do not start the Agent" % (branch, ticket_id))
@@ -412,17 +463,17 @@ def publish_ticket(
         print("refuse: branch %s commits .warp/config.yaml; do not start the Agent" % branch)
         return 2
     if push:
-        pushed = _push_branch(root, branch, remote)
+        pushed = _push_branch(root, branch, remote, run)
         if pushed != 0:
             return pushed
-        remote_beam = _show_beam(root, "%s/%s" % (remote, branch))
+        remote_beam = _show_beam(root, "%s/%s" % (remote, branch), run)
         remote_claim = ((remote_beam or {}).get("tickets") or {}).get(ticket_id)
         if not isinstance(remote_claim, dict):
             print("refuse: %s/%s has no claim for %s; do not start the Agent" % (remote, branch, ticket_id))
             return 2
     agent = claim.get("agent") or ""
     print("published: %s" % branch)
-    print("beam: .warp/beam.json")
+    print("beam: %s" % beam_key)
     print("claim: %s status=%s agent=%s" % (ticket_id, claim.get("status") or "", agent))
     if push:
         print("pushed: %s %s" % (remote, branch))
@@ -443,12 +494,17 @@ def push_ref(root: Path, branch: str, remote: str = "origin") -> int:
     return 0
 
 
-def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = True) -> int:
+def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = True, force: bool = False) -> int:
     """Commit the live beam, journal, and board onto the base branch and push.
 
     Secrets are stripped. `.warp/config.yaml` is not committed. A checkout that
     is not a git repo does nothing. The parent calls this at the end of a tick
     and after a merge so a fresh clone of main has the latest beam.
+
+    A named run commits its own folder, `.warp/runs/<run>/`. Three runs
+    pushing every pass would bury the base branch, so a named run publishes
+    when a ticket's status or the run state changed, when `checkpointMinutes`
+    have passed since the last publish, or when `force` is true.
     """
     root = Path(root).resolve()
     if _git(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
@@ -465,6 +521,9 @@ def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = Tr
         return 1
     config = data.get("config") if isinstance(data.get("config"), dict) else {}
     base = _base_name(root, config)
+    run = runs.current(root, data)
+    if run:
+        return _publish_run(root, beam_path, data, base, run, push, force)
     head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     current = head.stdout.strip()
     if head.returncode == 0 and current == base:
@@ -480,6 +539,65 @@ def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = Tr
     if code != 0 or not push:
         return code
     return push_ref(root, base)
+
+
+def _publish_run(root: Path, beam_path: Path, data: dict, base: str, run: str, push: bool, force: bool) -> int:
+    warp = beam_path.parent
+    if not force and not runs.checkpoint_due(warp, data):
+        print("state: %s is current on %s" % (run, base))
+        return 0
+    import beam as beam_mod
+
+    now = beam_mod.utcnow()
+    payload = state_payload(warp, run, now=now)
+    if runs.git_rel(run, ".warp/beam.json") not in payload:
+        print("state: nothing to commit")
+        return 0
+    runs.ensure_excluded(root)
+    message = "Warp state: %s run" % run
+    head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    if head.returncode == 0 and head.stdout.strip() == base:
+        code = _commit_run_in_tree(root, payload, message)
+    else:
+        code = _commit_files_on_branch(root, base, payload, message)
+        if code == 0:
+            print("state: committed %s on %s" % (run, base))
+    if code != 0:
+        return code
+    runs.record_checkpoint(warp, data, now)
+    if not push:
+        return 0
+    return push_ref(root, base)
+
+
+def _commit_run_in_tree(root: Path, payload: dict, message: str) -> int:
+    """The base branch is checked out: write the run folder, then commit just those files."""
+    rels = []
+    for rel, text in payload.items():
+        if _is_local_config(rel):
+            continue
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.is_file() or path.read_text() != text:
+            path.write_text(text)
+        rels.append(rel)
+    if not rels:
+        print("state: nothing to commit")
+        return 0
+    added = _git(root, "add", "--", *rels)
+    if added.returncode != 0:
+        print(added.stderr.strip() or "git add failed")
+        return 1
+    staged = _git(root, "diff", "--cached", "--name-only", "--", *rels)
+    if not staged.stdout.strip():
+        print("state: nothing to commit")
+        return 0
+    committed = _git(root, "commit", "-q", "--only", "-m", message, "--", *rels)
+    if committed.returncode != 0:
+        print(committed.stderr.strip() or committed.stdout.strip() or "git commit failed")
+        return 1
+    print("state: committed %d files" % len(staged.stdout.split()))
+    return 0
 
 
 def load_main_beam(beam_path: Path, replace: bool = False) -> list:
@@ -507,6 +625,7 @@ def load_main_beam(beam_path: Path, replace: bool = False) -> list:
     if isinstance(local, dict) and isinstance(local.get("config"), dict):
         config = local["config"]
     base = _base_name(root, config)
+    run = runs.current(root, local if isinstance(local, dict) else None)
     ref = base
     if "origin" in _remote_names(root):
         fetched = _git(root, "fetch", "origin", base)
@@ -517,7 +636,7 @@ def load_main_beam(beam_path: Path, replace: bool = False) -> list:
             remote_ref = "refs/remotes/origin/%s" % base
             if _ref_exists(root, remote_ref):
                 ref = "origin/%s" % base
-    shown = _git(root, "show", "%s:.warp/beam.json" % ref)
+    shown = _git(root, "show", "%s:%s" % (ref, runs.git_rel(run, ".warp/beam.json")))
     if shown.returncode != 0 or not shown.stdout.strip():
         lines.append("beam: %s has no beam" % ref)
         return lines

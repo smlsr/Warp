@@ -3,6 +3,22 @@
 # /Users/you/.warp/humanifyos
 stateDir: .warp
 
+# run: admin
+# The name of this checkout's run. /warp-init <name> writes this line, so it is
+# commented here. One repo can hold several runs (core, admin, ui). A named
+# run publishes to .warp/runs/<name>/ on the base branch and on its ticket
+# branches, names its branches warp/<name>/<id>, and is the only writer of
+# that folder. Lowercase letters, digits, and dashes. No name is one unnamed
+# run, as before.
+scanFolder: ""
+# The folder /warp-scan last scanned, for a run that works one segment of the
+# repo. Empty means the whole repo. /warp-scan <folder> sets it, /warp-scan /
+# clears it, and a bare /warp-scan reuses it. The run's copy in the repo
+# carries it, so a restored run scans the same folder.
+checkpointMinutes: 10
+# A named run publishes its folder to the base branch when a ticket changes
+# status or the run changes state, and at least this often while it runs.
+
 model: claude-sonnet-5-5-high
 # Cursor model slug for coding steps. Claude Sonnet 5.5 High.
 # The slug must match the Cursor model picker. Override it here.

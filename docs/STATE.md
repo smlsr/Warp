@@ -1,6 +1,6 @@
 # State
 
-`.warp/` is the checkpoint. `/warp-init` gitignores `.warp/config.yaml` and token files. The beam, journal, STATUS, and BOARD are committed with `state_commit.py commit` so the next cloud agent sees who is in flight, which locks are held, and which tickets are parked. Tokens, cost, API keys, and webhook URLs are stripped from that commit. Do not commit `.env` or MCP tokens; Warp never writes those.
+`.warp/` is the checkpoint. `/warp-init` gitignores `.warp/config.yaml` and token files. The beam, journal, STATUS, and BOARD are committed with `state_commit.py commit` so the next cloud agent sees who is in flight, which locks are held, and which tickets are parked. Tokens, cost, API keys, and webhook URLs are stripped from that commit. A named run (`run:` in the config) publishes the same files, plus `stats.json` and a config mirror, under `.warp/runs/<name>/` instead: see [RUNS.md](RUNS.md). Do not commit `.env` or MCP tokens; Warp never writes those.
 
 ```
 .warp/config.yaml          caps, model, messenger, connector names

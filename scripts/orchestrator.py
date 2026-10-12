@@ -73,6 +73,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import runs  # noqa: E402
+
 # Statuses that still hold lock paths. A green PR stays here until merge or park.
 LOCK_HELD = {
     "claimed",
@@ -854,9 +858,10 @@ def branch_name(ticket: dict, config: Optional[dict] = None) -> str:
         return str(existing)
     tid = ticket.get("id")
     key = ticket.get("jiraKey")
+    prefix = runs.branch_prefix(config)
     if key:
-        return "warp/%s-%s" % (tid, key)
-    return "warp/%s" % tid
+        return "%s%s-%s" % (prefix, tid, key)
+    return "%s%s" % (prefix, tid)
 
 
 def _nonempty_record(value) -> bool:
