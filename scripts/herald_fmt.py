@@ -2,7 +2,8 @@
 """One formatter for every message Herald posts.
 
 The channel is shared across repos, so each message opens with a header that
-names its source: `Warp | <repo> / <project> | warp:<instance>`. The repo
+names its source: `Warp | <repo> / <project> | run <name> | warp:<instance>`. A
+named run (`/warp-init <name>`) adds `run <name>`; an unnamed run does not. The repo
 comes from the origin remote (else the folder name). The project is
 `projectName` in .warp/config.yaml, else `jiraProject`, else the workspace
 folder name. If the project is the same word as the repo, only the repo is
@@ -127,12 +128,29 @@ def instance_tag(root: Path) -> str:
     return f"warp:{ident}" if ident else ""
 
 
+def run_label(root: Path) -> str:
+    """`run admin` for a named run, else empty."""
+    try:
+        import runs
+
+        name = runs.current(Path(root))
+    except Exception:
+        return ""
+    return f"run {name}" if name else ""
+
+
 def header(root: Path, cfg: Optional[dict] = None) -> str:
     root = root.resolve()
     cfg = cfg or read_config(root)
     proj = project_name(root, cfg)
     tag = instance_tag(root)
-    return f"Warp | {repo_name(root)}" + (f" / {proj}" if proj else "") + (f" | {tag}" if tag else "")
+    label = run_label(root)
+    return (
+        f"Warp | {repo_name(root)}"
+        + (f" / {proj}" if proj else "")
+        + (f" | {label}" if label else "")
+        + (f" | {tag}" if tag else "")
+    )
 
 
 def version_label() -> str:

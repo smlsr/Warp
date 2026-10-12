@@ -316,26 +316,36 @@ def _is_local_config(rel: str) -> bool:
     return rel == ".warp/config.yaml" or rel.endswith("/config.yaml")
 
 
-def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) -> int:
-    """Commit files onto branch without moving HEAD or the working tree."""
+def _build_commit(root: Path, basis: str, files: dict, message: str, remove: tuple = ()) -> tuple:
+    """A commit on top of `basis` holding `files`, without moving HEAD, a branch, or the working tree.
+
+    `remove` lists paths (files or folders) to delete from the tree. Returns
+    (code, sha). sha is None when the tree did not change.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="warp-publish-"))
     index = tmp / "index"
     env = os.environ.copy()
     env["GIT_INDEX_FILE"] = str(index)
     try:
-        read = _git(root, "read-tree", branch, env=env)
+        read = _git(root, "read-tree", basis, env=env)
         if read.returncode != 0:
-            print("refuse: could not read %s" % branch)
+            print("refuse: could not read %s" % basis)
             print((read.stderr or read.stdout).strip())
-            return 2
+            return 2, None
         _git(root, "update-index", "--force-remove", ".warp/config.yaml", env=env)
+        for gone in remove:
+            removed = _git(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", gone, env=env)
+            if removed.returncode != 0:
+                print("refuse: could not remove %s" % gone)
+                print((removed.stderr or removed.stdout).strip())
+                return 2, None
         for rel, text in files.items():
             if _is_local_config(rel):
                 continue
             blob = _git(root, "hash-object", "-w", "--stdin", input_text=text, env=env)
             if blob.returncode != 0 or not blob.stdout.strip():
                 print("refuse: could not write %s" % rel)
-                return 2
+                return 2, None
             cached = _git(
                 root,
                 "update-index",
@@ -347,41 +357,41 @@ def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) 
             if cached.returncode != 0:
                 print("refuse: could not stage %s" % rel)
                 print((cached.stderr or cached.stdout).strip())
-                return 2
+                return 2, None
         tree = _git(root, "write-tree", env=env)
         if tree.returncode != 0 or not tree.stdout.strip():
             print("refuse: could not write the tree")
-            return 2
+            return 2, None
         new_tree = tree.stdout.strip()
-        old = _git(root, "rev-parse", "%s^{tree}" % branch)
-        parent = _git(root, "rev-parse", branch)
+        old = _git(root, "rev-parse", "%s^{tree}" % basis)
+        parent = _git(root, "rev-parse", basis)
         if old.returncode == 0 and old.stdout.strip() == new_tree:
-            return 0
-        committed = _git(
-            root,
-            "commit-tree",
-            new_tree,
-            "-p",
-            parent.stdout.strip(),
-            "-m",
-            message,
-        )
+            return 0, None
+        committed = _git(root, "commit-tree", new_tree, "-p", parent.stdout.strip(), "-m", message)
         if committed.returncode != 0 or not committed.stdout.strip():
-            print("refuse: could not commit the beam onto %s" % branch)
+            print("refuse: could not commit the beam onto %s" % basis)
             print((committed.stderr or committed.stdout).strip())
-            return 2
-        updated = _git(root, "update-ref", "refs/heads/%s" % branch, committed.stdout.strip())
-        if updated.returncode != 0:
-            print("refuse: could not update %s" % branch)
-            print((updated.stderr or updated.stdout).strip())
-            return 2
-        return 0
+            return 2, None
+        return 0, committed.stdout.strip()
     finally:
         try:
             index.unlink(missing_ok=True)
             tmp.rmdir()
         except OSError:
             pass
+
+
+def _commit_files_on_branch(root: Path, branch: str, files: dict, message: str) -> int:
+    """Commit files onto branch without moving HEAD or the working tree."""
+    code, sha = _build_commit(root, branch, files, message)
+    if code != 0 or sha is None:
+        return code
+    updated = _git(root, "update-ref", "refs/heads/%s" % branch, sha)
+    if updated.returncode != 0:
+        print("refuse: could not update %s" % branch)
+        print((updated.stderr or updated.stdout).strip())
+        return 2
+    return 0
 
 
 def _push_branch(root: Path, branch: str, remote: str, run: str = "") -> int:
@@ -431,7 +441,7 @@ def publish_ticket(
     cfg = data.get("config") or {}
     run = runs.current(root, data)
     branch = orchestrator.branch_name(ticket, cfg)
-    base_name = _base_name(root, cfg)
+    base_name = runs.base_name(root, cfg) if run else _base_name(root, cfg)
     payload = state_payload(warp, run, extras=False)
     beam_key = runs.git_rel(run, ".warp/beam.json")
     if beam_key not in payload:
@@ -520,8 +530,8 @@ def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = Tr
         print("state: beam is not json")
         return 1
     config = data.get("config") if isinstance(data.get("config"), dict) else {}
-    base = _base_name(root, config)
     run = runs.current(root, data)
+    base = runs.base_name(root, config) if run else _base_name(root, config)
     if run:
         return _publish_run(root, beam_path, data, base, run, push, force)
     head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
@@ -541,6 +551,35 @@ def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = Tr
     return push_ref(root, base)
 
 
+def _is_ancestor(root: Path, older: str, newer: str) -> bool:
+    return _git(root, "merge-base", "--is-ancestor", older, newer).returncode == 0
+
+
+def _sync_base(root: Path, base: str, checked_out: bool) -> str:
+    """Fetch origin and bring the local base up to it when that is a fast-forward.
+
+    Several runs publish to the same base branch, so origin moves under us.
+    Returns the ref a new commit should sit on: origin/<base> when the local
+    base is behind or equal to it, else the local base.
+    """
+    if "origin" not in _remote_names(root):
+        return base
+    if _git(root, "fetch", "-q", "origin", base).returncode != 0:
+        return base
+    remote = "origin/%s" % base
+    if not _ref_exists(root, "refs/remotes/%s" % remote):
+        return base
+    if not _ref_exists(root, "refs/heads/%s" % base):
+        return remote
+    if _is_ancestor(root, base, remote):
+        if checked_out:
+            _git(root, "merge", "--ff-only", "-q", remote)
+        else:
+            _git(root, "update-ref", "refs/heads/%s" % base, remote)
+        return base if checked_out else remote
+    return base
+
+
 def _publish_run(root: Path, beam_path: Path, data: dict, base: str, run: str, push: bool, force: bool) -> int:
     warp = beam_path.parent
     if not force and not runs.checkpoint_due(warp, data):
@@ -554,20 +593,91 @@ def _publish_run(root: Path, beam_path: Path, data: dict, base: str, run: str, p
         print("state: nothing to commit")
         return 0
     runs.ensure_excluded(root)
-    message = "Warp state: %s run" % run
     head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
-    if head.returncode == 0 and head.stdout.strip() == base:
+    checked_out = head.returncode == 0 and head.stdout.strip() == base
+    onto = _sync_base(root, base, checked_out) if push else base
+    seen_ref = "origin/%s" % base if _ref_exists(root, "refs/remotes/origin/%s" % base) else base
+    taken = runs.owner_conflict(root, run, data, seen_ref)
+    if taken:
+        print("state: not published. %s was taken over by %s at %s. This parent should stop." % (run, taken.get("by") or "another developer", taken.get("at")))
+        return 0
+    message = "Warp state: %s run" % run
+    if checked_out:
         code = _commit_run_in_tree(root, payload, message)
-    else:
-        code = _commit_files_on_branch(root, base, payload, message)
-        if code == 0:
-            print("state: committed %s on %s" % (run, base))
+        if code != 0:
+            return code
+        runs.record_checkpoint(warp, data, now)
+        if not push:
+            return 0
+        pushed = push_ref(root, base)
+        if pushed != 0 and _git(root, "pull", "--rebase", "--autostash", "-q", "origin", base).returncode == 0:
+            pushed = push_ref(root, base)
+        return pushed
+    code, sha = _build_commit(root, onto, payload, message)
     if code != 0:
         return code
-    runs.record_checkpoint(warp, data, now)
-    if not push:
+    if sha is None:
+        runs.record_checkpoint(warp, data, now)
         return 0
-    return push_ref(root, base)
+    print("state: committed %s on %s" % (run, base))
+    if push and "origin" in _remote_names(root):
+        pushed = _git(root, "push", "origin", "%s:refs/heads/%s" % (sha, base))
+        if pushed.returncode != 0:
+            print("state: push failed")
+            print((pushed.stderr or pushed.stdout).strip())
+            return 1
+        print("state: pushed origin/%s" % base)
+    local_ok = not _ref_exists(root, "refs/heads/%s" % base) or _is_ancestor(root, base, sha)
+    if local_ok:
+        _git(root, "update-ref", "refs/heads/%s" % base, sha)
+    runs.record_checkpoint(warp, data, now)
+    return 0
+
+
+def remove_run_folder(root: Path, run: str, base: str, push: bool = True) -> int:
+    """One commit on the base branch that deletes `.warp/runs/<run>/`, then push."""
+    folder = runs.folder_rel(run)
+    message = "Warp state: delete run %s" % run
+    head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    checked_out = head.returncode == 0 and head.stdout.strip() == base
+    onto = _sync_base(root, base, checked_out) if push else base
+    if checked_out:
+        removed = _git(root, "rm", "-r", "-q", "-f", "--ignore-unmatch", "--", folder)
+        if removed.returncode != 0:
+            print("refuse: %s" % (removed.stderr or removed.stdout).strip())
+            return 2
+        staged = _git(root, "diff", "--cached", "--name-only", "--", folder)
+        if not staged.stdout.strip():
+            print("state: %s is not on %s. Nothing to commit." % (folder, base))
+            return 0
+        done = _git(root, "commit", "-q", "--only", "-m", message, "--", folder)
+        if done.returncode != 0:
+            print((done.stderr or done.stdout).strip() or "git commit failed")
+            return 1
+        print("state: committed deletion of %s files" % len(staged.stdout.split()))
+        if not push:
+            return 0
+        pushed = push_ref(root, base)
+        if pushed != 0 and _git(root, "pull", "--rebase", "--autostash", "-q", "origin", base).returncode == 0:
+            pushed = push_ref(root, base)
+        return pushed
+    code, sha = _build_commit(root, onto, {}, message, remove=(folder,))
+    if code != 0:
+        return code
+    if sha is None:
+        print("state: %s is not on %s. Nothing to commit." % (folder, base))
+        return 0
+    print("state: committed deletion of %s on %s" % (folder, base))
+    if push and "origin" in _remote_names(root):
+        pushed = _git(root, "push", "origin", "%s:refs/heads/%s" % (sha, base))
+        if pushed.returncode != 0:
+            print("state: push failed")
+            print((pushed.stderr or pushed.stdout).strip())
+            return 1
+        print("state: pushed origin/%s" % base)
+    if not _ref_exists(root, "refs/heads/%s" % base) or _is_ancestor(root, base, sha):
+        _git(root, "update-ref", "refs/heads/%s" % base, sha)
+    return 0
 
 
 def _commit_run_in_tree(root: Path, payload: dict, message: str) -> int:
@@ -624,8 +734,8 @@ def load_main_beam(beam_path: Path, replace: bool = False) -> list:
     config = {}
     if isinstance(local, dict) and isinstance(local.get("config"), dict):
         config = local["config"]
-    base = _base_name(root, config)
     run = runs.current(root, local if isinstance(local, dict) else None)
+    base = runs.base_name(root, config) if run else _base_name(root, config)
     ref = base
     if "origin" in _remote_names(root):
         fetched = _git(root, "fetch", "origin", base)

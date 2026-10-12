@@ -53,6 +53,7 @@
   "commands": [
     "./commands/warp-allow-notify.md",
     "./commands/warp-cleanup.md",
+    "./commands/warp-delete.md",
     "./commands/warp-export.md",
     "./commands/warp-import.md",
     "./commands/warp-init.md",
@@ -67,6 +68,7 @@
     "./commands/warp-proceed.md",
     "./commands/warp-report.md",
     "./commands/warp-resume.md",
+    "./commands/warp-runs.md",
     "./commands/warp-scan.md",
     "./commands/warp-start.md",
     "./commands/warp-status-post.md",

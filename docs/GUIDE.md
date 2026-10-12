@@ -129,6 +129,24 @@ One member still not merged leaves the gate as it is. So does a ticket that is s
 
 `state_commit.py commit` commits the beam, journal, STATUS, and BOARD. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` stays gitignored. On a cloud runner, `/warp-start` refuses when `transitionJiraIssue`, `addOrEditJiraIssueComment`, or `slack_send_message` is missing from the MCP allow list. It does not claim. `--force` starts anyway. A local runner does not block. `/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-status`, and the other commands when the plugin command index still omits that path.
 
+## Run in blocks
+
+The gates are blocks of work: G0, then G1, then G2. A ticket belongs to the block of the gate it names, else the lowest gate that lists it as a member, else the highest block among the tickets it depends on, else the first block.
+
+With `gateOrder: strict` (the default), a ticket in block G3 does not start until every block before it is cleared. A block is cleared when every ticket in it is merged, done, or skipped and its gate is not red. A parked ticket holds everything after it, so a stuck ticket shows up instead of being left behind. Open tickets always finish: this only decides what starts. `gateOrder: deps` goes back to dependencies and blocking gates alone.
+
+`/warp-start` takes a range:
+
+| Command | Runs |
+|---|---|
+| `/warp-start` | Everything, until it is stopped or finished |
+| `/warp-start G0-` | G0 through the last block |
+| `/warp-start G0-G3` | G0 through G3 |
+| `/warp-start -G2` | From the first block not cleared (where the last run left off) through G2 |
+| `/warp-start G5` | G5 only. The blocks before it are not waited for, though a ticket still needs its dependencies merged |
+
+Start prints `range: G0 through G3 (G0-G3).` and `blocks: G0 cleared, G1 3/8, G2 0/6, G3 0/4.`, then a `hold:` line for each reason tickets are held back (`hold: 6 tickets, G2 waits on G1`). When the last block in the range is cleared the run pauses by itself and prints one line per block with tickets merged, minutes, tokens, and cost, then the next block and the command that continues. A start with no range goes on from there. In Slack: `warp:start G2-G3`. `python3 scripts/blocks.py show --beam .warp/beam.json` prints the blocks at any time.
+
 ## Model
 
 Coding steps use `config.model`, default `claude-sonnet-5-5-high` (Claude Sonnet 5.5 High). The slug must match the Cursor model picker. Change the yaml, then the next Shuttle picks it up. In-flight tickets keep the model they started with; the branch records it in the PR body.

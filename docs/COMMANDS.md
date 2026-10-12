@@ -14,6 +14,8 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-pause` | End every agent, keep the work, then push that state. The same teardown as `/warp-stop`, without the completion report. Carry on with `/warp-start` or `/warp-resume` | `scan.py pause` or `beam.py pause` `--reason`, then `inbound.py release`, then `update_state.py` `--beam`, then `orchestrator.py parent-exit` `--beam` |
 | `/warp-resume` | The same command as `/warp-start`: the same prompt gate, the same output, and the same `--force`, from a paused run, a stopped run, or a run that is already running. A ticket that had a Shuttle out gets a new one | `scan.py resume` `--reason` `--force` (runs `beam.py watchdog`), then passes of `orchestrator.py supervise` `--beam` and `orchestrator.py parent-exit` `--beam` `--wait` `--session` |
 | `/warp-stop` | The same teardown as `/warp-pause`: end every agent, keep the work, push that state. Then write the completion report and record `stoppedAt`. Carry on with `/warp-start` or `/warp-resume` | `scan.py stop` `--reason`, then `inbound.py release`, then `update_state.py` `--beam`, then `orchestrator.py parent-exit` `--beam` |
+| `/warp-runs` | List the runs in this repo with state, owner, folder, progress, and what each waits for. Changes nothing | `runs.py list` |
+| `/warp-delete <name>` | Delete a named run from the base branch. Dry run until `--apply` | `runs.py delete` `--apply` `--force` `--branches` |
 | `/warp-list` | Show what this run still has out, running or idle. Changes nothing. `--scan` lists every agent the key can see that matches the words, in any repo | `agents.py list` `--beam` `--tag` `--untagged` `--all-idle` `--any-repo` `--scan` |
 | `/warp-cleanup` | Cancel the run of each agent `/warp-list` shows as running, and archive all of them. Without `--apply` it is a dry run. `--scan` archives idle word matches and leaves running ones unless `--force` | `agents.py cleanup` `--beam` `--cloud` `--apply` `--running` `--force` `--tag` `--untagged` `--all-idle` `--any-repo` `--scan` |
 | `/warp-update-state` | Load main and `.warp/tickets/<id>/`, keep parent pause, stop, and claims, push the beam | `update_state.py` `--beam` `--root` |
@@ -507,8 +509,21 @@ On `runner: cloud`, or `runner: auto` when `CURSOR_CLOUD`, `CURSOR_CLOUD_AGENT`,
 
 When `jiraTransition` is on, `transitionJiraIssue` and `addOrEditJiraIssueComment` must be present. When Slack notify is on (`messenger` is `slack` or `both`), `slack_send_message` must be present. A missing tool is printed on stdout and handed to Herald. The run does not start and nothing is claimed. `scan.py start --force`, or `scan.py resume --force`, starts anyway and later claims skip the check. A local runner does not block. The same check runs on a later claim while the run is running, unless it was force-started.
 
+`/warp-start` also takes four things that belong to blocks and to named runs:
+
+| Argument | Effect |
+|---|---|
+| `[gates]` or `--gates=G0-G3` | Run only some blocks: `G0-` (G0 to the end), `G0-G3`, `-G2` (from the first block not cleared, through G2), `G5` (G5 alone). No range runs to the end and clears the last one. `-G2` is read as a range, not an option. The range is kept on the beam as `range`, and the run pauses when it is cleared. See [GUIDE.md](GUIDE.md) "Run in blocks". |
+| `--takeover` | Start a named run that another machine is running. Without it `/warp-start` prints `refuse: admin is running under <who> on <host> (parent last seen ...)`. The earlier parent ends its turn on its next pass (`parent: exit superseded`). |
+| `--now` | Start although `startAfter` is not met. |
+| `--run NAME` | Take up the named run from the repo first, for a fresh VM with no config. |
+
 ```bash
 python3 <plugin>/scripts/scan.py start --beam .warp/beam.json
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json G0-G3
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json --gates=-G2
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json --takeover
+python3 <plugin>/scripts/scan.py start --beam .warp/beam.json --now
 python3 <plugin>/scripts/scan.py start --beam .warp/beam.json --force
 python3 <plugin>/scripts/scan.py resume --beam .warp/beam.json --force
 python3 <plugin>/scripts/prompt_gate.py check --beam .warp/beam.json
@@ -614,11 +629,13 @@ One `warp-listen` listener reads these. It is one background subagent on the par
 |---|---|
 | `warp:proceed <id>` | `Received warp:proceed XV-01. Merging and moving Jira to Done.` Plan id or Jira key. Only that awaiting_approval ticket. A bad id acks and merges nothing else. |
 | `warp:retry <id>` | `Received warp:retry XV-01. Requeueing XV-01.` Status `queued`, alarm cleared, attempts kept. |
-| `warp:pause` | `Received warp:pause. Pausing the run and stopping the listener.` The same teardown as `/warp-pause`: every agent is ended. |
+| `warp:pause [run]` | `Received warp:pause. Pausing the run and stopping the listener.` The same teardown as `/warp-pause`: every agent is ended. |
 | `warp:resume` | `Received warp:resume. Resuming the run.` Does not launch a second listener. |
 | `warp:stop` | `Received warp:stop. Stopping the run and the listener.` The same teardown as `/warp-stop`: every agent is ended. |
-| `warp:start` | `Received warp:start. Starting the run.` |
-| `warp:status` | `Received warp:status. Posting the digest.` |
+| `warp:start [run] [gates]` | `Received warp:start. Starting the run.` A range after the verb sets the blocks: `warp:start G2-G3` acks `Starting the run blocks G2-G3.` A start or resume without a range clears the old one. |
+| `warp:status [run]` | `Received warp:status. Posting the digest.` |
+
+With more than one run in the repo, name the run: `warp:pause admin`, `warp:stop @admin lunch`, `warp:start admin G2-G3`. Every run's listener reads the channel and ignores a command named for another run (`inbound: ignored (addressed to admin)`), so only `admin` acts. A bare word counts as the run only when the repo has a run of that name; `@name` always counts, so a typo is ignored by every run and never becomes a reason. An unnamed `warp:pause`, `resume`, `stop`, or `start` is answered by exactly one run, the first by name, with `Received warp:stop. This repo has more than one run (admin, core). Name the run: warp:stop <run>. Nothing was changed.` `warp:status` is answered by every run, and its header says which. `warp:proceed <id>` and `warp:retry <id>` need no run: only the run that has the ticket answers. With one run, nothing changes.
 | anything else starting with `warp:` | `Not understood: warp:hold. Accepted forms: warp:pause, warp:resume, warp:stop, warp:start, warp:proceed <id>, warp:retry <id>, warp:status.` |
 
 ```bash

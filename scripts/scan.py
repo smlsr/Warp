@@ -44,6 +44,13 @@ from beam import (  # noqa: E402
 
 SKIP = {".git", "node_modules", "vendor", "dist", ".warp", "coverage"}
 ID_RE = re.compile(r"\b([A-Z]{1,4}-\d{1,4})\b")
+# A dependency may name another run's ticket: core:P-014
+DEP_RE = re.compile(r"\b(?:([a-z][a-z0-9-]*):)?([A-Z]{1,4}-\d{1,4})\b")
+
+
+def dep_ids(text: str) -> list:
+    """Ticket ids in a deps cell. `core:P-014` keeps its run."""
+    return ["%s:%s" % (run, tid) if run else tid for run, tid in DEP_RE.findall(text or "")]
 AFTER_RE = re.compile(r"\bafter\s+([A-Z0-9][A-Z0-9,\s\-]{0,80})", re.I)
 BRACKET_RE = re.compile(r"\[([A-Z][A-Z0-9]+-\d+)\]")
 JIRA_FIELD_RE = re.compile(r"\bJira(?:\s*Key)?\s*[:=]\s*([A-Z][A-Z0-9]+-\d+)\b", re.I)
@@ -252,7 +259,7 @@ def _from_import_issue(row: dict, fields: dict, external: str) -> dict:
     locks_body = _section(sections, "locks")
     locks = [] if _is_none(locks_body) else [line for line in _lines_of(locks_body) if not _is_none(line)]
     blocked = _section(sections, "blocked by", "blockedby")
-    deps = [] if _is_none(blocked) else ID_RE.findall(blocked)
+    deps = [] if _is_none(blocked) else dep_ids(blocked)
     acceptance = _lines_of(_section(sections, "acceptance"))
     raw_key = _issue_key(row.get("key") or fields.get("key"))
     jira_key = raw_key if raw_key and raw_key != external.strip().upper() else None
@@ -361,7 +368,7 @@ def from_markdown(path: Path) -> Optional[dict]:
             if not tid or not ID_RE.fullmatch(tid.strip()):
                 continue
             deps_raw = row.get("deps") or row.get("blockers") or row.get("blocked by") or ""
-            deps = ID_RE.findall(deps_raw)
+            deps = dep_ids(deps_raw)
             tickets[tid.strip()] = {
                 "id": tid.strip(),
                 "summary": row.get("summary") or row.get("title") or "",
@@ -402,8 +409,9 @@ def from_markdown(path: Path) -> Optional[dict]:
         excluded = bracketed | field_keys
         ids = [i for i in ID_RE.findall(line) if i.upper() not in excluded]
         after = AFTER_RE.search(line)
-        after_ids = [i for i in (ID_RE.findall(after.group(1)) if after else []) if i.upper() not in excluded]
-        defined = [i for i in ids if i not in after_ids] or ids
+        after_ids = [i for i in (dep_ids(after.group(1)) if after else []) if i.upper() not in excluded]
+        after_plain = {i.split(":")[-1] for i in after_ids}
+        defined = [i for i in ids if i not in after_plain] or ids
         for tid in defined:
             if tid not in tickets:
                 tickets[tid] = {
@@ -863,6 +871,10 @@ def apply_ownership(root: Path, run: str, graph: dict, skip: bool) -> int:
         return 4
     kept = [t for t in graph["tickets"] if t["id"] not in clash]
     dependents = sorted({t["id"] for t in kept for d in (t.get("deps") or []) + (t.get("after") or []) if d in clash})
+    for t in kept:
+        for key in ("deps", "after"):
+            if t.get(key):
+                t[key] = ["%s:%s" % (clash[d], d) if d in clash else d for d in t[key]]
     graph["tickets"] = kept
     for gate in graph.get("gates") or []:
         gate["members"] = [m for m in gate.get("members") or [] if m not in clash]
@@ -870,13 +882,13 @@ def apply_ownership(root: Path, run: str, graph: dict, skip: bool) -> int:
     print(f"skipped: {len(clash)} tickets owned by another run")
     if dependents:
         print(
-            "warn: these tickets depend on a ticket another run owns and will not start until cross-run dependencies are supported: "
+            "deps: these tickets depend on a ticket another run owns. They now wait for it as <run>:<id>: "
             + ", ".join(dependents)
         )
     return 0
 
 
-def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "") -> int:
+def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
     """`start` and `resume`. They are the same command.
 
     Load the beam from main when this checkout has none, run the prompt
@@ -890,6 +902,12 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     import state_commit
 
     root = runs.repo_root(beam_path)
+    refusal, notes = runs.owner_blocker(root, run or runs.current(root), takeover=takeover)
+    if refusal:
+        print(refusal)
+        return 2
+    for line in notes:
+        print(line)
     if run:
         code, lines = runs.take_up(root, run)
         for line in lines:
@@ -902,18 +920,69 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     if blocked:
         print(blocked)
         return 2
+    import blocks
+
+    wait_text = runs.read_key(runs.config_path(root).read_text() if runs.config_path(root).is_file() else "", "startAfter") or ""
+    refusal, after_lines = runs.start_after_blocker(root, run or runs.current(root), wait_text)
+    for line in after_lines:
+        print(line)
+    if refusal and not now:
+        print(refusal)
+        return 2
+    ok, range_lines = blocks.apply(load_json(beam_path), gates)
+    if not ok:
+        for line in range_lines:
+            print(line)
+        return 2
     gate = prompt_gate.gate_start(beam_path, force=force)
     if gate != 0:
         return gate
+    held = load_json(beam_path)
+    blocks.apply(held, gates)
+    cfg = prompt_gate.effective_config(held, root)
+    held["gateOrder"] = blocks.order_mode({"config": cfg})
+    held["paths"] = runs.parse_paths(cfg.get("paths"))
+    held["baseFixOwner"] = str(cfg.get("baseFixOwner") or "").strip().lower()
+    if held.get("run"):
+        try:
+            runs.refresh_external(root, held, force=True)
+        except Exception as e:
+            print(f"runs: other runs not read ({e})")
+    atomic_write(beam_path, json.dumps(held, indent=2) + "\n")
     resume_hint.print_hint(beam_path)
     for line in orchestrator_notes(beam_path):
         print(line)
     set_run(beam_path, "running", reason)
+    for line in range_lines:
+        print(line)
+    print(blocks.open_line(load_json(beam_path)))
+    after = load_json(beam_path)
+    for line in blocks.holds(after):
+        print(line)
+    for line in path_holds(after):
+        print(line)
+    if after.get("baseFixOwner") and after.get("baseFixOwner") != after.get("run"):
+        print("basefix: %s owns the fix when the base branch goes red. This run waits for it." % after["baseFixOwner"])
     print(pipeline.unfinished_line(load_json(beam_path)))
     for line in pipeline.cold_start(beam_path):
         print(line)
     print_open_work(beam_path)
     return 0
+
+
+def path_holds(beam: dict) -> list:
+    """Tickets whose locks leave this run's paths. They do not start."""
+    paths = runs.parse_paths(beam.get("paths"))
+    if not paths:
+        return []
+    stray = sorted(
+        tid
+        for tid, row in (beam.get("tickets") or {}).items()
+        if row.get("status") in {"queued", "blocked"} and runs.outside_paths(paths, row.get("locks") or [])
+    )
+    if not stray:
+        return []
+    return ["hold: %d tickets, locks outside this run's paths (%s): %s" % (len(stray), ", ".join(paths), ", ".join(stray[:8]))]
 
 
 def orchestrator_notes(beam_path: Path) -> list:
@@ -939,6 +1008,8 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         import pipeline
 
         session_lines = pipeline.open_parent_session(beam)
+        if beam.get("run"):
+            runs.stamp_owner(beam, str(beam.get("parentSession") or ""))
     stop_lines = []
     if state == "running":
         import agents
@@ -1039,6 +1110,13 @@ from paused, from stopped, or when it is already running, prints where it
 came from (run: was paused. Continuing.), and starts unfinished work before
 any new ticket (unfinished: ...). pause and stop are the same teardown:
 every agent is ended. stop also writes the completion report.
+--takeover starts a named run that another machine is running (its owner).
+--now starts a run whose startAfter (for example core:G2) is not met yet.
+start and resume take a gate range, as --gates=G0-G3 or after the options:
+G0- (G0 to the end), G0-G3, -G2 (from the first block not cleared, through G2),
+or G5 (G5 only). No range runs to the end and clears the last one. With
+gateOrder strict (the default) a block starts when the one before it is cleared.
+A range pauses the run when its last block is cleared and prints each block.
 --force starts a cloud run even when the MCP allow list is missing
 the Jira or Slack tools. Without --force, that start does not claim.
 import --keep-status keeps status for ids that still exist (the default).
@@ -1079,10 +1157,17 @@ def main() -> None:
         sp.add_argument("--reason")
         if name in {"start", "resume"}:
             sp.add_argument("--force", action="store_true", help="start even if a cloud run would prompt for MCP tools")
+            sp.add_argument("--gates", default="", help="run only some blocks: G0-, G0-G3, -G2, or G5. None runs to the end")
+            sp.add_argument("gates_arg", nargs="?", default="", help="the same range as --gates")
+            sp.add_argument("--now", action="store_true", help="start even though startAfter is not met")
+            sp.add_argument("--takeover", action="store_true", help="take over a named run another machine is running")
             sp.add_argument("--run", default="", help="take up this named run from the repo first (a fresh checkout or cloud agent)")
     import usage
 
-    args = p.parse_args(usage.normalize_argv(None))
+    argv = usage.normalize_argv(None)
+    # `/warp-start -G2` would read as an option. Give it its real name.
+    argv = ["--gates=%s" % a if re.match(r"^-G?\d+$", a, re.I) else a for a in argv]
+    args = p.parse_args(argv)
     if args.cmd == "scan":
         root = Path(args.root).resolve()
         run = runs.current(root)
@@ -1195,6 +1280,8 @@ def main() -> None:
             print(f"scope folder={folder.relative_to(root)}")
         if run:
             print(f"run: {run}")
+            for line in runs.scope_warnings(root, run, beam):
+                print(line)
         print(f"scan format={graph.get('format')} tickets={len(beam['tickets'])} source={graph.get('source')}")
         print(f"estimate agentHours={est['agentHours']} humanHours={est['humanHours']} elapsedHours={est['elapsedHours']}")
         print("runState=stopped — /warp-start to dispatch")
@@ -1273,7 +1360,7 @@ def main() -> None:
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
     elif args.cmd in {"start", "resume"}:
-        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "")
+        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "", takeover=bool(getattr(args, "takeover", False)), gates=(getattr(args, "gates", "") or getattr(args, "gates_arg", "") or ""), now=bool(getattr(args, "now", False)))
         if code != 0:
             sys.exit(code)
     elif args.cmd == "pause":

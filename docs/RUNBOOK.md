@@ -338,6 +338,30 @@ IDE agents prompt until that matches. Cloud agents and automations do not prompt
 
 Open a new agent in a checkout of the repo and run `/warp-init <name>`. Warp reads origin, prints `run: <name> already exists on origin/<base>. You are taking up a previous run.`, then the saved config, folder, scan, state, and progress, restores the run, and says `next: /warp-start`. If it prints `warn: the last parent saved state ... Another agent may still be running it`, check that the old agent is really gone: `/warp-start` takes the run over and the old parent ends its turn. Run `/warp-list` to see leftover cloud agents and `/warp-cleanup` to archive them. State is as fresh as the last checkpoint; `/warp-sync` brings the beam in line with Jira for anything newer.
 
+## `refuse: <name> is running under <user>@<host>`
+
+The run is live on another machine. If that agent is gone, `/warp-start --takeover` takes the run over; their parent ends its turn on its next pass. If it is not gone, give each developer their own run name. `/warp-runs` shows the owner and when the parent was last seen.
+
+## `refuse: <name> starts after core:G2`
+
+`startAfter` in the config names a gate in another run. The line lists which block is not cleared yet. Wait, or `/warp-start --now` to start anyway. `/warp-runs` shows the other run's blocks.
+
+## Tickets are ready but nothing starts on a named run
+
+Check in this order. `blocks.py show` lists each block and whether it is cleared; in strict order (`gateOrder: strict`, the default) a ticket waits for every earlier block, and a parked ticket holds the later ones. `gateOrder: deps` goes back to dependencies only. A dependency written `core:P-014` waits until that ticket is merged in the other run. A ticket whose locks overlap another run's active locks waits. With `paths` set, a ticket whose locks fall outside it prints `hold: N tickets, locks outside this run's paths`. A `startAfter` that was met is not rechecked after the run starts.
+
+## `range: G0-G3 complete ... Pausing.`
+
+The range you started with is cleared. The run paused. `/warp-start G4-` (or `/warp-resume`, which clears the range) continues.
+
+## Base fix does not start in a run
+
+With `baseFixOwner: core`, only the run named `core` dispatches the base fix. The others print that they are leaving it to the owner. Clear the key to let every run fix it.
+
+## `/warp-delete <name>` refused
+
+It refuses a run that is live, and a run another run depends on or starts after, unless `--force`. Without `--apply` it only lists what it would remove. `--apply` removes `.warp/runs/<name>/` in one commit and pushes it; `--branches` also deletes the run's origin branches. The local files are moved to `.warp/previous-<name>/`.
+
 ## `refuse: <name> has no scan`
 
 A named run cannot start until `/warp-scan` has run. Run `/warp-scan [folder]`, then `/warp-start`.
@@ -348,7 +372,7 @@ One checkout runs one run. Use another checkout, or `/warp-init <name> --switch`
 
 ## `scan: N ticket ids are already owned by another run`
 
-Two runs may not share a ticket id. The scan listed the ids and the owner and wrote nothing (exit 4). Narrow the folder with `/warp-scan <folder>`, or add `--skip-owned` to leave those tickets out. Tickets that depend on a skipped ticket will not start until cross-run dependencies exist.
+Two runs may not share a ticket id. The scan listed the ids and the owner and wrote nothing (exit 4). Narrow the folder with `/warp-scan <folder>`, or add `--skip-owned` to leave those tickets out. Tickets that depend on a skipped ticket are rewritten to `<owner>:<id>` and wait for that ticket to merge in the owning run.
 
 ## Scan one folder
 

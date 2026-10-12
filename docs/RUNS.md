@@ -79,6 +79,58 @@ A ticket's own folder travels on its ticket branch. The shared files (beam, jour
 
 A fresh VM with no config finds its run from the branch name, the beam, or `WARP_RUN`, in that order after the config's `run:`.
 
+## Running together
+
+### Who owns a run
+
+`/warp-start` records the owner on the beam: who (git `user.name`), the machine, and when. A run that another machine is running, with a parent that saved state in the last 30 minutes, is not started by a second person by accident:
+
+```
+refuse: admin is running under Dev Two on devtwo-mbp, since 2026-10-12 14:02 (parent last seen 4m ago). /warp-start --takeover takes it over. /warp-init admin shows its state.
+```
+
+`/warp-start --takeover` takes it over. The earlier parent finds the new owner at its next `parent-exit` and ends its turn (`parent: exit superseded`), and its publish is skipped (`state: not published. admin was taken over by ...`), so it cannot write over the new owner's state. The same machine, a stopped run, and a run with an old checkpoint start without it.
+
+### Waiting for another run
+
+```yaml
+startAfter: core:G2        # in admin's .warp/config.yaml
+```
+
+`/warp-start` reads core's published beam and refuses until core's G2 and every block before it are cleared: `refuse: admin starts after core:G2. /warp-start --now starts it anyway.` The lines before it say where core is (`core is at G1 (3 of 8 merged). It must clear G2 first`). A run that does not exist yet, or has no such gate, is named. `/warp-runs` shows `startAfter=core:G2(waits)` and then `(met)`, so a developer knows when to start. Several runs: `startAfter: core:G2, admin:G1`.
+
+### Depending on another run's ticket
+
+Write the dependency as `<run>:<id>`: `deps: ["core:P-014"]` in `schedule.json`, or `core:P-014` in the deps cell of a table or an `after` list. The ticket waits until core's P-014 is merged in core's published beam. The parent reads the other runs' published beams every few minutes, and at start, and keeps what it needs under `external` on its own beam. `/warp-scan` warns when the run is not published yet, or does not have that ticket. `/warp-scan --skip-owned` leaves out the tickets another run owns and rewrites the tickets that depended on them to `core:A-1`.
+
+### Paths and locks
+
+```yaml
+paths: HOS/UI/Admin, packages/admin
+```
+
+A ticket whose locks leave those paths does not start, `/warp-start` lists them (`hold: 2 tickets, locks outside this run's paths ...`), and `/warp-scan` warns about them. Widen `paths` to let them run. Locks of the tickets that other runs have in flight also hold a ticket back, so two runs never edit the same path at once. They are read with the dependencies above.
+
+### The base branch
+
+Every run publishes to the same base branch, so origin moves under it. A publish fetches first, fast-forwards the local base, builds its commit on origin's tip, and pushes that commit. It touches only `.warp/runs/<name>/`, so runs never conflict with each other.
+
+When the base branch goes red, every run holds merging. `baseFixOwner: core` makes one run dispatch the fix, so three runs do not start three. The others print `basefix: core owns the fix ... This run waits for it.` With no owner every run fixes its own, as before.
+
+## Commands for several runs
+
+```
+/warp-runs                    runs on the base branch: state, owner, folder, progress, what each waits for
+/warp-delete admin            a dry run: what would be removed, what is kept
+/warp-delete admin --apply    remove .warp/runs/admin/ from the base branch in one commit, and push
+```
+
+`/warp-delete` refuses a run whose parent saved state in the last 30 minutes, and a run that another run waits on (`startAfter`, or a ticket dependency), unless `--force`. It keeps merged code, Jira, and merged pull requests. Branches `warp/<name>/*` stay unless `--branches`, which deletes them on origin and closes their open pull requests. If this checkout runs `<name>`, its local files move to `.warp/previous-<name>/` and `run:` is cleared. The deletion is a commit on the base branch, so it merges like any other change.
+
+## Slack and Teams
+
+Every message header names the run: `Warp | <repo> / <project> | run admin | warp:<instance>`. Commands name the run too: `warp:pause admin`. See `docs/COMMANDS.md`, "Channel verbs".
+
 ## What does not change
 
 Unnamed runs (no `run:`) behave exactly as before: `.warp/` on the base branch, `warp/<id>` branches.

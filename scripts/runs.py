@@ -20,7 +20,14 @@ whose agent is gone picks up where it left off.
   python3 scripts/runs.py ?
   python3 scripts/runs.py list
   python3 scripts/runs.py show admin
+  python3 scripts/runs.py delete admin
+  python3 scripts/runs.py delete admin --apply
+  python3 scripts/runs.py delete admin --apply --branches
   python3 scripts/runs.py name
+
+delete is a dry run until --apply. It removes .warp/runs/<name>/ from the base
+branch in one commit and pushes it. It refuses a run that is running, or that
+another run waits on, unless --force. Branches stay unless --branches.
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
@@ -326,19 +333,25 @@ def build_stats(beam: dict, run: str = "", now: Optional[str] = None) -> dict:
 # --- reading a run from git -----------------------------------------------
 
 
-def base_name(root) -> str:
-    """The base branch: baseBranch in the config, else origin's default, else this branch."""
+def base_name(root, config: Optional[dict] = None) -> str:
+    """The base branch: baseBranch in the config, else origin's default, else main or master, else this branch."""
     import state_commit
 
-    try:
-        configured = read_key(config_path(root).read_text(), "baseBranch") or ""
-    except OSError:
-        configured = ""
-    if configured.strip():
-        return configured.strip()
+    configured = str((config or {}).get("baseBranch") or "").strip()
+    if not configured:
+        try:
+            configured = (read_key(config_path(root).read_text(), "baseBranch") or "").strip()
+        except OSError:
+            configured = ""
+    if configured:
+        return configured
     shown = _git(root, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
     if shown.returncode == 0 and shown.stdout.strip().startswith("origin/"):
         return shown.stdout.strip()[len("origin/"):]
+    for name in ("main", "master"):
+        for ref in ("refs/remotes/origin/%s" % name, "refs/heads/%s" % name):
+            if _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0:
+                return name
     return state_commit._base_name(Path(root), {})
 
 
@@ -384,6 +397,16 @@ def list_runs(root, ref: str) -> list:
         if _git(root, "cat-file", "-e", "%s:%s" % (ref, git_rel(name, ".warp/beam.json"))).returncode == 0:
             names.append(name)
     return sorted(names)
+
+
+def known_names(root) -> set:
+    """Run names published on the base branch, from refs already fetched. No network."""
+    base = base_name(root)
+    names: set = set()
+    for ref in ("origin/%s" % base, base):
+        if _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0:
+            names |= set(list_runs(root, ref))
+    return names
 
 
 def owners(root, run: str, ref: str) -> dict:
@@ -478,6 +501,8 @@ def summary(root, ref: str, name: str, now: Optional[datetime] = None) -> Option
         "seenMinutes": minutes,
         "live": state == "running" and minutes is not None and minutes <= LIVE_MINUTES,
         "hasConfig": bool(cfg_text.strip()),
+        "owner": beam.get("owner") if isinstance(beam.get("owner"), dict) else {},
+        "startAfter": parse_start_after(read_key(cfg_text, "startAfter") or ""),
     }
 
 
@@ -498,12 +523,16 @@ def notice_lines(info: dict) -> list:
     else:
         lines.append("scan: none yet")
     lines.append("state: %s, parent last seen %s" % (info["runState"], _ago(info["seenMinutes"])))
+    if info.get("owner"):
+        lines.append("owner: %s" % owner_text(info["owner"]))
+    if info.get("startAfter"):
+        lines.append("startAfter: %s" % ", ".join("%s:%s" % pair for pair in info["startAfter"]))
     counts = info["counts"]
     lines.append("progress: %d merged, %d open, %d queued" % (counts["merged"], counts["open"], counts["queued"]))
     if info["live"]:
         lines.append(
             "warn: the last parent saved state %s and the run is marked running. Another agent may still be running it. "
-            "Starting here takes the run over." % _ago(info["seenMinutes"])
+            "Starting from another machine needs /warp-start --takeover." % _ago(info["seenMinutes"])
         )
     lines.append("next: /warp-start" if info["scanned"] else "next: /warp-scan [folder]")
     return lines
@@ -706,6 +735,358 @@ def start_blocker(root, beam_path) -> Optional[str]:
     return "refuse: %s has no scan. Run /warp-scan [folder] first." % name
 
 
+# --- owner and takeover ------------------------------------------------------
+
+
+def _git_user() -> str:
+    try:
+        done = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def identity() -> dict:
+    """Who is running this process: a name, the machine id, and the host."""
+    import agents
+
+    by = _git_user() or os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+    return {"by": by, "machine": agents.machine_id(), "host": agents._hostname()}
+
+
+def stamp_owner(beam: dict, session: str = "") -> dict:
+    """Record who started this run just now. The caller writes the beam."""
+    who = identity()
+    who["at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    who["session"] = session
+    beam["owner"] = who
+    return who
+
+
+def owner_text(owner: dict) -> str:
+    where = owner.get("host") or owner.get("machine") or "unknown host"
+    return "%s on %s, since %s" % (owner.get("by") or "unknown", where, (owner.get("at") or "unknown")[:16].replace("T", " "))
+
+
+def owner_conflict(root, run: str, beam: dict, ref: str) -> Optional[dict]:
+    """The published owner when another machine took this run over after we did, else None."""
+    mine = beam.get("owner") if isinstance(beam, dict) else None
+    if not isinstance(mine, dict) or not mine.get("machine"):
+        return None
+    published = (show_json(root, ref, run, ".warp/beam.json") or {}).get("owner")
+    if not isinstance(published, dict) or not published.get("machine"):
+        return None
+    if published.get("machine") == mine.get("machine"):
+        return None
+    if str(published.get("at") or "") > str(mine.get("at") or ""):
+        return published
+    return None
+
+
+def owner_blocker(root, run: str, takeover: bool = False) -> tuple:
+    """(refusal or None, notes). A run another machine is running needs `--takeover`."""
+    if not run:
+        return None, []
+    ref = fetch_ref(root)
+    info = summary(root, ref, run)
+    if info is None or not info["live"]:
+        return None, []
+    published = info.get("owner") or {}
+    if not published.get("machine") or published.get("machine") == identity()["machine"]:
+        return None, []
+    seen = _ago(info["seenMinutes"])
+    if takeover:
+        return None, [
+            "takeover: %s is running under %s (parent last seen %s). This session takes it over. "
+            "Their parent ends its turn on its next pass." % (run, owner_text(published), seen)
+        ]
+    return (
+        "refuse: %s is running under %s (parent last seen %s). /warp-start --takeover takes it over. "
+        "/warp-init %s shows its state." % (run, owner_text(published), seen, run),
+        [],
+    )
+
+
+# --- start after, cross-run dependencies -------------------------------------
+
+
+def parse_start_after(text: str) -> list:
+    """`core:G2, admin:G1` -> [("core", "G2"), ("admin", "G1")]. Bad pieces are left out."""
+    found = []
+    for piece in re.split(r"[,\s]+", str(text or "").strip().strip("[]")):
+        piece = piece.strip("\"'")
+        if ":" not in piece:
+            continue
+        run, _, gate = piece.partition(":")
+        run, gate = run.strip().lower(), gate.strip().upper()
+        if valid_name(run)[0] and re.match(r"^G\d+$", gate):
+            found.append((run, gate))
+    return found
+
+
+def split_dep(dep: str) -> tuple:
+    """`core:P-014` -> ("core", "P-014"). A plain id gives ("", id)."""
+    text = str(dep or "").strip()
+    head, sep, tail = text.partition(":")
+    if sep and tail and valid_name(head.lower())[0]:
+        return head.lower(), tail.strip()
+    return "", text
+
+
+def dependents(root, ref: str, name: str) -> list:
+    """Runs that wait on `name`: through startAfter, or a ticket dependency `name:<id>`."""
+    found = []
+    for other in list_runs(root, ref):
+        if other == name:
+            continue
+        cfg_text = show(root, ref, other, ".warp/config.yaml") or ""
+        waits = [gate for run, gate in parse_start_after(read_key(cfg_text, "startAfter") or "") if run == name]
+        beam = show_json(root, ref, other, ".warp/beam.json") or {}
+        for row in (beam.get("tickets") or {}).values():
+            if isinstance(row, dict):
+                for dep in (row.get("deps") or []) + (row.get("after") or []):
+                    if split_dep(dep)[0] == name:
+                        waits.append("ticket %s" % split_dep(dep)[1])
+        if waits:
+            found.append((other, sorted(set(waits))))
+    return found
+
+
+# --- delete ---------------------------------------------------------------
+
+
+def delete_run(root, name: str, apply: bool = False, force: bool = False, branches: bool = False) -> int:
+    """`/warp-delete <name>`. A dry run unless `apply`. Returns an exit code."""
+    import state_commit
+
+    root = Path(root)
+    ok, why = valid_name(name)
+    if not ok:
+        print("refuse: %s" % why)
+        return 2
+    ref = fetch_ref(root)
+    info = summary(root, ref, name)
+    listed = _git(root, "ls-tree", "-r", "--name-only", ref, folder_rel(name) + "/")
+    files = [f for f in listed.stdout.splitlines() if f.strip()] if listed.returncode == 0 else []
+    if info is None and not files:
+        print("run: %s not found on %s. Nothing to delete." % (name, ref))
+        return 2
+    base = ref.split("/", 1)[1] if ref.startswith("origin/") else ref
+    print("delete: run %s on %s: %d files in %s/" % (name, ref, len(files), folder_rel(name)))
+    if info is not None:
+        counts = info["counts"]
+        print("state: %s, parent last seen %s. %d merged, %d open, %d queued" % (info["runState"], _ago(info["seenMinutes"]), counts["merged"], counts["open"], counts["queued"]))
+    refused = []
+    if info is not None and info["live"]:
+        refused.append("%s is running (parent last seen %s). /warp-stop it first" % (name, _ago(info["seenMinutes"])))
+    for other, waits in dependents(root, ref, name):
+        refused.append("%s waits on %s (%s)" % (other, name, ", ".join(waits)))
+    if refused and not force:
+        for line in refused:
+            print("refuse: %s." % line)
+        print("--force deletes it anyway.")
+        return 2
+    for line in refused:
+        print("warn: %s. Deleting anyway (--force)." % line)
+    heads = _git(root, "ls-remote", "--heads", "origin", "refs/heads/warp/%s/*" % name)
+    names = [row.split("refs/heads/", 1)[1] for row in heads.stdout.splitlines() if "refs/heads/" in row] if heads.returncode == 0 else []
+    print("branches: %d on origin under warp/%s/. %s" % (len(names), name, "They are deleted too (--branches)." if branches else "They are kept. --branches deletes them, and closes their open pull requests."))
+    print("kept: merged code, Jira, and pull requests that are already merged.")
+    if not apply:
+        print("dry run: nothing deleted. Add --apply to remove %s/ from %s." % (folder_rel(name), base))
+        return 0
+    code = state_commit.remove_run_folder(root, name, base)
+    if code != 0:
+        return code
+    if branches and names:
+        gone = _git(root, "push", "origin", "--delete", *names)
+        print("branches: deleted %d" % len(names) if gone.returncode == 0 else "branches: delete failed: %s" % (gone.stderr or gone.stdout).strip())
+    if read_run(root) == name:
+        moved = _move_aside(root, name)
+        path = config_path(root)
+        path.write_text(set_key(path.read_text(), "run", ""))
+        print("local: this checkout ran %s. Its files are kept in %s/ and run: is cleared." % (name, moved))
+    print("deleted: %s from %s. Merge or pull %s to share it." % (name, base, base))
+    return 0
+
+
+# --- what other runs hold: start after, dependencies, locks, paths -----------
+
+EXTERNAL_MINUTES = 5
+
+
+def start_after_status(root, ref: str, pairs: list) -> list:
+    """For each (run, gate): (run, gate, met, why). Met means the gate and every block before it are cleared."""
+    import blocks
+
+    out = []
+    for other, gate in pairs:
+        beam = show_json(root, ref, other, ".warp/beam.json")
+        if beam is None:
+            out.append((other, gate, False, "no run named %s is published. /warp-init %s, /warp-scan, and /warp-start it first" % (other, other)))
+            continue
+        order = blocks.keys(beam)
+        if gate not in order:
+            out.append((other, gate, False, "%s has no gate %s. It has: %s" % (other, gate, ", ".join(order) or "none")))
+            continue
+        rows = blocks.states(beam)
+        upto = rows[: order.index(gate) + 1]
+        stuck = next((row for row in upto if not row["cleared"]), None)
+        if stuck is None:
+            out.append((other, gate, True, "%s cleared %s" % (other, gate)))
+        else:
+            out.append(
+                (other, gate, False, "%s is at %s (%d of %d merged). It must clear %s first" % (other, stuck["key"], stuck["merged"], stuck["total"], gate))
+            )
+    return out
+
+
+def start_after_blocker(root, run: str, text: str) -> tuple:
+    """(refusal or None, lines). A run with `startAfter: core:G2` waits until core's G2 is cleared."""
+    pairs = parse_start_after(text)
+    if not pairs:
+        return None, []
+    ref = fetch_ref(root)
+    status = start_after_status(root, ref, pairs)
+    lines = ["startAfter: %s:%s %s." % (o, g, "met (%s)" % why if met else "not met (%s)" % why) for o, g, met, why in status]
+    if all(met for _o, _g, met, _why in status):
+        return None, lines
+    waits = ", ".join("%s:%s" % (o, g) for o, g, met, _why in status if not met)
+    return "refuse: %s starts after %s. /warp-start --now starts it anyway." % (run, waits), lines
+
+
+def _active_locks(beam: dict, other: str) -> list:
+    import orchestrator
+    from beam import ACTIVE
+
+    rows = []
+    for tid, row in (beam.get("tickets") or {}).items():
+        if isinstance(row, dict) and row.get("status") in ACTIVE:
+            locks = orchestrator.lock_paths(row)
+            if locks:
+                rows.append({"run": other, "id": str(tid), "locks": locks})
+    return rows
+
+
+def refresh_external(root, beam: dict, force: bool = False, now: Optional[datetime] = None) -> bool:
+    """Record what other runs hold, on the live beam: statuses of tickets this run depends on, and active locks.
+
+    Reads only what the other runs published. Throttled to every few minutes
+    unless `force`. Returns True when the beam changed. The caller saves it.
+    """
+    me = str(beam.get("run") or "")
+    if not me:
+        return False
+    held = beam.get("external") if isinstance(beam.get("external"), dict) else {}
+    stamp = _parse_time(held.get("at"))
+    now = now or datetime.now(timezone.utc)
+    if not force and stamp is not None and (now - stamp).total_seconds() < EXTERNAL_MINUTES * 60:
+        return False
+    ref = fetch_ref(root)
+    wanted: dict = {}
+    for row in (beam.get("tickets") or {}).values():
+        for dep in (row.get("deps") or []) + (row.get("after") or []):
+            other, tid = split_dep(dep)
+            if other and other != me:
+                wanted.setdefault(other, set()).add(tid)
+    status: dict = {}
+    locks: list = []
+    for other in list_runs(root, ref):
+        if other == me:
+            continue
+        published = show_json(root, ref, other, ".warp/beam.json") or {}
+        rows = published.get("tickets") or {}
+        for tid in wanted.get(other, ()):
+            if tid in rows:
+                status["%s:%s" % (other, tid)] = (rows[tid] or {}).get("status")
+        locks.extend(_active_locks(published, other))
+    beam["external"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "ref": ref, "status": status, "locks": locks}
+    return True
+
+
+def external_status(beam: dict, dep: str) -> Optional[str]:
+    """Status of a dependency in this beam, or in another run's published beam when it is written `run:id`."""
+    row = (beam.get("tickets") or {}).get(dep)
+    if row is not None:
+        return row.get("status")
+    held = beam.get("external") if isinstance(beam.get("external"), dict) else {}
+    return (held.get("status") or {}).get(dep)
+
+
+def external_locks(beam: dict) -> list:
+    """[(label, locks)] other runs hold right now, as last read."""
+    held = beam.get("external") if isinstance(beam.get("external"), dict) else {}
+    return [("%s:%s" % (row.get("run"), row.get("id")), list(row.get("locks") or [])) for row in held.get("locks") or []]
+
+
+def parse_paths(text) -> list:
+    """`HOS/UI/Admin, packages/admin` -> ["HOS/UI/Admin", "packages/admin"]. A list is cleaned the same way."""
+    raw = text if isinstance(text, (list, tuple)) else re.split(r"[,\n]+", str(text or "").strip().strip("[]"))
+    found = []
+    for piece in raw:
+        item = str(piece).strip().strip("\"'").strip().strip("/")
+        if item and item not in {".", "*", "**"} and item not in found:
+            found.append(item)
+    return found
+
+
+def _lock_base(lock: str) -> str:
+    text = str(lock or "").strip().strip("/")
+    for tail in ("/**", "/*"):
+        if text.endswith(tail):
+            text = text[: -len(tail)]
+    return text
+
+
+def outside_paths(paths: list, locks: list) -> list:
+    """The locks that fall outside every path in `paths`. No paths means no scope: nothing is outside."""
+    if not paths:
+        return []
+    out = []
+    for lock in locks or []:
+        base = _lock_base(lock)
+        if not any(base == p or base.startswith(p + "/") for p in paths):
+            out.append(lock)
+    return out
+
+
+def scope_warnings(root, run: str, beam: dict) -> list:
+    """Lines for a scan: tickets whose locks leave this run's paths, and dependencies on runs that are not published."""
+    lines = []
+    paths = parse_paths(read_key(config_path(root).read_text() if config_path(root).is_file() else "", "paths") or "")
+    if paths:
+        stray = {}
+        for tid, row in (beam.get("tickets") or {}).items():
+            bad = outside_paths(paths, row.get("locks") or [])
+            if bad:
+                stray[tid] = bad
+        if stray:
+            lines.append(
+                "paths: %d tickets have locks outside this run's paths (%s) and will not start: %s"
+                % (len(stray), ", ".join(paths), ", ".join("%s (%s)" % (t, ", ".join(b[:2])) for t, b in sorted(stray.items())[:6]))
+            )
+    try:
+        ref = fetch_ref(root)
+        known = set(list_runs(root, ref))
+    except Exception:
+        return lines
+    missing = {}
+    for tid, row in (beam.get("tickets") or {}).items():
+        for dep in (row.get("deps") or []) + (row.get("after") or []):
+            other, dep_id = split_dep(dep)
+            if not other or other == run:
+                continue
+            if other not in known:
+                missing.setdefault(other, []).append("%s needs %s" % (tid, dep))
+            else:
+                published = show_json(root, ref, other, ".warp/beam.json") or {}
+                if dep_id not in (published.get("tickets") or {}):
+                    missing.setdefault(other, []).append("%s needs %s, which %s does not have" % (tid, dep, other))
+    for other, rows in sorted(missing.items()):
+        lines.append("warn: %s is not ready for %s: %s. Those tickets wait until it is." % (other, run, "; ".join(rows[:4])))
+    return lines
+
+
 # --- checkpoints -----------------------------------------------------------
 
 
@@ -757,6 +1138,12 @@ def main(argv: Optional[list] = None) -> int:
     for name in ("list", "name"):
         p = sub.add_parser(name)
         p.add_argument("--root", default=".")
+    del_p = sub.add_parser("delete")
+    del_p.add_argument("run")
+    del_p.add_argument("--root", default=".")
+    del_p.add_argument("--apply", action="store_true", help="remove the run folder from the base branch")
+    del_p.add_argument("--force", action="store_true", help="delete a running run, or one another run waits on")
+    del_p.add_argument("--branches", action="store_true", help="also delete the run's branches on origin")
     show_p = sub.add_parser("show")
     show_p.add_argument("run")
     show_p.add_argument("--root", default=".")
@@ -768,20 +1155,42 @@ def main(argv: Optional[list] = None) -> int:
         name = current(root)
         print("run: %s" % name if name else "run: none (unnamed run)")
         return 0
+    if args.cmd == "delete":
+        return delete_run(root, args.run, apply=args.apply, force=args.force, branches=args.branches)
     ref = fetch_ref(root)
     if args.cmd == "list":
         names = list_runs(root, ref)
+        mine = current(root)
+        if mine and mine not in names:
+            print("run: %s (this checkout) not published yet" % mine)
         if not names:
             print("runs: none on %s" % ref)
             return 0
+        print("runs: %d on %s" % (len(names), ref))
         for name in names:
             info = summary(root, ref, name)
             if info is None:
                 continue
             counts = info["counts"]
+            owner = info.get("owner") or {}
+            pairs = info.get("startAfter") or []
+            checked = start_after_status(root, ref, pairs) if pairs else []
+            wait = ",".join("%s:%s(%s)" % (o, g, "met" if met else "waits") for o, g, met, _why in checked) or "-"
             print(
-                "run: %s state=%s folder=%s merged=%d open=%d queued=%d seen=%s"
-                % (name, info["runState"], info["folder"] or "whole repo", counts["merged"], counts["open"], counts["queued"], _ago(info["seenMinutes"]))
+                "run: %s%s state=%s%s owner=%s folder=%s merged=%d open=%d queued=%d seen=%s startAfter=%s"
+                % (
+                    name,
+                    " (this checkout)" if name == mine else "",
+                    info["runState"],
+                    " live" if info["live"] else "",
+                    (owner.get("by") or "-").replace(" ", "_"),
+                    info["folder"] or "whole repo",
+                    counts["merged"],
+                    counts["open"],
+                    counts["queued"],
+                    _ago(info["seenMinutes"]),
+                    wait,
+                )
             )
         return 0
     info = summary(root, ref, args.run)

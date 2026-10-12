@@ -10,7 +10,13 @@
 - A VM with no config finds its run from `WARP_RUN`, the beam, or the ticket branch name.
 - New config keys: `run`, `scanFolder`, `checkpointMinutes`.
 - `/warp-ingest` is gone; `/warp-scan` builds the plan. The cloud resume hint says `/warp-scan`.
-- Not in this version: gate ranges for `/warp-start`, `startAfter` and cross-run ticket dependencies, per-run `paths`, `/warp-runs`, `/warp-delete`, Slack addressing by run, and owner/`--takeover`.
+- `/warp-runs` lists the runs on origin: state, owner, progress, last seen, and blocks. `/warp-runs <name>` shows one. `/warp-delete <name>` is a dry run; `--apply` removes `.warp/runs/<name>/` in one commit and pushes. It refuses live runs and runs others depend on unless `--force`; `--branches` deletes the run's origin branches.
+- Owner and `--takeover`. A named run records who started it. A start from another machine while the run is live refuses unless `--takeover`; the old parent exits `superseded`, and its stale publish is blocked.
+- Slack and Teams address a run by name: `warp:pause admin`, `warp:start admin G2-G3`, or `@admin`. A bare word counts only if it is a known run. With several runs in one channel an unaddressed state command is refused; status is answered by all. Headers read `Warp | repo / project | run <name> | warp:<instance>`.
+- Gate ranges. `/warp-start G0-`, `G0-G3`, `-G2`, `G5` (also `warp:start G2-G3`). The run pauses with a block summary when the range is cleared. A start or resume without a range clears it.
+- Blocks finish in order. A ticket's block is its explicit `gate`, else its lowest member gate, else its latest dependency's block, else the first. A block is cleared when its tickets are merged, done, or skipped and its gate is not red; a parked ticket holds later blocks. `gateOrder: deps` restores dependency-only ordering.
+- Cross-run coordination. `startAfter: core:G2` waits until that gate and the blocks before it are cleared in the other run (`--now` overrides). Dependencies may be written `run:id`. A ticket whose locks overlap another run's active locks waits. `paths` keeps a run to its folders. `baseFixOwner` names the one run that dispatches a base fix. `--skip-owned` rewrites dependents to `owner:id`. Other runs are read from their published beams, at most every 5 minutes, so they are as fresh as their last checkpoint.
+- New config keys: `gateOrder`, `startAfter`, `paths`, `baseFixOwner`. New flags: `/warp-start --takeover --now`.
 
 ## 1.5.3
 

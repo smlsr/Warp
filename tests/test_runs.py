@@ -619,7 +619,7 @@ class RunCliTests(RepoCase):
         buf = io.StringIO()
         with mock.patch.object(sys, "argv", ["runs.py", "list", "--root", str(self.repo)]), redirect_stdout(buf):
             runs.main()
-        self.assertIn("run: core state=running", buf.getvalue())
+        self.assertIn("run: core (this checkout) state=running", buf.getvalue())
         self.assertIn("merged=1", buf.getvalue())
 
 
