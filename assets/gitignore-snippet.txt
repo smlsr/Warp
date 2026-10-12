@@ -6,6 +6,7 @@
 .warp/outbox.md
 .warp/notify-post.json
 .warp/events.jsonl
+.warp/dashboard.html
 .warp/secrets.yaml
 .warp/*.token
 .warp/**/token

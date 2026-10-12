@@ -1,9 +1,11 @@
 {
   "name": "warp",
   "displayName": "Warp",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, and commit the beam without secrets.",
-  "author": { "name": "HumanifyOS" },
+  "author": {
+    "name": "HumanifyOS"
+  },
   "publisher": "HumanifyOS",
   "homepage": "https://github.com/smlsr/Warp",
   "repository": "https://github.com/smlsr/Warp",
@@ -53,6 +55,7 @@
   "commands": [
     "./commands/warp-allow-notify.md",
     "./commands/warp-cleanup.md",
+    "./commands/warp-dashboard.md",
     "./commands/warp-delete.md",
     "./commands/warp-export.md",
     "./commands/warp-import.md",

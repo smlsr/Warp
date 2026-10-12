@@ -23,6 +23,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp` | One tick of the master loop, including the watchdog | the `warp` skill, `beam.py watchdog`. Not a script flag. |
 | `/warp-status` | List every ticket that is not merged, alarms and stalls first, and rewrite status and the board | `scan.py status`, `beam.py board` |
 | `/warp-status-post` | Post that digest | `status_post.py` `--beam` `--out` |
+| `/warp-dashboard` | Write `.warp/dashboard.html`, the run dashboard with the run's files inside. `--empty` writes it without data. Status writes keep that file current | `dashboard.py write` `--beam` `--out` `--empty` `--open`, `dashboard.py path` |
 | `/warp-export` | Write the plan files for an outside edit | `scan.py export` `--beam` `--out` |
 | `/warp-import` | Replace the plan. The run stays stopped | `scan.py import` `--plan` `--keep-status` |
 | `/warp-jira-check` | Keyed or unmapped, what is missing, one fix | `jira_sync.py verify`, `catchup` |

@@ -157,6 +157,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | List open tickets, alarms and stalls first, and rewrite `.warp/STATUS.md` and the board | |
 | `/warp-status-post` | Post that digest to Slack or Teams | |
+| `/warp-dashboard` | Write `.warp/dashboard.html`: one HTML page with every ticket on a slot swimlane colored by status, and totals for run estimate, agent hours, people hours, and tickets. Opens from disk. File > Open reads `beam.json`, `status.json`, ticket `state.json`, or a `.warp` folder | `dashboard.py write` `--beam` `--out` `--empty` `--open` |
 | `/warp-export` | Write `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json` | |
 | `/warp-import` | Replace the plan from a file. The run stays stopped | `--keep-status` |
 | `/warp-jira-check` | Per ticket: keyed or unmapped, what is missing, one fix | `verify --link`, `verify --apply` |
@@ -603,6 +604,17 @@ python3 <plugin>/scripts/report.py --beam .warp/beam.json --out .warp/warp-compl
 ```
 
 The page is one self-contained HTML file. Waves are concurrency-run segments: tickets active at the same time, from claim until the status leaves the working set. A gap with nobody running is not a wave. A handoff that keeps the count the same but changes who is running is two waves. Token and cost figures come from `beam.py usage` (or the same flags on `set`). If the Cursor run did not report them, the page says n/a. It does not invent numbers.
+
+## Dashboard
+
+`/warp-dashboard` writes `.warp/dashboard.html`, a single page with no install and no server. It opens with the run's data inside it, and every status write after that keeps the file current, so Reload in the page shows the latest. The same page is in the plugin at `assets/warp-dashboard.html`: open it from disk, then use File > Open status files, File > Open .warp folder, or drop files on it. It reads `beam.json`, `status.json`, ticket `state.json` files (newer than the beam, they move an open ticket), and several runs' `.warp/runs/<name>/beam.json` side by side. Files are classified by what is in them, not by name. Nothing leaves the browser.
+
+- Header: run, instance, repo, state, range, owner, and when it was last updated. Four totals: run estimate (the plan's elapsed hours, with elapsed so far and ETA left), agent hours, people hours (0.5h per approval and per gate, as the scan estimates them), and tickets. Each is split into completed, in progress, errored or parked, and to do, with a bar. A value the files do not have shows as `—`.
+- Swimlane: agent slots on an estimate-hour clock, like the plan's swimlane PDF. A ready ticket takes the lowest free slot, the critical chain goes first, a dependency waits for the merge plus the approval wait, and with `gateOrder: strict` a block starts when the blocks before it have merged. Gates are drawn where they are reached. Bars are the plan; the color is the ticket's status now: Completed, Errored / Parked, In Progress, In Review, QA Ready, To Do. Every Warp status maps to one of those six. Color by module is an option.
+- Board: lanes by gate block, status, module, or size, with a card per ticket (id, title, size, status, estimate, time spent, pull request, and Jira link when `jiraSite` is set).
+- Click a bar or card for the detail: dependencies, locks, events, agent, tokens, and cost. Status chips filter, `/` searches, `R` reloads, auto-reload every 30 seconds is in the File menu, and the theme follows the system or the toggle. Printing fits the swimlane to a landscape page.
+
+`examples/beam.sample.json` is a sample beam to try it with.
 
 ## Status in Teams or Slack
 

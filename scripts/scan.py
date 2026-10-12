@@ -718,6 +718,12 @@ def write_status(beam_path: Path) -> None:
         lines += ["", f"Report: warp-complete.html generated {beam.get('reportGeneratedAt') or 'unknown'}"]
     lines.append("")
     atomic_write(beam_path.parent / "STATUS.md", "\n".join(lines))
+    try:
+        import dashboard
+
+        dashboard.refresh(beam_path)
+    except Exception:
+        pass
     print(f"wrote {out} and {beam_path.parent / 'STATUS.md'}")
     try:
         import version
