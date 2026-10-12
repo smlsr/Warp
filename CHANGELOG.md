@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.1
+
+- `/warp-dashboard` and `assets/warp-dashboard.html`. One HTML file, no install, no server. It opens from disk and reads `beam.json`, `status.json`, ticket `state.json` files, or a whole `.warp` folder through File > Open or drag and drop, and several named runs side by side. Files are classified by content, not by name. Reload re-reads the same files (Chrome and Edge), and auto-reload runs every 30 seconds.
+- A swimlane like the plan's swimlane PDF: agent slots on an estimate-hour clock, gates where they are reached, the critical chain outlined. Bars are colored by status now: Completed, Errored / Parked, In Progress, In Review, QA Ready, To Do. Every Warp status maps to one of the six. A board view groups cards by gate block, status, module, or size, with the pull request and Jira links.
+- Header totals for run estimate, agent hours, people hours, and tickets, each split into completed, in progress, errored or parked, and to do. They come from the beam's estimate fields and the scan's own rules (S=4, M=7, L=11, XL=16 agent hours unless the ticket has hours; 0.5h per approval and per gate). A missing value shows `—`.
+- `dashboard.py write` writes `.warp/dashboard.html` with the run's files embedded. Once that file exists, each status write rewrites it. State commits do not include it.
+- Status filters, search, light and dark themes, and printing.
+- `examples/beam.sample.json`, a sample beam.
+
 ## 1.6.0
 
 - Named runs. One repo can carry several Warp runs (`core`, `admin`, `ui`), each with its own beam, parent, tag, and branches. `/warp-init <name>` writes `run: <name>` to `.warp/config.yaml`. Details: `docs/RUNS.md`. Unnamed runs behave as before.
