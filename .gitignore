@@ -31,3 +31,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Python and macOS
+__pycache__/
+*.pyc
+.DS_Store
