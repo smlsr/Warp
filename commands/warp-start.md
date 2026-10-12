@@ -5,6 +5,12 @@ description: Start Warp dispatch after a scan
 
 `/warp-start` and `/warp-resume` are the same command. Use either. It works from a stopped run, a paused run, and a run that is already running, and it says which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` There is nothing to refuse and nothing to choose.
 
+A named run (`run:` in `.warp/config.yaml`) cannot start until `/warp-scan` has run: start prints `refuse: <name> has no scan. Run /warp-scan [folder] first.` On a fresh checkout with no config, `scan.py start --run <name>` takes the run up from the repo first (see `docs/RUNS.md`).
+
+`/warp-start` takes an optional range of blocks (gates): `/warp-start G0-G3` runs G0 through G3, `G0-` runs G0 to the end, `-G2` runs from the first block that is not cleared through G2, and `G5` runs G5 alone. Pass what the user typed as `--gates=<range>` (`--gates=-G2` keeps a leading dash from reading as an option). With no range the run goes to the end, and a range left from earlier is cleared (`range: none (was G0-G3)`). Start prints `range: G0 through G3 (G0-G3).`, `blocks: G0 cleared, G1 3/8, ...`, and `hold:` lines for tickets the block order or `paths` keep back. When every block in the range is cleared the run pauses by itself: `range: G0-G3 complete. ... Pausing.`, one `block G0: 12 of 12 merged, ...` line per block, and `next: G4 has 9 tickets. /warp-start G4- continues, or /warp-start G4 runs it alone.` Relay the `herald:` line. Refuse lines (`gate G9 is not in this plan`, `G0-G3 is already cleared`) mean nothing started.
+
+A named run adds three more refusals, each with the way past it: `refuse: <name> is running under <who> on <host> ...` needs `--takeover` (another machine owns the run, so ask the user before adding it), `refuse: <name> starts after core:G2` needs `--now` (or wait: `/warp-runs` shows when it is met), and a run with no scan needs `/warp-scan`. `docs/RUNS.md` has the details.
+
 On a fresh checkout, fetch origin and load the beam from main before anything else. Do not start from an empty beam if main has one. Close the window, open a new one, and `/warp-start`: state comes from main plus each ticket folder.
 
 ```bash

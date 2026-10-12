@@ -73,6 +73,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import runs  # noqa: E402
+
 # Statuses that still hold lock paths. A green PR stays here until merge or park.
 LOCK_HELD = {
     "claimed",
@@ -543,6 +547,10 @@ def needs_base_fix(beam: dict) -> bool:
     """True when the base is red and no ticket is already the fix."""
     if base_is_green(beam):
         return False
+    owner = str(beam.get("baseFixOwner") or "").strip().lower()
+    if owner and owner != str(beam.get("run") or "").strip().lower():
+        # Another run owns the fix to the shared base branch. This run waits for it.
+        return False
     for ticket in (beam.get("tickets") or {}).values():
         if not ticket.get("baseFix"):
             continue
@@ -854,9 +862,10 @@ def branch_name(ticket: dict, config: Optional[dict] = None) -> str:
         return str(existing)
     tid = ticket.get("id")
     key = ticket.get("jiraKey")
+    prefix = runs.branch_prefix(config)
     if key:
-        return "warp/%s-%s" % (tid, key)
-    return "warp/%s" % tid
+        return "%s%s-%s" % (prefix, tid, key)
+    return "%s%s" % (prefix, tid)
 
 
 def _nonempty_record(value) -> bool:
@@ -1553,6 +1562,10 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         return lines
     if provider is None:
         provider = pipeline.live_provider(data, path)
+    try:
+        runs.refresh_external(runs.repo_root(path), data)
+    except Exception as exc:
+        lines.append("runs: other runs not read (%s)" % exc)
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
     import agents as agents_mod
 
@@ -1572,6 +1585,9 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
     _save(path, data)
+    import blocks
+
+    lines.extend(blocks.check(path))
     return lines
 
 
@@ -1810,6 +1826,18 @@ def _changed_ticket(beam_path: Path, since: float) -> str:
     return ""
 
 
+def _taken_over(path: Path, data: dict) -> bool:
+    """True when the published owner of a named run is another machine that started after this parent."""
+    run = str(data.get("run") or "")
+    if not run:
+        return False
+    try:
+        root = runs.repo_root(path)
+        return runs.owner_conflict(root, run, data, runs.fetch_ref(root)) is not None
+    except Exception:
+        return False
+
+
 def parent_exit(
     beam_path: Path,
     session: str = "",
@@ -1832,6 +1860,8 @@ def parent_exit(
     def verdict(current: dict) -> list:
         if agents_mod.parent_superseded(current, session, beam_path=path):
             return ["parent: exit superseded", "parent: a later /warp-start or /warp-resume owns this run. End this turn."]
+        if _taken_over(path, current):
+            return ["parent: exit superseded", "parent: another machine took this run over with /warp-start --takeover. End this turn."]
         if parent_may_exit(current):
             out = ["parent: exit"]
             try:

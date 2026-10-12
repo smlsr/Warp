@@ -38,6 +38,10 @@ With no argument, if plans sit in more than one folder, the scan prints which fo
 
 The scan writes `.warp/scan.json` (what it found) and `.warp/beam.json` (the plan). `runState` is `stopped`. Nothing dispatches until `/warp-start`.
 
+## Named runs
+
+On a named run (`run:` in the config) the folder is saved as `scanFolder` and reused by the next `/warp-scan`. `/warp-scan /` clears it and scans the whole repo (`folder: was X, now whole repo`). A ticket id belongs to one run. If another run owns an id the scan refuses and writes nothing (exit 4). `--skip-owned` leaves those ids out. After the scan the run folder is published to the repo. `/warp-start` is refused until a scan has run. Details: `docs/RUNS.md`.
+
 ## What it looks for
 
 | File | How it is read |

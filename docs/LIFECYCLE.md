@@ -210,6 +210,12 @@ The agent running the command and this run's parent are never touched. While thi
 
 Archive is reversible in the Cursor UI. Warp never deletes an agent.
 
+## Named runs
+
+The instance (`warp:<instance>`) names one beam. A run name (`run:` in the config) names a run that is saved in the repo. A named run keeps the same instance on its beam, and the instance comes back when another agent takes the run up. Local files stay at `.warp/`. The parent publishes the shared files (beam, journal, `agents.json`, status, stats) to `.warp/runs/<name>/` on the base branch after each merge and at each checkpoint (`checkpointMinutes`, or when status changes). A ticket's own folder rides on its ticket branch. One run has one parent; a second `/warp-start` on the same run takes it over, as in "Run control". Pause, stop, and `/warp-cleanup` act on their own run's registry and tag, so they leave the other runs in the repo alone. See [RUNS.md](RUNS.md).
+
+A named run also has an owner (`owner` on the beam: user, machine, host, time, session). A start from the same machine takes the run over silently. A start from another machine while the published run is live refuses (`refuse: <name> is running under ...`) unless `--takeover`; the earlier parent then exits `parent: exit superseded`. Supervise refreshes other runs' published status every 5 minutes at most, and `blocks.py check` runs in each pass: when a `/warp-start G0-G3` range is complete, the run pauses and Herald posts the block summary. Slack and Teams commands address a run by name (`warp:pause admin`, `warp:start admin G2-G3`); with more than one run in the channel an unaddressed state command is refused.
+
 ## One parent pass
 
 The parent runs passes in one turn until `parent: exit`.

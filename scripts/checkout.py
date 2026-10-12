@@ -60,6 +60,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import orchestrator  # noqa: E402
+import runs  # noqa: E402
 import state_commit  # noqa: E402
 
 HELP = __doc__
@@ -117,7 +118,7 @@ _BEAM_ONLY_PATHS = {
 }
 
 
-def branch_state(root: Path, branch: str, base: str) -> str:
+def branch_state(root: Path, branch: str, base: str, run: str = "") -> str:
     """missing, beam-only, or work.
 
     beam-only is a branch whose diff against the base is only the Warp state
@@ -140,9 +141,10 @@ def branch_state(root: Path, branch: str, base: str) -> str:
     if diff.returncode != 0:
         return "missing"
     names = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
-    if not names or ".warp/beam.json" not in names:
+    beam_only = {runs.git_rel(run, rel) for rel in _BEAM_ONLY_PATHS}
+    if not names or runs.git_rel(run, ".warp/beam.json") not in names:
         return "work" if names else "missing"
-    if all(name in _BEAM_ONLY_PATHS for name in names):
+    if all(name in beam_only for name in names):
         return "beam-only"
     return "work"
 
@@ -400,7 +402,7 @@ def _launch_agent(root: Path, path: Path, data: dict, ticket: dict, branch: str,
     instance = agents.ensure_instance(data, path)
     if not _save_launch(path, data, ticket_id):
         return 2
-    state = branch_state(root, branch, base)
+    state = branch_state(root, branch, base, runs.current(root, data))
     for line in launch_lines(ticket, data.get("config") or {}, branch, state, instance=instance):
         print(line)
     return 0

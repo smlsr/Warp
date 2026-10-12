@@ -13,7 +13,7 @@ There is no per-person cap. There are two caps. `maxAgents` (default 18) is how 
 3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
 
-The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
+The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). Several runs in one repo (`/warp-init <name>`) are in [docs/RUNS.md](docs/RUNS.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -140,14 +140,16 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 
 | Command | What it does | Common flags |
 |---|---|---|
-| `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools | `--channel`, `--dry-run`, `--no-allow` |
+| `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools. `/warp-init <name>` names this checkout's run, or takes up a run of that name that is already in the repo | `--channel`, `--dry-run`, `--no-allow`, `--adopt`, `--switch` |
 | `/warp-upgrade` | Replace `.cursor/plugins/warp` with the current plugin. Does not touch config or the beam | `--root`, `--source` |
-| `/warp-scan` | Read a plan into the beam and resolve Jira keys | `--folder` |
-| `/warp-start` | Set the run running, from a stopped run, a paused run, or a run that is already running, and print which (`run: was stopped. Starting.`). The same command as `/warp-resume`. This turn becomes the parent of the run and prints `parent: session <id>`. It loads main's beam on a fresh checkout, runs the watchdog, and starts unfinished work first (`unfinished:`). A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force` |
+| `/warp-scan` | Read a plan into the beam and resolve Jira keys. `/warp-scan /` clears the saved folder | `--folder`, `--skip-owned` |
+| `/warp-start [gates]` | Set the run running, from a stopped run, a paused run, or a run that is already running, and print which (`run: was stopped. Starting.`). The same command as `/warp-resume`. A gate range runs only some blocks: `G0-`, `G0-G3`, `-G2`, `G5`; no range runs to the end. A named run waits for `startAfter`, and a run another machine is running needs `--takeover`. This turn becomes the parent of the run and prints `parent: session <id>`. It loads main's beam on a fresh checkout, runs the watchdog, and starts unfinished work first (`unfinished:`). A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force`, `--gates`, `--takeover`, `--now` |
 | `/warp-pause` | End every agent in `.warp/agents.json`, free every Shuttle slot, close the listener's poll (`halt: paused agents=<n>`), then push that paused beam to main. With `CURSOR_API_KEY`, cancel and archive this run's cloud agents. Branches, worktrees, and pull requests stay. No completion report. Carry on with `/warp-start` or `/warp-resume` | `--reason` |
 | `/warp-resume` | The same command as `/warp-start`. On a paused run it prints `run: was paused (<reason>). Continuing.` A ticket that had a Shuttle out gets one new Shuttle on the same branch (`fix: <id> resume after halt`). Nothing from before the pause or the stop is resumed | `--reason`, `--force` |
 | `/warp-stop` | The same teardown as `/warp-pause` (`halt: stopped agents=<n>`), with one difference: it also writes the completion report and records `stoppedAt`. Push that stopped beam to main. Carry on with `/warp-start` or `/warp-resume` | `--reason` |
 | `/warp-listen` | Take the listener lease in this chat and run the same read loop. Any other copy exits superseded. The parent only applies | `--holder` |
+| `/warp-runs` | List the runs in this repo: state, owner, folder, progress, and what each waits for. Changes nothing | `runs.py list` |
+| `/warp-delete <name>` | Delete a named run from the repo. A dry run until `--apply`. Refuses a running run, or one another run waits on, unless `--force`. Branches stay unless `--branches` | `runs.py delete` `--apply` `--force` `--branches` |
 | `/warp-list` | Show what this run still has out, running or idle: the instance, every registry row, each tagged cloud agent with its status, and `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>`. Changes nothing. `--scan` lists word matches in any repo | `--beam`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-cleanup` | Cancel the run of each agent `/warp-list` shows as running, and archive all of them. Leave `--apply` off for a dry run. While the run is running it archives the idle ones and refuses the running ones unless `--force`. `--scan` archives idle word matches and leaves running ones unless `--force` | `--beam`, `--cloud`, `--apply`, `--running`, `--force`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
@@ -157,7 +159,6 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-status-post` | Post that digest to Slack or Teams | |
 | `/warp-export` | Write `.warp/WARP_PLAN.md` and `.warp/WARP_PLAN.json` | |
 | `/warp-import` | Replace the plan from a file. The run stays stopped | `--keep-status` |
-| `/warp-ingest` | Build the beam from a schedule you name | |
 | `/warp-jira-check` | Per ticket: keyed or unmapped, what is missing, one fix | `verify --link`, `verify --apply` |
 | `/warp-jira-view` | Every field on one issue, by key or plan id | `--comments`, `--links`, `--all`, `--full`, `--verbose`, `--json` |
 | `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--write-external-id` |
@@ -505,7 +506,7 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 ## Where the files are
 
-A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>`.
+A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>`. A named run (`/warp-init <name>`) saves the same files, plus `stats.json` and a config mirror without machine keys or secrets, to `.warp/runs/<name>/`, and its branches are `warp/<name>/<id>-<jira>`. [docs/RUNS.md](docs/RUNS.md) has the layout.
 
 Review files from the Cursor file tree. On a cloud VM, download them before the VM is discarded. Ask for a bundle and Warp writes `.warp/warp-review.zip` (status, board, plan; no journal). Set `stateDir` to an absolute path to keep the beam outside the repo.
 
@@ -530,6 +531,14 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 - A name is matched against folder names, or the end of their paths, anywhere in the repo.
 - If a name matches several folders, Warp lists them, marks which have plan files, and scans nothing. If only one has plan files it uses that one and notes the others. Re-run with the full path to pick.
 - With no argument and plans in more than one folder, Warp prints the folders it found and uses the richest plan, as before.
+
+## Several runs in one repo
+
+`/warp-init admin` names a run. `core`, `admin`, and `ui` can each have their own checkout, parent, beam, and branches (`warp/admin/<id>`), and each saves its beam, state, stats, and config to `.warp/runs/<name>/` in the repo. A new agent that runs `/warp-init admin` finds that folder, prints what it found, restores it, and `/warp-start` carries on. A named run cannot start before `/warp-scan`. The run name is not the scan folder: the folder is optional and saved in the config, and `/warp-scan /` clears it. Runs can wait for each other. `startAfter: core:G2` in a run's config keeps `/warp-start` from running until core has cleared G2 (`--now` overrides). A ticket can depend on another run's ticket with `core:P-014`. `paths:` limits the repo paths a run may change, locks held by other runs keep a ticket out, and `baseFixOwner: core` makes one run fix a red base branch. Slack commands name the run (`warp:pause admin`), every header shows `run admin`, a run another machine is running needs `/warp-start --takeover`, `/warp-runs` lists them and `/warp-delete <name>` removes one. See [docs/RUNS.md](docs/RUNS.md).
+
+## Run in blocks
+
+A plan's work comes in gates: G0, G1, G2. With the default `gateOrder: strict`, a ticket in block G3 does not start until every block before it is cleared (every ticket merged, done, or skipped, and the gate not red), so a large project goes forward one manageable block at a time. `/warp-start` takes a range: `/warp-start G0-G3` runs G0 through G3, `G0-` runs G0 to the end, `-G2` runs from the first block that is not cleared through G2, and `G5` runs G5 alone. The run pauses when the range is cleared and prints each block (tickets merged, minutes, tokens, cost) and the next block. `/warp-start` with no range goes on to the end. Open tickets always finish. `gateOrder: deps` turns the strict order off. In Slack: `warp:start G2-G3`. Details: [docs/GUIDE.md](docs/GUIDE.md).
 
 ## Session
 
@@ -711,7 +720,7 @@ Warp starts each ready ticket in its own git worktree. The prompt begins:
 SUBAGENT API-01
 ```
 
-The id is the plan id. The worktree is a checkout of `warp/<id>-<jira>` from `origin/main`, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The subagent works only inside that path. The prompt comes from `checkout.py launch` and nowhere else. It carries the subagent's agent id (`agent: <id>`), the worker contract, and the reap command. The subagent runs the reap check first and stops on `reap: exit`. Then it reads those rules, then the claim in the prompt. See `assets/KICKOFF.md`.
+The id is the plan id. The worktree is a checkout of `warp/<id>-<jira>` (`warp/<name>/<id>-<jira>` on a named run) from `origin/main`, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The subagent works only inside that path. The prompt comes from `checkout.py launch` and nowhere else. It carries the subagent's agent id (`agent: <id>`), the worker contract, and the reap command. The subagent runs the reap check first and stops on `reap: exit`. Then it reads those rules, then the claim in the prompt. See `assets/KICKOFF.md`.
 
 Optional `launch: agent` still starts with `IMPLEMENT API-01` for one new Agent. This plugin does not call a Cloud Agents API. Clone main so `.cursor` rules load. A beam file does not have to exist on the branch before that Agent starts. Rules apply because the files are in the worktree, not because they were copied into the prompt. A rule only applies if Cursor would apply it in that workspace: `alwaysApply`, a matching glob, or the Shuttle reading it. Warp requires the read.
 

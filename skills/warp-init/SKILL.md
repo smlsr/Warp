@@ -15,6 +15,16 @@ python3 <plugin>/scripts/install.py init
 
 `<plugin>` is wherever this plugin is loaded from. The script works from the repo root (the git top level, or the current directory outside git). Add `--dry-run` to preview, `--channel NAME` to override the channel, or `--no-allow` to skip the MCP allowlist. `install.py ?` (and `init ?`, `help`, `-h`, `--help`) prints the options. Quote `?` if the shell expands it.
 
+## Name the run
+
+`/warp-init <name>` names this checkout's run (`core`, `admin`, `ui`) and writes `run: <name>` to `.warp/config.yaml`. Warp reads origin first.
+
+```bash
+python3 <plugin>/scripts/install.py init admin
+```
+
+A new name prints `run: admin is new.` and `next: /warp-scan [folder]`. A name the repo already has is taken up: init prints the `config:`, `folder:`, `scan:`, `state:`, and `progress:` it found, restores the run's beam, journal, scan, stats, ticket folders, and config (machine keys stay local), and says `next: /warp-start`. Tell the user they are assuming a previous run, and read any `warn:` line aloud: it means another agent may still be running it. One checkout runs one run: `--switch` moves it and keeps the old files in `.warp/previous-<old>/`, `--adopt` names an unnamed run that already has state. Without a name, init prints this checkout's run or the runs on origin. Details: `docs/RUNS.md`.
+
 ## Steps
 
 | Step | Done when | Otherwise |

@@ -79,6 +79,16 @@ The order is fixed: open pull requests that need a fix, then tickets whose Shutt
 | Use it when | you will carry on: overnight, a meeting, a bad base branch | the run is over, or you want the report |
 | To carry on | `/warp-start` or `/warp-resume` | `/warp-start` or `/warp-resume` |
 
+## Several runs in one repo
+
+A repo can carry more than one Warp run: `core`, `admin`, `ui`, each worked by its own checkout or developer. `/warp-init admin` names this checkout's run (`run: admin` in `.warp/config.yaml`). Each run has its own beam, parent, `warp:<instance>` tag, and branches (`warp/admin/<id>`), and saves its beam, journal, stats, status, config mirror, and ticket folders to `.warp/runs/admin/` in the repo.
+
+1. `/warp-init admin`. A new name says `run: admin is new.`. A name the repo already has is taken up: init prints the saved config, folder, scan, state, and progress, then restores them. That is how a new agent picks up after a lost one. Then `/warp-start`.
+2. `/warp-scan HOS/UI/Admin` for a folder, `/warp-scan` to reuse the saved folder, `/warp-scan /` to forget it and scan the whole repo. The run name is not the folder name, and the folder is optional.
+3. `/warp-start`. A named run refuses until a scan has run.
+
+A ticket id belongs to one run. A scan that finds an id another run owns refuses and writes nothing; `--skip-owned` leaves those tickets out. Layout, restore rules, and what is saved when: [RUNS.md](RUNS.md).
+
 ## Tick
 
 ```
@@ -118,6 +128,24 @@ A pending gate, or a stale red gate, turns green when every member is merged or 
 One member still not merged leaves the gate as it is. So does a ticket that is still alarmed or parked, and a check that is actually red: member CI, Bugbot, rollup, or checkCommand, or gate evidence that names a red check. A recovered ticket counts once it is merged or done. A ticket that is still alarmed does not. `make ci` is kept as the full check command. A red result is stored on `pr.check` and the ticket is sent back (`send-back <id> fix` and a `start` line) with the log so the run does not sit idle. Past `maxFixAttempts` (default 5) the ticket parks. The name alone is not a red check. A green `make ci` is recorded on `pr.check` and does not keep the gate.
 
 `state_commit.py commit` commits the beam, journal, STATUS, and BOARD. Tokens, cost, API keys, and webhook URLs are stripped. `.warp/config.yaml` stays gitignored. On a cloud runner, `/warp-start` refuses when `transitionJiraIssue`, `addOrEditJiraIssueComment`, or `slack_send_message` is missing from the MCP allow list. It does not claim. `--force` starts anyway. A local runner does not block. `/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-status`, and the other commands when the plugin command index still omits that path.
+
+## Run in blocks
+
+The gates are blocks of work: G0, then G1, then G2. A ticket belongs to the block of the gate it names, else the lowest gate that lists it as a member, else the highest block among the tickets it depends on, else the first block.
+
+With `gateOrder: strict` (the default), a ticket in block G3 does not start until every block before it is cleared. A block is cleared when every ticket in it is merged, done, or skipped and its gate is not red. A parked ticket holds everything after it, so a stuck ticket shows up instead of being left behind. Open tickets always finish: this only decides what starts. `gateOrder: deps` goes back to dependencies and blocking gates alone.
+
+`/warp-start` takes a range:
+
+| Command | Runs |
+|---|---|
+| `/warp-start` | Everything, until it is stopped or finished |
+| `/warp-start G0-` | G0 through the last block |
+| `/warp-start G0-G3` | G0 through G3 |
+| `/warp-start -G2` | From the first block not cleared (where the last run left off) through G2 |
+| `/warp-start G5` | G5 only. The blocks before it are not waited for, though a ticket still needs its dependencies merged |
+
+Start prints `range: G0 through G3 (G0-G3).` and `blocks: G0 cleared, G1 3/8, G2 0/6, G3 0/4.`, then a `hold:` line for each reason tickets are held back (`hold: 6 tickets, G2 waits on G1`). When the last block in the range is cleared the run pauses by itself and prints one line per block with tickets merged, minutes, tokens, and cost, then the next block and the command that continues. A start with no range goes on from there. In Slack: `warp:start G2-G3`. `python3 scripts/blocks.py show --beam .warp/beam.json` prints the blocks at any time.
 
 ## Model
 

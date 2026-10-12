@@ -18,7 +18,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import usage  # noqa: E402
 
-MISSING = "WARP: no .warp/beam.json — run /warp-ingest before /warp."
+MISSING = "WARP: no .warp/beam.json — run /warp-scan before /warp."
 FOLLOW = "Read .warp/BOARD.md then run /warp-status before dispatching."
 
 
@@ -38,7 +38,7 @@ def print_hint(beam_path: Path) -> None:
         if name.endswith(".warp/beam.json"):
             print(MISSING)
         else:
-            print("WARP: no %s — run /warp-ingest before /warp." % beam_path)
+            print("WARP: no %s — run /warp-scan before /warp." % beam_path)
         return
     try:
         beam = json.loads(beam_path.read_text())

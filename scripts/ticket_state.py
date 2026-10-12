@@ -649,8 +649,17 @@ def _show(root: Path, ref: str, rel: str) -> Optional[str]:
 
 def _default_read(root: Path, branch: str, tid: str):
     ref = "origin/%s" % branch if _has_origin(root) else branch
-    state_text = _show(root, ref, ".warp/tickets/%s/state.json" % tid)
-    log_text = _show(root, ref, ".warp/tickets/%s/log.jsonl" % tid)
+    import runs
+
+    run = runs.current(root)
+    rel = ".warp/tickets/%s" % tid
+    state_text = log_text = None
+    if run:
+        state_text = _show(root, ref, runs.git_rel(run, rel + "/state.json"))
+        log_text = _show(root, ref, runs.git_rel(run, rel + "/log.jsonl"))
+    if state_text is None and log_text is None:
+        state_text = _show(root, ref, rel + "/state.json")
+        log_text = _show(root, ref, rel + "/log.jsonl")
     state = None
     if state_text:
         try:
@@ -946,8 +955,21 @@ def _reap_lines(root: Path, tid: str, agent: str, remote: bool = False) -> list:
 
 
 def _push_dir(root: Path, tid: str, summary: str) -> int:
-    """Commit and push only `.warp/tickets/<id>/`. Leave the beam snapshot unstaged."""
-    rel = ".warp/tickets/%s" % tid
+    """Commit and push only `.warp/tickets/<id>/`. Leave the beam snapshot unstaged.
+
+    A named run commits the folder under `.warp/runs/<run>/tickets/<id>/`. The
+    files are copied there first, so the merge of this branch carries the
+    ticket's state and log into the run's folder on the base branch.
+    """
+    import runs
+
+    local_rel = ".warp/tickets/%s" % tid
+    run = runs.current(root)
+    rel = runs.git_rel(run, local_rel)
+    if run and rel != local_rel and (root / local_rel).is_dir():
+        import shutil
+
+        shutil.copytree(str(root / local_rel), str(root / rel), dirs_exist_ok=True)
     head = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     current = head.stdout.strip()
     base = _base_branch(root)
@@ -972,8 +994,9 @@ def _push_dir(root: Path, tid: str, summary: str) -> int:
     # The commit must not contain the beam. Drop it if a pathspec ever swallowed it.
     shown = _git(root, "show", "--name-only", "--format=", "HEAD")
     names = [line.strip() for line in shown.stdout.splitlines() if line.strip()]
-    if ".warp/beam.json" in names or any(name.startswith(".warp/beam.json") for name in names):
-        print("refuse: commit included .warp/beam.json")
+    beam_rel = runs.git_rel(run, ".warp/beam.json")
+    if beam_rel in names or any(name.startswith(beam_rel) for name in names):
+        print("refuse: commit included %s" % beam_rel)
         return 2
     outside = [name for name in names if not name.startswith(rel + "/") and name != rel]
     if outside:

@@ -72,7 +72,7 @@ Do not create tickets.
 
 Connected mode, in order:
 
-- Open the pull request from `warp/<id>-<jiraKey>` into `baseBranch` (empty detects origin's default, then `main` or `master`).
+- Open the pull request from `warp/<id>-<jiraKey>` (`warp/<name>/<id>-<jiraKey>` on a named run) into `baseBranch` (empty detects origin's default, then `main` or `master`).
 - Read CI and approvals. A GitHub approving review, or a Bitbucket participant status APPROVED, is the merge signal for a size not in `autoMergeSizes`, along with `warp:proceed <id>`.
 - Comment Bugbot evidence and acceptance-criterion ids.
 - Squash-merge only from Reed, only on the policy in MERGE-POLICY.md.

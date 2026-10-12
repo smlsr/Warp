@@ -3,7 +3,7 @@ name: warp-resume
 description: Resume Warp dispatch from the beam
 ---
 
-`/warp-resume` and `/warp-start` are the same command. `commands/warp-start.md` is the full text. It works from a paused run, a stopped run, and a run that is already running, and it says which (`run: was paused (<reason>). Continuing.`). It runs the same prompt gate as start, and `--force` means the same.
+`/warp-resume` and `/warp-start` are the same command. `commands/warp-start.md` is the full text. It works from a paused run, a stopped run, and a run that is already running, and it says which (`run: was paused (<reason>). Continuing.`). It runs the same prompt gate as start, and `--force` means the same. It takes the same gate range (`--gates=G0-G3`), `--takeover`, and `--now`.
 
 Resume the beam with `scripts/scan.py resume`, which fetches origin, loads the beam from main when the local one is missing or empty, prints the resume hint, and runs `beam.py watchdog`. Do not start from an empty beam if main has one. Close the window, open a new one, and `/warp-start` or `/warp-resume`: state comes from main plus each ticket folder. The watchdog fetches each in-flight ticket branch and patches from `.warp/tickets/<id>/`. Reconcile, then run Warp passes. Follow the hint. Do not dispatch when the beam is still paused. `watchdog: skipped` means do not recover Shuttles and do not start a listener.
 

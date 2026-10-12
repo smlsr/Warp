@@ -471,6 +471,9 @@ examples:
   python3 scripts/install.py init --dry-run
   python3 scripts/install.py init --channel eng-builds
   python3 scripts/install.py init --no-allow
+  python3 scripts/install.py init admin
+  python3 scripts/install.py init admin --adopt
+  python3 scripts/install.py init admin --switch
   python3 scripts/install.py uninstall
   python3 scripts/install.py uninstall --remove-gitignore --yes
 
@@ -484,6 +487,16 @@ not used here; user-level files stay opt-in. --dry-run writes nothing.
 --channel is lowercased (letters, digits, - and _, max 80). --root is the
 repo (default: git top level). Undo the allowlist with allow_notify.py --revoke.
 
+init <name> names this checkout's run (core, admin, ui: lowercase letters,
+digits, dashes). The name is run: in .warp/config.yaml. Warp reads the repo
+first. A name that is new starts a new run; /warp-scan is next. A name the
+repo already has is taken up: init prints what it found (config, folder,
+scan, state, progress) and restores the run's config and state, so
+/warp-start continues where the run stopped. One checkout runs one run.
+--adopt names a run this checkout already has, unnamed, and keeps its state.
+--switch moves this checkout to another run and keeps the old files in
+.warp/previous-<name>/. Without a name, init lists the runs the repo has.
+
 uninstall without --yes only lists. --yes deletes .cursor/plugins/warp and
 .warp/, and the project allow-notify entries. --remove-gitignore removes only
 the snippet init added. ~/.cursor is not touched.
@@ -492,6 +505,24 @@ the snippet init added. ~/.cursor is not touched.
 A bare help after an option that takes a value stays that value
 (--channel help is a channel name).
 """
+
+
+def run_lines_without_name(root: Path, runs) -> list:
+    """No name given: say which run this checkout is, or list the ones the repo has."""
+    local = runs.read_run(root)
+    if local:
+        return [f"run: {local} (this checkout)"]
+    try:
+        ref = runs.fetch_ref(root, fetch=bool(git(root, "remote")))
+        names = runs.list_runs(root, ref)
+    except Exception:
+        return []
+    if not names:
+        return []
+    return [
+        f"runs on {ref}: {', '.join(names)}",
+        "ask: which run is this checkout? /warp-init <name> takes one up, or names a new one. Without a name Warp runs as one unnamed run.",
+    ]
 
 
 def main() -> None:
@@ -506,6 +537,9 @@ def main() -> None:
     pi.add_argument("--channel", help="channel to use instead of warp (lowercase letters, digits, - and _)")
     pi.add_argument("--dry-run", action="store_true")
     pi.add_argument("--no-allow", action="store_true", help="do not write the project MCP allowlist")
+    pi.add_argument("name", nargs="?", default="", help="name this checkout's run, for example core, admin, or ui")
+    pi.add_argument("--adopt", action="store_true", help="name the unnamed run this checkout already has, and keep its state")
+    pi.add_argument("--switch", action="store_true", help="move this checkout to another run; the old files are kept in .warp/previous-<name>/")
     pu = sub.add_parser("uninstall")
     pu.add_argument("--root")
     pu.add_argument("--remove-gitignore", action="store_true")
@@ -522,12 +556,30 @@ def main() -> None:
             if wanted != args.channel:
                 print(f"note: --channel {args.channel!r} normalized to {wanted!r}")
             args.channel = wanted
+        import runs
+
+        name = (args.name or "").strip().lower()
+        if name:
+            ok, why = runs.valid_name(name)
+            if not ok:
+                sys.exit(f"refuse: {why}")
         steps = init(root, args.channel, args.dry_run, allow=not args.no_allow)
         print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
         for status, msg in steps:
             print(f"  [{status}] {msg}")
         if any(s == "fail" for s, _ in steps):
             sys.exit(1)
+        run_acted = False
+        if name:
+            code, run_lines = runs.take_up(root, name, switch=args.switch, adopt=args.adopt, dry=args.dry_run)
+            for line in run_lines:
+                print(line)
+            if code != 0:
+                sys.exit(code)
+            run_acted = not args.dry_run
+        else:
+            for line in run_lines_without_name(root, runs):
+                print(line)
         if any(s == "done" for s, _ in steps) and not args.dry_run:
             print("Reload Cursor so the commands and rules load. Then connect Jira, your git provider (GitHub or Bitbucket, if you want PRs), and Slack or Teams in Settings.")
             try:
@@ -536,7 +588,7 @@ def main() -> None:
                 notify.report(notify.build("init", root))
             except Exception as e:
                 print(f"herald: not posted ({e})")
-        elif not args.dry_run:
+        elif not args.dry_run and not run_acted:
             print("Already set up. Nothing changed.")
     else:
         sys.exit(uninstall(root, args.remove_gitignore, args.yes))

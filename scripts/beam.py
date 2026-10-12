@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 import orchestrator
+import runs
 
 SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 DEFAULT_AUTO_MERGE_SIZES = ["S", "M"]
@@ -916,16 +917,21 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     anc_cache: dict = {}
     held = held_locks(beam)
     base_red = not orchestrator.base_is_green(beam)
+    import blocks
+
+    block_plan = blocks.plan(beam)
+    scope_paths = runs.parse_paths(beam.get("paths"))
+    held = held + runs.external_locks(beam)
     candidates = []
     for t in beam["tickets"].values():
         if t["status"] not in {"queued", "blocked"}:
             continue
-        unmet = [
-            d
-            for d in orchestrator.blockers(t)
-            if not orchestrator.merged_on_base(beam["tickets"].get(d, {}).get("status"))
-        ]
+        if blocks.hold_reason(block_plan, t["id"]):
+            continue
+        unmet = [d for d in orchestrator.blockers(t) if not orchestrator.merged_on_base(runs.external_status(beam, d))]
         if unmet:
+            continue
+        if scope_paths and runs.outside_paths(scope_paths, orchestrator.lock_paths(t)):
             continue
         gb = gate_blocks(beam, t["id"], anc_cache)
         if gb:
@@ -1627,7 +1633,7 @@ def cmd_check(beam: dict) -> int:
     ids = set(beam["tickets"])
     for t in beam["tickets"].values():
         for d in t["deps"]:
-            if d not in ids:
+            if d not in ids and not runs.split_dep(d)[0]:
                 errors.append(f"{t['id']} dep missing {d}")
         if t["status"] not in STATUSES:
             errors.append(f"{t['id']} bad status {t['status']}")

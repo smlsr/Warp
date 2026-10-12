@@ -44,8 +44,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import beam  # noqa: E402
 import herald_fmt  # noqa: E402
 import jira_sync  # noqa: E402
+import blocks  # noqa: E402
 import notify  # noqa: E402
 import proceed  # noqa: E402
+import runs  # noqa: E402
 
 ACCEPTED_FORMS = (
     "warp:pause, warp:resume, warp:stop, warp:start, "
@@ -56,6 +58,8 @@ ACK_NAME = "inbound-ack.json"
 PENDING_NAME = "pending-commands.jsonl"
 LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
+ADDRESSABLE = {"pause", "resume", "stop", "start", "status"}
+STATE_VERBS = {"pause", "resume", "stop", "start"}
 EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped")
 DEFAULT_FAST_SECONDS = 15
 DEFAULT_SLOW_SECONDS = 60
@@ -905,7 +909,30 @@ def parse(text: str) -> Optional[dict]:
         if not rest:
             return {"ok": False, "verb": verb, "token": "", "rest": "", "raw": line, "command": "warp:%s" % verb}
         return {"ok": True, "verb": verb, "token": rest, "rest": rest, "raw": line, "command": command}
-    return {"ok": True, "verb": verb, "token": "", "rest": rest, "raw": line, "command": "warp:%s" % verb}
+    parsed = {"ok": True, "verb": verb, "token": "", "rest": rest, "raw": line, "command": "warp:%s" % verb}
+    if verb in ADDRESSABLE and rest:
+        first, _, after = rest.partition(" ")
+        explicit = first.startswith("@")
+        cand = first.lstrip("@").rstrip(":,").lower()
+        if cand and runs.NAME_RE.match(cand):
+            parsed["addr"] = cand
+            parsed["addr_explicit"] = explicit
+            parsed["addr_rest"] = after.strip()
+    return parsed
+
+
+def address_of(parsed: dict, local: str, known: set) -> str:
+    """The run a command is addressed to, or empty. `warp:pause admin` or `warp:pause @admin`.
+
+    A bare word counts only when it is a run the repo has. `@name` always
+    counts, so a typo is ignored by every run instead of becoming a reason.
+    """
+    cand = parsed.get("addr") or ""
+    if not cand:
+        return ""
+    if parsed.get("addr_explicit") or cand in known or cand == local:
+        return cand
+    return ""
 
 
 def not_understood(shown: str) -> str:
@@ -940,14 +967,21 @@ def plan_command(data: dict, parsed: dict, cfg: Optional[dict] = None) -> dict:
             "ok": True,
             "reason": parsed.get("rest") or None,
         }
+    spec, rest = "", parsed.get("rest") or ""
+    if verb in {"resume", "start"}:
+        first, _, after = rest.partition(" ")
+        if blocks.is_range(first):
+            spec, rest = first, after.strip()
+    shown = (" blocks %s" % spec) if spec else ""
     if verb == "resume":
         return {
-            "ack": "Received warp:resume. Resuming the run.",
+            "ack": "Received warp:resume. Resuming the run%s." % shown,
             "verb": verb,
             "ticket": None,
             "action": "resume",
             "ok": True,
-            "reason": parsed.get("rest") or None,
+            "reason": rest or None,
+            "range": spec,
         }
     if verb == "stop":
         return {
@@ -960,12 +994,13 @@ def plan_command(data: dict, parsed: dict, cfg: Optional[dict] = None) -> dict:
         }
     if verb == "start":
         return {
-            "ack": "Received warp:start. Starting the run.",
+            "ack": "Received warp:start. Starting the run%s." % shown,
             "verb": verb,
             "ticket": None,
             "action": "start",
             "ok": True,
-            "reason": parsed.get("rest") or None,
+            "reason": rest or None,
+            "range": spec,
         }
     if verb == "status":
         return {
@@ -1091,6 +1126,12 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
                 # The parent applying this command already owns the run. A new
                 # session here would supersede it and leave the run with no parent.
                 return "action: %s\nrun: already running. Nothing changed." % action
+        if action in {"resume", "start"}:
+            held = beam.load_json(Path(beam_path))
+            ok, range_lines = blocks.apply(held, decision.get("range") or "")
+            if not ok:
+                return "action: none\n" + "\n".join(range_lines)
+            beam.atomic_write(Path(beam_path), json.dumps(held, indent=2) + "\n")
         scan.set_run(beam_path, state, decision.get("reason"))
         extra = ""
         if action in {"pause", "stop"}:
@@ -1119,6 +1160,36 @@ def _decide(beam_path: Path, text: str) -> dict:
         return {"ignored": False, "code": 1, "ack": ack, "action": "none", "verb": parsed.get("verb"), "ticket": None}
     data = beam.load_json(beam_path)
     cfg = jira_sync.settings(beam_path, data)
+    root = _root(beam_path)
+    local = runs.current(root, data)
+    try:
+        known = runs.known_names(root)
+    except Exception:
+        known = set()
+    others = known - {local}
+    if parsed.get("ok") and parsed.get("verb") in ADDRESSABLE:
+        addressed = address_of(parsed, local, known)
+        if addressed:
+            if addressed != local:
+                return {"ignored": True, "code": 0, "ack": None, "action": "none", "why": "addressed to %s" % addressed}
+            parsed["rest"] = parsed.get("addr_rest") or ""
+            parsed["command"] = "warp:%s %s" % (parsed["verb"], addressed)
+        elif parsed["verb"] in STATE_VERBS and others:
+            if local != min(known | {local}):
+                return {"ignored": True, "code": 0, "ack": None, "action": "none", "why": "not named"}
+            names = ", ".join(sorted(known | ({local} if local else set())))
+            decision = {
+                "ack": "Received warp:%s. This repo has more than one run (%s). Name the run: warp:%s <run>. Nothing was changed."
+                % (parsed["verb"], names, parsed["verb"]),
+                "verb": parsed["verb"],
+                "ticket": None,
+                "action": "none",
+                "ok": False,
+            }
+            return {"ignored": False, "code": 0, "parsed": parsed, "decision": decision}
+    elif parsed.get("ok") and parsed.get("verb") in NEEDS_ID and others:
+        if not proceed.resolve_token(data, parsed.get("token") or parsed.get("raw") or ""):
+            return {"ignored": True, "code": 0, "ack": None, "action": "none", "why": "no such ticket in this run"}
     decision = plan_command(data, parsed, cfg)
     return {"ignored": False, "code": 0, "parsed": parsed, "decision": decision}
 
@@ -1285,7 +1356,7 @@ def drain(beam_path: Path) -> list:
 
 def _print_result(result: dict) -> None:
     if result.get("ignored"):
-        print("inbound: ignored")
+        print("inbound: ignored" + (" (%s)" % result["why"] if result.get("why") else ""))
         return
     print("ack: %s" % result.get("ack"))
     print("ack-first: post this sentence in the channel before the action")
