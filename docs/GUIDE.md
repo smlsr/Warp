@@ -79,6 +79,16 @@ The order is fixed: open pull requests that need a fix, then tickets whose Shutt
 | Use it when | you will carry on: overnight, a meeting, a bad base branch | the run is over, or you want the report |
 | To carry on | `/warp-start` or `/warp-resume` | `/warp-start` or `/warp-resume` |
 
+## Several runs in one repo
+
+A repo can carry more than one Warp run: `core`, `admin`, `ui`, each worked by its own checkout or developer. `/warp-init admin` names this checkout's run (`run: admin` in `.warp/config.yaml`). Each run has its own beam, parent, `warp:<instance>` tag, and branches (`warp/admin/<id>`), and saves its beam, journal, stats, status, config mirror, and ticket folders to `.warp/runs/admin/` in the repo.
+
+1. `/warp-init admin`. A new name says `run: admin is new.`. A name the repo already has is taken up: init prints the saved config, folder, scan, state, and progress, then restores them. That is how a new agent picks up after a lost one. Then `/warp-start`.
+2. `/warp-scan HOS/UI/Admin` for a folder, `/warp-scan` to reuse the saved folder, `/warp-scan /` to forget it and scan the whole repo. The run name is not the folder name, and the folder is optional.
+3. `/warp-start`. A named run refuses until a scan has run.
+
+A ticket id belongs to one run. A scan that finds an id another run owns refuses and writes nothing; `--skip-owned` leaves those tickets out. Layout, restore rules, and what is saved when: [RUNS.md](RUNS.md).
+
 ## Tick
 
 ```

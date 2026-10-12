@@ -9,7 +9,7 @@ SUBAGENT API-01
 
 The first line is the tag. It is also the subagent's name. `a1b2c3` is the instance: six characters that name this Warp run, printed by `/warp-start`. Cursor has no tag field on an agent, so the name is how this run's agents are found among all the others.
 
-The id is the plan id (`API-01`, `P-001`, `L-01`). The worktree is a checkout of `warp/<id>-<jira>` from `origin/main`, so `.cursor/`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The message names the ticket, Jira key, locks, acceptance, branch, absolute worktree path, and the subagent's agent id (`agent: <id>`). The subagent works only inside that path. It does not call Jira or Slack.
+The id is the plan id (`API-01`, `P-001`, `L-01`). The worktree is a checkout of `warp/<id>-<jira>` (`warp/<name>/<id>-<jira>` on a named run) from `origin/main`, so `.cursor/`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The message names the ticket, Jira key, locks, acceptance, branch, absolute worktree path, and the subagent's agent id (`agent: <id>`). The subagent works only inside that path. It does not call Jira or Slack.
 
 The message comes from `checkout.py launch` and nowhere else. It carries the worker contract: one step, one result line, never start another agent, never subscribe, set a timer, loop, or wait. It also carries the reap command. The subagent runs it first and stops on `reap: exit`.
 

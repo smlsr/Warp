@@ -292,6 +292,8 @@ The `effective:` line shows both caps: `effective: runner=<r> subagentVm=<b> mem
 
 Each run has its own tag, `warp:<instance>`. The instance is six characters that `/warp-start` sets once on the beam, and a resume from another window or VM keeps it. Every agent the run starts is named `[warp:<instance>] <ticket> <step>`, and the listener is `[warp:<instance>] listener`. To tell two runs apart, read the header on any Slack or Teams message, `Warp | <repo> / <project> | warp:<instance>`, or the `instance: warp:<instance> host=<host> machine=<machine id>` line that `/warp-list`, `/warp-status`, `/warp-version`, start, and resume print.
 
+Runs in one repo also get names: `/warp-init core`, `/warp-init admin`, `/warp-init ui`. Each has its own checkout, beam, and branches, and its own folder `.warp/runs/<name>/` in the repo ([RUNS.md](RUNS.md)). `/warp-start` on a run another agent has marked running takes it over, so give each developer their own run name.
+
 Pause, stop, and `/warp-cleanup` touch only agents in their own registry or carrying their own tag. Another run's agents are not matched, and neither is any other agent in the repo, whatever words are in its name. To act on another run's leftovers on purpose, name its tag: `/warp-list --tag <instance>`, then `/warp-cleanup --tag <instance>`. Nothing checks whether that run is still going.
 
 ## Lock-escape repair
@@ -332,9 +334,25 @@ Then:
 
 IDE agents prompt until that matches. Cloud agents and automations do not prompt, and plugin hooks do not run on cloud runners. The Cursor CLI uses `.cursor/cli.json` (`Mcp(server:tool)`), not the IDE button; `agent -f` approves tools for that process. A `beforeMCPExecution` allow does not skip the IDE prompt. On a cloud runner, `scripts/mcp_allow.py --server SERVER --tool TOOL` prints `allow` or `ask`. Call the tool only when it prints `allow`. That is the same Slack, Teams, Jira, and optional GitHub list, not every MCP tool, and it does not approve shell commands. `--allow-server-tools` writes `server:*`, which allows every tool on that server, including destructive ones. Leave it off unless you mean that.
 
+## The agent running a named run is gone
+
+Open a new agent in a checkout of the repo and run `/warp-init <name>`. Warp reads origin, prints `run: <name> already exists on origin/<base>. You are taking up a previous run.`, then the saved config, folder, scan, state, and progress, restores the run, and says `next: /warp-start`. If it prints `warn: the last parent saved state ... Another agent may still be running it`, check that the old agent is really gone: `/warp-start` takes the run over and the old parent ends its turn. Run `/warp-list` to see leftover cloud agents and `/warp-cleanup` to archive them. State is as fresh as the last checkpoint; `/warp-sync` brings the beam in line with Jira for anything newer.
+
+## `refuse: <name> has no scan`
+
+A named run cannot start until `/warp-scan` has run. Run `/warp-scan [folder]`, then `/warp-start`.
+
+## `refuse: this checkout runs <other>`
+
+One checkout runs one run. Use another checkout, or `/warp-init <name> --switch` to move this one; the old files are kept in `.warp/previous-<other>/`. A checkout that has an unnamed run with tickets needs `--adopt` to name it or `--switch` to set it aside.
+
+## `scan: N ticket ids are already owned by another run`
+
+Two runs may not share a ticket id. The scan listed the ids and the owner and wrote nothing (exit 4). Narrow the folder with `/warp-scan <folder>`, or add `--skip-owned` to leave those tickets out. Tickets that depend on a skipped ticket will not start until cross-run dependencies exist.
+
 ## Scan one folder
 
-`/warp-scan <folder>` limits the search to that folder. If the name matches several folders the scan stops and lists them; re-run with the full path. The beam and `scan.json` record the folder.
+`/warp-scan <folder>` limits the search to that folder. If the name matches several folders the scan stops and lists them; re-run with the full path. The beam and `scan.json` record the folder. On a named run the folder is saved as `scanFolder` and the next `/warp-scan` reuses it; `/warp-scan /` clears it and scans the whole repo.
 
 ## Rebuild the graph
 

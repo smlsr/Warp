@@ -210,6 +210,10 @@ The agent running the command and this run's parent are never touched. While thi
 
 Archive is reversible in the Cursor UI. Warp never deletes an agent.
 
+## Named runs
+
+The instance (`warp:<instance>`) names one beam. A run name (`run:` in the config) names a run that is saved in the repo. A named run keeps the same instance on its beam, and the instance comes back when another agent takes the run up. Local files stay at `.warp/`. The parent publishes the shared files (beam, journal, `agents.json`, status, stats) to `.warp/runs/<name>/` on the base branch after each merge and at each checkpoint (`checkpointMinutes`, or when status changes). A ticket's own folder rides on its ticket branch. One run has one parent; a second `/warp-start` on the same run takes it over, as in "Run control". Pause, stop, and `/warp-cleanup` act on their own run's registry and tag, so they leave the other runs in the repo alone. See [RUNS.md](RUNS.md).
+
 ## One parent pass
 
 The parent runs passes in one turn until `parent: exit`.

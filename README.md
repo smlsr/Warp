@@ -13,7 +13,7 @@ There is no per-person cap. There are two caps. `maxAgents` (default 18) is how 
 3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
 
-The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
+The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). Several runs in one repo (`/warp-init <name>`) are in [docs/RUNS.md](docs/RUNS.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -504,7 +504,7 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 ## Where the files are
 
-A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>`.
+A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>`. A named run (`/warp-init <name>`) saves the same files, plus `stats.json` and a config mirror without machine keys or secrets, to `.warp/runs/<name>/`, and its branches are `warp/<name>/<id>-<jira>`. [docs/RUNS.md](docs/RUNS.md) has the layout.
 
 Review files from the Cursor file tree. On a cloud VM, download them before the VM is discarded. Ask for a bundle and Warp writes `.warp/warp-review.zip` (status, board, plan; no journal). Set `stateDir` to an absolute path to keep the beam outside the repo.
 
@@ -714,7 +714,7 @@ Warp starts each ready ticket in its own git worktree. The prompt begins:
 SUBAGENT API-01
 ```
 
-The id is the plan id. The worktree is a checkout of `warp/<id>-<jira>` from `origin/main`, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The subagent works only inside that path. The prompt comes from `checkout.py launch` and nowhere else. It carries the subagent's agent id (`agent: <id>`), the worker contract, and the reap command. The subagent runs the reap check first and stops on `reap: exit`. Then it reads those rules, then the claim in the prompt. See `assets/KICKOFF.md`.
+The id is the plan id. The worktree is a checkout of `warp/<id>-<jira>` (`warp/<name>/<id>-<jira>` on a named run) from `origin/main`, so `.cursor/rules`, `AGENTS.md`, `CLAUDE.md`, and `.warp/` are on disk. The subagent works only inside that path. The prompt comes from `checkout.py launch` and nowhere else. It carries the subagent's agent id (`agent: <id>`), the worker contract, and the reap command. The subagent runs the reap check first and stops on `reap: exit`. Then it reads those rules, then the claim in the prompt. See `assets/KICKOFF.md`.
 
 Optional `launch: agent` still starts with `IMPLEMENT API-01` for one new Agent. This plugin does not call a Cloud Agents API. Clone main so `.cursor` rules load. A beam file does not have to exist on the branch before that Agent starts. Rules apply because the files are in the worktree, not because they were copied into the prompt. A rule only applies if Cursor would apply it in that workspace: `alwaysApply`, a matching glob, or the Shuttle reading it. Warp requires the read.
 
