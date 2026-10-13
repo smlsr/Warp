@@ -186,11 +186,15 @@
         "bugbot": "pass",
         "sha": "fc8e80b36f0e228923a5ef88ef02090bbfdefc15",
         "via": "connected",
+        "openedAt": "2026-10-11T12:26:00Z",
+        "reviewedAt": "2026-10-11T12:44:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T12:56:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T12:56:00Z"
+        "doneAt": "2026-10-11T12:56:00Z",
+        "lastCommentAt": "2026-10-11T12:56:00Z"
       },
       "events": [
         {
@@ -226,7 +230,8 @@
       "usage": {
         "cost": 0.89
       },
-      "updatedAt": "2026-10-11T12:56:00Z"
+      "updatedAt": "2026-10-11T12:56:00Z",
+      "claimedAt": "2026-10-11T11:40:00Z"
     },
     "M-01": {
       "id": "M-01",
@@ -256,11 +261,15 @@
         "bugbot": "pass",
         "sha": "537409029620bf0dc38084a03d93fd4c804c25d6",
         "via": "connected",
+        "openedAt": "2026-10-11T13:14:00Z",
+        "reviewedAt": "2026-10-11T13:32:00Z",
+        "approvedAt": "2026-10-11T13:39:00Z",
         "mergedAt": "2026-10-11T13:44:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T13:44:00Z"
+        "doneAt": "2026-10-11T13:44:00Z",
+        "lastCommentAt": "2026-10-11T13:44:00Z"
       },
       "events": [
         {
@@ -296,7 +305,8 @@
       "usage": {
         "cost": 1.49
       },
-      "updatedAt": "2026-10-11T13:44:00Z"
+      "updatedAt": "2026-10-11T13:44:00Z",
+      "claimedAt": "2026-10-11T11:43:00Z"
     },
     "O-01": {
       "id": "O-01",
@@ -326,11 +336,15 @@
         "bugbot": "pass",
         "sha": "9556585ea997f351754a09cde5cfedfa5a9196f0",
         "via": "connected",
+        "openedAt": "2026-10-11T14:15:00Z",
+        "reviewedAt": "2026-10-11T14:33:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T14:45:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T14:45:00Z"
+        "doneAt": "2026-10-11T14:45:00Z",
+        "lastCommentAt": "2026-10-11T14:45:00Z"
       },
       "events": [
         {
@@ -366,7 +380,8 @@
       "usage": {
         "cost": 2.12
       },
-      "updatedAt": "2026-10-11T14:45:00Z"
+      "updatedAt": "2026-10-11T14:45:00Z",
+      "claimedAt": "2026-10-11T12:41:00Z"
     },
     "U-01": {
       "id": "U-01",
@@ -396,11 +411,15 @@
         "bugbot": "pass",
         "sha": "df70301704c9d78d82b335998604871926debfdb",
         "via": "connected",
+        "openedAt": "2026-10-11T15:23:00Z",
+        "reviewedAt": "2026-10-11T15:41:00Z",
+        "approvedAt": "2026-10-11T15:48:00Z",
         "mergedAt": "2026-10-11T15:53:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T15:53:00Z"
+        "doneAt": "2026-10-11T15:53:00Z",
+        "lastCommentAt": "2026-10-11T15:53:00Z"
       },
       "events": [
         {
@@ -436,7 +455,8 @@
       "usage": {
         "cost": 2.18
       },
-      "updatedAt": "2026-10-11T15:53:00Z"
+      "updatedAt": "2026-10-11T15:53:00Z",
+      "claimedAt": "2026-10-11T13:16:00Z"
     },
     "Q-01": {
       "id": "Q-01",
@@ -466,11 +486,15 @@
         "bugbot": "pass",
         "sha": "1ece615db9a6442e9e7d6b377936d536243d3570",
         "via": "connected",
+        "openedAt": "2026-10-11T16:09:00Z",
+        "reviewedAt": "2026-10-11T16:27:00Z",
+        "approvedAt": "2026-10-11T16:34:00Z",
         "mergedAt": "2026-10-11T16:39:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T16:39:00Z"
       },
       "events": [
         {
@@ -506,7 +530,8 @@
       "usage": {
         "cost": 2.6
       },
-      "updatedAt": "2026-10-11T16:39:00Z"
+      "updatedAt": "2026-10-11T16:39:00Z",
+      "claimedAt": "2026-10-11T13:44:00Z"
     },
     "I-01": {
       "id": "I-01",
@@ -536,11 +561,15 @@
         "bugbot": "pass",
         "sha": "30f970583f9d52f90e8bec948f6f915fe21b37ca",
         "via": "connected",
+        "openedAt": "2026-10-11T17:04:00Z",
+        "reviewedAt": "2026-10-11T17:22:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T17:34:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T17:34:00Z"
       },
       "events": [
         {
@@ -576,7 +605,8 @@
       "usage": {
         "cost": 1.43
       },
-      "updatedAt": "2026-10-11T17:34:00Z"
+      "updatedAt": "2026-10-11T17:34:00Z",
+      "claimedAt": "2026-10-11T15:39:00Z"
     },
     "A-01": {
       "id": "A-01",
@@ -608,11 +638,15 @@
         "bugbot": "pass",
         "sha": "816bee06f92e23399ccea098535b6a437178ba0a",
         "via": "connected",
+        "openedAt": "2026-10-11T17:45:00Z",
+        "reviewedAt": "2026-10-11T18:03:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T18:15:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T18:15:00Z"
       },
       "events": [
         {
@@ -648,7 +682,8 @@
       "usage": {
         "cost": 1.61
       },
-      "updatedAt": "2026-10-11T18:15:00Z"
+      "updatedAt": "2026-10-11T18:15:00Z",
+      "claimedAt": "2026-10-11T16:30:00Z"
     },
     "F-01": {
       "id": "F-01",
@@ -680,11 +715,15 @@
         "bugbot": "pass",
         "sha": "f10637ce81fc069e7a609683ceaf4915888564e8",
         "via": "connected",
+        "openedAt": "2026-10-11T18:32:00Z",
+        "reviewedAt": "2026-10-11T18:50:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T19:02:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T19:02:00Z"
+        "doneAt": "2026-10-11T19:02:00Z",
+        "lastCommentAt": "2026-10-11T19:02:00Z"
       },
       "events": [
         {
@@ -720,7 +759,8 @@
       "usage": {
         "cost": 1.42
       },
-      "updatedAt": "2026-10-11T19:02:00Z"
+      "updatedAt": "2026-10-11T19:02:00Z",
+      "claimedAt": "2026-10-11T17:06:00Z"
     },
     "P-01": {
       "id": "P-01",
@@ -750,11 +790,15 @@
         "bugbot": "pass",
         "sha": "729135bdd70a39d133dcd77ff179f2d2e48b9662",
         "via": "connected",
+        "openedAt": "2026-10-11T19:40:00Z",
+        "reviewedAt": "2026-10-11T19:58:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T20:10:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T20:10:00Z"
+        "doneAt": "2026-10-11T20:10:00Z",
+        "lastCommentAt": "2026-10-11T20:10:00Z"
       },
       "events": [
         {
@@ -790,7 +834,8 @@
       "usage": {
         "cost": 1.43
       },
-      "updatedAt": "2026-10-11T20:10:00Z"
+      "updatedAt": "2026-10-11T20:10:00Z",
+      "claimedAt": "2026-10-11T18:03:00Z"
     },
     "D-01": {
       "id": "D-01",
@@ -822,11 +867,15 @@
         "bugbot": "pass",
         "sha": "3672d6ae12b80aed6da79a873d9a8079abd0d7fb",
         "via": "connected",
+        "openedAt": "2026-10-11T20:22:00Z",
+        "reviewedAt": "2026-10-11T20:40:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T20:52:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T20:52:00Z"
       },
       "events": [
         {
@@ -862,7 +911,8 @@
       "usage": {
         "cost": 1.55
       },
-      "updatedAt": "2026-10-11T20:52:00Z"
+      "updatedAt": "2026-10-11T20:52:00Z",
+      "claimedAt": "2026-10-11T19:14:00Z"
     },
     "M-02": {
       "id": "M-02",
@@ -895,11 +945,15 @@
         "bugbot": "pass",
         "sha": "40cbacd0249a45845dbe3023a906922fa4b9a9c4",
         "via": "connected",
+        "openedAt": "2026-10-11T21:04:00Z",
+        "reviewedAt": "2026-10-11T21:22:00Z",
+        "approvedAt": "2026-10-11T21:29:00Z",
         "mergedAt": "2026-10-11T21:34:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T21:34:00Z"
+        "doneAt": "2026-10-11T21:34:00Z",
+        "lastCommentAt": "2026-10-11T21:34:00Z"
       },
       "events": [
         {
@@ -935,7 +989,8 @@
       "usage": {
         "cost": 2.26
       },
-      "updatedAt": "2026-10-11T21:34:00Z"
+      "updatedAt": "2026-10-11T21:34:00Z",
+      "claimedAt": "2026-10-11T18:13:00Z"
     },
     "F-02": {
       "id": "F-02",
@@ -968,11 +1023,15 @@
         "bugbot": "pass",
         "sha": "aaf719f3fd68373b29acf1a57cbd1f5ae28af604",
         "via": "connected",
+        "openedAt": "2026-10-11T22:08:00Z",
+        "reviewedAt": "2026-10-11T22:26:00Z",
+        "approvedAt": "2026-10-11T22:33:00Z",
         "mergedAt": "2026-10-11T22:38:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T22:38:00Z"
+        "doneAt": "2026-10-11T22:38:00Z",
+        "lastCommentAt": "2026-10-11T22:38:00Z"
       },
       "events": [
         {
@@ -1008,7 +1067,8 @@
       "usage": {
         "cost": 2.42
       },
-      "updatedAt": "2026-10-11T22:38:00Z"
+      "updatedAt": "2026-10-11T22:38:00Z",
+      "claimedAt": "2026-10-11T19:16:00Z"
     },
     "D-02": {
       "id": "D-02",
@@ -1041,11 +1101,15 @@
         "bugbot": "pass",
         "sha": "179a071e518ae4525b4b1b75321c52966bd8c676",
         "via": "connected",
+        "openedAt": "2026-10-11T23:10:00Z",
+        "reviewedAt": "2026-10-11T23:28:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-11T23:40:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-11T23:40:00Z"
+        "doneAt": "2026-10-11T23:40:00Z",
+        "lastCommentAt": "2026-10-11T23:40:00Z"
       },
       "events": [
         {
@@ -1081,7 +1145,8 @@
       "usage": {
         "cost": 2.18
       },
-      "updatedAt": "2026-10-11T23:40:00Z"
+      "updatedAt": "2026-10-11T23:40:00Z",
+      "claimedAt": "2026-10-11T21:26:00Z"
     },
     "U-02": {
       "id": "U-02",
@@ -1114,11 +1179,15 @@
         "bugbot": "pass",
         "sha": "84768b8c54dd0ba5626467ba04a10547b401ba85",
         "via": "connected",
+        "openedAt": "2026-10-11T23:46:00Z",
+        "reviewedAt": "2026-10-12T00:04:00Z",
+        "approvedAt": "2026-10-12T00:11:00Z",
         "mergedAt": "2026-10-12T00:16:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T00:16:00Z"
+        "doneAt": "2026-10-12T00:16:00Z",
+        "lastCommentAt": "2026-10-12T00:16:00Z"
       },
       "events": [
         {
@@ -1154,7 +1223,8 @@
       "usage": {
         "cost": 3.37
       },
-      "updatedAt": "2026-10-12T00:16:00Z"
+      "updatedAt": "2026-10-12T00:16:00Z",
+      "claimedAt": "2026-10-11T20:38:00Z"
     },
     "Q-02": {
       "id": "Q-02",
@@ -1186,11 +1256,15 @@
         "bugbot": "pass",
         "sha": "43fc052715850a031ad2d5f1e05b3e13f8c110fb",
         "via": "connected",
+        "openedAt": "2026-10-12T00:53:00Z",
+        "reviewedAt": "2026-10-12T01:11:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-12T01:23:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T01:23:00Z"
       },
       "events": [
         {
@@ -1226,7 +1300,8 @@
       "usage": {
         "cost": 1.64
       },
-      "updatedAt": "2026-10-12T01:23:00Z"
+      "updatedAt": "2026-10-12T01:23:00Z",
+      "claimedAt": "2026-10-11T23:11:00Z"
     },
     "R-01": {
       "id": "R-01",
@@ -1258,11 +1333,15 @@
         "bugbot": "pass",
         "sha": "f22d2882d1a89b37ad0c9bb6e9526a69d97e967b",
         "via": "connected",
+        "openedAt": "2026-10-12T01:39:00Z",
+        "reviewedAt": "2026-10-12T01:57:00Z",
+        "approvedAt": "2026-10-12T02:04:00Z",
         "mergedAt": "2026-10-12T02:09:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T02:09:00Z"
+        "doneAt": "2026-10-12T02:09:00Z",
+        "lastCommentAt": "2026-10-12T02:09:00Z"
       },
       "events": [
         {
@@ -1298,7 +1377,8 @@
       "usage": {
         "cost": 2.57
       },
-      "updatedAt": "2026-10-12T02:09:00Z"
+      "updatedAt": "2026-10-12T02:09:00Z",
+      "claimedAt": "2026-10-11T22:40:00Z"
     },
     "I-02": {
       "id": "I-02",
@@ -1331,11 +1411,15 @@
         "bugbot": "pass",
         "sha": "ccb1c51d0eba0ea84770a08716e6fec353b97377",
         "via": "connected",
+        "openedAt": "2026-10-12T02:23:00Z",
+        "reviewedAt": "2026-10-12T02:41:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-12T02:53:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T02:53:00Z"
+        "doneAt": "2026-10-12T02:53:00Z",
+        "lastCommentAt": "2026-10-12T02:53:00Z"
       },
       "events": [
         {
@@ -1371,7 +1455,8 @@
       "usage": {
         "cost": 1.71
       },
-      "updatedAt": "2026-10-12T02:53:00Z"
+      "updatedAt": "2026-10-12T02:53:00Z",
+      "claimedAt": "2026-10-12T01:06:00Z"
     },
     "A-02": {
       "id": "A-02",
@@ -1403,11 +1488,15 @@
         "bugbot": "pass",
         "sha": "1570266b42b38755cd37880e16ac4191a26aa0ae",
         "via": "connected",
+        "openedAt": "2026-10-12T03:25:00Z",
+        "reviewedAt": "2026-10-12T03:43:00Z",
+        "approvedAt": "2026-10-12T03:50:00Z",
         "mergedAt": "2026-10-12T03:55:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T03:55:00Z"
       },
       "events": [
         {
@@ -1443,7 +1532,8 @@
       "usage": {
         "cost": 4.49
       },
-      "updatedAt": "2026-10-12T03:55:00Z"
+      "updatedAt": "2026-10-12T03:55:00Z",
+      "claimedAt": "2026-10-11T23:02:00Z"
     },
     "S-01": {
       "id": "S-01",
@@ -1476,11 +1566,15 @@
         "bugbot": "pass",
         "sha": "6af257488d959c31fe8ad4a156d2a68c02f4b342",
         "via": "connected",
+        "openedAt": "2026-10-12T04:14:00Z",
+        "reviewedAt": "2026-10-12T04:32:00Z",
+        "approvedAt": "2026-10-12T04:39:00Z",
         "mergedAt": "2026-10-12T04:44:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T04:44:00Z"
+        "doneAt": "2026-10-12T04:44:00Z",
+        "lastCommentAt": "2026-10-12T04:44:00Z"
       },
       "events": [
         {
@@ -1516,7 +1610,8 @@
       "usage": {
         "cost": 2.24
       },
-      "updatedAt": "2026-10-12T04:44:00Z"
+      "updatedAt": "2026-10-12T04:44:00Z",
+      "claimedAt": "2026-10-12T01:43:00Z"
     },
     "M-03": {
       "id": "M-03",
@@ -1548,11 +1643,15 @@
         "bugbot": "pass",
         "sha": "2e5f950c0ce5af69430b91ed2954ba5cf81e54dd",
         "via": "connected",
+        "openedAt": "2026-10-12T04:57:00Z",
+        "reviewedAt": "2026-10-12T05:15:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-12T05:27:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T05:27:00Z"
       },
       "events": [
         {
@@ -1588,7 +1687,8 @@
       "usage": {
         "cost": 0.92
       },
-      "updatedAt": "2026-10-12T05:27:00Z"
+      "updatedAt": "2026-10-12T05:27:00Z",
+      "claimedAt": "2026-10-12T04:09:00Z"
     },
     "L-02": {
       "id": "L-02",
@@ -1620,11 +1720,15 @@
         "bugbot": "pass",
         "sha": "4540f4262d8ad8c0ac127e938005ce74721888ff",
         "via": "connected",
+        "openedAt": "2026-10-12T05:51:00Z",
+        "reviewedAt": "2026-10-12T06:09:00Z",
+        "approvedAt": "2026-10-12T06:16:00Z",
         "mergedAt": "2026-10-12T06:21:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T06:21:00Z"
+        "doneAt": "2026-10-12T06:21:00Z",
+        "lastCommentAt": "2026-10-12T06:21:00Z"
       },
       "events": [
         {
@@ -1660,7 +1764,8 @@
       "usage": {
         "cost": 3.36
       },
-      "updatedAt": "2026-10-12T06:21:00Z"
+      "updatedAt": "2026-10-12T06:21:00Z",
+      "claimedAt": "2026-10-12T02:04:00Z"
     },
     "M-04": {
       "id": "M-04",
@@ -1693,11 +1798,15 @@
         "bugbot": "pass",
         "sha": "fa6197748d118e3781728a07bbab27f604b8157d",
         "via": "connected",
+        "openedAt": "2026-10-12T06:21:00Z",
+        "reviewedAt": "2026-10-12T06:39:00Z",
+        "approvedAt": "2026-10-12T06:46:00Z",
         "mergedAt": "2026-10-12T06:51:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T06:51:00Z"
       },
       "events": [
         {
@@ -1733,7 +1842,8 @@
       "usage": {
         "cost": 1.43
       },
-      "updatedAt": "2026-10-12T06:51:00Z"
+      "updatedAt": "2026-10-12T06:51:00Z",
+      "claimedAt": "2026-10-12T04:49:00Z"
     },
     "C-01": {
       "id": "C-01",
@@ -1765,11 +1875,15 @@
         "bugbot": "pass",
         "sha": "a81100a16ea330a1a66d58b5d1a4c01ea887ae22",
         "via": "connected",
+        "openedAt": "2026-10-12T07:06:00Z",
+        "reviewedAt": "2026-10-12T07:24:00Z",
+        "approvedAt": "2026-10-12T07:31:00Z",
         "mergedAt": "2026-10-12T07:36:00Z"
       },
       "jira": {
         "status": "QA Ready",
-        "doneAt": null
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T07:36:00Z"
       },
       "events": [
         {
@@ -1805,7 +1919,8 @@
       "usage": {
         "cost": 1.73
       },
-      "updatedAt": "2026-10-12T07:36:00Z"
+      "updatedAt": "2026-10-12T07:36:00Z",
+      "claimedAt": "2026-10-12T05:35:00Z"
     },
     "L-03": {
       "id": "L-03",
@@ -1838,11 +1953,15 @@
         "bugbot": "pass",
         "sha": "32d90dcd57bb7d973ac4da9afb81392137161c16",
         "via": "connected",
+        "openedAt": "2026-10-12T08:02:00Z",
+        "reviewedAt": "2026-10-12T08:20:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-12T08:32:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T08:32:00Z"
+        "doneAt": "2026-10-12T08:32:00Z",
+        "lastCommentAt": "2026-10-12T08:32:00Z"
       },
       "events": [
         {
@@ -1878,7 +1997,8 @@
       "usage": {
         "cost": 2.26
       },
-      "updatedAt": "2026-10-12T08:32:00Z"
+      "updatedAt": "2026-10-12T08:32:00Z",
+      "claimedAt": "2026-10-12T06:12:00Z"
     },
     "L-04": {
       "id": "L-04",
@@ -1911,11 +2031,15 @@
         "bugbot": "pass",
         "sha": "03a63966213bca7fd644de2f0dec6823fb5c9d56",
         "via": "connected",
+        "openedAt": "2026-10-12T08:52:00Z",
+        "reviewedAt": "2026-10-12T09:10:00Z",
+        "approvedAt": null,
         "mergedAt": "2026-10-12T09:22:00Z"
       },
       "jira": {
         "status": "Done",
-        "doneAt": "2026-10-12T09:22:00Z"
+        "doneAt": "2026-10-12T09:22:00Z",
+        "lastCommentAt": "2026-10-12T09:22:00Z"
       },
       "events": [
         {
@@ -1951,7 +2075,8 @@
       "usage": {
         "cost": 1.14
       },
-      "updatedAt": "2026-10-12T09:22:00Z"
+      "updatedAt": "2026-10-12T09:22:00Z",
+      "claimedAt": "2026-10-12T07:35:00Z"
     },
     "U-03": {
       "id": "U-03",
@@ -2138,7 +2263,9 @@
       "pr": {
         "url": "https://github.com/acme/hos-platform/pull/464",
         "ci": "red",
-        "bugbot": null
+        "bugbot": null,
+        "openedAt": "2026-10-12T18:54:00Z",
+        "reviewedAt": null
       },
       "jira": {
         "status": "In Review"
@@ -2190,7 +2317,9 @@
       "pr": {
         "url": "https://github.com/acme/hos-platform/pull/467",
         "ci": "green",
-        "bugbot": null
+        "bugbot": null,
+        "openedAt": "2026-10-12T18:53:00Z",
+        "reviewedAt": null
       },
       "jira": {
         "status": "In Review"
@@ -2243,7 +2372,9 @@
       "pr": {
         "url": "https://github.com/acme/hos-platform/pull/470",
         "ci": "green",
-        "bugbot": null
+        "bugbot": null,
+        "openedAt": "2026-10-12T19:07:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
       },
       "jira": {
         "status": "In Review"
@@ -2295,7 +2426,9 @@
       "pr": {
         "url": "https://github.com/acme/hos-platform/pull/473",
         "ci": "green",
-        "bugbot": "pass"
+        "bugbot": "pass",
+        "openedAt": "2026-10-12T18:33:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
       },
       "jira": {
         "status": "QA Ready"
@@ -2348,7 +2481,9 @@
       "pr": {
         "url": "https://github.com/acme/hos-platform/pull/476",
         "ci": "green",
-        "bugbot": "pass"
+        "bugbot": "pass",
+        "openedAt": "2026-10-12T18:44:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
       },
       "jira": {
         "status": "QA Ready"

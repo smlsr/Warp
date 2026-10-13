@@ -149,6 +149,39 @@ button { cursor: pointer; }
 .bar .flag { position: absolute; right: 3px; bottom: 2px; font-size: 10px; }
 .tl-foot { padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
 
+/* utilization */
+.util > summary { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.util > summary::-webkit-details-marker { display: none; }
+.util > summary .muted { color: var(--muted); font-weight: 500; }
+.util-b { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; padding: 4px 14px 14px; }
+.meter { display: grid; gap: 10px; align-content: start; font-size: 13px; }
+.meter .row { display: grid; grid-template-columns: 170px 1fr 96px; gap: 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.meter .bar0 { height: 8px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; }
+.meter .bar0 i { display: block; height: 100%; background: var(--brand2); }
+.meter .bar0 i.over { background: var(--c-qa); }
+.meter .v { text-align: right; font-weight: 600; }
+table.mini, table.grid { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+table.mini th, table.mini td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+table.mini th:first-child, table.mini td:first-child { text-align: left; }
+table.mini th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.assume { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.assume summary { cursor: pointer; color: var(--ink2); }
+.assume ul { margin: 6px 0 0; padding-left: 18px; }
+/* table view */
+.tbl-wrap { overflow: auto; max-height: calc(100vh - 150px); }
+table.grid th, table.grid td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.grid th { position: sticky; top: 0; background: var(--panel); z-index: 2; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+table.grid th[aria-sort="ascending"]::after { content: " ▲"; } table.grid th[aria-sort="descending"]::after { content: " ▼"; }
+table.grid tr.trow { cursor: pointer; } table.grid tr.trow:hover td { background: var(--panel2); }
+table.grid tr.dim { display: none; }
+table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.chipst { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--c); }
+.chipst::before { content: ""; width: 9px; height: 9px; border-radius: 3px; background: var(--c); }
+.clock { margin-left: auto; }
+.nowline { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--c-prog); z-index: 3; pointer-events: none; }
+.tlnote { color: var(--muted); font-size: 12px; }
+@media (max-width: 900px) { .util-b { grid-template-columns: 1fr; } .meter .row { grid-template-columns: 120px 1fr 80px; } }
+
 /* board */
 .lane { margin-bottom: 14px; }
 .lane-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
@@ -235,7 +268,7 @@ body.dragging .drop { display: flex; }
     --c-done: #1f9d55; --c-err: #d64545; --c-prog: #2f6fde; --c-rev: #8b5cf6; --c-qa: #d99a00; --c-todo: #8c99a5; --tint: 18%; --tint-todo: 10%; color-scheme: light; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { background: #fff; font-size: 12px; }
-  .top .actions, .controls .search, .controls .ctl, .controls .seg, .tabs, .drawer, .scrim, .toasts, .drop, .tip { display: none !important; }
+  .util > summary, .clock, .top .actions, .controls .search, .controls .ctl, .controls .seg, .tabs, .drawer, .scrim, .toasts, .drop, .tip { display: none !important; }
   .top { position: static; backdrop-filter: none; }
   .wrap { max-width: none; padding: 0; }
   .card, .panel { box-shadow: none; break-inside: avoid; }
@@ -299,13 +332,14 @@ body.dragging .drop { display: flex; }
       <div class="tabs" id="tabs"></div>
     </section>
     <section class="metrics" id="metrics"></section>
+    <details class="panel util" id="util"></details>
     <section class="controls">
       <div class="legend" id="legend"></div>
       <div class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="q" type="search" placeholder="Search tickets, Jira keys, modules  /" autocomplete="off">
       </div>
-      <div class="seg" id="viewSeg"><button data-view="timeline" class="on">Swimlane</button><button data-view="board">Board</button></div>
+      <div class="seg" id="viewSeg"><button data-view="timeline" class="on">Swimlane</button><button data-view="board">Board</button><button data-view="table">Table</button></div>
       <label class="ctl" id="groupCtl">Lanes
         <select id="groupBy"><option value="block">Gate block</option><option value="status">Status</option><option value="module">Module</option><option value="size">Size</option></select>
       </label>
@@ -437,8 +471,9 @@ function ticketRow(raw, id) {
     deps: [].concat(t.deps || [], t.after || []).map(String), locks: [].concat(t.locks || []).map(String),
     gate: t.gate || null, module: t.module || null, layer: t.layer || null, critical: !!t.critical, starred: !!t.starred,
     rank: num(t.rank), priority: t.priority || null,
-    pr: { url: pr.url || null, ci: pr.ci || null, bugbot: pr.bugbot || null, sha: pr.sha || null, mergedAt: pr.mergedAt || null, via: pr.via || null },
-    jiraKey: t.jiraKey || jira.key || null, jiraStatus: jira.status || null, jiraDone: !!(jira.doneAt || t.jiraDone),
+    pr: { url: pr.url || null, ci: pr.ci || null, bugbot: pr.bugbot || null, sha: pr.sha || null, via: pr.via || null,
+      openedAt: pr.openedAt || null, reviewedAt: pr.reviewedAt || null, approvedAt: pr.approvedAt || null, mergedAt: pr.mergedAt || null },
+    jiraKey: t.jiraKey || jira.key || null, jiraStatus: jira.status || null, jiraDone: !!(jira.doneAt || t.jiraDone), jiraCommentAt: jira.lastCommentAt || null,
     alarm: t.alarm || null, agent: t.agent || null, attempts: num(t.attempts) || 0, recoveries: num(t.recoveries) || 0,
     minutes: num(t.minutes) || 0, tokens: num(t.tokens) || 0, cost: num(usage.cost),
     claimedAt: t.claimedAt || null, updatedAt: t.updatedAt || null, events: Array.isArray(t.events) ? t.events : [],
@@ -452,15 +487,17 @@ function runFromBeam(b, path, modified) {
   const raw = Array.isArray(b.tickets) ? b.tickets : Object.entries(b.tickets || {}).map(([k, v]) => Object.assign({ id: k }, v));
   const tickets = raw.map((t) => ticketRow(t, t.id));
   const inst = b.instance && typeof b.instance === "object" ? b.instance : b.instance ? { id: b.instance } : {};
-  const est = program.estimate && typeof program.estimate === "object" ? program.estimate : null;
+  // A Warp export (scan.py export, kind warp-plan) carries the estimate at the top level.
+  const est = program.estimate && typeof program.estimate === "object" ? program.estimate : b.estimate && typeof b.estimate === "object" ? b.estimate : null;
   const times = tickets.map((t) => parseTime(t.updatedAt)).filter(Boolean);
-  const updated = Math.max(parseTime(b.checkpointAt) || 0, ...times, 0) || modified || null;
+  const updated = Math.max(parseTime(b.checkpointAt) || 0, parseTime(b.exportedAt) || 0, ...times, 0) || modified || null;
   return {
-    kind: "beam", path, dir: dirOf(path), name: b.run || null, instance: inst.id || null, host: inst.host || null,
+    kind: "beam", export: b.kind === "warp-plan", exportedAt: parseTime(b.exportedAt), path, dir: dirOf(path), name: b.run || null, instance: inst.id || null, host: inst.host || null,
     runState: b.runState || null, paused: !!b.paused, pauseReason: b.pauseReason || null, range: b.range || null, owner: b.owner || null,
     gateOrder: b.gateOrder || cfg.gateOrder || "strict", startAfter: cfg.startAfter || null,
-    gates: (b.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: g.status || "pending", blocking: g.blocking !== false, members: (g.members || []).map(String) })),
-    tickets, critical: (program.criticalPath || []).map(String),
+    gates: (b.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: g.status || "pending", blocking: g.blocking !== false, members: (g.members || []).map(String),
+      greenAt: parseTime(g.greenAt), evidence: g.evidence || null, checks: [].concat(g.checks || []).map(String), ifRed: g.ifRed || g.if_red || null })),
+    tickets, critical: (program.criticalPath || b.criticalPath || []).map(String),
     estimate: est, metrics: b.metrics || null, cap: num(cfg.maxAgents) || DEFAULT_CAP,
     jiraSite: cfg.jiraSite || "", project: cfg.projectName || cfg.jiraProject || null,
     runStartedAt: parseTime(b.runStartedAt), runEndedAt: parseTime(b.runEndedAt), updated,
@@ -475,7 +512,7 @@ function runFromStatus(s, path, modified) {
     kind: "status", path, dir: dirOf(path), name: s.run || null, instance: inst.id || null, host: inst.host || null,
     runState: s.runState || null, paused: !!s.paused, range: null, owner: null, gateOrder: null, startAfter: null,
     gates: [], tickets: rows.map((r) => ticketRow(Object.assign({}, r, { pr: { url: r.pr, ci: r.ci, bugbot: r.bugbot, sha: r.sha, via: r.via } }), r.id)),
-    critical: [], estimate: null, metrics: s.metrics || null, cap: DEFAULT_CAP, jiraSite: "", project: null,
+    critical: [], estimate: null, metrics: s.metrics || null, cap: DEFAULT_CAP, jiraSite: "", project: null, export: false, exportedAt: null,
     runStartedAt: null, runEndedAt: null, updated: parseTime(s.updatedAt) || modified || null, folder: null, repo: null,
   };
 }
@@ -749,7 +786,8 @@ function computeMetrics(runs) {
   const agentTotal = sum(Object.values(agent));
   for (const k of Object.keys(share)) share[k] = estTotal != null && agentTotal > 0 ? (estTotal * agent[k]) / agentTotal : null;
   const finish = Math.max(0, ...runs.map((r) => r.finish || 0)) || null;
-  return { finish, agent, human, count, share, estTotal, agentTotal, humanTotal: sum(Object.values(human)), ticketTotal: sum(Object.values(count)), humanPlan,
+  const assumptions = [...new Set(runs.flatMap((r) => (r.estimate && Array.isArray(r.estimate.assumptions) ? r.estimate.assumptions : [])))];
+  return { finish, assumptions, agent, human, count, share, estTotal, agentTotal, humanTotal: sum(Object.values(human)), ticketTotal: sum(Object.values(count)), humanPlan,
     sizeDerived, actualH: actualMin / 60, tokens, cost: costSeen ? cost : null, gatesTotal, gatesGreen, elapsed, eta };
 }
 
@@ -757,7 +795,7 @@ function computeMetrics(runs) {
 const S = {
   printing: false, printWidth: 0,
   docs: [], sources: [], runs: [], tab: "all", view: store("view") || "timeline", groupBy: store("groupBy") || "block", colorBy: store("colorBy") || "status",
-  zoom: num(store("zoom")) || 0, off: new Set(), q: "", closed: new Set(), embedded: null, reloadable: false, timer: null, loadedAt: null,
+  zoom: num(store("zoom")) || 0, clock: store("clock") || "plan", sort: { key: "start", dir: 1 }, off: new Set(), q: "", closed: new Set(), embedded: null, reloadable: false, timer: null, loadedAt: null,
 };
 
 // ---- rendering --------------------------------------------------------------------------------
@@ -786,8 +824,9 @@ function render() {
   $$("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === S.view));
   $("#groupCtl").classList.toggle("hidden", S.view !== "board");
   $("#zoomCtl").classList.toggle("hidden", S.view !== "timeline");
+  renderUtil(runs);
   $("#groupBy").value = S.groupBy; $("#colorBy").value = S.colorBy; $("#zoom").value = S.zoom;
-  if (S.view === "timeline") renderTimeline(runs); else renderBoard(runs);
+  if (S.view === "timeline") renderTimeline(runs); else if (S.view === "table") renderTable(runs); else renderBoard(runs);
   const files = S.docs.length;
   $("#sources").textContent = `${files} file${files === 1 ? "" : "s"} read${S.embedded ? " (embedded by /warp-dashboard)" : ""} · ${S.docs.slice(0, 4).map((d) => d.path).join(", ")}${files > 4 ? ", …" : ""}`;
   $("#generated").textContent = S.loadedAt ? "Loaded " + stamp(S.loadedAt) : "";
@@ -856,7 +895,7 @@ function renderMetrics(runs) {
   const many = runs.length > 1;
   const run = `<div class="card"><h3>Run estimate <span>${many ? "longest run" : "elapsed, plan"}</span></h3>
     <div class="big">${fmtH(m.estTotal)}</div>${stackBar(m.share, m.estTotal || 0)}${rowsFor(m.share, m.estTotal || 0, (v) => fmtH(v))}
-    <div class="foot"><span>Elapsed <b>${fmtH(m.elapsed)}</b></span><span>ETA left <b>~${fmtH(m.eta)}</b></span>${m.finish ? `<span title="Planned finish on the swimlane, with blocks in order">Swimlane <b>T+${Math.round(m.finish)}h</b></span>` : ""}<span title="The plan's elapsed estimate, split by agent-hour share">split by agent-hours</span></div></div>`;
+    <div class="foot"><span>Elapsed <b>${fmtH(m.elapsed)}</b></span><span>ETA left <b>~${fmtH(m.eta)}</b></span>${m.finish ? `<span title="Planned finish on the swimlane, with blocks in order">Swimlane <b>T+${Math.round(m.finish)}h</b></span>` : ""}<span title="The plan's elapsed estimate, split by agent-hour share">split by agent-hours</span></div>${m.assumptions.length ? `<details class="assume"><summary>Assumptions</summary><ul>${m.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}</div>`;
   const agent = `<div class="card"><h3>Agent hours <span>estimate</span></h3>
     <div class="big">${fmtH(m.agentTotal)}</div>${stackBar(m.agent, m.agentTotal)}${rowsFor(m.agent, m.agentTotal, (v) => fmtH(v))}
     <div class="foot"><span>Actual <b>${m.actualH ? fmtH(m.actualH) : "—"}</b></span><span>Tokens <b>${m.tokens ? fmtN(m.tokens) : "—"}</b></span><span>Cost <b>${m.cost == null ? "—" : "$" + m.cost.toFixed(2)}</b></span>${m.sizeDerived ? `<span title="S=4, M=7, L=11, XL=16 (scan.py)">${m.sizeDerived} from size</span>` : ""}</div></div>`;
@@ -869,6 +908,35 @@ function renderMetrics(runs) {
     <div class="big">${fmtN(m.ticketTotal)}</div>${stackBar(m.count, m.ticketTotal)}${rowsFor(m.count, m.ticketTotal, fmtN)}
     <div class="foot"><span>In review <b>${byCat.rev}</b></span><span>QA ready <b>${byCat.qa}</b></span><span>Coding <b>${byCat.prog}</b></span></div></div>`;
   $("#metrics").innerHTML = run + agent + human + tick;
+}
+
+const ACTIVE_ST = new Set(["claimed", "recovering", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"]);
+function renderUtil(runs) {
+  const el = $("#util");
+  const tickets = runs.flatMap((r) => r.tickets);
+  const cap = sum(runs.map((r) => r.cap));
+  const active = tickets.filter((t) => ACTIVE_ST.has(t.status)).length;
+  const spentH = sum(tickets.map((t) => t.minutes)) / 60;
+  const estH = sum(runs.map((r) => (r.estimate && num(r.estimate.agentHours)) ?? null).filter((x) => x != null)) || null;
+  const tokens = sum(tickets.map((t) => t.tokens));
+  const by = (keyf) => {
+    const m = new Map();
+    for (const t of tickets) { const k = keyf(t); const row = m.get(k) || { n: 0, tokens: 0, minutes: 0 }; row.n++; row.tokens += t.tokens; row.minutes += t.minutes; m.set(k, row); }
+    return m;
+  };
+  const sizes = by((t) => t.size || "—");
+  const agents = by((t) => t.agent || "unassigned");
+  const table = (m, head, order) => `<table class="mini"><thead><tr><th>${head}</th><th>tickets</th><th>tokens</th><th>minutes</th></tr></thead><tbody>${(order || [...m.keys()].sort(natCmp)).filter((k) => m.has(k)).slice(0, 8).map((k) => { const v = m.get(k); return `<tr><td class="mono">${esc(k)}</td><td>${v.n}</td><td>${fmtN(v.tokens)}</td><td>${fmtN(v.minutes)}</td></tr>`; }).join("")}</tbody></table>${m.size > 8 ? `<div class="tlnote">${m.size - 8} more</div>` : ""}`;
+  const meter = (label, v, max, text) => `<div class="row"><span>${label}</span><span class="bar0"><i class="${max && v > max ? "over" : ""}" style="width:${max ? Math.min(100, (100 * v) / max) : 0}%"></i></span><span class="v">${text}</span></div>`;
+  el.innerHTML = `<summary>Utilization <span class="muted">${active} active of ${cap} agents · ${fmtH(spentH)} spent${estH ? " of " + fmtH(estH) + " estimated" : ""} · ${fmtN(tokens)} tokens</span></summary>
+    <div class="util-b"><div class="meter">
+      ${meter("Active agents / maxAgents", active, cap, `${active} / ${cap}`)}
+      ${meter("Agent hours / estimate", spentH, estH, `${fmtH(spentH)} / ${fmtH(estH)}`)}
+      ${meter("Tickets done", tickets.filter((t) => t.cat === "done").length, tickets.length, `${tickets.filter((t) => t.cat === "done").length} / ${tickets.length}`)}
+      <div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are the minutes Warp recorded per ticket.</div>
+    </div>
+    <div>${table(sizes, "size", ["S", "M", "L", "XL", "—"])}</div>
+    <div>${table(agents, "agent")}</div></div>`;
 }
 
 function renderLegend(runs) {
@@ -890,27 +958,74 @@ function statusText(t) { return t.status.replace(/_/g, " "); }
 function renderTimeline(runs) {
   const view = $("#view");
   const wide = view.clientWidth || document.documentElement.clientWidth - 40;
-  view.innerHTML = runs.map((r, i) => `<section class="panel" data-run="${i}">
-    <div class="panel-h"><h2>${esc(runs.length > 1 ? runLabel(r) : "Swimlane")}</h2><span class="muted">${r.slots} of ${r.cap} slots · planned finish T+${Math.round(r.finish)}h${r.kind !== "beam" ? "" : r.gateOrder === "deps" ? " · dependency order" : " · blocks finish in order"}</span></div>
+  const actual = S.clock === "actual";
+  view.innerHTML = runs.map((r, i) => {
+    const lay = actual ? layoutActual(r) : layoutPlan(r);
+    r._layout = lay;
+    const note = actual
+      ? `${lay.rows} agents in use · ${lay.items.length} started${lay.unstarted ? ` · ${lay.unstarted} not started` : ""}${lay.now != null ? ` · now +${Math.round(lay.now)}h` : ""}`
+      : `${r.slots} of ${r.cap} slots · planned finish T+${Math.round(r.finish)}h${r.kind !== "beam" ? "" : r.gateOrder === "deps" ? " · dependency order" : " · blocks finish in order"}`;
+    return `<section class="panel" data-run="${i}">
+    <div class="panel-h"><h2>${esc(runs.length > 1 ? runLabel(r) : "Swimlane")}</h2><span class="muted">${note}</span>
+      <div class="seg clock"><button data-clock="plan" class="${actual ? "" : "on"}" title="Estimate-hours: the plan, colored by status now">Plan</button><button data-clock="actual" class="${actual ? "on" : ""}" title="Hours since the run started, from claimed to merged">Actual</button></div></div>
     <div class="tl-scroll"></div>
-    <div class="tl-foot"><span>Estimate-hours on a continuous clock. A bar ends at its merge; the slot is reused at once. Bars are the plan; color is the ticket's status now.</span><span>Slots are interchangeable: the parent gives a ready ticket the next free agent.</span></div></section>`).join("");
-  runs.forEach((r, i) => drawTimeline(r, $(`[data-run="${i}"] .tl-scroll`, view), wide));
+    <div class="tl-foot">${actual
+      ? "<span>Hours since the run started. A bar runs from claim (or PR opened) to merge; an open ticket runs to now. Gate lines are drawn at greenAt.</span><span>Rows are agents in use at the same time, not agent ids.</span>"
+      : "<span>Estimate-hours on a continuous clock. A bar ends at its merge; the slot is reused at once. Bars are the plan; color is the ticket's status now.</span><span>Slots are interchangeable: the parent gives a ready ticket the next free agent.</span>"}</div></section>`;
+  }).join("");
+  runs.forEach((r, i) => drawTimeline(r, r._layout, $(`[data-run="${i}"] .tl-scroll`, view), wide));
 }
 
-function drawTimeline(run, host, wide) {
+// The planned picture (see plan()).
+function layoutPlan(run) {
+  const gates = gateKeys(run).filter((k) => run.gateAt.has(k)).map((k) => ({ k, at: run.gateAt.get(k), g: run.gates.find((x) => x.key === k) }));
+  return { prefix: "T+", label: "Slot", rows: Math.max(1, run.slots), span: run.finish, now: null, unstarted: 0,
+    items: run.tickets.map((t) => ({ t, row: t.slot, s: t.start, e: t.start + t.hours, sz: true })), gates };
+}
+
+// What happened: hours since the run started, one bar per started ticket, packed into rows.
+function layoutActual(run) {
+  // the first moment work started: a status event into claimed…merging, merged or done
+  const firstEvent = (t) => { const ts = t.events.filter((e) => e.type === "status" && (ACTIVE_ST.has(e.to) || e.to === "merged" || e.to === "done")).map((e) => parseTime(e.at)).filter(Boolean); return ts.length ? Math.min(...ts) : null; };
+  const startOf = (t) => parseTime(t.claimedAt) || parseTime(t.pr.openedAt) || (t.cat !== "todo" ? firstEvent(t) : null);
+  const endNow = run.runEndedAt || (run.runState === "running" && !run.paused ? Date.now() : run.updated || Date.now());
+  const raw = run.tickets.map((t) => {
+    const s0 = startOf(t);
+    if (!s0) return null;
+    let e0 = parseTime(t.pr.mergedAt) || (TERMINAL.has(t.status) ? parseTime(t.updatedAt) : null) || endNow;
+    if (e0 < s0) e0 = s0;
+    return { t, s0, e0 };
+  }).filter(Boolean);
+  const base = run.runStartedAt || (raw.length ? Math.min(...raw.map((x) => x.s0)) : Date.now());
+  const H = (ms) => Math.max(0, (ms - base) / 3600000);
+  raw.sort((a, b) => a.s0 - b.s0 || natCmp(a.t.id, b.t.id));
+  const free = [];
+  const items = raw.map((x) => {
+    const s = H(x.s0), e = Math.max(H(x.e0), s + 0.05);
+    let row = free.findIndex((f) => f <= s + 1e-9);
+    if (row < 0) { row = free.length; free.push(e); } else free[row] = e;
+    return { t: x.t, row, s, e, sz: false };
+  });
+  const gates = run.gates.filter((g) => g.greenAt).map((g) => ({ k: g.key, at: H(g.greenAt), g }));
+  const now = run.runEndedAt ? null : H(endNow);
+  const span = Math.max(1, now || 0, ...items.map((i) => i.e), ...gates.map((g) => g.at));
+  return { prefix: "+", label: "Agent", rows: Math.max(1, free.length), span, now, unstarted: run.tickets.length - items.length, items, gates };
+}
+
+function drawTimeline(run, lay, host, wide) {
   const lab = window.matchMedia("(max-width:640px)").matches ? 54 : 76;
-  const span = Math.max(1, Math.ceil(run.finish / 5) * 5);
+  const span = Math.max(1, Math.ceil(lay.span / 5) * 5);
   const fit = Math.max(wide < 700 ? 7 : 2, (wide - lab - 24) / span);
   const pph = S.printing ? Math.max(1, (S.printWidth - lab) / span) : fit * Math.pow(6, S.zoom / 100);
   const W = Math.ceil(span * pph) + 16;
-  const step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find((s) => s * pph >= 56) || 500;
+  const step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find((x) => x * pph >= 56) || 500;
   const ticks = [];
   for (let h = 0; h <= span; h += step) ticks.push(h);
-  const gates = gateKeys(run).filter((k) => run.gateAt.has(k)).map((k) => ({ k, at: run.gateAt.get(k), g: run.gates.find((x) => x.key === k) }));
   // gates reached at the same moment share one label, like "G2 · G8"
   const groups = [];
-  gates.sort((a, b) => a.at - b.at).forEach((x) => { const last = groups[groups.length - 1]; if (last && Math.abs(last.at - x.at) * pph < 6) last.items.push(x); else groups.push({ at: x.at, items: [x] }); });
+  lay.gates.slice().sort((a, b) => a.at - b.at).forEach((x) => { const last = groups[groups.length - 1]; if (last && Math.abs(last.at - x.at) * pph < 6) last.items.push(x); else groups.push({ at: x.at, items: [x] }); });
   const gateCls = (items) => (items.some((x) => x.g.status === "red") ? "red" : items.every((x) => x.g.status === "green") ? "green" : "");
+  const gateTip = (x) => [`${x.k} ${x.g.name || ""} — ${x.g.status}`, x.g.greenAt ? "green " + new Date(x.g.greenAt).toISOString() : "", x.g.evidence || "", ...(x.g.checks || []).map((c) => "check: " + c)].filter(Boolean).join("\n");
   let html = `<div class="tl" style="width:${W + lab}px">`;
   html += `<div class="tl-head"><div class="tl-row gates"><div class="tl-lab"></div><div class="tl-track" style="width:${W}px">`;
   html += groups.map((gr, i) => {
@@ -918,25 +1033,61 @@ function drawTimeline(run, host, wide) {
     const name = gr.items.length === 1 ? gr.items[0].g.name || "" : "";
     const label = gr.items.map((x) => x.k).join(" · ");
     const lift = room < label.length * 7 + 8 && i % 2 ? "bottom:17px" : "";
-    return `<div class="gl ${gateCls(gr.items)}" style="left:${gr.at * pph}px;${lift}" title="${esc(gr.items.map((x) => `${x.k} ${x.g.name || ""} — ${x.g.status}`).join("\n"))}">${esc(label)}${name && !lift && room > name.length * 6 + 12 ? `<small>${esc(name)}</small>` : ""}</div>`;
+    return `<div class="gl ${gateCls(gr.items)}" style="left:${gr.at * pph}px;${lift}" title="${esc(gr.items.map(gateTip).join("\n\n"))}">${esc(label)}${name && !lift && room > name.length * 6 + 12 ? `<small>${esc(name)}</small>` : ""}</div>`;
   }).join("");
-  html += `</div></div><div class="tl-row tl-axis"><div class="tl-lab">T+</div><div class="tl-track" style="width:${W}px">${ticks.map((h) => `<span style="left:${h * pph}px">T+${h}</span>`).join("")}</div></div></div>`;
+  html += `</div></div><div class="tl-row tl-axis"><div class="tl-lab">${lay.prefix}</div><div class="tl-track" style="width:${W}px">${ticks.map((h) => `<span style="left:${h * pph}px">${lay.prefix}${h}</span>`).join("")}</div></div></div>`;
   html += `<div class="tl-body" style="position:relative">`;
-  html += `<div style="position:absolute;left:${lab}px;top:0;bottom:0;width:${W}px;pointer-events:none">${ticks.map((h) => `<i class="grid-v" style="left:${h * pph}px"></i>`).join("")}${groups.map((gr) => `<i class="gline ${gateCls(gr.items)}" style="left:${gr.at * pph}px"></i>`).join("")}</div>`;
-  for (let s = 0; s < Math.max(1, run.slots); s++) {
-    html += `<div class="tl-row"><div class="tl-lab">Slot ${s + 1}</div><div class="tl-track" style="width:${W}px">`;
-    for (const t of run.tickets.filter((x) => x.slot === s)) {
-      const w = Math.max(3, t.hours * pph - 2);
+  html += `<div style="position:absolute;left:${lab}px;top:0;bottom:0;width:${W}px;pointer-events:none">${ticks.map((h) => `<i class="grid-v" style="left:${h * pph}px"></i>`).join("")}${groups.map((gr) => `<i class="gline ${gateCls(gr.items)}" style="left:${gr.at * pph}px"></i>`).join("")}${lay.now != null ? `<i class="nowline" style="left:${lay.now * pph}px" title="now"></i>` : ""}</div>`;
+  for (let row = 0; row < lay.rows; row++) {
+    html += `<div class="tl-row"><div class="tl-lab">${lay.label} ${row + 1}</div><div class="tl-track" style="width:${W}px">`;
+    for (const it of lay.items.filter((x) => x.row === row)) {
+      const t = it.t;
+      const w = Math.max(3, (it.e - it.s) * pph - 2);
       const tiny = w < 70;
       const hit = matches(t, run);
       const flag = t.alarm ? "⚠" : t.pr.ci === "red" ? "✗" : "";
-      html += `<div class="bar c-${t.cat} ${t.critical ? "crit" : ""} ${tiny ? "tiny" : ""} ${hit ? (S.q ? "hit" : "") : "dim"}" style="left:${t.start * pph + 1}px;width:${w}px;--c:${barColor(t)}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}">
-        <div class="l1"><span class="id">${t.critical ? "★ " : ""}${esc(t.id)}</span><span class="sz">${esc(t.size || "")}·${fmtH(t.hours, 0)}</span></div><div class="tt">${esc(t.title)}</div>${flag ? `<span class="flag">${flag}</span>` : ""}</div>`;
+      const meta = it.sz ? `${esc(t.size || "")}·${fmtH(t.hours, 0)}` : `${fmtH(it.e - it.s)}`;
+      html += `<div class="bar c-${t.cat} ${t.critical ? "crit" : ""} ${tiny ? "tiny" : ""} ${hit ? (S.q ? "hit" : "") : "dim"}" style="left:${it.s * pph + 1}px;width:${w}px;--c:${barColor(t)}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}">
+        <div class="l1"><span class="id">${t.critical ? "★ " : ""}${esc(t.id)}</span><span class="sz">${meta}</span></div><div class="tt">${esc(t.title)}</div>${flag ? `<span class="flag">${flag}</span>` : ""}</div>`;
     }
     html += `</div></div>`;
   }
   html += `</div></div>`;
   host.innerHTML = html;
+}
+
+// ---- table ----------------------------------------------------------------------------------
+const COLS = [
+  { key: "id", label: "Ticket", val: (t) => natKey(t.id) },
+  { key: "status", label: "Status", val: (t) => CATS.findIndex((c) => c.key === t.cat) * 100 + Object.keys(STATUS_CAT).indexOf(t.status) },
+  { key: "title", label: "Summary", val: (t) => t.title.toLowerCase() },
+  { key: "size", label: "Size", val: (t) => ["S", "M", "L", "XL"].indexOf(t.size) },
+  { key: "block", label: "Block", val: (t) => natKey(t.block || "") },
+  { key: "hours", label: "Est", val: (t) => t.hours },
+  { key: "start", label: "Plan", val: (t) => t.start },
+  { key: "minutes", label: "Spent", val: (t) => t.minutes },
+  { key: "opened", label: "Opened", val: (t) => parseTime(t.pr.openedAt) || 0 },
+  { key: "reviewed", label: "Reviewed", val: (t) => parseTime(t.pr.reviewedAt) || 0 },
+  { key: "approved", label: "Approved", val: (t) => parseTime(t.pr.approvedAt) || 0 },
+  { key: "merged", label: "Merged", val: (t) => parseTime(t.pr.mergedAt) || 0 },
+  { key: "links", label: "Links", val: (t) => (t.pr.url ? 1 : 0) + (t.jiraKey ? 1 : 0) },
+];
+function renderTable(runs) {
+  const rows = runs.flatMap((run) => run.tickets.map((t) => ({ t, run })));
+  const col = COLS.find((c) => c.key === S.sort.key) || COLS[0];
+  rows.sort((a, b) => { const x = col.val(a.t), y = col.val(b.t); return (x < y ? -1 : x > y ? 1 : natCmp(a.t.id, b.t.id)) * S.sort.dir; });
+  const ts = (v) => (v ? `<span title="${esc(v)}">${esc(stamp(parseTime(v)))}</span>` : "—");
+  const body = rows.map(({ t, run }) => {
+    const ju = jiraUrl(run, t.jiraKey);
+    return `<tr class="trow ${matches(t, run) ? "" : "dim"}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}" tabindex="0">
+      <td class="mono"><b>${t.critical ? "★ " : ""}${esc(t.id)}</b>${runs.length > 1 ? ` <span class="tlnote">${esc(runLabel(run))}</span>` : ""}</td>
+      <td><span class="chipst" style="--c:${catColor(t.cat)}">${esc(statusText(t))}</span></td>
+      <td class="t" title="${esc(t.title)}">${esc(t.title)}</td><td>${esc(t.size || "—")}</td><td>${esc(t.block || "—")}</td>
+      <td>${fmtH(t.hours, 0)}</td><td>T+${Math.round(t.start)}</td><td>${t.minutes ? fmtH(t.minutes / 60) : "—"}</td>
+      <td>${ts(t.pr.openedAt)}</td><td>${ts(t.pr.reviewedAt)}</td><td>${ts(t.pr.approvedAt)}</td><td>${ts(t.pr.mergedAt)}</td>
+      <td>${t.pr.url ? `<a href="${esc(t.pr.url)}" target="_blank" rel="noopener">${esc(prLabel(t.pr.url))}</a> ` : ""}${t.jiraKey ? (ju ? `<a href="${esc(ju)}" target="_blank" rel="noopener">${esc(t.jiraKey)}</a>` : esc(t.jiraKey)) : ""}</td></tr>`;
+  }).join("");
+  $("#view").innerHTML = `<section class="panel"><div class="tbl-wrap"><table class="grid"><thead><tr>${COLS.map((c) => `<th data-sort="${c.key}" tabindex="0" ${c.key === col.key ? `aria-sort="${S.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
 function groupKeyOf(t, run) {
@@ -984,7 +1135,7 @@ function renderBoard(runs) {
     return `<section class="panel lane ${closed ? "closed" : ""}" data-lane="${esc(lane.id)}">
       <div class="lane-h" role="button" tabindex="0" aria-expanded="${!closed}"><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
         <h2>${S.groupBy === "status" ? `<i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:${catColor(lane.key)}"></i>` : ""}${esc(title)} ${lane.gate && lane.gate.name ? `<span class="gname">${esc(lane.gate.name)}</span>` : ""}</h2>
-        ${lane.gate ? `<span class="pill ${pillCls}">gate ${esc(lane.gate.status)}</span>` : ""}${cleared && S.groupBy === "block" ? '<span class="pill green">cleared</span>' : ""}
+        ${lane.gate ? `<span class="pill ${pillCls}" title="${esc([lane.gate.greenAt ? "green " + new Date(lane.gate.greenAt).toISOString() : "", lane.gate.evidence || "", ...lane.gate.checks.map((c) => "check: " + c), lane.gate.ifRed ? "if red: " + lane.gate.ifRed : ""].filter(Boolean).join("\n"))}">gate ${esc(lane.gate.status)}${lane.gate.greenAt ? " · " + esc(stamp(lane.gate.greenAt)) : ""}</span>` : ""}${cleared && S.groupBy === "block" ? '<span class="pill green">cleared</span>' : ""}
         <span class="stat"><span>${doneN}/${total} done</span><span>${fmtH(hours)} agent</span>${visible !== total ? `<span>${visible} shown</span>` : ""}${stackBar(values, total)}</span></div>
       <div class="lane-b">${items.map(({ t, run }) => card(t, run)).join("") || '<div class="empty-lane">Nothing here.</div>'}</div></section>`;
   }).join("");
@@ -1039,11 +1190,13 @@ function openDrawer(runId, id) {
   ];
   if (t.alarm) kv.splice(1, 0, ["Alarm", `<b style="color:var(--c-err)">${esc(t.alarm)}</b>`]);
   if (t.stateNote) kv.push(["Note", esc(t.stateNote)]);
+  const marks = [["Claimed", t.claimedAt], ["PR opened", t.pr.openedAt], ["Reviewed", t.pr.reviewedAt], ["Approved", t.pr.approvedAt], ["Merged", t.pr.mergedAt], ["Jira last comment", t.jiraCommentAt], ["Updated", t.updatedAt]];
   const ev = t.events.slice(-25).reverse();
   const dr = $("#drawer");
   dr.style.setProperty("--c", catColor(t.cat));
   dr.innerHTML = `<div class="drawer-h"><div class="id">${t.critical ? "★ " : ""}${esc(t.id)}</div><div class="tt">${esc(t.title)}</div><button class="btn icon x" id="drawerClose" aria-label="Close">✕</button></div>
     <div class="drawer-b"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    <h4>Timestamps</h4><dl class="kv">${marks.map(([k, v]) => `<dt>${k}</dt><dd>${v ? esc(stamp(parseTime(v))) + ` <span style="color:var(--muted)">${esc(v)}</span>` : "—"}</dd>`).join("")}</dl>
     ${t.deps.length ? `<h4>Depends on</h4><div class="tags">${t.deps.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
     ${t.locks.length ? `<h4>Locks</h4><div class="tags">${t.locks.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
     ${ev.length ? `<h4>Events</h4><div class="ev">${ev.map((e) => `<span class="t">${esc(stamp(parseTime(e.at)))}</span><span>${esc(e.type || "")}${e.from || e.to ? ` ${esc(e.from || "")} → ${esc(e.to || "")}` : ""}${e.detail ? " · " + esc(e.detail) : ""}</span>`).join("")}</div>` : ""}</div>`;
@@ -1206,11 +1359,15 @@ document.addEventListener("click", (e) => {
   if (chip) { const c = chip.dataset.cat; S.off.has(c) ? S.off.delete(c) : S.off.add(c); render(); return; }
   const tab = e.target.closest(".tab");
   if (tab) { S.tab = tab.dataset.tab; render(); return; }
+  const ck = e.target.closest("[data-clock]");
+  if (ck) { S.clock = ck.dataset.clock; store("clock", S.clock); renderTimeline(currentRuns()); return; }
+  const th = e.target.closest("th[data-sort]");
+  if (th) { const k = th.dataset.sort; S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : 1 }; renderTable(currentRuns()); return; }
   const v = e.target.closest("#viewSeg button");
   if (v) { S.view = v.dataset.view; store("view", S.view); render(); return; }
   const lh = e.target.closest(".lane-h");
   if (lh) { const lane = lh.parentElement; const id = lane.dataset.lane; const closed = lane.classList.toggle("closed"); S.closed.delete(id); S.closed.delete("!" + id); S.closed.add(closed ? id : "!" + id); lh.setAttribute("aria-expanded", !closed); return; }
-  const tk = e.target.closest(".bar, .tcard");
+  const tk = e.target.closest(".bar, .tcard, .trow");
   if (tk && !e.target.closest("a")) { openDrawer(tk.dataset.run, tk.dataset.id); return; }
 });
 document.addEventListener("dblclick", (e) => {
@@ -1220,7 +1377,7 @@ document.addEventListener("dblclick", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeDrawer(); $("#fileMenu").classList.remove("open"); return; }
   const typing = /input|select|textarea/i.test((e.target.tagName || "")) ;
-  if ((e.key === "Enter" || e.key === " ") && e.target.matches(".tcard, .lane-h")) { e.preventDefault(); e.target.click(); return; }
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches(".tcard, .lane-h, .trow, th[data-sort]")) { e.preventDefault(); e.target.click(); return; }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
   else if (e.key === "o") openFiles();
@@ -1252,8 +1409,8 @@ window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; docu
 let resizeT;
 window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (S.runs.length && S.view === "timeline") renderTimeline(currentRuns()); }, 120); });
 // Print the swimlane at page width.
-window.addEventListener("beforeprint", () => { if (S.view === "timeline" && S.runs.length) { S.printing = true; S.printWidth = 1020; renderTimeline(currentRuns()); } });
-window.addEventListener("afterprint", () => { if (S.printing) { S.printing = false; renderTimeline(currentRuns()); } });
+window.addEventListener("beforeprint", () => { const u = $("#util"); S.utilWasOpen = u.open; S.noStore = true; u.open = true; if (S.view === "timeline" && S.runs.length) { S.printing = true; S.printWidth = 1020; renderTimeline(currentRuns()); } });
+window.addEventListener("afterprint", () => { $("#util").open = !!S.utilWasOpen; setTimeout(() => (S.noStore = false), 0); if (S.printing) { S.printing = false; renderTimeline(currentRuns()); } });
 
 (function init() {
   const theme = store("theme");
@@ -1266,6 +1423,8 @@ window.addEventListener("afterprint", () => { if (S.printing) { S.printing = fal
     load([{ kind: "embedded", docs }], true).then(() => { $("#generated").textContent = "Written by /warp-dashboard " + stamp(parseTime(embedded.generatedAt)); });
   }
   if (store("auto") === "1") setAuto(true);
+  $("#util").open = store("util") === "1";
+  $("#util").addEventListener("toggle", () => { if (!S.noStore) store("util", $("#util").open ? "1" : ""); });
   render();
 })();
 </script>

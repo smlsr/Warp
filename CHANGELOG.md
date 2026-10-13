@@ -6,7 +6,12 @@
 - A swimlane like the plan's swimlane PDF: agent slots on an estimate-hour clock, gates where they are reached, the critical chain outlined. Bars are colored by status now: Completed, Errored / Parked, In Progress, In Review, QA Ready, To Do. Every Warp status maps to one of the six. A board view groups cards by gate block, status, module, or size, with the pull request and Jira links.
 - Header totals for run estimate, agent hours, people hours, and tickets, each split into completed, in progress, errored or parked, and to do. They come from the beam's estimate fields and the scan's own rules (S=4, M=7, L=11, XL=16 agent hours unless the ticket has hours; 0.5h per approval and per gate). A missing value shows `—`.
 - `dashboard.py write` writes `.warp/dashboard.html` with the run's files embedded. Once that file exists, each status write rewrites it. State commits do not include it.
+- A Table view: status, plan start, time spent and the four pull request timestamps (opened, reviewed, approved, merged), sortable on any column. The drawer lists claimed, PR opened, reviewed, approved, merged, Jira last comment, and updated; a missing time is `—`.
+- The swimlane has two clocks: Plan (estimate-hours, the slot simulation) and Actual (hours since the run started, from claim to merge, with a now line and gates at greenAt).
+- A Utilization panel: active agents over maxAgents, hours spent over the estimate, tokens and minutes by size and by agent. The run estimate card lists the estimate's assumptions. Gate pills show greenAt, evidence, checks and if-red.
+- A Warp export (`/warp-export`, kind warp-plan) opens like a beam.
 - Status filters, search, light and dark themes, and printing.
+- `/warp-scan` reads schedule.json in build-schedule/2 (the shared FORGEQA/HOS format): `h` is the ticket's hours, `critical_chain` the critical path, `if_red` the gate's if-red text, and `gate: ""` means no gate. `after` was already read as blockers; `run:id` entries are cross-run blockers.
 - `examples/beam.sample.json`, a sample beam.
 
 ## 1.6.0

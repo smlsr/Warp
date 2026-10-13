@@ -383,7 +383,7 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
                 "blocking": bool(g.get("blocking", True)),
                 "members": list(g.get("members") or []),
                 "checks": list(g.get("checks") or []),
-                "ifRed": g.get("ifRed"),
+                "ifRed": g.get("ifRed") or g.get("if_red"),
                 "status": "pending",
                 "evidence": None,
                 "greenAt": None,
