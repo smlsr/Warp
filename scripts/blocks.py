@@ -63,14 +63,26 @@ def is_range(text: str) -> bool:
 
 
 def keys(beam: dict) -> list:
-    """Gate keys in run order: G0, G1, G2 by number, then any other key in plan order."""
-    found = [str(g.get("key")) for g in beam.get("gates") or [] if isinstance(g, dict) and g.get("key")]
+    """Gate keys in run order.
+
+    When every gate carries `at` (build-schedule/2: the hour it is reached in the plan), that order,
+    so a named gate such as G-RBAC sits where the plan reaches it. Otherwise G0, G1, G2 by number,
+    then any other key in plan order.
+    """
+    rows = [g for g in beam.get("gates") or [] if isinstance(g, dict) and g.get("key")]
+    found = [str(g.get("key")) for g in rows]
+    ats = [g.get("at") for g in rows]
+    if rows and all(isinstance(a, (int, float)) and not isinstance(a, bool) for a in ats):
+        idx = {k: i for i, k in enumerate(found)}
+        num = lambda k: int(GATE_RE.match(k).group(1)) if GATE_RE.match(k) else 10**6
+        return [k for _, k in sorted(zip(ats, found), key=lambda p: (p[0], num(p[1]), idx[p[1]]))]
     numbered = sorted((k for k in found if GATE_RE.match(k)), key=lambda k: int(GATE_RE.match(k).group(1)))
     return numbered + [k for k in found if not GATE_RE.match(k)]
 
 
 def order_mode(beam: dict) -> str:
-    raw = beam.get("gateOrder") or (beam.get("config") or {}).get("gateOrder") or "strict"
+    """beam gateOrder, else config gateOrder, else the schedule's (build-schedule/2: deps), else strict."""
+    raw = beam.get("gateOrder") or (beam.get("config") or {}).get("gateOrder") or (beam.get("program") or {}).get("gateOrder") or "strict"
     text = str(raw).strip().lower()
     return text if text in ORDERS else "strict"
 
@@ -232,6 +244,10 @@ def resolve(beam: dict, text: str) -> tuple:
     if not spec or spec == "-":
         return None, None
     match = RANGE_RE.match(spec)
+    if not (match and re.search(r"\d", spec)):
+        named = _named_range(beam, spec)
+        if named is not None:
+            return named
     if not match or not re.search(r"\d", spec):
         return None, "refuse: %r is not a gate range. Use G0-, G0-G3, -G2, or G5." % spec
     order = keys(beam)
@@ -259,6 +275,37 @@ def resolve(beam: dict, text: str) -> tuple:
         return None, "refuse: %s through %s is already cleared. Pick a later range." % (lo_key, order[hi])
     shown = lo_key if not sep else "%s-%s" % (a is not None and lo_key or "", b is not None and hi_key or "")
     return {"spec": shown, "from": lo_key, "to": hi_key, "setAt": utcnow()}, None
+
+
+def _named_range(beam: dict, spec: str):
+    """A gate named outright (G-RBAC) or two named with `..` (G0..G-RBAC). None when it is not that form."""
+    order = keys(beam)
+    lower = {k.casefold(): k for k in order}
+    if spec.casefold() in lower:
+        lo_key = hi_key = lower[spec.casefold()]
+    elif ".." in spec:
+        a, _, b = spec.partition("..")
+        a, b = a.strip(), b.strip()
+        if (a and a.casefold() not in lower) or (b and b.casefold() not in lower) or not (a or b):
+            return None
+        lo_key = lower[a.casefold()] if a else None
+        hi_key = lower[b.casefold()] if b else None
+        if lo_key is None:
+            rows = states(beam)
+            first = next((i for i, row in enumerate(rows) if not row["cleared"]), None)
+            if first is None:
+                return None, "refuse: every block is already cleared."
+            lo_key = order[first]
+    else:
+        return None
+    lo = order.index(lo_key)
+    hi = order.index(hi_key) if hi_key else len(order) - 1
+    if lo > hi:
+        return None, "refuse: %s comes after %s. A range runs forward." % (lo_key, hi_key)
+    rows = states(beam)
+    if all(rows[i]["cleared"] for i in range(lo, hi + 1)):
+        return None, "refuse: %s through %s is already cleared. Pick a later range." % (lo_key, order[hi])
+    return {"spec": spec, "from": lo_key, "to": hi_key, "setAt": utcnow()}, None
 
 
 def apply(beam: dict, text: str) -> tuple:

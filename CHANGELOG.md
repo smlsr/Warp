@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.2
+
+- `/warp-scan` reads the full build-schedule/2 schedule.json (the HOS-Admin shape): `priority_gate`, `checks` (`[{name, check, wave}]`), `repo`, `lane`, `file`, `screens`, `mock`, and the planned `slot`, `start`, `merge`, `ready` and `latest_start` are kept on each ticket. Gates keep `scope`, `on_green`, `priority`, `starts`, `siblings` and `at`. `python3 scripts/buildsched.py show <schedule.json> [--repo <name>]` prints what Warp will read.
+- Gates in a build-schedule/2 schedule are milestones, as the file says ("nothing waits for a gate to be reached"): gate order is `deps`, a pending gate holds nothing, a red blocking gate stops every ticket outside it, and a red non-blocking gate stops the tickets that need its members. `model.gate_order: "strict"` in the schedule, or `gateOrder: strict` in the config, keeps Warp's block order.
+- Gates are ordered by `at` when every gate has one, so a named gate such as `G-RBAC` sits between G0 and G1. Ranges take a named gate: `/warp-start G-RBAC`, `/warp-start G0..G-RBAC`.
+- Priority gates: tickets with `priority_gate` are dispatched after the critical chain and before rank, as `model.priority` says.
+- A gate that turns green prints its `on_green` command for the parent to run and report, and the programs it `starts`.
+- Several repos. A schedule whose `repos` lists more than one is split by repo: the run keeps this checkout's tickets (config `repo`, else origin's name), locks lose their `<repo>/` prefix, and a blocker in the other repo becomes `<run>:<id>` (config `repoRuns`, else the repo name in lowercase). Config `externalRepos` names where another run's repo is (git URL or local path, optional `#branch`); Warp fetches its base branch and reads that run's published beam.
+- Dashboard: a build-schedule/2 schedule.json opens as a plan and is drawn as written (planned slots, starts and merges); a scanned beam from one keeps that picture too. Gates are placed by `at`. Lanes by Lane or Repo, color by Lane. The drawer shows lane and repo, priority gate, the planned times and the checks run at merge; gate pills show scope, priority, starts and on green.
+
 ## 1.6.1
 
 - `/warp-dashboard` and `assets/warp-dashboard.html`. One HTML file, no install, no server. It opens from disk and reads `beam.json`, `status.json`, ticket `state.json` files, or a whole `.warp` folder through File > Open or drag and drop, and several named runs side by side. Files are classified by content, not by name. Reload re-reads the same files (Chrome and Edge), and auto-reload runs every 30 seconds.

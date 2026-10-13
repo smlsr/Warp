@@ -144,6 +144,7 @@ With `gateOrder: strict` (the default), a ticket in block G3 does not start unti
 | `/warp-start G0-G3` | G0 through G3 |
 | `/warp-start -G2` | From the first block not cleared (where the last run left off) through G2 |
 | `/warp-start G5` | G5 only. The blocks before it are not waited for, though a ticket still needs its dependencies merged |
+| `/warp-start G-RBAC`, `/warp-start G0..G-RBAC` | A named gate, alone or as the end of a range (`..` because the name has a dash). Blocks follow the gates' `at` when every gate has one |
 
 Start prints `range: G0 through G3 (G0-G3).` and `blocks: G0 cleared, G1 3/8, G2 0/6, G3 0/4.`, then a `hold:` line for each reason tickets are held back (`hold: 6 tickets, G2 waits on G1`). When the last block in the range is cleared the run pauses by itself and prints one line per block with tickets merged, minutes, tokens, and cost, then the next block and the command that continues. A start with no range goes on from there. In Slack: `warp:start G2-G3`. `python3 scripts/blocks.py show --beam .warp/beam.json` prints the blocks at any time.
 

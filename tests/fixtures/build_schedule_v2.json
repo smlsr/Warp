@@ -1,0 +1,407 @@
+{
+ "schema": "build-schedule/2",
+ "program": "Demo-Admin",
+ "rebuilt": "2026-10-13",
+ "source": {
+  "from": "tests",
+  "generated": "2026-10-13",
+  "tool": "tests"
+ },
+ "model": {
+  "orchestrators": 1,
+  "slots": 18,
+  "merge": "continuous",
+  "clock": "estimate hours",
+  "priority": "critical chain first, then priority gates, then rank"
+ },
+ "numbers": {
+  "tickets": 6,
+  "waves": 4,
+  "agent_hours": 37,
+  "finish_h": 29.0,
+  "critical_path_h": 29,
+  "critical_tickets": 4,
+  "peak": 3,
+  "utilisation": 0.1,
+  "hours_at_cap": 0,
+  "delayed_by_cap": 0,
+  "steps": 5,
+  "max_queue": 0,
+  "finish_by_slots": {
+   "18": 29.0
+  },
+  "lock_pairs": 0,
+  "old_plan": null
+ },
+ "critical_chain": [
+  "AR-00",
+  "AD-01",
+  "AU-01",
+  "AD-04"
+ ],
+ "lanes": [
+  "1 ADMIN backend",
+  "2 ADMIN UI"
+ ],
+ "repos": [
+  "Core",
+  "Core-UI"
+ ],
+ "gates": [
+  {
+   "key": "G0",
+   "name": "Ready",
+   "blocking": true,
+   "scope": "everyone",
+   "members": [
+    "AR-00"
+   ],
+   "behind": 1,
+   "at": 11.0,
+   "closes_with": [
+    "AR-00"
+   ],
+   "checks": [
+    "make ready"
+   ],
+   "if_red": "Nobody starts.",
+   "on_green": "make gate-close GATE=G0",
+   "sibling": null,
+   "siblings": [],
+   "priority": false,
+   "starts": [],
+   "old_reached": null
+  },
+  {
+   "key": "G-RBAC",
+   "name": "Roles live",
+   "blocking": false,
+   "scope": "UI program start",
+   "members": [
+    "AD-02"
+   ],
+   "behind": 2,
+   "at": 15.0,
+   "closes_with": [
+    "AD-02"
+   ],
+   "checks": [
+    "make rbac-ready"
+   ],
+   "if_red": "Only the UI program waits.",
+   "on_green": "make gate-close GATE=G-RBAC",
+   "sibling": {
+    "program": "Demo-UI"
+   },
+   "siblings": [
+    {
+     "program": "Demo-UI"
+    }
+   ],
+   "priority": true,
+   "starts": [
+    "Demo-UI"
+   ],
+   "old_reached": null
+  },
+  {
+   "key": "G1",
+   "name": "Server + login",
+   "blocking": true,
+   "scope": "everyone",
+   "members": [
+    "AD-03",
+    "AU-01"
+   ],
+   "behind": 4,
+   "at": 25.0,
+   "closes_with": [
+    "AU-01"
+   ],
+   "checks": [
+    "make e2e"
+   ],
+   "if_red": "Everyone stops.",
+   "on_green": null,
+   "sibling": null,
+   "siblings": [],
+   "priority": false,
+   "starts": [],
+   "old_reached": null
+  },
+  {
+   "key": "G2",
+   "name": "Org",
+   "blocking": false,
+   "scope": "Org lanes",
+   "members": [
+    "AD-04"
+   ],
+   "behind": 5,
+   "at": 29.0,
+   "closes_with": [
+    "AD-04"
+   ],
+   "checks": [
+    "org flow"
+   ],
+   "if_red": "Only Org stops.",
+   "on_green": null,
+   "sibling": null,
+   "siblings": [],
+   "priority": false,
+   "starts": [],
+   "old_reached": null
+  }
+ ],
+ "lock_pairs": [],
+ "tickets": [
+  {
+   "id": "AR-00",
+   "summary": "ticket AR-00",
+   "module": "ADMIN",
+   "layer": "backend",
+   "lane": "1 ADMIN backend",
+   "wave": 0,
+   "repo": "Core",
+   "file": "/PACK/tickets.json",
+   "size": "L",
+   "h": 11,
+   "rank": 1,
+   "latest_start": 0.0,
+   "critical": true,
+   "priority_gate": "G-RBAC",
+   "slot": 1,
+   "start": 0.0,
+   "merge": 11.0,
+   "ready": 0.0,
+   "waited": 0.0,
+   "why": "no blockers",
+   "after": [],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "G0",
+   "first_gate": "G0",
+   "checks": [
+    {
+     "name": "ready (G0)",
+     "check": "make ready",
+     "wave": 0
+    }
+   ],
+   "locks": [
+    "Core/scripts/ready.sh",
+    "Core/apps/admin/tools/ready"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  },
+  {
+   "id": "AD-01",
+   "summary": "ticket AD-01",
+   "module": "ADMIN",
+   "layer": "backend",
+   "lane": "1 ADMIN backend",
+   "wave": 0,
+   "repo": "Core",
+   "file": "/PACK/tickets.json",
+   "size": "M",
+   "h": 7,
+   "rank": 2,
+   "latest_start": 11.0,
+   "critical": true,
+   "priority_gate": "G-RBAC",
+   "slot": 1,
+   "start": 11.0,
+   "merge": 18.0,
+   "ready": 11.0,
+   "waited": 0.0,
+   "why": "unblocked by AR-00",
+   "after": [
+    "AR-00"
+   ],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "",
+   "first_gate": "",
+   "checks": [],
+   "locks": [
+    "Core/apps/ad-01"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  },
+  {
+   "id": "AD-02",
+   "summary": "ticket AD-02",
+   "module": "ADMIN",
+   "layer": "backend",
+   "lane": "1 ADMIN backend",
+   "wave": 0,
+   "repo": "Core",
+   "file": "/PACK/tickets.json",
+   "size": "S",
+   "h": 4,
+   "rank": 3,
+   "latest_start": 11.0,
+   "critical": false,
+   "priority_gate": "G-RBAC",
+   "slot": 2,
+   "start": 11.0,
+   "merge": 15.0,
+   "ready": 11.0,
+   "waited": 0.0,
+   "why": "unblocked by AR-00",
+   "after": [
+    "AR-00"
+   ],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "G-RBAC",
+   "first_gate": "G-RBAC",
+   "checks": [],
+   "locks": [
+    "Core/apps/ad-02"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  },
+  {
+   "id": "AD-03",
+   "summary": "ticket AD-03",
+   "module": "ADMIN",
+   "layer": "backend",
+   "lane": "1 ADMIN backend",
+   "wave": 0,
+   "repo": "Core",
+   "file": "/PACK/tickets.json",
+   "size": "S",
+   "h": 4,
+   "rank": 4,
+   "latest_start": 11.0,
+   "critical": false,
+   "priority_gate": "",
+   "slot": 3,
+   "start": 11.0,
+   "merge": 15.0,
+   "ready": 11.0,
+   "waited": 0.0,
+   "why": "unblocked by AR-00",
+   "after": [
+    "AR-00"
+   ],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "G1",
+   "first_gate": "G1",
+   "checks": [],
+   "locks": [
+    "Core/apps/ad-03"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  },
+  {
+   "id": "AU-01",
+   "summary": "ticket AU-01",
+   "module": "ADMIN",
+   "layer": "ui",
+   "lane": "2 ADMIN UI",
+   "wave": 0,
+   "repo": "Core-UI",
+   "file": "/PACK/tickets.json",
+   "size": "M",
+   "h": 7,
+   "rank": 5,
+   "latest_start": 18.0,
+   "critical": true,
+   "priority_gate": "",
+   "slot": 1,
+   "start": 18.0,
+   "merge": 25.0,
+   "ready": 18.0,
+   "waited": 0.0,
+   "why": "unblocked by AD-01",
+   "after": [
+    "AD-01"
+   ],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "G1",
+   "first_gate": "G1",
+   "checks": [],
+   "locks": [
+    "Core-UI/apps/au-01"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  },
+  {
+   "id": "AD-04",
+   "summary": "ticket AD-04",
+   "module": "ADMIN",
+   "layer": "backend",
+   "lane": "1 ADMIN backend",
+   "wave": 0,
+   "repo": "Core",
+   "file": "/PACK/tickets.json",
+   "size": "S",
+   "h": 4,
+   "rank": 6,
+   "latest_start": 25.0,
+   "critical": true,
+   "priority_gate": "",
+   "slot": 1,
+   "start": 25.0,
+   "merge": 29.0,
+   "ready": 25.0,
+   "waited": 0.0,
+   "why": "unblocked by AU-01",
+   "after": [
+    "AU-01"
+   ],
+   "after_other_modules": [],
+   "unlocks": [],
+   "gate": "G2",
+   "first_gate": "G2",
+   "checks": [],
+   "locks": [
+    "Core/apps/ad-04"
+   ],
+   "locks_more": 0,
+   "lock_pairs": [],
+   "screens": [],
+   "mock": null
+  }
+ ],
+ "steps": [
+  {
+   "n": 0,
+   "t": 0.0,
+   "merges": [],
+   "starts": [
+    "AR-00"
+   ],
+   "queued": [],
+   "held": {},
+   "running": [
+    "AR-00"
+   ],
+   "free": 17,
+   "gates": []
+  }
+ ],
+ "fields": {
+  "schema": "Format name and version."
+ }
+}

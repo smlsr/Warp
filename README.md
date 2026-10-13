@@ -514,7 +514,7 @@ Review files from the Cursor file tree. On a cloud VM, download them before the 
 ## If you have no plan file
 
 1. Paste `examples/PROMPT-make-cursor-plan.md` into an agent in that repo. It writes `CURSOR_PLAN.md` from the specs and tickets. A filled example is `examples/CURSOR_PLAN.sample.md`.
-2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json` (Warp's own shape or build-schedule/2, the shared FORGEQA/HOS format: `h` hours, `after` blockers, `critical_chain`, gates with `if_red`), a Jira JSON export, or a markdown table with `id` and `deps`.
+2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json` (Warp's own shape or build-schedule/2, the shared FORGEQA/HOS format: `h` hours, `after` blockers, `critical_chain`, gates with `if_red`; gates there are milestones, `priority_gate` tickets go right after the critical chain, and a schedule that spans several repos is split by repo, see [docs/RUNS.md](docs/RUNS.md)), a Jira JSON export, or a markdown table with `id` and `deps`.
 3. A connected Jira plugin is the live system of record after the scan, not a second scheduler. Warp will not invent tickets.
 
 ## Scan one folder
@@ -539,7 +539,7 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 
 ## Run in blocks
 
-A plan's work comes in gates: G0, G1, G2. With the default `gateOrder: strict`, a ticket in block G3 does not start until every block before it is cleared (every ticket merged, done, or skipped, and the gate not red), so a large project goes forward one manageable block at a time. `/warp-start` takes a range: `/warp-start G0-G3` runs G0 through G3, `G0-` runs G0 to the end, `-G2` runs from the first block that is not cleared through G2, and `G5` runs G5 alone. The run pauses when the range is cleared and prints each block (tickets merged, minutes, tokens, cost) and the next block. `/warp-start` with no range goes on to the end. Open tickets always finish. `gateOrder: deps` turns the strict order off. In Slack: `warp:start G2-G3`. Details: [docs/GUIDE.md](docs/GUIDE.md).
+A plan's work comes in gates: G0, G1, G2. With the default `gateOrder: strict`, a ticket in block G3 does not start until every block before it is cleared (every ticket merged, done, or skipped, and the gate not red), so a large project goes forward one manageable block at a time. `/warp-start` takes a range: `/warp-start G0-G3` runs G0 through G3, `G0-` runs G0 to the end, `-G2` runs from the first block that is not cleared through G2, and `G5` runs G5 alone. The run pauses when the range is cleared and prints each block (tickets merged, minutes, tokens, cost) and the next block. `/warp-start` with no range goes on to the end. Open tickets always finish. `gateOrder: deps` turns the strict order off; a build-schedule/2 schedule.json starts in that mode, since its gates are milestones, unless its `model.gate_order` is `strict`. Gates are ordered by `at` when they have one, and a named gate works in a range: `/warp-start G-RBAC`, `/warp-start G0..G-RBAC`. In Slack: `warp:start G2-G3`. Details: [docs/GUIDE.md](docs/GUIDE.md).
 
 ## Session
 
@@ -616,6 +616,8 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 - The swimlane's Actual clock draws what happened: hours since the run started, each ticket from claim to merge, gates at greenAt, and a now line.
 - Utilization (collapsed under the totals): active agents over maxAgents, hours spent over the estimate, tokens and minutes by size and by agent.
 - Click a bar or card for the detail: dependencies, locks, events, agent, tokens, and cost. Status chips filter, `/` searches, `R` reloads, auto-reload every 30 seconds is in the File menu, and the theme follows the system or the toggle. Printing fits the swimlane to a landscape page.
+
+- A build-schedule/2 `schedule.json` opens too, before any scan: the plan drawn as written (its slots, starts and merges), gates where `at` puts them, lanes by Lane or Repo, and each ticket's priority gate and merge checks in the drawer.
 
 `examples/beam.sample.json` is a sample beam to try it with.
 
