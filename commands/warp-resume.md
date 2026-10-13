@@ -24,9 +24,13 @@ It also puts every ticket in alarm back on a path that can finish, so no one has
 
 Parked tickets stay parked. `warp:retry` still works on them. `python3 <plugin>/scripts/heal.py --beam .warp/beam.json --dry-run` shows what a resume would do.
 
+It always publishes the config: `.warp/config.yaml` goes to the repo as `.warp/runs/<run>/config.yaml` (`.warp/config.published.yaml` when the run has no name), with the machine keys and secrets left out, and the line `config: published to <path> (machine keys and secrets left out)` says so. A setting you changed by hand reaches the repo here. `config: not published ...` says why not (not a git checkout, or the state push failed).
+
 It also prints `parent: session <id>`. Keep that id. You are now the parent of this run: the only agent that starts another agent, and the only agent that waits. An earlier parent, here or in another window, ends its turn when its `parent-exit --session` prints `parent: exit superseded`.
 
 Nothing from before a pause or a stop is resumed. `/warp-pause` and `/warp-stop` ended every agent. A ticket that had a Shuttle out prints `start <id> ... step=restart` and `fix: <id> resume after halt`: launch one new Shuttle on that ticket's surviving worktree and branch. It keeps the pull request, `jira.startedAt`, and locks. It is not a recovery and no one is told a worker died.
+
+The previous session's listener ended with that session. Resume closes its lease (`listener: generation <n> belonged to the previous session and ended with it.`), so the first `supervise` prints `listener: poll`: start it then.
 
 One listener for the beam, not one per awaiting_approval ticket, not one per Shuttle, not one per Reed. The listener is a Subagent of the parent. It shares this session and this checkout. It is not a separate Agent. Do not start a separate Agent for it. `subagentVm` does not apply. You do not claim it. When `orchestrator.py supervise` prints `listener: poll` and the prompt (`LISTEN`), start exactly one `warp-listen` Subagent in the background with those lines and do not wait for it. `listener: hold reason=live` and `listener: hold reason=await-return` mean do not start a second. `listener: idle` and `listener: none` mean do not start one. It does not merge.
 

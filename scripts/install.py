@@ -375,9 +375,22 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
             new = src.read_text()
             for key in CHANNEL_KEYS:
                 new = set_channel(new, key, channel)
+            published = root / ".warp" / "config.published.yaml"
+            restored = []
+            if published.is_file():
+                # A fresh checkout of a repo whose run already published its config: take
+                # those values. Machine keys were never published, so this machine's stay.
+                try:
+                    import runs
+
+                    new, restored, _skipped = runs.overlay_config(new, published.read_text())
+                except Exception:
+                    restored = []
             if not dry:
                 cfg.write_text(new)
             steps.append(("done", f"created .warp/config.yaml from example with channel {channel!r}"))
+            if restored:
+                steps.append(("done", "took %d keys from .warp/config.published.yaml (the config the run published)" % len(restored)))
 
     try:
         import provider

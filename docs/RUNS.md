@@ -75,7 +75,7 @@ Local files stay at `.warp/` on each machine, as before. The repo gets a mirror 
   tickets/<id>/state.json  log.jsonl
 ```
 
-A ticket's own folder travels on its ticket branch. The shared files (beam, journal, status, stats) are published by the parent to the base branch when a ticket merges, and at a checkpoint: when status or run state changes, or every `checkpointMinutes` (default 10). That keeps three runs from flooding the base branch. A run's branch names are `warp/<name>/<id>-<jira>` (`warp/<name>/<id>` when the ticket has no Jira key), so one run's branches never collide with another's.
+A ticket's own folder travels on its ticket branch. The shared files (beam, journal, status, stats, config) are published by the parent to the base branch when a ticket merges, on every `/warp-start` and `/warp-resume`, and at a checkpoint: when status or run state changes, when the published config changes (a hand edit of `.warp/config.yaml`, or Warp's own change such as `bugbotTrigger`), or every `checkpointMinutes` (default 10). That keeps three runs from flooding the base branch. A run's branch names are `warp/<name>/<id>-<jira>` (`warp/<name>/<id>` when the ticket has no Jira key), so one run's branches never collide with another's.
 
 Each process finds its run in this order: an explicit `--run <name>` (`/warp-start` and `/warp-resume`), then `WARP_RUN`, then `run:` in this checkout's config, then the beam's `run`, then a ticket branch named `warp/<name>/...`. A fresh VM with no config, such as a Shuttle on its own VM, finds it from `WARP_RUN`, the beam, or its branch.
 

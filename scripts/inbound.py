@@ -493,8 +493,29 @@ def begin_generation(data: dict, now_s: str, holder: str = LISTENER_ID) -> dict:
     raw["returnedAt"] = ""
     raw["awaitReturn"] = False
     raw["interval"] = "slow"
+    # The listener is a subagent of the parent session that started it. It ends with that session.
+    raw["session"] = str(data.get("parentSession") or "")
     data["listener"] = raw
     return raw
+
+
+def close_for_new_parent(data: dict, beam_path: Path, now_s: str) -> Optional[str]:
+    """A new parent session (start, resume, takeover): the previous session's listener ended with it.
+
+    Its lease is closed with an `orphaned` stamp, so the next supervise starts a new listener at
+    once instead of holding for one that is gone or waiting for a return stamp it will never write.
+    A lease a person holds with /warp-listen (`take`, another holder) is left alone.
+    Returns the line to print, or None when there was nothing to close.
+    """
+    raw = _raw(data)
+    holder = str(raw.get("holder") or "")
+    if holder and holder != LISTENER_ID:
+        return None
+    if not holder and (return_ready(data) or generation_of(data) == 0):
+        return None
+    gen = generation_of(data)
+    stamp_return(data, beam_path, "orphaned", now_s, holder=holder or LISTENER_ID)
+    return "listener: generation %s belonged to the previous session and ended with it. The next supervise starts a new listener." % gen
 
 
 def begin_poll(data: dict, now_s: str) -> dict:

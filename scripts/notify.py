@@ -175,7 +175,7 @@ def scan_message(root: Path, info: dict) -> dict:
         bullets.append(f"... {len(refs) - MAX_LINKS} more in .warp/scan.json")
     footer = (
         fmt.version_label()
-        + ". Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored."
+        + ". Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored; /warp-start publishes its copy."
     )
     if any(u for _, u in links):
         footer = f"Links point at branch {branch}; they work once it is pushed. " + footer
