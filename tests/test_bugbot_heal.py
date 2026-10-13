@@ -171,7 +171,7 @@ class BugbotTriggerTest(Repo):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertTrue(out.stdout.startswith("bugbot: recorded WV-01 pass on 579fb1873f14"), out.stdout)
         ticket = self.load()["tickets"]["WV-01"]
-        self.assertEqual((ticket["pr"]["bugbot"], ticket["pr"]["bugbotSource"]), ("pass", "manual"))
+        self.assertEqual((ticket["pr"]["bugbot"], ticket["pr"]["bugbotSource"]), ("pass", "hand"))
         pipeline._apply_snapshot(ticket, {"headSha": SHA, "bugbot": "", "findings": [], "rollup": "absent"})
         self.assertEqual(pipeline.bugbot_state(ticket), "pass")
         self.assertTrue(bugbot.answered(ticket))
@@ -299,6 +299,116 @@ class BugbotTriggerTest(Repo):
         saved = self.load()
         self.assertEqual(saved["config"]["bugbotTrigger"], "comment")
         self.assertEqual(saved["tickets"]["WV-01"]["pr"]["bugbotCommentPending"], SHA)
+
+
+SNAP = {"WV-01": {"headSha": SHA, "rollup": "absent", "checkCount": 0, "ciConfigured": False,
+                  "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}}
+
+
+class ShuttleReviewTest(Repo):
+    def setUp(self):
+        super().setUp()
+        self.config.write_text("bugbotRequired: true\nbugbotTrigger: shuttle\n")
+
+    def test_trigger_reads_shuttle(self):
+        self.assertEqual(bugbot.trigger(self.data([row()])), "shuttle")
+
+    def test_the_working_shuttle_is_told_to_review_its_own_diff(self):
+        ticket = row(shuttle={"step": "implement", "pending": True})
+        text = orchestrator.subagent_prompt(ticket, {"bugbotTrigger": "shuttle"}, "warp/WV-01", "/w/WV-01", "/repo")
+        self.assertIn("bugbotTrigger: shuttle. You run the Bugbot review.", text)
+        self.assertIn("ticket_state.py append --root /repo --id WV-01 --state review-pass|review-fail --sha <head sha>", text)
+        self.assertNotIn("REVIEW ONLY", text)
+        plain = orchestrator.subagent_prompt(ticket, {"bugbotTrigger": "auto"}, "warp/WV-01", "/w/WV-01", "/repo")
+        self.assertNotIn("review-pass", plain)
+        vm = orchestrator.subagent_vm_prompt(ticket, {"bugbotTrigger": "shuttle"}, "warp/WV-01")
+        self.assertIn("ticket_state.py append --push --id WV-01 --state review-pass|review-fail", vm)
+
+    def test_a_review_step_reviews_only(self):
+        ticket = row(shuttle={"step": "review", "pending": True})
+        text = orchestrator.subagent_prompt(ticket, {"bugbotTrigger": "shuttle"}, "warp/WV-01", "/w/WV-01", "/repo")
+        self.assertIn("REVIEW ONLY. bugbotTrigger: shuttle. Do not change code, commit, or push.", text)
+        self.assertIn("result: WV-01 ok review=pass|fail findings=<n>", text)
+
+    def test_a_review_line_in_the_ticket_folder_records_the_result(self):
+        ticket = row()
+        self.write([ticket])
+        lines, heralded = [], set()
+        event = {"state": "review-fail", "sha": SHA[:12], "findings": ["util.mjs:12 null deref"], "source": "shuttle",
+                 "at": "2026-10-13T20:00:00Z"}
+        self.assertTrue(ticket_state._apply_event(self.beam_path, {}, ticket, event, "2026-10-13T20:00:00Z", heralded, lines))
+        self.assertEqual((ticket["pr"]["bugbot"], ticket["pr"]["bugbotSha"]), ("fail", SHA))
+        self.assertEqual(ticket["pr"]["bugbotFindings"], ["util.mjs:12 null deref"])
+        self.assertIn("herald: WV-01 Bugbot review by the Shuttle: 1 finding(s). Back to fix.", lines)
+        self.assertIn("bugbot: util.mjs:12 null deref", pipeline.red_reasons(ticket, {}))
+        # Same line again changes nothing; a review of another commit is ignored.
+        self.assertFalse(ticket_state._apply_event(self.beam_path, {}, ticket, event, "2026-10-13T20:01:00Z", heralded, []))
+        stale = dict(event, state="review-pass", sha="d" * 40)
+        out = []
+        self.assertFalse(ticket_state._apply_event(self.beam_path, {}, ticket, stale, "2026-10-13T20:02:00Z", heralded, out))
+        self.assertTrue(out[0].startswith("bugbot: review for WV-01 ignored"))
+
+    def test_append_writes_the_review_into_the_folder(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        with redirect_stdout(StringIO()):
+            ticket_state.append_status(self.tmp, "WV-01", "review-pass", sha=SHA, source="shuttle")
+        folder = ticket_state.ticket_dir(self.tmp, "WV-01")
+        state = json.loads((folder / "state.json").read_text())
+        self.assertEqual((state["review"]["result"], state["review"]["sha"]), ("pass", SHA))
+        event = ticket_state._event_from_state(state)
+        self.assertEqual((event["state"], event["sha"]), ("review-pass", SHA))
+        line = json.loads((folder / "log.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((line["state"], line["sha"], line["source"]), ("review-pass", SHA, "shuttle"))
+
+    def run_pass(self, now):
+        saved = pipeline.live_provider
+        try:
+            pipeline.live_provider = lambda data, path: SNAP
+            return orchestrator.supervise(self.beam_path, now=now)
+        finally:
+            pipeline.live_provider = saved
+
+    def test_work_done_with_no_review_starts_a_review_shuttle_twice_then_asks_by_hand(self):
+        self.write([row()])
+        lines = self.run_pass("2026-10-13T19:30:00Z")
+        start = [line for line in lines if line.startswith("start WV-01 ")]
+        self.assertEqual(len(start), 1, lines)
+        self.assertIn("step=review", start[0])
+        self.assertIn("bugbot: review-shuttle WV-01 1/2", lines)
+        self.assertFalse(any(line.startswith("bugbot: comment") for line in lines))
+        saved = self.load()["tickets"]["WV-01"]
+        self.assertEqual((saved["shuttle"]["step"], saved["shuttle"]["pending"]), ("review", True))
+        # It returned with nothing recorded: one more, then a person.
+        for n, now in ((2, "2026-10-13T19:40:00Z"), (3, "2026-10-13T19:50:00Z")):
+            data = self.load()
+            data["tickets"]["WV-01"]["shuttle"]["pending"] = False
+            data["tickets"]["WV-01"].setdefault("report", {})["returned"] = True
+            self.beam_path.write_text(json.dumps(data))
+            lines = self.run_pass(now)
+            if n == 2:
+                self.assertIn("bugbot: review-shuttle WV-01 2/2", lines)
+            else:
+                self.assertFalse(any(line.startswith("start WV-01 ") for line in lines), lines)
+                self.assertTrue(any(line.startswith("bugbot: manual WV-01") for line in lines), lines)
+
+    def test_a_recorded_pass_ends_the_review(self):
+        ticket = row()
+        ticket["pr"].update({"bugbot": "pass", "bugbotSha": SHA, "bugbotRecordedSha": SHA, "bugbotSource": "shuttle"})
+        self.write([ticket])
+        lines = self.run_pass("2026-10-13T19:30:00Z")
+        self.assertFalse(any(line.startswith("start WV-01 ") for line in lines), lines)
+        self.assertEqual(self.load()["tickets"]["WV-01"]["pr"]["bugbot"], "pass")
+
+    def test_a_stuck_ticket_whose_work_is_done_gets_a_review_shuttle(self):
+        ticket = row(status="alarm", alarm="stuck")
+        ticket["pr"].update({"agentFinished": True, "opened": True})
+        self.write([ticket])
+        lines = self.run_pass("2026-10-13T19:30:00Z")
+        self.assertIn("alarm: WV-01 stuck cleared; the work is done and only the review is missing", lines)
+        self.assertTrue(any(line.startswith("start WV-01 ") and "step=review" in line for line in lines), lines)
+        self.assertIsNone(self.load()["tickets"]["WV-01"]["alarm"])
 
 
 class NoCiTest(unittest.TestCase):

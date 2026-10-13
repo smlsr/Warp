@@ -15,6 +15,13 @@
            nothing hears comments. Warp asks once per head commit (a MUST DO line and one
            Herald line) for a Bugbot review done by hand, and the ticket waits in review
            until someone records the result with `bugbot.py record`.
+  shuttle  The Shuttle runs the review. Once its pull request is open and its check is
+           green, the Shuttle reviews its own diff the way Bugbot does, fixes what it finds,
+           and records the result in its ticket folder (`ticket_state.py append --state
+           review-pass|review-fail --sha <head>`). When the work is done and no review is
+           recorded for the head, with no Shuttle out (it returned without one, stalled, or
+           is stuck), the parent starts a review-only Shuttle (`step=review`), up to
+           2 per head commit; after that it asks for a review by hand.
 
 `bugbotManual` is a different key: whether manual-merge tickets (autoMerge false) need
 Bugbot at all. It does not change how Bugbot is started.
@@ -49,7 +56,8 @@ START_KEY = "bugbotStartMinutes"
 COMMENT_BODY = "bugbot run"
 DEFAULT_START_MINUTES = 10
 MAX_COMMENTS = 2
-TRIGGERS = ("auto", "comment", "manual")
+TRIGGERS = ("auto", "comment", "manual", "shuttle")
+MAX_REVIEW_SHUTTLES = 2
 _LINE = re.compile(r"^bugbot: comment (\S+) (\S+)")
 
 
@@ -82,6 +90,8 @@ def trigger(data: dict, root=None) -> str:
     value = str(raw or "auto").strip().casefold()
     if value in {"manual", "hand", "person"}:
         return "manual"
+    if value in {"shuttle", "agent", "review", "self"}:
+        return "shuttle"
     if value in {"comment", "true", "yes", "on"}:
         return "comment"
     return "auto"
@@ -162,6 +172,7 @@ def on_request(data: dict, ticket: dict, lines: list) -> None:
         ask(ticket, lines)
     elif mode == "manual":
         ask_manual(data, ticket, lines)
+    # shuttle: the Shuttle reviews its own work; the parent starts a review Shuttle if it did not.
 
 
 def set_trigger(data: dict, value: str, root=None) -> bool:
@@ -237,6 +248,8 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
     if head and str(pr.get("bugbotRequestedSha") or head) != head:
         return False
     mode = trigger(data)
+    if mode == "shuttle":
+        return False  # pipeline starts a review Shuttle; nothing to post
     if mode == "manual":
         # Nothing to wait for: a person records the result. Ask once per head.
         before = len(lines)
@@ -307,11 +320,12 @@ def persist(beam_path: Path, tid: str, fields: dict, drop: tuple = ()) -> None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def record_result(ticket: dict, result: str, findings: Optional[list] = None, evidence: str = "", now=None) -> dict:
-    """A Bugbot review recorded by hand for the current head. Returns the fields it set."""
+def record_result(ticket: dict, result: str, findings: Optional[list] = None, evidence: str = "", now=None,
+                  source: str = "manual", sha: str = "") -> dict:
+    """A Bugbot review recorded by hand or by a Shuttle for a head commit. Returns the fields it set."""
     pr = _pr(ticket)
     _now_dt, now_s = beam_mod.coerce_now(now)
-    head = _head(pr)
+    head = str(sha or "").strip() or _head(pr)
     result = "pass" if str(result).strip().casefold() == "pass" else "fail"
     found = [str(item).strip() for item in (findings or []) if str(item).strip()]
     if result == "fail" and not found:
@@ -321,13 +335,82 @@ def record_result(ticket: dict, result: str, findings: Optional[list] = None, ev
         "bugbotSha": head,
         "bugbotFindings": found if result == "fail" else [],
         "bugbotFindingsSha": head,
-        "bugbotEvidence": evidence or "recorded by hand",
-        "bugbotSource": "manual",
-        "bugbotManualSha": head,
-        "bugbotManualAt": now_s,
+        "bugbotEvidence": evidence or ("reviewed by the Shuttle" if source == "shuttle" else "recorded by hand"),
+        "bugbotSource": source,
+        "bugbotRecordedSha": head,
+        "bugbotRecordedAt": now_s,
     }
     pr.update(fields)
     return fields
+
+
+def recorded_for_head(pr: dict, head: str) -> bool:
+    """A result recorded by hand or by a Shuttle for this head. A provider read with no Bugbot check keeps it."""
+    return bool(head) and str(pr.get("bugbotRecordedSha") or "") == head
+
+
+def apply_review(beam_path, ticket: dict, event: dict, stamp: str, lines: list, heralded: set) -> bool:
+    """A review-pass or review-fail line from the ticket folder. True when the beam changed."""
+    pr = _pr(ticket)
+    head = str(pr.get("headSha") or "").strip()
+    sha = str(event.get("sha") or "").strip()
+    tid = ticket.get("id")
+    if sha and head and not (head.startswith(sha) or sha.startswith(head)):
+        lines.append("bugbot: review for %s ignored: it reviewed %s, the head is %s" % (tid, sha[:12], head[:12]))
+        return False
+    sha = head or sha
+    result = "pass" if event.get("state") == "review-pass" else "fail"
+    findings = [str(item) for item in (event.get("findings") or []) if str(item).strip()]
+    if recorded_for_head(pr, sha) and str(pr.get("bugbot") or "") == result and list(pr.get("bugbotFindings") or []) == (findings if result == "fail" else []):
+        return False
+    source = str(event.get("source") or "shuttle")
+    fields = record_result(ticket, result, findings, now=stamp, source=source, sha=sha)
+    ticket["updatedAt"] = stamp
+    key = (tid, "review-" + result)
+    if key not in heralded:
+        heralded.add(key)
+        who = "the Shuttle" if source == "shuttle" else "hand"
+        if result == "pass":
+            lines.append("herald: %s Bugbot review by %s: pass." % (tid, who))
+        else:
+            lines.append("herald: %s Bugbot review by %s: %d finding(s). Back to fix." % (tid, who, len(fields["bugbotFindings"])))
+    try:
+        beam_mod.append_ticket_event(Path(beam_path), ticket, {"at": stamp, "type": "bugbot", "value": result, "source": source, "sha": sha})
+    except Exception:
+        pass
+    return True
+
+
+def review_shuttles_on_head(pr: dict) -> int:
+    if str(pr.get("bugbotReviewSha") or "") != _head(pr):
+        return 0
+    try:
+        return int(pr.get("bugbotReviews") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def note_review_shuttle(ticket: dict) -> int:
+    """Count one review Shuttle on this head. Returns the count."""
+    pr = _pr(ticket)
+    count = review_shuttles_on_head(pr) + 1
+    pr["bugbotReviewSha"] = _head(pr)
+    pr["bugbotReviews"] = count
+    return count
+
+
+def review_detail(ticket: dict, data: dict) -> str:
+    """What the review Shuttle does. It goes on the start line as the fix detail."""
+    pr = _pr(ticket)
+    scripts = Path(__file__).resolve().parent
+    root = data.get("_repoRoot") or "<parent checkout>"
+    return (
+        "review only (bugbotTrigger: shuttle): do not change code. Review the diff of %s against the base branch "
+        "the way Bugbot does: real bugs, crashes, security holes, data loss, broken acceptance criteria; not style. "
+        "Then record it for head %s: python3 %s/ticket_state.py append --root %s --id %s --state review-pass|review-fail "
+        "--sha <head sha> --source shuttle [--finding \"<file:line what is wrong>\" ...]"
+        % (pr.get("url") or ticket.get("branch") or "the branch", (_head(pr) or "?")[:12], scripts, root, ticket.get("id"))
+    )
 
 
 def post(root: Path, url: str, runner: Optional[Callable] = None) -> tuple:
@@ -409,8 +492,21 @@ def _cli_record(beam_path: Path, tid: str, result: str, findings: list, evidence
     if not _pr(ticket).get("url") and not _pr(ticket).get("headSha"):
         print("bugbot: %s has no pull request yet. Nothing recorded." % tid)
         return 1
-    fields = record_result(ticket, result, findings, evidence)
+    fields = record_result(ticket, result, findings, evidence, source="hand")
     persist(beam_path, tid, fields)
+    try:
+        # Also in the ticket folder: a parent pass already holding the beam re-applies it from there.
+        import contextlib
+        import io
+
+        import ticket_state
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            ticket_state.append_status(beam_path.resolve().parent.parent, tid,
+                                       "review-pass" if fields["bugbot"] == "pass" else "review-fail",
+                                       findings=fields["bugbotFindings"], sha=fields["bugbotSha"], source="hand")
+    except Exception:
+        pass
     head = fields["bugbotSha"][:12] or "?"
     if fields["bugbot"] == "pass":
         print("bugbot: recorded %s pass on %s. The next pass checks the rest and merges when it can." % (tid, head))

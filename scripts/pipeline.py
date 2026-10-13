@@ -400,7 +400,7 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
         pr["url"] = snap["pr"]
         pr["opened"] = True
     head_now = new_sha or str(pr.get("headSha") or "")
-    by_hand = pr.get("bugbotSource") == "manual" and head_now and str(pr.get("bugbotManualSha") or "") == head_now
+    by_hand = bool(head_now) and str(pr.get("bugbotRecordedSha") or "") == head_now
     for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
         if key == "bugbot" and by_hand and not str(snap.get(key) or "").strip():
             # A Bugbot review recorded by hand for this head. No Bugbot check is not a reset.
@@ -982,6 +982,46 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     _queue_in_review(data, ticket, lines)
 
 
+def start_review(data: dict, ticket: dict, lines: list) -> None:
+    """bugbotTrigger: shuttle. The work is done and no review is recorded for the head: one review Shuttle."""
+    import agents
+    import bugbot
+
+    tid = ticket.get("id")
+    if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
+        lines.append("shuttle: hold %s" % tid)
+        return
+    pr = ticket.setdefault("pr", {})
+    if bugbot.review_shuttles_on_head(pr) >= bugbot.MAX_REVIEW_SHUTTLES:
+        # Two review Shuttles came back with nothing recorded for this head. Ask a person.
+        bugbot.ask_manual(data, ticket, lines)
+        lines.append("review: wait %s" % tid)
+        return
+    count = bugbot.note_review_shuttle(ticket)
+    ticket["status"] = "review"
+    _phase(ticket, "reviewing", lines)
+    mark_shuttle(ticket, "review", data)
+    lines.extend(_start_lines(data, ticket, "review", bugbot.review_detail(ticket, data)))
+    lines.append("bugbot: review-shuttle %s %d/%d" % (tid, count, bugbot.MAX_REVIEW_SHUTTLES))
+
+
+def _review_only_left(data: dict, ticket: dict) -> bool:
+    """bugbotTrigger: shuttle, the pull request is open, the work came back, and only the review is missing."""
+    import bugbot
+
+    cfg = data.get("config") or {}
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if bugbot.trigger(data) != "shuttle" or not pr.get("url"):
+        return False
+    if not (pr.get("agentFinished") or pr.get("opened")):
+        return False
+    if not orchestrator.bugbot_applies(ticket, cfg) or bugbot_finished(ticket, cfg):
+        return False
+    if red_reasons(ticket, cfg) or _conflicted(ticket):
+        return False
+    return True
+
+
 def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str = "") -> None:
     import agents
 
@@ -1038,6 +1078,15 @@ def _recover_alarm(data: dict, ticket: dict, lines: list, deferred: list) -> boo
     if ticket.get("status") != "alarm":
         return False
     alarm = ticket.get("alarm")
+    if alarm in {"stuck", "worker-died", "stalled"} and _review_only_left(data, ticket):
+        # The work is done; only the Bugbot review is missing. A review Shuttle, not a restart.
+        ticket["alarm"] = None
+        ticket["status"] = "review"
+        ticket["phase"] = "reviewing"
+        clear_shuttle(ticket)
+        lines.append("alarm: %s %s cleared; the work is done and only the review is missing" % (ticket.get("id"), alarm))
+        start_review(data, ticket, lines)
+        return True
     if alarm == "lock-escape":
         if not pending(ticket):
             mark_shuttle(ticket, "repair", data)
@@ -1204,6 +1253,15 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
             import bugbot
 
+            if bugbot.trigger(data) == "shuttle":
+                pr_now = ticket.get("pr") or {}
+                head = str(pr_now.get("headSha") or "")
+                if not pr_now.get("bugbotRequested") or (head and str(pr_now.get("bugbotRequestedSha") or "") != head):
+                    # Record the request (and the Jira In Review move) for this head first.
+                    _request_bugbot(ticket, lines, data)
+                    return
+                start_review(data, ticket, lines)
+                return
             # Requested and never started: comment `bugbot run`, switching the trigger when it was auto.
             if bugbot.check_silence(data, ticket, lines, now=now):
                 return

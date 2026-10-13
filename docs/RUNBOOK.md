@@ -465,6 +465,15 @@ A recorded `pass` counts as Bugbot passing for that head commit, and a provider 
 
 Set `bugbotTrigger` back to `auto` once Bugbot is on for the repo.
 
+`bugbotTrigger: shuttle` puts the review in the Shuttle. Its prompt has the review step: once the pull request is open and the check is green, diff the branch against the base the way Bugbot does, fix what it finds inside the locks, push, and record the result for the head commit:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state review-pass --sha <head sha> --source shuttle
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state review-fail --sha <head sha> --source shuttle --finding "util.mjs:12 null deref"
+```
+
+The parent reads that line from the ticket folder like any other state. A review of an older commit is ignored. A `fail` goes to fix with the findings, and the fix Shuttle reviews again at the end. When the work is done but no review is recorded for the head and no Shuttle is out (it returned without one, the review stalled, or the ticket went `stuck` or `worker-died` with its pull request open), the parent starts a review-only Shuttle: `start <id> ... step=review` and `bugbot: review-shuttle <id> 1/2`. It changes no code and returns `result: <id> ok review=pass|fail findings=<n>`. A second one may follow. After two with nothing recorded, Warp asks for the review by hand, as in `manual`.
+
 A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelines.yml`) is not a CI that never started: Warp does not send a Shuttle to push empty commits. The Shuttle's own check and Bugbot decide. Bugbot's check alone makes the rollup green once it passes.
 
 ## A lock-escape that keeps coming back
