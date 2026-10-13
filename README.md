@@ -704,7 +704,7 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
 | `bugbotRequired` | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. |
 | `bugbotManual` | `true` | Manual tickets only. `false` skips Bugbot before QA Ready. Auto-merge still uses `bugbotRequired`. |
-| `bugbotTrigger` | `auto` | `auto`: Bugbot runs on its own. If it never starts within `bugbotStartMinutes`, Warp switches this to `comment` and says so. `comment`: Warp posts `bugbot run` on each pull request it asks Bugbot to review. |
+| `bugbotTrigger` | `auto` | `auto`: Bugbot reviews each pull request on its own; if it never starts within `bugbotStartMinutes`, Warp switches to `comment`. `comment`: Warp posts `bugbot run`; two unanswered comments switch to `manual`. `manual`: Bugbot can't be started from here, so Warp asks for a review by hand each commit and waits for `bugbot.py record`. `bugbotManual` is separate: whether manual-merge tickets need Bugbot at all. |
 | `bugbotStartMinutes` | `10` | How long Warp waits for Bugbot to start before it comments `bugbot run`. |
 | `maxFixAttempts` | `5` | Shared fix loop, then the ticket alarms. |
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. Separate from a dead worker. |

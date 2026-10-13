@@ -399,14 +399,19 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     if snap.get("pr"):
         pr["url"] = snap["pr"]
         pr["opened"] = True
+    head_now = new_sha or str(pr.get("headSha") or "")
+    by_hand = pr.get("bugbotSource") == "manual" and head_now and str(pr.get("bugbotManualSha") or "") == head_now
     for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
+        if key == "bugbot" and by_hand and not str(snap.get(key) or "").strip():
+            # A Bugbot review recorded by hand for this head. No Bugbot check is not a reset.
+            continue
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
             if new_sha:
                 pr[sha_field] = new_sha
     if "checkLog" in snap and snap["checkLog"] is not None:
         pr["checkLog"] = snap["checkLog"]
-    if "findings" in snap:
+    if "findings" in snap and not (by_hand and not snap.get("findings")):
         pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
         if new_sha:
             pr["bugbotFindingsSha"] = new_sha

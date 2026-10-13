@@ -452,7 +452,18 @@ The scan printed `schedule: <program> build-schedule/2, gate order strict — ga
 2. posts `bugbot run` on that pull request (`bugbot: commented <id> <url>`). Without gh it prints `bugbot: MUST DO ...`: post the comment with the GitHub MCP, then `bugbot.py run --id <id> --posted`;
 3. from then on posts `bugbot run` each time it asks for a review, once per head commit.
 
-Still nothing `bugbotStartMinutes` after a comment: one more comment. After two, `bugbot: silent <id>` and one Herald line: check that Bugbot is on for the repo in the Cursor dashboard, and that the pull request author's "Run only when mentioned" setting is not the cause, or set `bugbotRequired: false`. `python3 <plugin>/scripts/bugbot.py status` lists every ticket still waiting on Bugbot.
+Still nothing `bugbotStartMinutes` after a comment: one more comment. After two, Bugbot is not listening on the repo (the Cursor Bugbot app is not installed on it, or the pull request author's "Run only when mentioned" setting). Warp writes `bugbotTrigger: manual`, prints `bugbot: silent <id>` and one Herald line, and asks for the review by hand.
+
+`bugbotTrigger: manual` is also the setting to choose up front when GitHub or Bitbucket is not connected to Cursor. Each head commit gets `bugbot: manual <id> <url> branch=<branch>`, a `MUST DO` line and one Herald line. Run Bugbot on it the way your setup allows, then record the result:
+
+```bash
+python3 <plugin>/scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result pass --evidence "<link or note>"
+python3 <plugin>/scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result fail --finding "null check in util.mjs"
+```
+
+A recorded `pass` counts as Bugbot passing for that head commit, and a provider read with no Bugbot check does not clear it. A recorded `fail` sends the ticket to fix with the findings. A new commit needs a new review. `python3 <plugin>/scripts/bugbot.py status` lists every ticket still waiting on Bugbot.
+
+Set `bugbotTrigger` back to `auto` once Bugbot is on for the repo.
 
 A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelines.yml`) is not a CI that never started: Warp does not send a Shuttle to push empty commits. The Shuttle's own check and Bugbot decide. Bugbot's check alone makes the rollup green once it passes.
 

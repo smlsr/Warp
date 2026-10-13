@@ -104,7 +104,7 @@ class BugbotTriggerTest(Repo):
             self.assertFalse(bugbot.check_silence(data, data["tickets"]["WV-01"], lines, now="2026-10-13T21:00:00Z"))
             self.assertEqual(lines, [])
 
-    def test_comment_mode_asks_on_request_then_twice_then_warns_once(self):
+    def test_comment_mode_asks_on_request_then_twice_then_switches_to_manual(self):
         self.config.write_text("bugbotRequired: true\nbugbotTrigger: comment\n")
         data = self.data([row()])
         ticket = data["tickets"]["WV-01"]
@@ -122,11 +122,72 @@ class BugbotTriggerTest(Repo):
         bugbot.record(ticket, now="2026-10-13T19:13:00Z")
         lines = []
         self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:30:00Z"))
+        self.assertTrue(lines[0].startswith("config: bugbotTrigger manual. Bugbot did not answer 2 `bugbot run` comments"), lines)
+        self.assertIn("not listening on smlsr/WarpDemo", lines[0])
         self.assertIn("bugbot: silent WV-01", lines)
-        self.assertIn("for smlsr/WarpDemo", lines[0])
+        self.assertIn("bugbot: manual WV-01 %s branch=warp/view/WV-01-WAR-47" % URL, lines)
+        self.assertTrue(any(line.startswith("bugbot: MUST DO WV-01: Bugbot cannot be started from here") for line in lines))
+        self.assertIn("bugbotTrigger: manual", self.config.read_text())
+        self.assertEqual(bugbot.trigger(data), "manual")
         lines = []
         self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:45:00Z"))
-        self.assertEqual(lines, [])
+        self.assertEqual(lines, [], "manual asks once per head")
+
+    def test_manual_mode_asks_at_once_and_once_per_head(self):
+        self.config.write_text("bugbotRequired: true\nbugbotTrigger: manual\nbugbotManual: true\n")
+        data = self.data([row()])
+        ticket = data["tickets"]["WV-01"]
+        lines = []
+        bugbot.on_request(data, ticket, lines)
+        self.assertEqual(lines[0], "bugbot: manual WV-01 %s branch=warp/view/WV-01-WAR-47" % URL)
+        self.assertIn("bugbot.py record --beam", lines[1])
+        self.assertTrue(lines[2].startswith("herald: WV-01 needs a Bugbot review by hand"))
+        self.assertFalse(any(line.startswith("bugbot: comment") for line in lines))
+        again = []
+        bugbot.on_request(data, ticket, again)
+        self.assertFalse(bugbot.check_silence(data, ticket, again, now="2026-10-13T23:00:00Z"))
+        self.assertEqual(again, [])
+        # A new head asks again, with no wait.
+        ticket["pr"]["headSha"] = "b" * 40
+        ticket["pr"]["bugbotRequestedSha"] = "b" * 40
+        later = []
+        self.assertTrue(bugbot.check_silence(data, ticket, later, now="2026-10-13T19:01:30Z"))
+        self.assertTrue(later[0].startswith("bugbot: manual WV-01"))
+
+    def test_bugbot_manual_does_not_choose_the_trigger(self):
+        for manual in ("true", "false"):
+            self.config.write_text("bugbotManual: %s\n" % manual)
+            self.assertEqual(bugbot.trigger(self.data([row()])), "auto")
+        self.assertTrue(orchestrator.bugbot_applies({"autoMerge": False}, {"bugbotManual": True}))
+        self.assertFalse(orchestrator.bugbot_applies({"autoMerge": False}, {"bugbotManual": False}))
+        self.assertTrue(orchestrator.bugbot_applies({"autoMerge": True}, {"bugbotManual": False}))
+
+    def test_record_by_hand_survives_a_provider_read_with_no_bugbot_check(self):
+        self.config.write_text("bugbotTrigger: manual\n")
+        self.write([row()])
+        out = subprocess.run([sys.executable, "-B", str(SCRIPTS / "bugbot.py"), "record", "--beam", str(self.beam_path),
+                              "--id", "WV-01", "--result", "pass", "--evidence", "reviewed in Cursor"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(out.stdout.startswith("bugbot: recorded WV-01 pass on 579fb1873f14"), out.stdout)
+        ticket = self.load()["tickets"]["WV-01"]
+        self.assertEqual((ticket["pr"]["bugbot"], ticket["pr"]["bugbotSource"]), ("pass", "manual"))
+        pipeline._apply_snapshot(ticket, {"headSha": SHA, "bugbot": "", "findings": [], "rollup": "absent"})
+        self.assertEqual(pipeline.bugbot_state(ticket), "pass")
+        self.assertTrue(bugbot.answered(ticket))
+        # A new head is a new review.
+        pipeline._apply_snapshot(ticket, {"headSha": "c" * 40, "bugbot": ""})
+        self.assertEqual(pipeline.bugbot_state(ticket), "")
+
+    def test_record_fail_sends_findings_to_fix(self):
+        self.write([row()])
+        out = subprocess.run([sys.executable, "-B", str(SCRIPTS / "bugbot.py"), "record", "--beam", str(self.beam_path),
+                              "--id", "WV-01", "--result", "fail", "--finding", "null check in util.mjs"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        ticket = self.load()["tickets"]["WV-01"]
+        self.assertIn("bugbot fail", pipeline.red_reasons(ticket, {}))
+        self.assertIn("bugbot: null check in util.mjs", pipeline.red_reasons(ticket, {}))
 
     def test_a_new_head_starts_the_count_again(self):
         ticket = row()
@@ -155,6 +216,70 @@ class BugbotTriggerTest(Repo):
         self.assertTrue(got[0].startswith("bugbot: MUST DO post a pull request comment with the body `bugbot run` on %s (gh: not logged in)" % URL))
         self.assertIn("bugbot.py run --beam", got[0])
         self.assertIn("--id WV-01 --posted", got[0])
+
+    def test_a_posted_comment_is_on_disk_even_if_the_pass_is_dropped(self):
+        data = self.data([row()])
+
+        def ok(cmd):
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        bugbot.post_pending(data, self.beam_path, ["bugbot: comment WV-01 %s" % URL], runner=ok, now="2026-10-13T19:20:00Z")
+        # The in-memory beam is thrown away (an aborted pass). The disk still has the comment.
+        pr = self.load()["tickets"]["WV-01"]["pr"]
+        self.assertEqual((pr["bugbotComments"], pr["bugbotCommentSha"]), (1, SHA))
+        self.assertNotIn("bugbotCommentPending", pr)
+
+    def test_supervise_does_not_post_when_a_halt_lands_during_the_pass(self):
+        import agents
+
+        self.write([row()])
+        posted = []
+        snap = {"WV-01": {"headSha": SHA, "rollup": "absent", "checkCount": 0, "ciConfigured": False,
+                          "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}}
+        saved = (pipeline.live_provider, bugbot.post, agents.halted_meanwhile)
+
+        def halted(data, path):
+            disk = json.loads(Path(path).read_text())
+            disk["runState"] = "paused"
+            disk["paused"] = True
+            return disk
+
+        try:
+            pipeline.live_provider = lambda data, path: snap
+            bugbot.post = lambda root, url, runner=None: (posted.append(url), (True, ""))[1]
+            agents.halted_meanwhile = halted
+            lines = orchestrator.supervise(self.beam_path, now="2026-10-13T19:30:00Z")
+        finally:
+            pipeline.live_provider, bugbot.post, agents.halted_meanwhile = saved
+        self.assertIn("pass: aborted. The run was paused during this pass.", lines)
+        self.assertEqual(posted, [])
+        # Not posted, so nothing is recorded: the next pass asks again.
+        self.assertNotIn("bugbotComments", self.load()["tickets"]["WV-01"]["pr"])
+
+    def test_supervise_posts_and_saves_on_a_normal_pass(self):
+        self.write([row()])
+        posted = []
+        snap = {"WV-01": {"headSha": SHA, "rollup": "absent", "checkCount": 0, "ciConfigured": False,
+                          "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}}
+        saved = (pipeline.live_provider, bugbot.post)
+        try:
+            pipeline.live_provider = lambda data, path: snap
+            bugbot.post = lambda root, url, runner=None: (posted.append(url), (True, ""))[1]
+            lines = orchestrator.supervise(self.beam_path, now="2026-10-13T19:30:00Z")
+        finally:
+            pipeline.live_provider, bugbot.post = saved
+        self.assertEqual(posted, [URL])
+        self.assertIn("bugbot: commented WV-01 %s" % URL, lines)
+        pr = self.load()["tickets"]["WV-01"]["pr"]
+        self.assertEqual(pr["bugbotComments"], 1)
+        again = []
+        try:
+            pipeline.live_provider = lambda data, path: snap
+            bugbot.post = lambda root, url, runner=None: (again.append(url), (True, ""))[1]
+            orchestrator.supervise(self.beam_path, now="2026-10-13T19:32:00Z")
+        finally:
+            pipeline.live_provider, bugbot.post = saved
+        self.assertEqual(again, [], "no second comment inside the start window")
 
     def test_cli_records_a_comment_posted_another_way(self):
         self.write([row()])

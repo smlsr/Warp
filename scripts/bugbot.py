@@ -3,21 +3,30 @@
 
 `bugbotTrigger` in .warp/config.yaml:
 
-  auto     (default) Bugbot reviews each pull request on its own. Warp waits for its
-           check. If no Bugbot check shows up on the head within `bugbotStartMinutes`
-           (default 10) of the request, Warp sets `bugbotTrigger: comment` in
-           .warp/config.yaml (published with the run state), posts `bugbot run` on that
-           pull request, and asks the same way on every pull request after it.
-  comment  Warp posts `bugbot run` on the pull request each time it asks for a review
-           (once per head commit). If Bugbot still has not started `bugbotStartMinutes`
-           after a comment, Warp comments once more. After that it posts one Herald line
-           saying Bugbot is not answering, and keeps waiting.
+  auto     (default) Bugbot reviews each new pull request and push on its own. Warp waits
+           for its `Cursor Bugbot` check. If none shows up on the head within
+           `bugbotStartMinutes` (default 10) of the request, Warp sets
+           `bugbotTrigger: comment` (published with the run state) and posts `bugbot run`.
+  comment  The Cursor Bugbot app is on the repo and hears pull request comments. Warp posts
+           `bugbot run` each time it asks for a review, once per head commit. No answer
+           after `bugbotStartMinutes`: one more comment. No answer to two: Bugbot is not
+           listening, so Warp sets `bugbotTrigger: manual` and asks by hand.
+  manual   Bugbot cannot be started from here: the provider is not connected to Cursor, or
+           nothing hears comments. Warp asks once per head commit (a MUST DO line and one
+           Herald line) for a Bugbot review done by hand, and the ticket waits in review
+           until someone records the result with `bugbot.py record`.
 
-`orchestrator.py supervise` posts the comment itself with `gh pr comment` when gh is
-logged in. Without gh it prints a MUST DO line for the GitHub MCP, then:
+`bugbotManual` is a different key: whether manual-merge tickets (autoMerge false) need
+Bugbot at all. It does not change how Bugbot is started.
+
+`orchestrator.py supervise` posts comments itself with `gh pr comment` when gh is logged
+in, and writes each posted comment to the beam on disk at once. Without gh it prints a
+MUST DO line for the GitHub MCP, then:
 
   python3 scripts/bugbot.py run --beam .warp/beam.json --id WV-01            post now (gh) and record it
   python3 scripts/bugbot.py run --beam .warp/beam.json --id WV-01 --posted   record a comment posted another way
+  python3 scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result pass
+  python3 scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result fail --finding "null check in util.mjs"
   python3 scripts/bugbot.py status --beam .warp/beam.json                    trigger, and each ticket waiting on Bugbot
 """
 
@@ -40,7 +49,7 @@ START_KEY = "bugbotStartMinutes"
 COMMENT_BODY = "bugbot run"
 DEFAULT_START_MINUTES = 10
 MAX_COMMENTS = 2
-TRIGGERS = ("auto", "comment")
+TRIGGERS = ("auto", "comment", "manual")
 _LINE = re.compile(r"^bugbot: comment (\S+) (\S+)")
 
 
@@ -71,7 +80,9 @@ def trigger(data: dict, root=None) -> str:
     if raw in (None, ""):
         raw = ((data or {}).get("config") or {}).get(TRIGGER_KEY)
     value = str(raw or "auto").strip().casefold()
-    if value in {"manual", "comment", "true", "yes", "on"}:
+    if value in {"manual", "hand", "person"}:
+        return "manual"
+    if value in {"comment", "true", "yes", "on"}:
         return "comment"
     return "auto"
 
@@ -122,39 +133,92 @@ def ask(ticket: dict, lines: list) -> None:
     lines.append("bugbot: comment %s %s" % (ticket.get("id"), pr.get("url") or ""))
 
 
+def ask_manual(data: dict, ticket: dict, lines: list) -> None:
+    """Bugbot cannot be started from here. Ask once per head for a review recorded by hand."""
+    pr = _pr(ticket)
+    head = _head(pr)
+    if head and str(pr.get("bugbotManualAsked") or "") == head:
+        return
+    pr["bugbotManualAsked"] = head
+    tid = ticket.get("id")
+    url = pr.get("url") or ""
+    branch = ticket.get("branch") or ""
+    beam_file = data.get("_agentBeam") or (str(Path(data["_repoRoot"]) / ".warp" / "beam.json") if data.get("_repoRoot") else ".warp/beam.json")
+    scripts = Path(__file__).resolve().parent
+    lines.append("bugbot: manual %s %s branch=%s" % (tid, url, branch))
+    lines.append(
+        "bugbot: MUST DO %s: Bugbot cannot be started from here (%s: manual). Get a Bugbot review of %s "
+        "(branch %s, head %s) the way this setup allows, then record it: python3 %s/bugbot.py record --beam %s "
+        "--id %s --result pass|fail [--finding \"<what is wrong>\" ...]. The ticket waits in review until it is recorded."
+        % (tid, TRIGGER_KEY, url or "the pull request", branch, head[:12] or "?", scripts, beam_file, tid)
+    )
+    lines.append("herald: %s needs a Bugbot review by hand: %s. It waits in review until the result is recorded." % (tid, url or branch))
+
+
 def on_request(data: dict, ticket: dict, lines: list) -> None:
-    """Called when Warp asks Bugbot for a new head. Comment mode posts `bugbot run` now."""
-    if trigger(data) == "comment" and comments_on_head(_pr(ticket)) == 0:
+    """Called when Warp asks Bugbot for a new head. comment posts `bugbot run`; manual asks for a review by hand."""
+    mode = trigger(data)
+    if mode == "comment" and comments_on_head(_pr(ticket)) == 0:
         ask(ticket, lines)
+    elif mode == "manual":
+        ask_manual(data, ticket, lines)
+
+
+def set_trigger(data: dict, value: str, root=None) -> bool:
+    """Write `bugbotTrigger: <value>` to the beam copy and .warp/config.yaml. True when the yaml changed."""
+    import runs
+
+    cfg = data.setdefault("config", {})
+    cfg[TRIGGER_KEY] = value
+    where = _root(data, root)
+    if where is None:
+        return False
+    path = Path(where) / ".warp" / "config.yaml"
+    if not path.is_file():
+        return False
+    text = path.read_text()
+    updated = runs.set_key(text, TRIGGER_KEY, value)
+    if updated == text:
+        return False
+    path.write_text(updated)
+    return True
+
+
+_PUBLISHED = " .warp/config.yaml was updated and is published with the run state."
 
 
 def switch_to_comment(data: dict, ticket: dict, minutes: int, root=None) -> list:
     """Bugbot did not start on its own: write `bugbotTrigger: comment` and say so once."""
-    import runs
-
-    cfg = data.setdefault("config", {})
-    cfg[TRIGGER_KEY] = "comment"
-    where = _root(data, root)
-    wrote = False
-    if where is not None:
-        path = Path(where) / ".warp" / "config.yaml"
-        if path.is_file():
-            text = path.read_text()
-            updated = runs.set_key(text, TRIGGER_KEY, "comment")
-            if updated != text:
-                path.write_text(updated)
-                wrote = True
+    wrote = set_trigger(data, "comment", root)
     url = _pr(ticket).get("url") or ""
     tid = ticket.get("id")
-    lines = [
+    return [
         "config: %s comment. Bugbot did not start on its own for %s (%s) within %d minutes. "
         "Warp now posts `%s` on each pull request when it asks for a review.%s"
-        % (TRIGGER_KEY, tid, url, minutes, COMMENT_BODY,
-           " .warp/config.yaml was updated and is published with the run state." if wrote else ""),
+        % (TRIGGER_KEY, tid, url, minutes, COMMENT_BODY, _PUBLISHED if wrote else ""),
         "herald: Bugbot did not start on its own on %s. Warp now asks it with a `%s` comment on each pull request (%s: comment)."
         % (tid, COMMENT_BODY, TRIGGER_KEY),
     ]
-    return lines
+
+
+def switch_to_manual(data: dict, ticket: dict, count: int, root=None) -> list:
+    """`bugbot run` comments went unanswered: Bugbot is not listening on this repo."""
+    wrote = set_trigger(data, "manual", root)
+    pr = _pr(ticket)
+    url = pr.get("url") or ""
+    repo = ""
+    match = re.search(r"(?:github\.com|bitbucket\.org)/([^/]+/[^/]+)/", str(url))
+    if match:
+        repo = " on %s" % match.group(1)
+    return [
+        "config: %s manual. Bugbot did not answer %d `%s` comments on %s, so it is not listening%s "
+        "(the Cursor Bugbot app is not on the repo, or the author's \"Run only when mentioned\" setting). "
+        "Each review is now asked for and recorded by hand.%s"
+        % (TRIGGER_KEY, count, COMMENT_BODY, url, repo, _PUBLISHED if wrote else ""),
+        "herald: Bugbot is not answering `%s`%s. Warp now asks for each Bugbot review by hand (%s: manual). "
+        "Set it back to auto once Bugbot is on for the repo." % (COMMENT_BODY, repo, TRIGGER_KEY),
+        "bugbot: silent %s" % ticket.get("id"),
+    ]
 
 
 def _age_minutes(stamp, now_dt) -> Optional[float]:
@@ -172,6 +236,12 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
         return False
     if head and str(pr.get("bugbotRequestedSha") or head) != head:
         return False
+    mode = trigger(data)
+    if mode == "manual":
+        # Nothing to wait for: a person records the result. Ask once per head.
+        before = len(lines)
+        ask_manual(data, ticket, lines)
+        return len(lines) > before
     now_dt, now_s = beam_mod.coerce_now(now)
     count = comments_on_head(pr)
     since = pr.get("bugbotCommentAt") if count else pr.get("bugbotRequestedAt")
@@ -183,39 +253,81 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
         # Asked already this head and not posted yet: say it again so it gets posted.
         lines.append("bugbot: comment %s %s" % (ticket.get("id"), pr.get("url") or ""))
         return True
-    if trigger(data) == "auto":
+    if mode == "auto":
         lines.extend(switch_to_comment(data, ticket, minutes))
         ask(ticket, lines)
         return True
     if count < MAX_COMMENTS:
         ask(ticket, lines)
         return True
-    if str(pr.get("bugbotSilentSha") or "") != head:
-        pr["bugbotSilentSha"] = head
-        pr["bugbotSilentAt"] = now_s
-        repo = ""
-        match = re.search(r"github\.com/([^/]+/[^/]+)/pull/", str(pr.get("url") or ""))
-        if match:
-            repo = " for %s" % match.group(1)
-        lines.append(
-            "herald: %s Bugbot has not answered `%s` on %s after %d comments. Check that Bugbot is on%s in the Cursor "
-            "dashboard and that the pull request author's \"Run only when mentioned\" setting is not the cause, "
-            "or set bugbotRequired: false." % (ticket.get("id"), COMMENT_BODY, pr.get("url") or "", count, repo)
-        )
-        lines.append("bugbot: silent %s" % ticket.get("id"))
-        return True
-    return False
+    pr["bugbotSilentSha"] = head
+    pr["bugbotSilentAt"] = now_s
+    lines.extend(switch_to_manual(data, ticket, count))
+    ask_manual(data, ticket, lines)
+    return True
 
 
-def record(ticket: dict, now=None) -> None:
+def record(ticket: dict, now=None) -> dict:
+    """Count one posted comment on this head. Returns the fields it set."""
     pr = _pr(ticket)
     _now_dt, now_s = beam_mod.coerce_now(now)
     head = _head(pr)
     count = comments_on_head(pr)
-    pr["bugbotCommentSha"] = head
-    pr["bugbotComments"] = count + 1
-    pr["bugbotCommentAt"] = now_s
+    fields = {"bugbotCommentSha": head, "bugbotComments": count + 1, "bugbotCommentAt": now_s}
+    pr.update(fields)
     pr.pop("bugbotCommentPending", None)
+    return fields
+
+
+def persist(beam_path: Path, tid: str, fields: dict, drop: tuple = ()) -> None:
+    """Write pull request fields to the beam on disk now, under the beam lock.
+
+    A comment is on GitHub the moment gh returns. If the pass is then aborted (a pause or a
+    stop landed meanwhile), the in-memory beam is not what gets saved; this record must be.
+    """
+    import fcntl
+
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return
+    lock_path = beam_path.parent / ".bugbot.lock"
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            data = beam_mod.load_json(beam_path)
+            ticket = (data.get("tickets") or {}).get(tid)
+            if not isinstance(ticket, dict):
+                return
+            pr = _pr(ticket)
+            pr.update(fields)
+            for key in drop:
+                pr.pop(key, None)
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def record_result(ticket: dict, result: str, findings: Optional[list] = None, evidence: str = "", now=None) -> dict:
+    """A Bugbot review recorded by hand for the current head. Returns the fields it set."""
+    pr = _pr(ticket)
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    head = _head(pr)
+    result = "pass" if str(result).strip().casefold() == "pass" else "fail"
+    found = [str(item).strip() for item in (findings or []) if str(item).strip()]
+    if result == "fail" and not found:
+        found = ["Bugbot finding (recorded by hand, no detail given)"]
+    fields = {
+        "bugbot": result,
+        "bugbotSha": head,
+        "bugbotFindings": found if result == "fail" else [],
+        "bugbotFindingsSha": head,
+        "bugbotEvidence": evidence or "recorded by hand",
+        "bugbotSource": "manual",
+        "bugbotManualSha": head,
+        "bugbotManualAt": now_s,
+    }
+    pr.update(fields)
+    return fields
 
 
 def post(root: Path, url: str, runner: Optional[Callable] = None) -> tuple:
@@ -261,7 +373,9 @@ def post_pending(data: dict, beam_path: Path, lines: list, runner: Optional[Call
         seen.add(tid)
         ok, detail = post(root, url, runner=runner)
         if ok:
-            record(tickets[tid], now=now)
+            fields = record(tickets[tid], now=now)
+            # On disk at once: an aborted pass must not drop a comment that is already posted.
+            persist(beam_path, tid, fields, drop=("bugbotCommentPending",))
             out.append("bugbot: commented %s %s" % (tid, url))
         else:
             out.append(must_do(tid, url, beam_path, detail))
@@ -280,9 +394,28 @@ def _cli_run(beam_path: Path, tid: str, posted: bool) -> int:
         if not ok:
             print(must_do(tid, url, beam_path, detail))
             return 1
-    record(ticket)
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    fields = record(ticket)
+    persist(beam_path, tid, fields, drop=("bugbotCommentPending",))
     print("bugbot: commented %s %s" % (tid, url))
+    return 0
+
+
+def _cli_record(beam_path: Path, tid: str, result: str, findings: list, evidence: str) -> int:
+    data = beam_mod.load_json(beam_path)
+    ticket = (data.get("tickets") or {}).get(tid)
+    if not isinstance(ticket, dict):
+        print("bugbot: unknown %s" % tid)
+        return 1
+    if not _pr(ticket).get("url") and not _pr(ticket).get("headSha"):
+        print("bugbot: %s has no pull request yet. Nothing recorded." % tid)
+        return 1
+    fields = record_result(ticket, result, findings, evidence)
+    persist(beam_path, tid, fields)
+    head = fields["bugbotSha"][:12] or "?"
+    if fields["bugbot"] == "pass":
+        print("bugbot: recorded %s pass on %s. The next pass checks the rest and merges when it can." % (tid, head))
+    else:
+        print("bugbot: recorded %s fail on %s with %d finding(s). The next pass sends it back to fix." % (tid, head, len(fields["bugbotFindings"])))
     return 0
 
 
@@ -311,6 +444,12 @@ def main() -> None:
     pr.add_argument("--beam", default=".warp/beam.json")
     pr.add_argument("--id", required=True)
     pr.add_argument("--posted", action="store_true", help="the comment was posted another way: record it only")
+    prc = sub.add_parser("record", help="record a Bugbot review done by hand for the ticket's current head")
+    prc.add_argument("--beam", default=".warp/beam.json")
+    prc.add_argument("--id", required=True)
+    prc.add_argument("--result", required=True, choices=["pass", "fail"])
+    prc.add_argument("--finding", action="append", default=[], help="one finding; repeat for each")
+    prc.add_argument("--evidence", default="", help="where the review is: a link or a note")
     ps = sub.add_parser("status", help="the trigger and each ticket waiting on Bugbot")
     ps.add_argument("--beam", default=".warp/beam.json")
     import usage
@@ -322,6 +461,8 @@ def main() -> None:
         sys.exit(1)
     if args.cmd == "run":
         sys.exit(_cli_run(beam_path, args.id, bool(args.posted)))
+    if args.cmd == "record":
+        sys.exit(_cli_record(beam_path, args.id, args.result, args.finding, args.evidence))
     sys.exit(_cli_status(beam_path))
 
 

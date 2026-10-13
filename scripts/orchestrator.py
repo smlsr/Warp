@@ -1626,11 +1626,6 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     except Exception as exc:
         lines.append("runs: other runs not read (%s)" % exc)
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
-    if live:
-        import bugbot
-
-        # Post each `bugbot run` this pass asked for. Without gh it prints a MUST DO line.
-        lines.extend(bugbot.post_pending(data, path, lines, now=now))
     import agents as agents_mod
 
     disk = agents_mod.halted_meanwhile(data, path)
@@ -1645,6 +1640,13 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
             "pass: start nothing from this pass. Run parent-exit.",
             "listener: idle",
         ]
+    if live:
+        import bugbot
+
+        # Post each `bugbot run` this pass asked for, only once the pass was not aborted
+        # by a halt. Each posted comment is written to the beam on disk as it is posted.
+        # Without gh it prints a MUST DO line.
+        lines.extend(bugbot.post_pending(data, path, lines, now=now))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
