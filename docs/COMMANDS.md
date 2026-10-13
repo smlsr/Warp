@@ -708,7 +708,7 @@ python3 <plugin>/scripts/inbound.py ?
 | `--pid` | Optional process id stored on `listener.pid` by `claim` or `heartbeat`. |
 | `--lease` | Generation this copy holds. `poll` checks it before any channel line. `wait` and `returned` use the same number. |
 | `--holder` | Holder id that must match the beam. `take` sets it. A mismatch prints `reap: exit superseded` and reads nothing. |
-| `--reason` | With `returned`: `polled`, `rotated`, `orphaned`, or `stopped`. With `heartbeat`: `poll`, `pause`, or `stop`. |
+| `--reason` | With `returned`: `rotated`, `orphaned`, or `stopped`. `polled` is refused while this copy holds a live lease (`listener: not returned`): a listener keeps cycling until `poll` or `wait` tells it to stop. With `heartbeat`: `poll`, `pause`, or `stop`. |
 | `--fast` | With `wait`: this cycle queued a command, so sleep `listenerFastSeconds`. Without it, sleep `listenerSlowSeconds`. |
 | `--count` | With `wait` or `polled`: how many `warp:` commands this cycle queued. |
 | `--cursor` | With `wait` or `polled`: the id of the newest message this read saw. The next read starts after it. |

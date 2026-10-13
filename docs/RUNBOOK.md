@@ -315,7 +315,7 @@ Pause, stop, and `/warp-cleanup` touch only agents in their own registry or carr
 
 `lock-escape` means the diff needed a path outside the ticket's locks. The Shuttle stores each of those paths with `--escaped` when it sets the alarm. It does not widen the lock itself.
 
-The parent's pass, while the run is running, calls `alarm_repair.py next` about every `alarmRepairMinutes` (default 15). The listener does not start the repair. The repair widens that ticket's locks to the paths that escaped, records the added paths on `addedLocks`, and starts one Shuttle inside the widened lock. Herald's start line names the paths added.
+The parent's pass, while the run is running, calls `alarm_repair.py next` about every `alarmRepairMinutes` (default 15). The listener does not start the repair. The repair widens that ticket's locks to the paths that escaped, records the added paths on `addedLocks`, and prints `alarm-repair: launch <id>` with the `checkout.py launch` command for one Shuttle inside the widened lock. The parent runs it and starts that Shuttle. Herald's start line names the paths added. `--returned <id>` before that launch prints `alarm-repair: not launched <id>` and does not use one of the `maxAlarmRepairs` attempts.
 
 Do not start that repair when an in-flight ticket holds one of those paths, or holds one of the ticket's current locks. `alarm-repair: locked <id> by <holder>` means wait. When the holder finishes (it is no longer in flight), the next pass widens and starts. A queued ticket's overlapping lock can be widened. Nothing is stolen from work that is running.
 

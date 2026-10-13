@@ -1676,9 +1676,12 @@ def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None
 LISTENER_CONTRACT = (
     "You are the Warp listener. Stay up on the parent's checkout. subagentVm does not apply. "
     "You never start another agent of any kind. "
-    "Each cycle runs inbound.py poll --lease, reads each channel once, posts each ack, enqueues, "
-    "then inbound.py wait. The wait sleeps in Python. You do not shell-sleep, set a timer, or subscribe. "
-    "On reap: exit, listen: rotate, or listen: stopped, return that line. The script already wrote the return stamp."
+    "Keep cycling until the script tells you to stop. Each cycle runs inbound.py poll --lease, reads each channel once, "
+    "posts each ack, enqueues, then inbound.py wait. The wait sleeps in Python. You do not shell-sleep, set a timer, or subscribe. "
+    "`listen: wait` means run poll again now, with the same lease and holder. An empty read, a quiet channel, "
+    "or a finished cycle is not a reason to stop. "
+    "Stop only when poll or wait prints reap: exit, listen: rotate, or listen: stopped. Return that line. "
+    "The script already wrote the return stamp."
 )
 
 
@@ -1709,10 +1712,13 @@ def listener_prompt(beam_path: Path) -> list:
         "holder: %s" % holder,
         "background: true",
         LISTENER_CONTRACT,
-        "First: python3 %s/inbound.py poll --beam %s --lease %s --holder %s" % (scripts, beam_file, generation, holder),
-        "Then: python3 %s/inbound.py wait --beam %s --lease %s --holder %s" % (scripts, beam_file, generation, holder),
-        "Exit: python3 %s/inbound.py returned --beam %s --reason <polled|rotated|orphaned|stopped> --lease %s --holder %s"
+        "Loop: poll, read, ack, enqueue, wait, then poll again. Keep cycling until the script tells you to stop.",
+        "Poll: python3 %s/inbound.py poll --beam %s --lease %s --holder %s" % (scripts, beam_file, generation, holder),
+        "Wait: python3 %s/inbound.py wait --beam %s --lease %s --holder %s --cursor <newest> --count <n>"
         % (scripts, beam_file, generation, holder),
+        "Stop: only on reap: exit, listen: rotate, or listen: stopped. Return that line. The stamp is already written.",
+        "Stamp, only if you must leave and the script printed none: python3 %s/inbound.py returned --beam %s "
+        "--reason <rotated|orphaned|stopped> --lease %s --holder %s" % (scripts, beam_file, generation, holder),
     ]
     if slug:
         body.insert(6, "model: %s" % slug)

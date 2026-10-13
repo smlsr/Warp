@@ -205,7 +205,7 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertIn("do not wait for it", lines[at + 1])
         self.assertIn("model: inherit", lines[at + 1])
         self.assertNotIn("subagentVm", lines[at + 1])
-        prompt = lines[at + 2 : at + 2 + 10]
+        prompt = lines[at + 2 : at + 2 + 13]
         self.assertEqual(prompt[0], "[warp] listener")
         self.assertEqual(prompt[1], "LISTEN")
         self.assertNotIn("LISTEN once", prompt)
@@ -216,8 +216,14 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertEqual(prompt[6], "background: true")
         self.assertIn("subagentVm does not apply", prompt[7])
         self.assertIn("You never start another agent of any kind", prompt[7])
-        self.assertIn("inbound.py poll --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[8])
-        self.assertIn("inbound.py wait --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[9])
+        self.assertIn("Keep cycling until the script tells you to stop", prompt[7])
+        self.assertIn("Keep cycling until the script tells you to stop", prompt[8])
+        self.assertIn("inbound.py poll --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[9])
+        self.assertIn("inbound.py wait --beam %s --lease 1 --holder listener" % self.beam_path.resolve(), prompt[10])
+        self.assertTrue(prompt[11].startswith("Stop: only on reap: exit, listen: rotate, or listen: stopped."))
+        self.assertIn("--reason <rotated|orphaned|stopped>", prompt[12])
+        # The listener is never offered `polled` as a way out.
+        self.assertNotIn("polled", "\n".join(prompt))
         self.assertEqual(agents.launch_marker("\n".join(prompt)), ("listener", ""))
         self.assertTrue(agents.has_tag("\n".join(prompt)))
         again = orchestrator.supervise(self.beam_path, now=NOW, provider={})
@@ -502,6 +508,21 @@ class ListenerLeaseTests(unittest.TestCase):
     def start(self):
         self.assertEqual(orchestrator.supervise_listener(self.beam_path, now=NOW), ["listener: poll"])
 
+    def test_a_live_holder_cannot_leave_with_polled(self):
+        self.start()
+        got = inbound.mark_returned(self.beam_path, "polled", lease=1, holder="listener", now=NOW)
+        self.assertTrue(got.startswith("listener: not returned."), got)
+        self.assertIn("Run poll again now with the same lease and holder", got)
+        raw = self.beam()["listener"]
+        self.assertEqual(raw["holder"], "listener")
+        self.assertEqual(raw.get("returnReason") or "", "")
+        # Once the run halts, the stamp is allowed.
+        data = self.beam()
+        data["runState"] = "stopped"
+        self.write(data)
+        self.assertEqual(inbound.mark_returned(self.beam_path, "polled", lease=1, holder="listener", now=NOW),
+                         "listener: returned polled")
+
     def test_a_mismatched_lease_exits_before_a_read(self):
         self.start()
         self.assertEqual(inbound.take_lease(self.beam_path, "chat", now=NOW), "listener: lease generation=2 holder=chat")
@@ -586,14 +607,14 @@ class ListenerLeaseTests(unittest.TestCase):
         fast = inbound.wait_for(
             self.beam_path, lease=1, holder="listener", fast=True, sleep=nap, clock=clock.time, step=2, now=None
         )
-        self.assertEqual(fast, ["listen: wait"])
+        self.assertEqual(fast, ["listen: wait", inbound.KEEP_CYCLING])
         self.assertEqual(self.beam()["listener"]["interval"], "fast")
         self.assertGreaterEqual(clock.now - epoch(NOW), 4)
         started = clock.now
         slow = inbound.wait_for(
             self.beam_path, lease=1, holder="listener", fast=False, sleep=nap, clock=clock.time, step=2
         )
-        self.assertEqual(slow, ["listen: wait"])
+        self.assertEqual(slow, ["listen: wait", inbound.KEEP_CYCLING])
         self.assertEqual(self.beam()["listener"]["interval"], "slow")
         self.assertGreaterEqual(clock.now - started, 6)
 
