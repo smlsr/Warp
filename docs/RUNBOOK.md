@@ -507,3 +507,11 @@ python3 <plugin>/scripts/acceptance.py show --beam .warp/beam.json --id WV-01
 
 A ticket with no criteria at all still cannot merge until a result is recorded for it; scan names those tickets so the pack can be fixed.
 
+## How a merge is recorded
+
+A ticket is recorded merged only when its pull request is merged on the provider. When a ticket is ready (Bugbot, checks, every acceptance criterion pass), the supervise pass prints `merge: request <id> <url>` and, once it knows the pass was not cut short by a pause or stop, merges it with `gh pr merge --squash` and reads the pull request back. `MERGED` prints `merge: <id> merged on the provider (gh pr merge --squash, confirmed MERGED)`, then the usual `merge: <id> merged`, the Jira Done move, Slack, and the gate check.
+
+When the merge cannot run here (gh missing, a read-only token, branch protection), the ticket stays `merging` and nothing downstream moves: `merge: not merged <id>: <reason>` and `merge: MUST DO <id>: merge <url> (squash) with the GitHub MCP merge tool (merge_pull_request) or gh pr merge --squash`. `/warp-allow-notify --with-git` allows `merge_pull_request`. Whoever merges it, the next pass reads the pull request as `MERGED` and records it (`merge: <id> merged on the provider (confirmed)`). In between, `merge: wait <id>`. A merge queue prints `merge: <id> enqueued` and is recorded the same way when it lands. Local mode (`pushMerge: false`) prints the `provider.py merge-local` command to run.
+
+Before 1.6.12 a pass with no merge result from the provider recorded the merge without one, cleared the gate, and asked for the Jira Done move while the pull request stayed open. `/warp-resume` now checks every ticket recorded merged that has a pull request and no confirmed merge: an open pull request goes back to ready (`heal: <id> was recorded merged, but <url> is open on the provider. Back to ready to merge; the next pass merges it.`) and its gate is pending again.
+

@@ -126,6 +126,62 @@ def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=
     return "heal: %s lock-escape cleared, %s.%s" % (tid, where, added)
 
 
+def check_merged(beam_path: Path, fetch=None) -> list:
+    """Tickets recorded merged that the provider shows are not: put them back to ready-to-merge.
+
+    Before 1.6.12 a live pass with no merge result from the provider recorded the merge anyway, so a
+    ticket could read merged (and clear its gate) while its pull request was still open. Each merged
+    ticket with a pull request and no confirmed merge is checked once; a confirmed one is marked.
+    """
+    import provider as provider_mod
+
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return []
+    data = beam_mod.load_json(beam_path)
+    root = beam_path.resolve().parent.parent
+    fetch = fetch or (lambda url: provider_mod.fetch_pr_state(root, url))
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    lines, reopened, changed = [], [], False
+    for tid, ticket in tickets.items():
+        if not isinstance(ticket, dict) or ticket.get("status") != "merged":
+            continue
+        pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+        if not pr.get("url") or pr.get("mergeConfirmed"):
+            continue
+        snap = fetch(pr["url"])
+        state = str((snap or {}).get("prState") or "").upper()
+        if state == "MERGED":
+            pr["mergeConfirmed"] = True
+            if snap.get("mergeSha"):
+                pr["sha"] = snap["mergeSha"]
+            changed = True
+            continue
+        if state not in {"OPEN", "CLOSED"}:
+            continue  # the provider could not be read; leave it
+        ticket["status"] = "review"
+        ticket["phase"] = "ready"
+        for key in ("sha", "mergeRequestedSha", "mergeRequestedAt", "mergeAttempt"):
+            pr.pop(key, None)
+        reopened.append(tid)
+        changed = True
+        lines.append("heal: %s was recorded merged, but %s is %s on the provider. Back to ready to merge; the next pass merges it."
+                     % (tid, pr["url"], state.lower()))
+    if reopened:
+        for gate in data.get("gates") or []:
+            if isinstance(gate, dict) and gate.get("status") == "green" and set(gate.get("members") or []) & set(reopened):
+                gate["status"] = "pending"
+                gate["evidence"] = None
+                gate["greenAt"] = None
+                lines.append("heal: gate %s is pending again: %s is not merged." % (gate.get("key"), ", ".join(sorted(set(gate.get("members") or []) & set(reopened)))))
+    if changed:
+        data["metrics"] = beam_mod.metrics(data)
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        if reopened:
+            beam_mod.journal(beam_path, {"type": "heal", "unmerged": reopened})
+    return lines
+
+
 def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
     beam_path = Path(beam_path)
     if not beam_path.is_file():

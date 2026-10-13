@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Optional
 
 import orchestrator
@@ -1357,6 +1358,8 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
             ticket["phase"] = "merged"
         return
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
+    if confirm_merge(data, ticket, snap, lines):
+        return
     import agents
 
     agents.finish_bugbot(data, ticket, now=now, beam_path=_beam_path(data))
@@ -1435,6 +1438,10 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         return
     _ensure_records(ticket)
     snap = (provider or {}).get(tid) or {}
+    if data.get("_liveMerge") and "merge" not in snap:
+        # A live pass. Merged means the provider says merged, never "nothing said otherwise".
+        request_merge(data, ticket, snap, lines)
+        return
     wanted = str(snap.get("merge") or "merged").strip().casefold()
     if wanted not in {"merged", "enqueue", "rejected"}:
         wanted = "merged"
@@ -1454,11 +1461,115 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         lines.append("merge: %s %s" % (tid, reported))
         lines.append("not merged")
         return
+    finish_merge(data, ticket, lines)
+
+
+def request_merge(data: dict, ticket: dict, snap: dict, lines: list) -> None:
+    """Ask for the merge once per head commit. Supervise runs it; a later pass confirms it."""
+    import beam as beam_mod
+
+    tid = ticket.get("id")
+    pr = ticket.setdefault("pr", {})
+    if str(snap.get("prState") or "").upper() == "MERGED":
+        finish_merge(data, ticket, lines, sha=str(snap.get("mergeSha") or ""), how="merged on the provider (confirmed)")
+        return
+    head = str(pr.get("headSha") or "")
+    ticket["status"] = "merging"
+    ticket["phase"] = "merging"
+    if head and str(pr.get("mergeRequestedSha") or "") == head:
+        lines.append("merge: wait %s (asked; the provider does not show it merged yet)" % tid)
+        return
+    pr["mergeRequestedSha"] = head
+    pr["mergeRequestedAt"] = beam_mod.utcnow()
+    lines.append("phase: %s merging" % tid)
+    lines.append("merge: request %s %s" % (tid, pr.get("url") or ""))
+
+
+def confirm_merge(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> bool:
+    """A ticket asked to merge, and the provider now shows its pull request merged."""
+    if not isinstance(snap, dict) or str(snap.get("prState") or "").upper() != "MERGED":
+        return False
+    if ticket.get("status") in orchestrator.SETTLED:
+        return False
+    finish_merge(data, ticket, lines, sha=str(snap.get("mergeSha") or ""), how="merged on the provider (confirmed)")
+    return True
+
+
+_MERGE_LINE = re.compile(r"^merge: request (\S+) (\S*)")
+
+
+def run_merges(data: dict, beam_path, lines: list, merger=None) -> list:
+    """Merge each `merge: request` this pass printed, through the provider, and confirm it.
+
+    `merger(root, number, cfg)` returns (outcome, detail) like provider.merge_connected. A merge
+    that cannot run here prints a MUST DO line and leaves the ticket merging: the next pass marks
+    it merged only when the provider shows the pull request merged.
+    """
+    import provider as provider_mod
+
+    out = []
+    root = Path(beam_path).resolve().parent.parent
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    cfg = dict(data.get("config") or {})
+    try:
+        import prompt_gate
+
+        cfg.update(prompt_gate.effective_config(data, root))
+    except Exception:
+        pass
+    mode = ""
+    try:
+        mode = str(provider_mod.resolve(root, cfg).get("mode") or "")
+    except Exception:
+        mode = ""
+    for line in list(lines):
+        match = _MERGE_LINE.match(line)
+        if not match or match.group(1) not in tickets:
+            continue
+        tid, url = match.group(1), match.group(2)
+        ticket = tickets[tid]
+        scripts = orchestrator.scripts_dir()
+        if mode == "local" or not url:
+            out.append("merge: MUST DO %s: local mode, no pull request to merge. Run python3 %s/provider.py merge-local "
+                       "--root %s --beam %s --id %s --branch %s" % (tid, scripts, root, Path(beam_path).resolve(), tid, ticket.get("branch") or ""))
+            continue
+        number = str(url).rstrip("/").split("/")[-1]
+        outcome, detail = (merger or provider_mod.merge_connected)(root, number, cfg)
+        if outcome == "merged":
+            finish_merge(data, ticket, out, sha=detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else "",
+                         how="merged on the provider (gh pr merge --squash, confirmed MERGED)")
+            continue
+        ticket.setdefault("pr", {})["mergeAttempt"] = outcome
+        if outcome == "enqueue":
+            out.append("merge: %s enqueued (%s). Marked merged when the provider shows it merged." % (tid, detail))
+            continue
+        ticket["pr"]["mergeError"] = detail
+        out.append("merge: not merged %s: %s" % (tid, (detail or "rejected").splitlines()[0]))
+        out.append(
+            "merge: MUST DO %s: merge %s (squash) with the GitHub MCP merge tool (merge_pull_request) or `gh pr merge %s --squash`, "
+            "then let the next pass confirm it. Warp marks it merged only when the provider shows the pull request merged. "
+            "Do not mark it merged by hand. If the tool is not allowed, add it with /warp-allow-notify --with-git." % (tid, url, number)
+        )
+        out.append("herald: %s is ready to merge, but Warp could not merge it here: %s" % (tid, (detail or "rejected").splitlines()[0]))
+    return out
+
+
+def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str = "") -> None:
+    """The pull request is merged on the provider (or locally in local mode). Record it and say so."""
+    tid = ticket.get("id")
+    ticket["status"] = "merged"
+    if sha:
+        ticket.setdefault("pr", {})["sha"] = sha
+    if how:
+        # Seen merged on the provider (or merged locally). A merge recorded without this is checked on resume.
+        ticket.setdefault("pr", {})["mergeConfirmed"] = True
     ticket["phase"] = "merged"
     lines.extend(_release_ticket(data, ticket, "merged"))
     clear_shuttle(ticket)
     url = (ticket.get("pr") or {}).get("url") or ""
     key = ticket.get("jiraKey") or ""
+    if how:
+        lines.append("merge: %s %s" % (tid, how))
     lines.append("phase: %s merged" % tid)
     lines.append("merge: %s merged" % tid)
     lines.append("herald: %s merged." % tid)
@@ -1529,3 +1640,4 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         data.pop("_fixDefer", None)
         if owned_root:
             data.pop("_repoRoot", None)
+        data.pop("_liveMerge", None)

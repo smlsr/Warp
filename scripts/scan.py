@@ -1084,6 +1084,8 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         try:
             import heal
 
+            # A ticket recorded merged whose pull request is still open goes back to ready first.
+            heal_lines.extend(heal.check_merged(beam_path))
             heal_lines.extend(heal.heal(beam_path))
         except Exception as e:
             heal_lines.append("heal: skipped (%s)" % e)

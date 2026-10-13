@@ -497,6 +497,13 @@ def prepare_launch(
         # An id from before a pause or a stop is never reused. Whatever still
         # holds it reads `reap: exit` on its next check.
         ticket["agent"] = _new_id(ticket, doc)
+    current = str(ticket.get("agent") or "")
+    if current and any(
+        isinstance(row, dict) and row.get("id") == current and row.get("state") not in _LIVE for row in _rows(doc)
+    ):
+        # That Shuttle finished (returned, replaced, dead). A new step is a new Shuttle with its own id:
+        # reusing the old one put two rows under one id, and the ended row made the new one look dead.
+        ticket["agent"] = _new_id(ticket, doc)
     agent = str(ticket.get("agent") or "")
     if any(isinstance(row, dict) and row.get("id") == agent and row.get("state") in _LIVE for row in _rows(doc)):
         return {"action": "hold", "id": agent}
