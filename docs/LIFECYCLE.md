@@ -20,7 +20,7 @@ A worker never starts an agent, never subscribes to anything, never sets a timer
 
 Four commands, two behaviors.
 
-`/warp-start` and `/warp-resume` are the same command. Either one sets the run running, from a stopped run, a paused run, or a run that is already running. It prints which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` Both run the same prompt gate, and `--force` means the same on both. There is nothing to refuse and nothing to choose between them.
+`/warp-start` and `/warp-resume` are the same command. Either one sets the run running, from a stopped run, a paused run, or a run that is already running. It prints which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` Both run the same prompt gate, and `--force` means the same on both. The run state is never a reason to refuse, and there is nothing to choose between them. A named run can still refuse: it has no scan, it is live on another machine (`--takeover`), or its `startAfter` is not met (`--now`). See "Named runs".
 
 `/warp-pause` and `/warp-stop` are the same teardown. One thing differs.
 
@@ -54,7 +54,7 @@ The order is fixed: open pull requests that need a fix (a conflict, CI that neve
 
 A fix, a rebase, or a relaunch is an agent like any other. It takes a `maxAgents` slot, and it starts even when `maxInProgress` is full, because its ticket is already open. `maxInProgress` holds only new tickets. Unfinished work draws on the slots first, so a new ticket starts only in a slot unfinished work did not need. `memoryCheck: true` can lower `maxAgents` on a shared machine when memory is tight.
 
-`maxLocalSubagents` and `maxFixWorkers` are retired. A config that still has them prints `config: <key>: <value> is retired and ignored.` at start and in `/warp-version`.
+`maxLocalSubagents`, `maxFixWorkers`, `listenerStaleMinutes`, `listenerRestartNote`, and `maxListenerRestartsPerHour` are retired ([CONFIG.md](CONFIG.md) "Retired keys"). A config that still has them prints `config: <key>: <value> is retired and ignored.` at start and in `/warp-version`.
 
 ## Why
 
@@ -70,7 +70,7 @@ A prompt for a Shuttle comes from one place, `checkout.py launch --id <id>`. It 
 
 The output has two parts. Lines above `prompt: pass every line below this one to the subagent, and nothing above it` are for the parent. Lines below it are the worker's prompt. The parent's instruction to start workers in parallel never reaches a worker.
 
-The listener's prompt comes from `orchestrator.py supervise`, after `listener: poll`, and only when a poll is due.
+The listener's prompt comes from `orchestrator.py supervise`, after `listener: poll`, and only when no holder is live and the return stamp is in.
 
 ### The tag
 
@@ -95,7 +95,7 @@ The instance is shown wherever you would look for it:
 | `/warp-version` | the same line, and `this machine: <machine id> host=<host>` for the machine the command ran on |
 | `agents.py list` | the same line first |
 | `.warp/STATUS.md`, `.warp/status.json` | `Instance warp:a1b2c3 ...`, and an `instance` object |
-| Every Slack and Teams message | the header: `Warp | <repo> / <project> | warp:a1b2c3` |
+| Every Slack and Teams message | the header: `Warp | <repo> / <project> | run <name> | warp:a1b2c3`. `| run <name>` appears only on a named run |
 | The status post | a fact, `Instance: warp:a1b2c3 on <host>` |
 
 The tag is how this run's agents are told apart from every other agent, including another Warp run's. A dry run lists them with their status, which is how you see one that is still running:
@@ -130,7 +130,7 @@ python3 <plugin>/scripts/agents.py reap --remote --id <agent> --ticket <id>
 python3 <plugin>/scripts/agents.py reap --beam .warp/beam.json --role parent --id <session>
 ```
 
-It prints `reap: continue`, or `reap: exit <reason>` and one line saying how to stop, and exits 3. `ticket_state.py append` and `beam.py heartbeat` print the same line, so a Shuttle that writes its state reads the answer without a second command. `inbound.py poll` prints it for the listener.
+It prints `reap: continue`, or `reap: exit <reason>` and one line saying how to stop, and exits 3. `ticket_state.py append` and `beam.py heartbeat` print the same line, so a Shuttle that writes its state reads the answer without a second command. `inbound.py poll` and `inbound.py wait` print it for the listener.
 
 | Reason | Meaning |
 |---|---|
@@ -142,6 +142,8 @@ It prints `reap: continue`, or `reap: exit <reason>` and one line saying how to 
 | `archived` | cleanup archived this agent |
 | `not-resumed` | the turn returned more than `staleMinutes` ago and the parent did not resume it |
 | `not-launched` | no launch was recorded for this id: something other than the parent started it |
+| `superseded` | listener only: its lease generation or holder no longer matches. Another copy, or a `/warp-listen` chat, holds the lease |
+| `orphaned` | listener only: `listener.parentSeenAt` is older than `listenerOrphanMinutes` (default 5). The parent is gone. Nothing replaces the listener until a parent runs `supervise` again |
 
 A Shuttle in a worktree reads the parent's beam on disk. On `reap: exit` that check ends the agent's row and stamps `reaped`, so `agents.py list` shows who is gone.
 
@@ -149,7 +151,7 @@ A Shuttle on its own VM passes `--remote`, which reads the beam and the registry
 
 ### 4. The halt
 
-`/warp-pause` and `/warp-stop` run the same teardown. The only difference is what comes after: a paused run continues with `/warp-resume`, a stopped run writes the completion report and waits for `/warp-start`.
+`/warp-pause` and `/warp-stop` run the same teardown. The only difference is what comes after: a stopped run also writes the completion report. Either one continues with `/warp-start` or `/warp-resume`.
 
 1. `runState` becomes `paused` or `stopped`.
 2. Every row in `.warp/agents.json` is ended (`stop: <id>`) and marked `halted`. Every Shuttle slot is freed. The listener's poll is closed. The line is `halt: <state> agents=<n>`.
@@ -222,7 +224,7 @@ The parent runs passes in one turn until `parent: exit`.
 
 1. `inbound.py apply-pending`. Queued `warp:` commands are applied. A pause or stop here is the halt above.
 2. `orchestrator.py supervise --beam .warp/beam.json`. The first line is the listener. The rest is the pipeline.
-   - `listener: poll`, then the prompt (`LISTEN`): start one `warp-listen` subagent in the background with those lines and do not wait. `subagentVm` does not apply. When `listenerModel` is unset the head line says `model: inherit`. When it is set the head line says `model: <slug>`.
+   - `listener: poll`, then the prompt (first line `[warp:<instance>] listener`, then `LISTEN`): start one `warp-listen` subagent in the background with those lines and do not wait. `subagentVm` does not apply. When `listenerModel` is unset the head line says `model: inherit`. When it is set the head line says `model: <slug>`.
    - `listener: hold reason=live holder=<id> generation=<n>`: that holder already has the lease. `listener: hold reason=await-return generation=<n>`: the lease was bumped and the return stamp is not in. Start nothing. A stale heartbeat does not start one.
    - `listener: idle`: the run is paused, stopped, or finished. `listener: none`: no `slackChannel` or `teamsChannel` is set. Start nothing.
    - `start <id> ...`: run `checkout.py launch --id <id>` and start one subagent with the lines below the `prompt:` mark. Start the ready ones together, up to `maxAgents`, in the background so the pass goes on. A foreground batch also works: the pass continues when they return.
@@ -277,7 +279,7 @@ The parent's own cloud agent is never bound to a Shuttle and never archived.
 | `id` | `subagent:<ticket>`, `shuttle-<ticket>-rN`, `listener`, `parent:<session>`, `bugbot:<ticket>:<sha>`, or a cloud id (`bc-...`) |
 | `role` | `shuttle`, `listener`, `parent`, or `bugbot` |
 | `state` | `starting`, `running`, `ended`, or `stopped` |
-| `endReason` | `returned`, `dead`, `replaced`, `merged`, `parked`, `paused`, `stopped`, `done`, `archived`, `polled`, `lost` |
+| `endReason` | `returned`, `dead`, `replaced`, `merged`, `parked`, `paused`, `stopped`, `done`, `archived`, `polled`, `rotated`, `orphaned`, `lost`. A listener row ends `polled`, `rotated`, `orphaned`, or `stopped`, the generation's return stamp |
 | `halted` | the row is from before a pause or a stop, and is never resumed |
 | `reaped` | when the agent read `reap: exit`. A worktree Shuttle stamps its own row. A VM Shuttle does not: the parent stamps the row named by `agent=` or `cloudAgent` |
 | `cloudId`, `retired`, `archivedIds` | the VM the Shuttle is on, VMs it left, and VMs already archived |
@@ -301,6 +303,13 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `parent: stay` / `parent: exit` / `parent: exit superseded` | `parent-exit` | run another pass, or end the turn |
 | `listener: poll` / `hold reason=live` / `hold reason=await-return` / `idle` / `none` | `supervise` | start one background listener, or start nothing |
 | `listen: <kind> channel=<name> since=<cursor>` | `inbound.py poll` | where the listener reads from |
+| `listen: rotate` | `inbound.py poll`, `inbound.py wait` | this generation hit `listenerMaxMinutes` or `listenerMaxReads`. Return it. The return stamp is written |
+| `listen: wait` | `inbound.py wait` | the sleep is over. Poll again with the same lease |
+| `listen: stopped` | `inbound.py poll`, `inbound.py wait`, after a `reap: exit` line | return it. Do not read |
+| `listener: lease generation=<n> holder=<id>` | `inbound.py take` | a `/warp-listen` chat holds the lease. Any other copy exits `superseded` |
+| `listener: returned <reason>` | `inbound.py returned` | the return stamp is written |
+| `listener: not started. The next supervise issues it.` | `scan.py start`, `scan.py resume` | start and resume do not start a listener |
+| `inbound: duplicate <id>` / `enqueue: duplicate <id>` | `inbound.py accept` / `inbound.py enqueue` | an earlier poll already queued that message. No second ack, no second queue entry |
 | `listener: polled <n>` | `inbound.py polled` | the poll is recorded |
 | `spawn: closed <id>` and `refuse: ...` | `checkout.py launch` | no prompt was printed |
 | `name: [warp:<instance>] <ticket> <step>` | `checkout.py launch` | the name to give the subagent. It is the tag |
@@ -309,8 +318,9 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `stop: <id>` | pause, stop | that registry row was ended |
 | `halt: <state> agents=<n>` | pause, stop, end of run | the local teardown ran |
 | `cleanup: cancelled <id>` / `archived <id>` / `link <url>` | halt, cleanup, merge, park | what happened to a cloud agent |
+| `cleanup: would cancel <id>` / `would archive <id>` | cleanup without `--apply` | a dry run. Nothing changed |
 | `cleanup: unreachable <id>` / `cancel failed` / `archive failed` | halt, merge, park, retire | the API call failed. The agent is left alone and tried again later |
-| `cleanup: skip <id> reason=self` / `parent` / `running` / `running-untagged` / `status` | cleanup | why an agent was left |
+| `cleanup: skip <id> reason=self` / `parent` / `running` / `running-untagged` / `running-scan` / `status` | cleanup | why an agent was left |
 | `list: kept <id> reason=...` | `/warp-list` | the same reasons, in a listing |
 | `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>` | `/warp-list` | what is still out |
 | `run: was paused (<reason>). Continuing.` / `was stopped. Starting.` / `was already running.` | start, resume | where the run came from |

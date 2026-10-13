@@ -7,7 +7,7 @@ stateDir: .warp
 # The name of this checkout's run. /warp-init <name> writes this line, so it is
 # commented here. One repo can hold several runs (core, admin, ui). A named
 # run publishes to .warp/runs/<name>/ on the base branch and on its ticket
-# branches, names its branches warp/<name>/<id>, and is the only writer of
+# branches, names its branches warp/<name>/<id>-<jira>, and is the only writer of
 # that folder. Lowercase letters, digits, and dashes. No name is one unnamed
 # run, as before.
 scanFolder: ""
@@ -18,12 +18,14 @@ scanFolder: ""
 checkpointMinutes: 10
 # A named run publishes its folder to the base branch when a ticket changes
 # status or the run changes state, and at least this often while it runs.
-gateOrder: strict
-# strict (the default): a ticket in block G3 does not start until every block
-# before it is cleared. A block is cleared when all its tickets are merged, done,
-# or skipped and its gate is not red. A parked ticket holds the blocks after it.
-# deps: only dependencies and a blocking gate that is not green hold a ticket
-# back, as before. /warp-start G0-G3 runs a range of blocks either way.
+# gateOrder: strict
+# Unset (the default): strict, except a build-schedule/2 schedule.json, which
+# runs in deps order with milestone gates unless its model.gate_order is strict.
+# strict: a ticket in block G3 does not start until every block before it is
+# cleared. A block is cleared when all its tickets are merged, done, or skipped
+# and its gate is not red. A parked ticket holds the blocks after it.
+# deps: only dependencies and a gate hold a ticket back. Setting this line
+# overrides the schedule either way. /warp-start G0-G3 runs a range of blocks.
 startAfter: ""
 # A run that waits on another run reaching a gate: core:G2, or several separated
 # by commas. /warp-start refuses until that run has cleared the gate and every

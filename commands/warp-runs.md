@@ -19,4 +19,4 @@ It fetches origin first. It prints `runs: <n> on origin/<base>` and one line per
 - `live` means the run is `running` and its parent saved state within 30 minutes. A live run owned by another machine needs `/warp-start --takeover`.
 - `owner` is the person (git `user.name`) who last started it. `startAfter` is the gate of another run it waits for, or `-`.
 
-`python3 <plugin>/scripts/runs.py show <name>` prints what `/warp-init <name>` would show about one run. Details: `docs/RUNS.md`.
+With a name, `/warp-runs <name>` runs `python3 <plugin>/scripts/runs.py show <name>` instead. It prints what `/warp-init <name>` would show about one run. Details: `docs/RUNS.md`.

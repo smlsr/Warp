@@ -18,4 +18,4 @@ The dry run prints how many files are in the run's folder, its state, the branch
 - `refuse: <name> is running (parent last seen ...). /warp-stop it first.` A run whose parent saved state in the last 30 minutes.
 - `refuse: <other> waits on <name> (...).` Another run has `startAfter` on it, or a ticket that depends on one of its tickets.
 
-What is kept: merged code, Jira, and pull requests already merged. Branches stay unless `--branches`, which deletes them on origin and closes their open pull requests. If this checkout runs `<name>`, its local files move to `.warp/previous-<name>/` and `run:` is cleared. Details: `docs/RUNS.md`.
+What is kept: merged code, Jira, and pull requests already merged. Branches stay unless `--branches`, which deletes them on origin (`git push origin --delete`). Deleting a branch closes its open pull request on GitHub. If this checkout runs `<name>`, its local files move to `.warp/previous-<name>/` and `run:` is cleared. Details: `docs/RUNS.md`.

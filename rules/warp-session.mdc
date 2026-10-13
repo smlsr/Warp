@@ -17,7 +17,7 @@ Run this and follow it. Do not dispatch from the hint.
 python3 <plugin>/scripts/resume_hint.py --root .
 ```
 
-If it says there is no beam, stop and tell the user to run `/warp-scan`. If the beam is paused, do not dispatch. Read `.warp/BOARD.md` and run `/warp-status` before claiming tickets.
+If it says there is no beam, stop and tell the user to run `/warp-scan` (or `/warp-from-jira <labels>` when there is no plan file). If the beam is paused, do not dispatch. Read `.warp/BOARD.md` and run `/warp-status` before claiming tickets.
 
 ## Who starts and who waits
 

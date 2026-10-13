@@ -35,4 +35,4 @@ Warp's own Jira import (`/build-pack`) writes everything this reads; hand-made i
 - Locks: the `Locks` section, one path per line. Gate: label `gate:G1`. Lane, repo, module: labels `lane:`, `repo:`, `area:` (else the first component). Acceptance: the `Acceptance` or `Acceptance criteria` section.
 - Sections are `h2. Name` (wiki), `## Name` (markdown), or headings in the rich-text description.
 
-The schedule is planned with `maxAgents` slots, `gateOrder` and `autoMergeSizes` from `.warp/config.yaml`, by the same rule Warp dispatches with. Each ticket keeps its Jira key (`jira`), and `.warp/jira-map.json` gets every plan id, so `/warp-scan` stores the keys without a lookup.
+The schedule is planned with `maxAgents` slots, `gateOrder` and `autoMergeSizes` from `.warp/config.yaml`, by the same rule Warp dispatches with (`scripts/plansim.py`). Each ticket keeps its Jira key (`jira`), and `.warp/jira-map.json` gets every plan id, so `/warp-scan` stores the keys without a lookup.

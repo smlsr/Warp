@@ -27,7 +27,7 @@ python3 <plugin>/scripts/inbound.py poll --beam .warp/beam.json --lease <gen> --
 
 2. Read the messages after `since` in each channel it printed, once. Slack: `slack_read_channel`, `slack_read_thread`, and `slack_search_channels`. Teams: `teams_read_channel`, `teams_read_thread`, and `teams_search_channels`. An empty `since` means read the recent messages. Call an MCP tool only when `scripts/mcp_allow.py` prints `allow`.
 
-3. For each new `warp:` message, run `inbound.py accept`, post the `ack:` sentence from `.warp/inbound-ack.json` in that channel, then enqueue the command. Pass the channel's message id, the Slack ts, to both. `inbound: duplicate <id>` means that ts was already queued: do not post an ack and do not enqueue it. You do not merge. You do not call `proceed.py`. The parent runs `inbound.py apply-pending` and merges a proceed.
+3. For each new `warp:` message, run `inbound.py accept`, post the `ack:` sentence from `.warp/inbound-ack.json` in that channel, then enqueue the command. Pass the channel's message id, the Slack ts, to both. `inbound: duplicate <id>` means that ts was already queued: do not post an ack and do not enqueue it. `inbound: ignored (…)` from `accept` means the command is for another run (`addressed to <run>`, `not named`, or `no such ticket in this run`). It does not rewrite `.warp/inbound-ack.json`: post nothing and do not enqueue it. You do not merge. You do not call `proceed.py`. The parent runs `inbound.py apply-pending` and merges a proceed.
 
 ```bash
 python3 <plugin>/scripts/inbound.py accept --beam .warp/beam.json \
