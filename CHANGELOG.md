@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.3
+
+- `/warp-from-jira <label>[,<label>…]`: when there is no plan file and the work is already in Jira. Warp asks Jira (Atlassian MCP, `jiraMcp`) for the issues with any of the labels (`--match all`: every label), in `jiraProject` unless `--project` or `--any-project`, plus `--jql` for one more clause. It writes `warp-plans/<labels>/plan/schedule.json` (build-schedule/2), `plan/FROM_JIRA.md`, `jira/issues.json` and `.warp/jira-map.json`, then prints `next: /warp-scan <folder>`. A folder that already has a plan is refused unless `--force`. Nothing is written to Jira.
+- Each issue gives its plan id (External ID field, `warp:`/`ext:` label, `[ID]` summary prefix, else the key), size (`size:` label, Size section, original estimate, story points), hours, blockers (`is blocked by` / `depends on` links and a Blocked by section; Done blockers are met; `run:id` stays cross-run), locks (Locks section), gate (`gate:` label), lane, repo, module, and acceptance. Done issues and epics are left out. Issues with no size, no locks, or a blocker outside the labels are reported; a dependency cycle writes nothing.
+- The schedule is planned by Warp's dispatch rule (`scripts/plansim.py`): `maxAgents` slots, `gateOrder`, `autoMergeSizes` with the 0.5 h approval wait, lock paths kept apart, critical chain first. Every ticket carries its Jira key, so `/warp-scan` stores the keys without a lookup.
+- `/warp-scan` with no plan names `/warp-from-jira`.
+
 ## 1.6.2
 
 - `/warp-scan` reads the full build-schedule/2 schedule.json (the HOS-Admin shape): `priority_gate`, `checks` (`[{name, check, wave}]`), `repo`, `lane`, `file`, `screens`, `mock`, and the planned `slot`, `start`, `merge`, `ready` and `latest_start` are kept on each ticket. Gates keep `scope`, `on_green`, `priority`, `starts`, `siblings` and `at`. `python3 scripts/buildsched.py show <schedule.json> [--repo <name>]` prints what Warp will read.

@@ -142,6 +142,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 |---|---|---|
 | `/warp-init` | Copy missing plugin files, backfill config, commit-safe gitignore, allow Warp's MCP tools. `/warp-init <name>` names this checkout's run, or takes up a run of that name that is already in the repo | `--channel`, `--dry-run`, `--no-allow`, `--adopt`, `--switch` |
 | `/warp-upgrade` | Replace `.cursor/plugins/warp` with the current plugin. Does not touch config or the beam | `--root`, `--source` |
+| `/warp-from-jira <labels>` | No plan file yet: read the Jira issues with those labels (`version:1.5.5,ui`) and write a plan folder `/warp-scan` reads: `schedule.json` (build-schedule/2, planned with this run's slots), `FROM_JIRA.md`, and the Jira keys. Refuses a folder that already has a plan. Writes nothing to Jira | `jira_pull.py plan` `--folder` `--project` `--any-project` `--match` `--jql` `--force`, `jira_pull.py build` `--results` `--dry-run` |
 | `/warp-scan` | Read a plan into the beam and resolve Jira keys. `/warp-scan /` clears the saved folder | `--folder`, `--skip-owned` |
 | `/warp-start [gates]` | Set the run running, from a stopped run, a paused run, or a run that is already running, and print which (`run: was stopped. Starting.`). The same command as `/warp-resume`. A gate range runs only some blocks: `G0-`, `G0-G3`, `-G2`, `G5`; no range runs to the end. A named run waits for `startAfter`, and a run another machine is running needs `--takeover`. This turn becomes the parent of the run and prints `parent: session <id>`. It loads main's beam on a fresh checkout, runs the watchdog, and starts unfinished work first (`unfinished:`). A cloud run refuses when Jira or Slack tools are missing from the allow list | `--reason`, `--force`, `--gates`, `--takeover`, `--now` |
 | `/warp-pause` | End every agent in `.warp/agents.json`, free every Shuttle slot, close the listener's poll (`halt: paused agents=<n>`), then push that paused beam to main. With `CURSOR_API_KEY`, cancel and archive this run's cloud agents. Branches, worktrees, and pull requests stay. No completion report. Carry on with `/warp-start` or `/warp-resume` | `--reason` |
@@ -512,6 +513,17 @@ A local agent uses your clone. A cloud agent uses a Cursor virtual machine with 
 Review files from the Cursor file tree. On a cloud VM, download them before the VM is discarded. Ask for a bundle and Warp writes `.warp/warp-review.zip` (status, board, plan; no journal). Set `stateDir` to an absolute path to keep the beam outside the repo.
 
 ## If you have no plan file
+
+The work is already in Jira: label the issues (`version:1.5.5`, or several labels), then
+
+```
+/warp-from-jira version:1.5.5
+/warp-scan warp-plans/version-1.5.5
+```
+
+`/warp-from-jira` asks Jira (through the Atlassian MCP server, `jiraMcp`) for every issue with any of the labels (`--match all`: every label), in `jiraProject` unless `--project` or `--any-project`. Done issues and epics are left out. From each issue it reads the plan id (External ID field, label `warp:<id>`, a `[ID]` summary prefix, else the Jira key), the size (label `size:M`, a Size section, the original estimate, or story points), blockers (`is blocked by` links and a Blocked by section; a Done blocker is met, `run:id` is another run's ticket), locks (a Locks section), the gate (label `gate:G1`), and acceptance (an Acceptance section). It plans the tickets with this run's `maxAgents`, `gateOrder` and `autoMergeSizes`, writes `warp-plans/<labels>/plan/schedule.json`, `plan/FROM_JIRA.md` (the query and every warning: no size, no locks, a blocker outside the labels), `jira/issues.json`, and `.warp/jira-map.json`, and prints `next: /warp-scan <folder>`. A folder that already has a plan is refused; `--force` rebuilds it. Issues made by Warp's own Jira import carry every one of those fields.
+
+Without Jira:
 
 1. Paste `examples/PROMPT-make-cursor-plan.md` into an agent in that repo. It writes `CURSOR_PLAN.md` from the specs and tickets. A filled example is `examples/CURSOR_PLAN.sample.md`.
 2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json` (Warp's own shape or build-schedule/2, the shared FORGEQA/HOS format: `h` hours, `after` blockers, `critical_chain`, gates with `if_red`; gates there are milestones, `priority_gate` tickets go right after the critical chain, and a schedule that spans several repos is split by repo, see [docs/RUNS.md](docs/RUNS.md)), a Jira JSON export, or a markdown table with `id` and `deps`.

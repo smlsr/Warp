@@ -1232,6 +1232,7 @@ def main() -> None:
         if not graph:
             where = f" in {folder.relative_to(root)}" if folder else ""
             print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
+            print("next: the work is in Jira? /warp-from-jira <label>[,<label>] writes a plan folder from the issues with those labels")
             sys.exit(2)
         if graph.get("format") == "build-schedule/2":
             import buildsched
