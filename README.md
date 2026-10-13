@@ -514,7 +514,7 @@ Review files from the Cursor file tree. On a cloud VM, download them before the 
 ## If you have no plan file
 
 1. Paste `examples/PROMPT-make-cursor-plan.md` into an agent in that repo. It writes `CURSOR_PLAN.md` from the specs and tickets. A filled example is `examples/CURSOR_PLAN.sample.md`.
-2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json`, a Jira JSON export, or a markdown table with `id` and `deps`.
+2. `/warp-scan`, or `/warp-scan <folder>` to look only in one folder (see below). Warp also reads `schedule.json` (Warp's own shape or build-schedule/2, the shared FORGEQA/HOS format: `h` hours, `after` blockers, `critical_chain`, gates with `if_red`), a Jira JSON export, or a markdown table with `id` and `deps`.
 3. A connected Jira plugin is the live system of record after the scan, not a second scheduler. Warp will not invent tickets.
 
 ## Scan one folder
@@ -612,6 +612,9 @@ The page is one self-contained HTML file. Waves are concurrency-run segments: ti
 - Header: run, instance, repo, state, range, owner, and when it was last updated. Four totals: run estimate (the plan's elapsed hours, with elapsed so far and ETA left), agent hours, people hours (0.5h per approval and per gate, as the scan estimates them), and tickets. Each is split into completed, in progress, errored or parked, and to do, with a bar. A value the files do not have shows as `—`.
 - Swimlane: agent slots on an estimate-hour clock, like the plan's swimlane PDF. A ready ticket takes the lowest free slot, the critical chain goes first, a dependency waits for the merge plus the approval wait, and with `gateOrder: strict` a block starts when the blocks before it have merged. Gates are drawn where they are reached. Bars are the plan; the color is the ticket's status now: Completed, Errored / Parked, In Progress, In Review, QA Ready, To Do. Every Warp status maps to one of those six. Color by module is an option.
 - Board: lanes by gate block, status, module, or size, with a card per ticket (id, title, size, status, estimate, time spent, pull request, and Jira link when `jiraSite` is set).
+- Table: every ticket with status, plan start, time spent and the four pull request timestamps, sortable on any column.
+- The swimlane's Actual clock draws what happened: hours since the run started, each ticket from claim to merge, gates at greenAt, and a now line.
+- Utilization (collapsed under the totals): active agents over maxAgents, hours spent over the estimate, tokens and minutes by size and by agent.
 - Click a bar or card for the detail: dependencies, locks, events, agent, tokens, and cost. Status chips filter, `/` searches, `R` reloads, auto-reload every 30 seconds is in the File menu, and the theme follows the system or the toggle. Printing fits the swimlane to a landscape page.
 
 `examples/beam.sample.json` is a sample beam to try it with.

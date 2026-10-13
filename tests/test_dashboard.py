@@ -59,7 +59,8 @@ class PageTest(unittest.TestCase):
         self.assertNotRegex(text, r"<link[^>]+stylesheet")
         for label in ("Completed", "Errored / Parked", "In Progress", "In Review", "QA Ready", "To Do"):
             self.assertIn('"%s"' % label, text)
-        for needle in ("showOpenFilePicker", "showDirectoryPicker", "webkitdirectory", "@media print", "prefers-color-scheme", 'data-act="reload"'):
+        for needle in ("showOpenFilePicker", "showDirectoryPicker", "webkitdirectory", "@media print", "prefers-color-scheme", 'data-act="reload"',
+                       'data-view="table"', 'data-clock="actual"', 'id="util"', "PR opened", "Jira last comment", "assumptions"):
             self.assertIn(needle, text)
 
     def test_script_parses(self):
@@ -72,6 +73,38 @@ class PageTest(unittest.TestCase):
         result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)
         Path(handle.name).unlink()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class ScheduleV2Test(unittest.TestCase):
+    """build-schedule/2 (the FORGEQA/HOS/WARPDEMO format): h, critical_chain and if_red."""
+
+    def test_scan_reads_build_schedule_2(self):
+        data = {
+            "schema": "build-schedule/2",
+            "critical_chain": ["A-01", "A-02"],
+            "gates": [{"key": "G0", "name": "Start", "blocking": True, "members": ["A-01"], "checks": ["make ci"], "if_red": "stop"}],
+            "tickets": [
+                {"id": "A-01", "summary": "one", "size": "S", "h": 4, "after": [], "gate": "G0", "critical": True, "rank": 1, "locks": ["a/"]},
+                {"id": "A-02", "summary": "two", "size": "L", "h": 11, "after": ["A-01", "other:B-01"], "gate": "", "critical": True, "rank": 2, "locks": ["b/"]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "schedule.json"
+            path.write_text(json.dumps(data))
+            got = scan.from_schedule(path)
+        self.assertEqual(got["format"], "build-schedule/2")
+        self.assertEqual(got["criticalPath"], ["A-01", "A-02"])
+        self.assertEqual(got["gates"][0]["ifRed"], "stop")
+        two = got["tickets"][1]
+        self.assertEqual((two["hours"], two["after"], two["gate"], two["size"]), (11, ["A-01", "other:B-01"], None, "L"))
+        self.assertEqual(got["tickets"][0]["gate"], "G0")
+
+    def test_legacy_schedule_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "schedule.json"
+            path.write_text(json.dumps({"criticalPath": ["X-1"], "tickets": [{"id": "X-1", "summary": "x", "hours": 6, "deps": [], "size": "M"}]}))
+            got = scan.from_schedule(path)
+        self.assertEqual((got["format"], got["criticalPath"], got["tickets"][0]["hours"]), ("schedule.json", ["X-1"], 6))
 
 
 class WriteTest(unittest.TestCase):

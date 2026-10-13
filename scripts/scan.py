@@ -174,22 +174,30 @@ def from_schedule(path: Path) -> Optional[dict]:
                 "starred": bool(t.get("starred") or t.get("star")),
                 "rank": t.get("rank"),
                 "size": _size_from_label(str(t.get("size") or "M")),
-                "hours": t.get("hours"),
+                # build-schedule/2 writes h for hours and gate "" for no gate.
+                "hours": t.get("hours") or t.get("h"),
                 "critical": bool(t.get("critical")),
                 "rankDays": t.get("rankDays") or 0,
-                "gate": t.get("gate"),
+                "gate": t.get("gate") or None,
                 "module": t.get("module"),
                 "layer": t.get("layer"),
                 "priority": t.get("priority"),
                 "acs": t.get("acs"),
             }
         )
+    gates = []
+    for g in data.get("gates") or []:
+        if isinstance(g, dict):
+            g = dict(g)
+            if "ifRed" not in g and "if_red" in g:
+                g["ifRed"] = g.get("if_red")
+            gates.append(g)
     return {
         "tickets": tickets,
-        "gates": data.get("gates") or [],
-        "criticalPath": data.get("criticalPath") or [],
+        "gates": gates,
+        "criticalPath": data.get("criticalPath") or data.get("critical_chain") or [],
         "source": str(path),
-        "format": "schedule.json",
+        "format": "build-schedule/2" if data.get("schema") == "build-schedule/2" else "schedule.json",
     }
 
 
