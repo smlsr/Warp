@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.12
+
+- Fix: a live pass recorded a merge it never did. With no merge result from the provider, `_merge_one` assumed success: it printed `merge: <id> merged`, cleared the gate, and asked for the Jira Done move while the pull request stayed open (WV-01 / PR #4 on WarpDemo; `main` did not get the scaffold). `merge_connected` (`gh pr merge --squash`) was never called on that path. Now a live pass prints `merge: request <id> <url>`, and supervise, after its halt check, merges through the provider and reads the pull request back; only `MERGED` records the ticket merged (`pr.mergeConfirmed`). A merge that cannot run here leaves the ticket `merging` with `merge: not merged` and a `merge: MUST DO` naming the GitHub MCP `merge_pull_request` tool, and nothing downstream moves (no gate, no Jira Done). A later pass that reads the pull request as `MERGED`, whoever merged it, records it. `/warp-allow-notify --with-git` now allows `merge_pull_request`.
+- `/warp-start` and `/warp-resume` check every ticket recorded merged with a pull request and no confirmed merge: one whose pull request is open goes back to ready to merge, and its gate is pending again (`heal: <id> was recorded merged, but <url> is open ...`).
+- Fix: a new step reused a finished Shuttle's agent id (the verify launch took `shuttle-WV-01-r3`). Two registry rows shared the id, the ended one made the running Shuttle look dead, and it was replaced while it was recording its results. A new step now gets its own id whenever the ticket's last id has ended.
+- Fix: tickets queued behind a dependency, a closed gate, a lock, or the slot cap were flagged stalled after `stallQueuedMinutes` (15 alarms on WarpDemo). A waiting ticket that cannot start is not stalled; its stall clock starts when it could start.
+- The PR snapshot carries the pull request's state and merge commit (`prState`, `mergeSha`).
+- Docs: RUNBOOK "How a merge is recorded", LIFECYCLE lines, the warp skill.
+
 ## 1.6.11
 
 - Fix: no ticket from a pack could merge. A ticket merges only when every acceptance criterion is recorded as pass, and three gaps kept that from ever happening (WV-01 sat in `review: wait`, `ac=unknown`, with Bugbot pass and the check green):

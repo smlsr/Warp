@@ -545,7 +545,7 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
             "view",
             text,
             "--json",
-            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits",
+            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits,state,mergeCommit",
         ],
         root,
     )
@@ -580,7 +580,12 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         "behind": state.upper() == "BEHIND",
         "conflict": files or True if conflicted else False,
         "conflictFiles": files,
+        # OPEN, MERGED or CLOSED. Only MERGED, read from the provider, marks a ticket merged.
+        "prState": str(doc.get("state") or "").upper(),
     }
+    commit = doc.get("mergeCommit") if isinstance(doc.get("mergeCommit"), dict) else {}
+    if commit.get("oid"):
+        snap["mergeSha"] = str(commit.get("oid"))
     if bugbot:
         snap["bugbot"] = bugbot
     return snap

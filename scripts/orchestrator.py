@@ -1702,7 +1702,11 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         runs.refresh_external(runs.repo_root(path), data)
     except Exception as exc:
         lines.append("runs: other runs not read (%s)" % exc)
+    if live:
+        # Merges in this pass go through the provider and are confirmed; see pipeline.request_merge.
+        data["_liveMerge"] = True
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
+    data.pop("_liveMerge", None)
     import agents as agents_mod
 
     disk = agents_mod.halted_meanwhile(data, path)
@@ -1710,6 +1714,7 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         # A pause or a stop landed while this pass was working. Keep it. End
         # anything this pass recorded, and tell the parent to start nothing.
         state = agents_mod.halt_state(disk)
+        disk.pop("_liveMerge", None)
         agents_mod.halt_local(disk, beam_path=path, reason=state, now=now)
         _save(path, disk)
         return [
@@ -1724,6 +1729,8 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         # by a halt. Each posted comment is written to the beam on disk as it is posted.
         # Without gh it prints a MUST DO line.
         lines.extend(bugbot.post_pending(data, path, lines, now=now))
+        # Merge what this pass asked to merge, through the provider, and confirm it.
+        lines.extend(pipeline.run_merges(data, path, lines))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}

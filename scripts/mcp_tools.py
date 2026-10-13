@@ -68,7 +68,10 @@ CREATE_FIELD_TOOLS = (
 
 # GitHub pull-request comment. `gh pr comment` is a CLI fallback, not an MCP tool.
 GITHUB_COMMENT = "add_issue_comment"
-GITHUB_TOOLS = (GITHUB_COMMENT,)
+# The merge, when gh cannot merge on this runner (read-only token). Warp still records a merge only
+# when the provider shows the pull request merged.
+GITHUB_MERGE = "merge_pull_request"
+GITHUB_TOOLS = (GITHUB_COMMENT, GITHUB_MERGE)
 
 # Channel post tools, plus the reads Herald uses for warp:status.
 # slack_read_channel, slack_read_thread, and slack_search_channels are the

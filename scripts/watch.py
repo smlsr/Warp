@@ -213,13 +213,36 @@ def _touch(ticket: dict, now: str) -> None:
     watch["lastActive"] = last or watch.get("progressAt") or now
 
 
+_WAITING = {"queued", "blocked"}
+
+
+def _startable_ids(data: dict) -> set:
+    import beam as beam_mod
+
+    try:
+        return {str(row.get("id")) for row in beam_mod.ready(data) if isinstance(row, dict)}
+    except Exception:
+        return set()
+
+
 def _mark_stalls(data: dict, now: str, beam_path: Optional[Path], lines: list) -> None:
+    startable = None
     for ticket in _open_tickets(data):
         if ticket.get("status") in {"parked"}:
             continue
         _touch(ticket, now)
         watch = _watch(ticket)
         state = _state_of(ticket)
+        if state in _WAITING or ticket.get("status") in _WAITING:
+            if startable is None:
+                startable = _startable_ids(data)
+            if str(ticket.get("id")) not in startable:
+                # Held by a dependency, a gate, a lock, or the slot cap: waiting is its job.
+                # The stall clock starts when it could start.
+                watch["progressAt"] = now
+                watch["stalled"] = False
+                ticket["stalled"] = False
+                continue
         age = _minutes_between(str(watch.get("progressAt") or ""), now)
         stalled = age > limit_minutes(data, state)
         was = bool(watch.get("stalled"))
