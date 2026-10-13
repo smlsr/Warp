@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.10
+
+- Fix: a Shuttle on an existing pull request was never seen to return. Only a first implement step that opened a new pull request counted as back; nothing recorded the return of a restart, fix, or repair Shuttle, and on a cloud runner nothing else could. It held its slot until its heartbeat went stale (15 minutes), then the parent counted it dead and launched another (WV-01's restart wrote `pr-opened` and `check-green` at 19:45 and was later replaced as dead). The return is now read from the ticket folder: `done` (the new last line every Shuttle writes), or a check result from the same agent after it started, or, for a review Shuttle, the review it recorded. `supervise` prints `shuttle: returned <id> step=<step> (<state>)`, consumes the return before any liveness check, and moves the ticket on. The watchdog leaves a returned Shuttle alone (`shuttle: returned <id>`). A return belongs to one Shuttle: the next launch starts out again, and lines from before a Shuttle started do not count.
+- Shuttle prompts (worktree and VM) and the shuttle-run skill end with `ticket_state.py append --state done`.
+- Docs: RUNBOOK "How the parent knows a Shuttle came back", LIFECYCLE lines.
+
 ## 1.6.9
 
 - `/warp-start` and `/warp-resume` always publish the config. `.warp/config.yaml` stays gitignored; its copy without machine keys or secrets goes to the repo as `.warp/runs/<run>/config.yaml` on a named run, or `.warp/config.published.yaml` when the run has no name. Start and resume publish the state with `force`, so a setting changed by hand reaches the repo even when no ticket moved, and print `config: published to <path> (machine keys and secrets left out)` (or `config: not published ...` with the reason). Before, a named run published only at a checkpoint (a status change or `checkpointMinutes`), and an unnamed run never published its config.

@@ -480,3 +480,9 @@ A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelin
 
 The Shuttle's `.warp/tickets/<id>/state.json` used to keep `alarm: lock-escape` and the escaped paths after later states, so every newer state raised the alarm again, even after the repair had widened the locks. A later state now clears those fields, a leftover field is not read as a new lock-escape, and paths already inside the ticket's locks never raise it. `/warp-resume` clears one that is already on a ticket (`heal: <id> lock-escape cleared, ...`).
 
+## How the parent knows a Shuttle came back
+
+A Shuttle's return is read from its ticket folder, the one channel that works on a cloud runner too. The step's Shuttle (implement, fix, restart, repair, review) writes `done` as its last state. A check result (`check-green`, `check-red`) from the same agent after it started counts as well, and for a review Shuttle so does the review it recorded. Supervise prints `shuttle: returned <id> step=<step> (<state>)`, frees the slot, and moves the ticket on.
+
+Before 1.6.10, only a first implement step that opened a new pull request was seen to return. A restart, fix, or repair Shuttle on a pull request that already existed stayed "out" until its heartbeat went stale (`staleMinutes`, 15), then was counted dead and replaced (`shuttle: replace`, `worker died`). That is how WV-01's restart was marked dead after it had pushed and recorded a green check. A returned Shuttle whose heartbeat later goes stale is not dead: the watchdog prints `shuttle: returned <id>` and leaves it.
+

@@ -1481,6 +1481,11 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
             continue
         if ticket.get("needsReplacement"):
             continue
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        if shuttle.get("pending") and orchestrator.shuttle_returned(ticket):
+            # It came back (its last state is in its folder). Stopping its heartbeat is not dying.
+            lines.append("shuttle: returned %s" % tid)
+            continue
         if not worker_is_dead(ticket.get("lastSeenAt"), _shuttle_anchor(ticket), now, stale):
             kind = "alive" if ticket.get("lastSeenAt") else "fresh"
             lines.append("shuttle: %s %s" % (kind, tid))
