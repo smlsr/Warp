@@ -9,7 +9,9 @@ called it. Warp does not create channels: the channel in the config must
 already exist. A Slack channel with uppercase letters is lowercased (Slack
 channel names are lowercase) and noted.
 
-  notify.py init|scan --root .   write .warp/notify-post.json and print it
+  notify.py init|scan --root .   write .warp/notify-post.json and print it. `scan` on its own
+                                 rebuilds the scan message from .warp/beam.json, with the Jira
+                                 counts as they are now (run it after resolving keys)
   notify.py outbox --root .      append that payload's plain text to
                                  .warp/outbox.md (connector missing or erroring)
 
@@ -85,6 +87,49 @@ def init_message(root: Path, cfg: dict) -> dict:
     )
 
 
+def scan_info(root: Path, beam_path: Optional[Path] = None) -> Optional[dict]:
+    """The scan message's details from the beam the scan wrote. None when there is no beam.
+
+    The Jira counts are read now, so a message rebuilt after keys were resolved shows them.
+    """
+    path = Path(beam_path) if beam_path else root / ".warp" / "beam.json"
+    if not path.is_file():
+        return None
+    beam = json.loads(path.read_text())
+    tickets = beam.get("tickets") or {}
+    rows = list(tickets.values()) if isinstance(tickets, dict) else list(tickets)
+    if not rows:
+        return None
+    src = beam.get("source") if isinstance(beam.get("source"), dict) else {}
+    found = src.get("scan") if isinstance(src.get("scan"), dict) else {}
+    if not found:
+        scan_file = path.parent / "scan.json"
+        if scan_file.is_file():
+            try:
+                found = json.loads(scan_file.read_text())
+            except json.JSONDecodeError:
+                found = {}
+    try:
+        import jira_sync
+
+        cfg = jira_sync.settings(path, beam)
+        prefixes = jira_sync.prefixes_from(cfg)
+        unmapped = [str(t.get("id")) for t in rows if isinstance(t, dict) and not jira_sync.jira_key(t, prefixes)]
+    except Exception:
+        unmapped = [str(t.get("id")) for t in rows if isinstance(t, dict) and t.get("jiraMapping") == "needs mapping"]
+    return {
+        "format": src.get("format"),
+        "tickets": len(rows),
+        "gates": len(beam.get("gates") or []),
+        "estimate": (beam.get("program") or {}).get("estimate") or {},
+        "source": src.get("plan") or src.get("schedule"),
+        "found": found,
+        "folder": src.get("folder") or found.get("folder"),
+        "unmapped": unmapped,
+        "keyed": len(rows) - len(unmapped),
+    }
+
+
 def scan_message(root: Path, info: dict) -> dict:
     web, branch, kind = fmt.repo_web(root)
     found = info.get("found") or {}
@@ -151,6 +196,12 @@ def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict
     root = root.resolve()
     payload = {"kind": kind, "text": "", "action": "skip", "targets": [], "notes": []}
     try:
+        if kind == "scan" and msg is None and not (info or {}).get("format") and not (info or {}).get("tickets"):
+            # No details passed (notify.py scan on its own): read them from the beam.
+            info = scan_info(root)
+            if not info:
+                payload["notes"].append("no scan on the beam: .warp/beam.json is missing or has no tickets. Run /warp-scan; .warp/notify-post.json was left as it was")
+                return payload
         cfg = fmt.read_config(root)
         if msg is None:
             msg = init_message(root, cfg) if kind == "init" else scan_message(root, info or {})
@@ -198,11 +249,15 @@ def main() -> None:
         epilog="examples:\n  python3 scripts/notify.py ?\n  python3 scripts/notify.py init --root .\n"
         "  python3 scripts/notify.py scan --root .\n  python3 scripts/notify.py outbox --root .\n\n"
         "init and scan write .warp/notify-post.json. outbox appends that text to .warp/outbox.md.\n"
+        "scan on its own rebuilds the scan message from .warp/beam.json (format, tickets, gates, estimate,\n"
+        "plan files) with the Jira counts as they are now: run it after resolving keys. With no beam it\n"
+        "writes nothing.\n"
         "notify: quiet skips init and scan. ?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("kind", choices=["init", "scan", "outbox"])
     p.add_argument("--root", default=".")
+    p.add_argument("--beam", help=argparse.SUPPRESS)
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
@@ -214,6 +269,14 @@ def main() -> None:
             return
         text = json.loads(f.read_text()).get("text", "")
         print(f"herald: saved to {outbox(root, text).relative_to(root)}")
+        return
+    if args.kind == "scan" and args.beam:
+        info = scan_info(root, Path(args.beam))
+        if not info:
+            print("herald: not posted (skip).")
+            print("herald: no scan on the beam. Run /warp-scan; .warp/notify-post.json was left as it was")
+            return
+        report(build("scan", root, info))
         return
     report(build(args.kind, root))
 

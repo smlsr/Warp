@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.6
+
+- Fix: `notify.py scan` run on its own wrote a scan message with `Format: None` and `Tickets: None` over the one the scan had written. It was only built to take its details from `scan.py`. It now rebuilds the whole message from `.warp/beam.json` (format, ticket count, gates, estimate, plan used and the other plan files found) with the Jira counts as they are now, so run it after resolving keys and post what it writes. With no beam, or a beam with no tickets, it writes nothing, leaves `.warp/notify-post.json` as it was, and says so.
+- `jira_sync.py resolve`, `map`, `verify`, `external-id` and `record-external-id` print `jira: N keyed now (+K). next: python3 <plugin>/scripts/notify.py scan --root . ...` when they store a key, and the `/warp-scan` skill runs that before posting the scan message.
+
 ## 1.6.5
 
 - The Shuttle model keys ship commented out. `/warp-init` writes:
