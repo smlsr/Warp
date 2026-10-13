@@ -3439,6 +3439,22 @@ def sync_command(
     return text
 
 
+KEY_COMMANDS = ("resolve", "map", "verify", "external-id", "record-external-id")
+SCAN_MESSAGE_HINT = "next: python3 <plugin>/scripts/notify.py scan --root . rebuilds the scan message with these Jira counts"
+
+
+def _keyed_ids(beam_path: Path) -> Optional[set]:
+    """Ticket ids that have a Jira key now. None when the beam can't be read."""
+    try:
+        beam = _load(beam_path)
+        prefixes = prefixes_from(settings(beam_path, beam))
+        rows = beam.get("tickets") or {}
+        rows = rows.values() if isinstance(rows, dict) else rows
+        return {str(t.get("id")) for t in rows if isinstance(t, dict) and jira_key(t, prefixes)}
+    except Exception:
+        return None
+
+
 def main() -> None:
     import usage
 
@@ -3534,175 +3550,185 @@ def main() -> None:
     psync.add_argument("--force", action="store_true", help="allow a move to an earlier status")
     psync.add_argument("--id", help="one ticket")
     args = p.parse_args(usage.normalize_argv(None))
+    watch = Path(args.beam) if args.cmd in KEY_COMMANDS and getattr(args, "beam", None) else None
+    keyed_before = _keyed_ids(watch) if watch else None
     try:
-        if args.cmd == "plan":
-            beam_path = Path(args.beam)
-            beam = _load(beam_path)
-            t = beam["tickets"].get(args.id)
-            if not t:
-                print(f"jira: unknown ticket {args.id}")
-                return
-            print(instruction(plan(t, args.event, settings(beam_path, beam))))
-        elif args.cmd == "pick":
-            raw = Path(args.transitions_file).read_text() if args.transitions_file else (args.transitions or "[]")
-            data = json.loads(raw)
-            transitions = data.get("transitions", []) if isinstance(data, dict) else data
-            current = json.loads(args.current) if args.current else None
-            ahead = [part.strip() for part in (args.ahead or "").split(",") if part.strip()]
-            print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind, ahead), indent=2))
-        elif args.cmd == "record":
-            print(record(Path(args.beam), args.id, args.event, args.result, args.frm, args.to, args.detail, args.error))
-        elif args.cmd == "record-comment":
-            print(record_comment(Path(args.beam), args.id, args.where, args.event, args.comment_id))
-        elif args.cmd == "verify":
-            results = args.results or args.verify_apply
-            print(
-                verify(
-                    Path(args.beam),
-                    args.id,
-                    link=bool(args.link),
-                    results=Path(results) if results else None,
-                    dry_run=bool(args.dry_run),
-                )
-            )
-        elif args.cmd == "map":
-            beam_path = Path(args.beam)
-            if args.from_jira or args.auto:
-                if args.results:
-                    data = json.loads(Path(args.results).read_text())
-                    client = jira_lookup.ReplayClient(data if isinstance(data, dict) else {})
-                    print(
-                        apply_jira_lookup(
-                            beam_path,
-                            client,
-                            dry_run=args.dry_run,
-                            confirm_summary=bool(args.yes) and not args.dry_run,
-                            flag_active=False,
-                        )
-                    )
-                else:
-                    print(prepare_resolve(beam_path))
-                    print("jira: nothing written. Keys stay as they are until --results.")
-            elif args.search:
-                print(search_request(beam_path))
-            elif args.match:
-                print(match_search(beam_path, Path(args.match), args.yes))
-            elif args.set or args.import_path:
-                pairs = []
-                for raw in args.set:
-                    parsed = _parse_set(raw)
-                    if not parsed:
-                        print(f"jira: --set {raw!r} must be ID=KEY")
-                        continue
-                    pairs.append(parsed)
-                if args.import_path:
-                    pairs.extend(parse_mapping_file(Path(args.import_path)))
-                print(apply_pairs(beam_path, pairs, args.force))
-            else:
-                print(list_mappings(_load(beam_path), settings(beam_path, _load(beam_path))))
-        elif args.cmd == "project":
-            import jira_project
-
-            root = Path(args.root).resolve()
-            if args.list:
-                decision = jira_project.choose(jira_project.gather(root))
-                current = jira_project.config_value(jira_project.config_text(root), "jiraProject")
-                if current:
-                    print(f"jira: jiraProject is {current}")
-                shown = ", ".join(decision["candidates"]) if decision["candidates"] else "none"
-                print(f"jira: candidates: {shown}")
-                if decision["prefix"]:
-                    print(f"jira: would set {decision['prefix']} ({decision['how']})")
-            elif args.project_key:
-                print(jira_project.write_project(root, args.project_key, "set with project --set", force=True))
-            elif args.project_apply:
-                data = json.loads(Path(args.project_apply).read_text())
-                print(jira_project.apply_remote(root, jira_project.ReplayClient(data if isinstance(data, dict) else {})))
-            elif args.probe:
-                projects = []
-                todo = root / ".warp" / "jira-project.json"
-                if todo.is_file():
-                    try:
-                        saved = json.loads(todo.read_text())
-                        projects = [str(p).upper() for p in (saved.get("projects") or saved.get("candidates") or [])]
-                    except (OSError, json.JSONDecodeError):
-                        projects = []
-                print(jira_project.prepare_probe(root, projects))
-            elif args.project_record:
-                data = json.loads(Path(args.project_record).read_text())
-                print(jira_project.record_probe(root, data if isinstance(data, dict) else {}))
-            else:
-                print(jira_project.ensure(root, write=True, report_set=True))
-        elif args.cmd == "record-external-id":
-            import jira_match
-
-            data = json.loads(Path(args.results).read_text())
-            print(
-                jira_match.record_external_id(
-                    Path(args.beam),
-                    data if isinstance(data, dict) else {},
-                    force=bool(args.force),
-                    force_value=bool(args.force_external_id),
-                )
-            )
-        elif args.cmd == "external-id":
-            import jira_match
-
-            beam_path = Path(args.beam)
-            pairs = []
-            if args.pair:
-                parsed = jira_match._parse_pair(args.pair)
-                if not parsed:
-                    print(f"jira: --set {args.pair!r} must be ID=KEY")
-                    return
-                pairs.append(parsed)
-            elif args.ticket and args.key:
-                key = normalize_key(args.key)
-                if not key:
-                    print(f"jira: {args.key!r} is not a Jira issue key")
-                    return
-                pairs.append((args.ticket, key))
-            if args.results and args.yes:
-                data = json.loads(Path(args.results).read_text())
-                print(jira_match.record_write(beam_path, data if isinstance(data, dict) else {}, yes=True, force=bool(args.force_external_id)))
-            else:
-                if not pairs:
-                    loaded = _load(beam_path) if beam_path.is_file() else {"tickets": {}}
-                    rows = jira_match._pairs_from_beam(loaded, settings(beam_path, loaded), args.ticket, [])
-                    pairs = [(row["id"], row["key"]) for row in rows]
-                print(jira_match.prepare_write(beam_path, pairs, yes=bool(args.yes), force=bool(args.force_external_id)))
-        elif args.cmd == "sync":
-            print(
-                sync_command(
-                    Path(args.beam),
-                    args.jira,
-                    args.prs,
-                    bool(args.apply),
-                    bool(args.force),
-                    args.id,
-                )
-            )
-        elif args.cmd == "resolve":
-            beam_path = Path(args.beam)
-            if args.ticket and args.key:
-                print(
-                    record_resolved(
-                        beam_path,
-                        args.ticket,
-                        args.key,
-                        issue_id=args.issue_id,
-                        cloud_id=args.cloud_id,
-                        status=args.status,
-                    )
-                )
-            elif args.apply:
-                print(apply_resolve(beam_path, Path(args.apply)))
-            else:
-                print(prepare_resolve(beam_path))
-        else:
-            print(catchup(Path(args.beam), args.id, args.write))
+        _dispatch(args)
     except Exception as e:  # fail-soft: report, do not fail the caller
         print(f"jira: skipped ({e})")
+    if keyed_before is not None:
+        keyed_after = _keyed_ids(watch)
+        if keyed_after is not None and keyed_after - keyed_before:
+            print(f"jira: {len(keyed_after)} keyed now (+{len(keyed_after - keyed_before)}). {SCAN_MESSAGE_HINT}")
+
+
+def _dispatch(args) -> None:
+    if args.cmd == "plan":
+        beam_path = Path(args.beam)
+        beam = _load(beam_path)
+        t = beam["tickets"].get(args.id)
+        if not t:
+            print(f"jira: unknown ticket {args.id}")
+            return
+        print(instruction(plan(t, args.event, settings(beam_path, beam))))
+    elif args.cmd == "pick":
+        raw = Path(args.transitions_file).read_text() if args.transitions_file else (args.transitions or "[]")
+        data = json.loads(raw)
+        transitions = data.get("transitions", []) if isinstance(data, dict) else data
+        current = json.loads(args.current) if args.current else None
+        ahead = [part.strip() for part in (args.ahead or "").split(",") if part.strip()]
+        print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind, ahead), indent=2))
+    elif args.cmd == "record":
+        print(record(Path(args.beam), args.id, args.event, args.result, args.frm, args.to, args.detail, args.error))
+    elif args.cmd == "record-comment":
+        print(record_comment(Path(args.beam), args.id, args.where, args.event, args.comment_id))
+    elif args.cmd == "verify":
+        results = args.results or args.verify_apply
+        print(
+            verify(
+                Path(args.beam),
+                args.id,
+                link=bool(args.link),
+                results=Path(results) if results else None,
+                dry_run=bool(args.dry_run),
+            )
+        )
+    elif args.cmd == "map":
+        beam_path = Path(args.beam)
+        if args.from_jira or args.auto:
+            if args.results:
+                data = json.loads(Path(args.results).read_text())
+                client = jira_lookup.ReplayClient(data if isinstance(data, dict) else {})
+                print(
+                    apply_jira_lookup(
+                        beam_path,
+                        client,
+                        dry_run=args.dry_run,
+                        confirm_summary=bool(args.yes) and not args.dry_run,
+                        flag_active=False,
+                    )
+                )
+            else:
+                print(prepare_resolve(beam_path))
+                print("jira: nothing written. Keys stay as they are until --results.")
+        elif args.search:
+            print(search_request(beam_path))
+        elif args.match:
+            print(match_search(beam_path, Path(args.match), args.yes))
+        elif args.set or args.import_path:
+            pairs = []
+            for raw in args.set:
+                parsed = _parse_set(raw)
+                if not parsed:
+                    print(f"jira: --set {raw!r} must be ID=KEY")
+                    continue
+                pairs.append(parsed)
+            if args.import_path:
+                pairs.extend(parse_mapping_file(Path(args.import_path)))
+            print(apply_pairs(beam_path, pairs, args.force))
+        else:
+            print(list_mappings(_load(beam_path), settings(beam_path, _load(beam_path))))
+    elif args.cmd == "project":
+        import jira_project
+
+        root = Path(args.root).resolve()
+        if args.list:
+            decision = jira_project.choose(jira_project.gather(root))
+            current = jira_project.config_value(jira_project.config_text(root), "jiraProject")
+            if current:
+                print(f"jira: jiraProject is {current}")
+            shown = ", ".join(decision["candidates"]) if decision["candidates"] else "none"
+            print(f"jira: candidates: {shown}")
+            if decision["prefix"]:
+                print(f"jira: would set {decision['prefix']} ({decision['how']})")
+        elif args.project_key:
+            print(jira_project.write_project(root, args.project_key, "set with project --set", force=True))
+        elif args.project_apply:
+            data = json.loads(Path(args.project_apply).read_text())
+            print(jira_project.apply_remote(root, jira_project.ReplayClient(data if isinstance(data, dict) else {})))
+        elif args.probe:
+            projects = []
+            todo = root / ".warp" / "jira-project.json"
+            if todo.is_file():
+                try:
+                    saved = json.loads(todo.read_text())
+                    projects = [str(p).upper() for p in (saved.get("projects") or saved.get("candidates") or [])]
+                except (OSError, json.JSONDecodeError):
+                    projects = []
+            print(jira_project.prepare_probe(root, projects))
+        elif args.project_record:
+            data = json.loads(Path(args.project_record).read_text())
+            print(jira_project.record_probe(root, data if isinstance(data, dict) else {}))
+        else:
+            print(jira_project.ensure(root, write=True, report_set=True))
+    elif args.cmd == "record-external-id":
+        import jira_match
+
+        data = json.loads(Path(args.results).read_text())
+        print(
+            jira_match.record_external_id(
+                Path(args.beam),
+                data if isinstance(data, dict) else {},
+                force=bool(args.force),
+                force_value=bool(args.force_external_id),
+            )
+        )
+    elif args.cmd == "external-id":
+        import jira_match
+
+        beam_path = Path(args.beam)
+        pairs = []
+        if args.pair:
+            parsed = jira_match._parse_pair(args.pair)
+            if not parsed:
+                print(f"jira: --set {args.pair!r} must be ID=KEY")
+                return
+            pairs.append(parsed)
+        elif args.ticket and args.key:
+            key = normalize_key(args.key)
+            if not key:
+                print(f"jira: {args.key!r} is not a Jira issue key")
+                return
+            pairs.append((args.ticket, key))
+        if args.results and args.yes:
+            data = json.loads(Path(args.results).read_text())
+            print(jira_match.record_write(beam_path, data if isinstance(data, dict) else {}, yes=True, force=bool(args.force_external_id)))
+        else:
+            if not pairs:
+                loaded = _load(beam_path) if beam_path.is_file() else {"tickets": {}}
+                rows = jira_match._pairs_from_beam(loaded, settings(beam_path, loaded), args.ticket, [])
+                pairs = [(row["id"], row["key"]) for row in rows]
+            print(jira_match.prepare_write(beam_path, pairs, yes=bool(args.yes), force=bool(args.force_external_id)))
+    elif args.cmd == "sync":
+        print(
+            sync_command(
+                Path(args.beam),
+                args.jira,
+                args.prs,
+                bool(args.apply),
+                bool(args.force),
+                args.id,
+            )
+        )
+    elif args.cmd == "resolve":
+        beam_path = Path(args.beam)
+        if args.ticket and args.key:
+            print(
+                record_resolved(
+                    beam_path,
+                    args.ticket,
+                    args.key,
+                    issue_id=args.issue_id,
+                    cloud_id=args.cloud_id,
+                    status=args.status,
+                )
+            )
+        elif args.apply:
+            print(apply_resolve(beam_path, Path(args.apply)))
+        else:
+            print(prepare_resolve(beam_path))
+    else:
+        print(catchup(Path(args.beam), args.id, args.write))
 
 
 if __name__ == "__main__":
