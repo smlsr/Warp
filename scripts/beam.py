@@ -1717,6 +1717,8 @@ def default_config() -> dict:
         "jiraSite": "",
         "bugbotRequired": True,
         "bugbotManual": True,
+        "bugbotTrigger": "auto",
+        "bugbotStartMinutes": 10,
         "maxFixAttempts": 5,
         "stuckAfterMinutes": 90,
         "stallImplementingMinutes": 90,

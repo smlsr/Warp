@@ -442,11 +442,14 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
         return False
     if rollup == "green" or check == "green":
         return True
-    if rollup in {"pending", "absent"}:
+    if rollup == "pending":
+        return False
+    no_ci = bool(pr.get("ciNone"))
+    if rollup == "absent" and not no_ci:
         return False
     if check_command(config):
         return check == "green"
-    if ci != "green":
+    if ci != "green" and not no_ci:
         return False
     if not bugbot_applies(ticket, config):
         return True
@@ -1376,6 +1379,42 @@ def name_line(name: str) -> str:
     ) % name
 
 
+REVIEW_FOCUS = (
+    "Review it the way Bugbot does: real bugs, crashes, wrong logic, security holes, data loss, "
+    "race conditions, and acceptance criteria the change does not meet. Not style, naming, or taste."
+)
+
+
+def review_lines(ticket: dict, config: Optional[dict], parent: str, scripts: str = "") -> list:
+    """Prompt lines for bugbotTrigger: shuttle. A review step reviews only; any other step reviews its own work at the end."""
+    scripts = scripts or scripts_dir()
+    tid = str(ticket.get("id") or "")
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "")
+    mode = str((config or {}).get("bugbotTrigger") or "").strip().casefold()
+    record = (
+        "python3 %s/ticket_state.py append --root %s --id %s --state review-pass|review-fail --sha <head sha> "
+        "--source shuttle [--finding \"<file:line what is wrong>\" ...]" % (scripts, parent, tid)
+    )
+    if step == "review":
+        return [
+            "REVIEW ONLY. bugbotTrigger: shuttle. Do not change code, commit, or push.",
+            "Check out the pull request branch and diff it against the base branch. %s" % REVIEW_FOCUS,
+            "Record the result for the head commit you reviewed (`git rev-parse HEAD`). One --finding per problem:",
+            record,
+            "Return one line: result: %s ok review=pass|fail findings=<n>" % tid,
+        ]
+    if mode in {"shuttle", "agent", "review", "self"}:
+        return [
+            "bugbotTrigger: shuttle. You run the Bugbot review. When the pull request is open and your check is green, "
+            "diff your branch against the base branch. %s" % REVIEW_FOCUS,
+            "Fix what you find inside your locks, push, and review again. Then record the result for the head commit (`git rev-parse HEAD`):",
+            record,
+            "Record review-fail with --finding lines only for what you could not fix inside your locks.",
+        ]
+    return []
+
+
 def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional[dict] = None) -> list:
     tid = str(ticket.get("id") or "")
     return [
@@ -1405,6 +1444,7 @@ def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused
             REAP_RULE % (tid, agent),
             "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
             "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
+            *[line.replace("--root <parent>", "--push") for line in review_lines(ticket, config, "<parent>", "<plugin>/scripts")],
             "The parent patches the beam from that folder. The parent's disk is not shared.",
             "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.",
             "Never merge. Never touch the parent checkout. Never call Jira or Slack.",
@@ -1447,6 +1487,7 @@ def subagent_prompt(
             "python3 %s/agents.py reap --beam %s/.warp/beam.json --id %s --ticket %s" % (scripts, parent, agent, tid),
             "Write state with this command. Do not pass --push. It prints the reap line too:",
             "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
+            *review_lines(ticket, config, parent, scripts),
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=%s memory=<available-gib>"
             % (tid, branch, worktree),
             "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,
@@ -1615,7 +1656,8 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     data = _load(path)
     if not listener_should_run(data):
         return lines
-    if provider is None:
+    live = provider is None
+    if live:
         provider = pipeline.live_provider(data, path)
     try:
         runs.refresh_external(runs.repo_root(path), data)
@@ -1636,6 +1678,13 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
             "pass: start nothing from this pass. Run parent-exit.",
             "listener: idle",
         ]
+    if live:
+        import bugbot
+
+        # Post each `bugbot run` this pass asked for, only once the pass was not aborted
+        # by a halt. Each posted comment is written to the beam on disk as it is posted.
+        # Without gh it prints a MUST DO line.
+        lines.extend(bugbot.post_pending(data, path, lines, now=now))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
@@ -1717,8 +1766,9 @@ def listener_prompt(beam_path: Path) -> list:
         "Wait: python3 %s/inbound.py wait --beam %s --lease %s --holder %s --cursor <newest> --count <n>"
         % (scripts, beam_file, generation, holder),
         "Stop: only on reap: exit, listen: rotate, or listen: stopped. Return that line. The stamp is already written.",
-        "Stamp, only if you must leave and the script printed none: python3 %s/inbound.py returned --beam %s "
-        "--reason <rotated|orphaned|stopped> --lease %s --holder %s" % (scripts, beam_file, generation, holder),
+        "Stamp, only when poll or wait told you to stop and printed no stamp: python3 %s/inbound.py returned --beam %s "
+        "--reason <rotated|orphaned|stopped> --lease %s --holder %s. A stamp the script did not decide is refused: keep cycling."
+        % (scripts, beam_file, generation, holder),
     ]
     if slug:
         body.insert(6, "model: %s" % slug)

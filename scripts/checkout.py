@@ -463,7 +463,7 @@ def _note_live(data: dict, ticket: dict) -> None:
 
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     step = str(shuttle.get("step") or "")
-    if step not in {"implement", "fix", "restart", "repair"}:
+    if step not in {"implement", "fix", "restart", "repair", "review"}:
         if ticket.get("status") == "fix" or ticket.get("phase") == "fixing":
             step = "fix"
         else:

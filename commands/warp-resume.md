@@ -15,6 +15,15 @@ python3 <plugin>/scripts/scan.py resume --beam .warp/beam.json
 
 It prints `unfinished: <n> open. ...` and launches that work first: open pull requests that need a fix, then tickets whose Shuttle was halted or died, then new tickets, all under `maxAgents`. `maxInProgress` holds only new tickets.
 
+It also puts every ticket in alarm back on a path that can finish, so no one has to post `warp:retry`. Each one prints a `heal:` line:
+
+- `heal: <id> lock-escape cleared, back to review on <url>.` Every escaped path is already inside the ticket's locks (a repair widened them, or the alarm was left over from an earlier event). Paths still outside the locks are added when no ticket in flight holds them (`Added <paths> to its locks.`). Without a pull request the ticket is queued and its next claim reuses the branch. `... its <step> Shuttle is still out.` means only the alarm went.
+- `heal: <id> lock-escape kept: <paths> held by <id>.` The repair count starts again, and the parent's repair widens the locks when the holder is done.
+- `heal: <id> retried: was alarm (<reason>), ...` Any other alarm (worker-died, stuck, spawn-cap, ci-red, bugbot-failed, failed) is retried the way `warp:retry` does it: an open pull request goes to `fix` on its branch, otherwise `queued`, and the counts start again (old ones on `retryLog`).
+- `heal: <id> left in alarm (gate-red).` The gate's own check is red. Fix that; the gate reruns it.
+
+Parked tickets stay parked. `warp:retry` still works on them. `python3 <plugin>/scripts/heal.py --beam .warp/beam.json --dry-run` shows what a resume would do.
+
 It also prints `parent: session <id>`. Keep that id. You are now the parent of this run: the only agent that starts another agent, and the only agent that waits. An earlier parent, here or in another window, ends its turn when its `parent-exit --session` prints `parent: exit superseded`.
 
 Nothing from before a pause or a stop is resumed. `/warp-pause` and `/warp-stop` ended every agent. A ticket that had a Shuttle out prints `start <id> ... step=restart` and `fix: <id> resume after halt`: launch one new Shuttle on that ticket's surviving worktree and branch. It keeps the pull request, `jira.startedAt`, and locks. It is not a recovery and no one is told a worker died.

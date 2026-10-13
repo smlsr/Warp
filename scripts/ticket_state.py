@@ -63,7 +63,12 @@ STATES = (
     "alarm",
     "failed",
     "done",
+    "review-pass",
+    "review-fail",
 )
+# A Bugbot review recorded from the ticket folder: by the Shuttle (bugbotTrigger: shuttle)
+# or by a person (bugbot.py record). It carries the head sha it reviewed.
+REVIEW_STATES = {"review-pass", "review-fail"}
 _WORK = {
     "planning": "planning",
     "coding": "coding",
@@ -184,6 +189,7 @@ def _state_key(state: dict) -> str:
         "escaped": state.get("escaped"),
         "pr": state.get("pr"),
         "startedAt": state.get("startedAt"),
+        "review": state.get("review"),
     }
     blob = json.dumps(keep, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:20]
@@ -278,8 +284,19 @@ def _escaped(value) -> list:
     return alarm_repair.normalize_paths(value if isinstance(value, list) else [])
 
 
+def uncovered(ticket: dict, paths) -> list:
+    """Escaped paths the ticket's locks do not already cover (a repair may have widened them)."""
+    import alarm_repair
+
+    locks = [lock for lock in (ticket.get("locks") or []) if isinstance(lock, str) and lock.strip()]
+    return [path for path in _escaped(paths) if not alarm_repair._already_locked(locks, path)]
+
+
 def _apply_lock_escape(beam_path: Path, ticket: dict, paths: list, now: str) -> bool:
     paths = _escaped(paths)
+    if paths and not uncovered(ticket, paths):
+        # Every path is inside the locks now. Nothing escaped.
+        return False
     same = (
         ticket.get("status") == "alarm"
         and ticket.get("alarm") == "lock-escape"
@@ -412,6 +429,10 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
             lines.extend(extra)
             return True
         return changed
+    if state in REVIEW_STATES:
+        import bugbot
+
+        return bugbot.apply_review(beam_path, ticket, event, stamp, lines, heralded) or changed
     if state == "lock-escape":
         if _apply_lock_escape(beam_path, ticket, event.get("escaped"), now):
             _remote(ticket)["state"] = "lock-escape"
@@ -453,6 +474,10 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
     return changed
 
 
+# States that keep the alarm fields already in state.json. Every other state clears them.
+STICKY_STATES = {"heartbeat", "lock-escape", "alarm", "failed"}
+
+
 def _event_from_state(state: dict) -> Optional[dict]:
     """One snapshot event when the directory has current state and the log was short."""
     name = str(state.get("state") or "").strip()
@@ -474,7 +499,14 @@ def _event_from_state(state: dict) -> Optional[dict]:
         event["state"] = "check-red"
     elif name == "check-green" or check.get("result") == "green":
         event["state"] = "check-green"
-    if name == "lock-escape" or state.get("alarm") == "lock-escape":
+    if name in REVIEW_STATES:
+        review = state.get("review") if isinstance(state.get("review"), dict) else {}
+        event["sha"] = review.get("sha") or ""
+        event["findings"] = review.get("findings") or []
+        event["source"] = review.get("source") or "shuttle"
+    if name == "lock-escape" or (name in STICKY_STATES and state.get("alarm") == "lock-escape"):
+        # A later state (review, pr-opened, check-green) with a leftover alarm
+        # field is that later state, not a new lock-escape.
         event["state"] = "lock-escape"
         event["escaped"] = state.get("escaped")
     return event
@@ -838,6 +870,9 @@ def append_status(
     alarm: str = "",
     agent: str = "",
     push: bool = False,
+    findings: Optional[list] = None,
+    sha: str = "",
+    source: str = "",
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -869,6 +904,12 @@ def append_status(
             body["state"] = "started"
     else:
         body["state"] = state
+    if state not in STICKY_STATES:
+        # A newer progress state: the alarm, the escaped paths and the error
+        # belonged to the event that set them. Left here they raise it again.
+        body["alarm"] = ""
+        body["escaped"] = []
+        body["error"] = ""
     if error:
         body["error"] = error
     if state == "pr-opened" and pr:
@@ -878,6 +919,14 @@ def append_status(
             "result": "red" if state == "check-red" else "green",
             "name": name or "make ci",
             "log": error,
+        }
+    if state in REVIEW_STATES:
+        body["review"] = {
+            "result": "pass" if state == "review-pass" else "fail",
+            "sha": str(sha or "").strip(),
+            "findings": [str(item).strip() for item in (findings or []) if str(item).strip()],
+            "source": source or "shuttle",
+            "at": stamp,
         }
     if state == "lock-escape":
         body["alarm"] = "lock-escape"
@@ -914,6 +963,10 @@ def append_status(
         line["alarm"] = "lock-escape"
     if alarm and state != "lock-escape":
         line["alarm"] = alarm
+    if state in REVIEW_STATES:
+        line["sha"] = body["review"]["sha"]
+        line["findings"] = body["review"]["findings"]
+        line["source"] = body["review"]["source"]
     beam.atomic_write(folder / "state.json", json.dumps(body, indent=2) + "\n")
     with log_path.open("a") as handle:
         handle.write(json.dumps(line, separators=(",", ":")) + "\n")
@@ -1023,7 +1076,7 @@ def main(argv: Optional[list] = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     add = sub.add_parser("append", help="append one event under .warp/tickets/<id>/")
     add.add_argument("--id", required=True)
-    add.add_argument("--state", required=True, help="started, heartbeat, planning, coding, review, bugbot, fix, pr-opened, check-red, check-green, lock-escape, alarm, failed, or done")
+    add.add_argument("--state", required=True, help="started, heartbeat, planning, coding, review, bugbot, fix, pr-opened, check-red, check-green, lock-escape, alarm, failed, done, review-pass, or review-fail")
     add.add_argument("--root", default=".")
     add.add_argument("--push", action="store_true", help="commit and push only .warp/tickets/<id>/")
     add.add_argument("--escaped", action="append", default=[], help="path outside the lock; repeat for each path")
@@ -1033,6 +1086,9 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--alarm", default="", help="alarm reason")
     add.add_argument("--agent", default="")
     add.add_argument("--at", default="", help="timestamp; default is now")
+    add.add_argument("--sha", default="", help="with review-pass or review-fail: the head commit that was reviewed")
+    add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
+    add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default) or hand")
     watch = sub.add_parser("observe", help="fetch in-flight branches and patch the live beam")
     watch.add_argument("--beam", default=".warp/beam.json")
     watch.add_argument("--root", default=".")
@@ -1052,6 +1108,9 @@ def main(argv: Optional[list] = None) -> int:
             alarm=args.alarm,
             agent=args.agent,
             push=bool(args.push),
+            findings=args.finding,
+            sha=args.sha,
+            source=args.source,
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)

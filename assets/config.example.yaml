@@ -218,7 +218,24 @@ bugbotRequired: true
 bugbotManual: true
 # Manual tickets (autoMerge false) only. true: Bugbot must pass before QA Ready,
 # the same gate as auto-merge. false: skip Bugbot on that path. bugbotRequired
-# still covers auto-merge.
+# still covers auto-merge. This says whether Bugbot is needed, not how it starts:
+# that is bugbotTrigger.
+bugbotTrigger: auto
+# How Warp gets a Bugbot review.
+#   auto:    every new pull request and push gets a review on its own. If no Bugbot check
+#            shows up within bugbotStartMinutes, Warp sets this to comment and says so.
+#   comment: the Cursor Bugbot app is on the repo and hears comments. Warp posts
+#            `bugbot run` each time it asks. Two unanswered comments: Warp sets manual.
+#   manual:  nothing can start Bugbot from here (GitHub or Bitbucket not connected to
+#            Cursor). Warp asks once per commit for a review by hand, and the ticket waits
+#            until `bugbot.py record --id <id> --result pass|fail` records it.
+#   shuttle: the Shuttle runs the review. When its pull request is open and its check is
+#            green, it reviews its own diff the way Bugbot does, fixes what it finds, and
+#            records the result. Work that is done with no review recorded (the Shuttle
+#            returned without one, stalled, or is stuck) gets a review-only Shuttle, up to
+#            2 per commit; after that Warp asks for a review by hand.
+bugbotStartMinutes: 10
+# Minutes to wait for Bugbot to start after a request or a `bugbot run` comment.
 maxFixAttempts: 5
 stuckAfterMinutes: 90
 # Minutes with no progress before supervise marks that state stalled.

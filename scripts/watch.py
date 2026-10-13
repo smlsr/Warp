@@ -397,6 +397,15 @@ def _run_action(data: dict, ticket: dict, action: str, lines: list, beam_path: O
     import pipeline
 
     tid = ticket.get("id")
+    if action == "bugbot" and pipeline._review_only_left(data, ticket):
+        # bugbotTrigger: shuttle. A stalled review is a review Shuttle, not another request.
+        watch = _watch(ticket)
+        watch["fixerAttempts"] = int(watch.get("fixerAttempts") or 0) + 1
+        watch["lastFix"] = "review"
+        watch["lastFixAt"] = now
+        pipeline.start_review(data, ticket, lines)
+        lines.append("fixer: %s review" % tid)
+        return
     if action == "bugbot":
         import agents
 
