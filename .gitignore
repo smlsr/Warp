@@ -32,7 +32,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Python and macOS
+# macOS
+.DS_Store
+
+# Python
 __pycache__/
 *.pyc
-.DS_Store
