@@ -340,6 +340,7 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
             "result": t.get("result") if isinstance(t.get("result"), dict) else {},
             "gate": t.get("gate") or None,
             "priority": t.get("priority"),
+            **{k: t[k] for k in ("lane", "repo", "wave", "priorityGate", "checks", "planned", "screens", "mock") if t.get(k) not in (None, [], "")},
             "acs": t.get("acs"),
             "plannedStart": t.get("startLabel"),
             "plannedMerge": t.get("mergeLabel"),
@@ -384,6 +385,7 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
                 "members": list(g.get("members") or []),
                 "checks": list(g.get("checks") or []),
                 "ifRed": g.get("ifRed") or g.get("if_red"),
+                **{k: g[k] for k in ("scope", "onGreen", "priority", "starts", "siblings", "at", "hold", "otherMembers") if g.get(k) not in (None, [], "", False)},
                 "status": "pending",
                 "evidence": None,
                 "greenAt": None,
@@ -410,6 +412,7 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
             "lockConflicts": sched.get("lockConflicts") or [],
             "peakAgents": sched.get("peakAgents"),
             "agentHours": sched.get("agentHours"),
+            **({"schedule": sched["schedule"], "gateOrder": sched["schedule"].get("gateOrder")} if isinstance(sched.get("schedule"), dict) else {}),
         },
         "config": config,
         "paused": False,
@@ -788,6 +791,10 @@ def gate_flip_lines(flipped: list, data: dict, run_dispatch: bool) -> list:
     for gate in flipped:
         condition = gate.pop("_clearedCondition", "pending")
         lines.append("herald: %s %s cleared. Members merged. Tick ran." % (gate.get("key"), condition))
+        if gate.get("onGreen"):
+            lines.append("gate: %s on_green: %s — the parent runs it now and reports the result" % (gate.get("key"), gate["onGreen"]))
+        if gate.get("starts"):
+            lines.append("gate: %s starts %s (their runs wait with startAfter <this run>:%s)" % (gate.get("key"), ", ".join(gate["starts"]), gate.get("key")))
     if flipped and run_dispatch:
         lines.extend(orchestrator.format_dispatch(data))
     return lines
@@ -872,9 +879,20 @@ def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False)
 
 
 def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
-    """A blocking gate that is not green blocks non-members that depend on a member."""
+    """A blocking gate that is not green blocks non-members that depend on a member.
+
+    A milestone gate (`hold: red`, from build-schedule/2) holds nothing while pending: when it is
+    red, a blocking one stops every non-member, and a non-blocking one stops the tickets that
+    depend on its members.
+    """
     anc = ancestors(beam["tickets"], tid, anc_cache)
     for g in beam.get("gates") or []:
+        if g.get("hold") == "red":
+            if g.get("status") != "red" or tid in g.get("members", []):
+                continue
+            if g.get("blocking", True) or anc & set(g.get("members") or []):
+                return g["key"]
+            continue
         if not g.get("blocking", True) or g.get("status") == "green":
             continue
         if tid in g["members"]:

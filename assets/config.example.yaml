@@ -35,6 +35,15 @@ baseFixOwner: ""
 # The run that fixes the shared base branch when it goes red, for example core.
 # The other runs wait for it and dispatch no fix of their own. Empty means every
 # run fixes its own.
+# repo: HumanifyOS
+# repoRuns: {HumanifyOS-UI: admin-ui}
+# externalRepos: {admin-ui: https://github.com/acme/HumanifyOS-UI.git}
+# For a build-schedule/2 schedule.json that spans several repos. repo is the
+# repo this checkout is (default: origin's name); the scan keeps its tickets.
+# repoRuns names the Warp run that works each other repo (default: the repo
+# name in lowercase), so a blocker there becomes <run>:<id>. externalRepos says
+# where that run's repo is (git URL or local path, #branch optional), so the
+# parent can read its published beam.
 
 model: claude-sonnet-5-5-high
 # Cursor model slug for coding steps. Claude Sonnet 5.5 High.

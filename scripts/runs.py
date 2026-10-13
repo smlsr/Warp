@@ -991,7 +991,8 @@ def refresh_external(root, beam: dict, force: bool = False, now: Optional[dateti
                 wanted.setdefault(other, set()).add(tid)
     status: dict = {}
     locks: list = []
-    for other in list_runs(root, ref):
+    here = list_runs(root, ref)
+    for other in here:
         if other == me:
             continue
         published = show_json(root, ref, other, ".warp/beam.json") or {}
@@ -1000,8 +1001,47 @@ def refresh_external(root, beam: dict, force: bool = False, now: Optional[dateti
             if tid in rows:
                 status["%s:%s" % (other, tid)] = (rows[tid] or {}).get("status")
         locks.extend(_active_locks(published, other))
+    # Runs in another repo (a build-schedule/2 program across repos): externalRepos names where.
+    remote = {}
+    elsewhere = sorted(set(wanted) - set(here) - {me})
+    if elsewhere:
+        import buildsched
+
+        where = buildsched.parse_map(beam.get("externalRepos"))
+        for other in elsewhere:
+            if other not in where:
+                continue
+            got = external_repo_ref(root, other, where[other])
+            remote[other] = got or "unreachable"
+            if not got:
+                continue
+            published = show_json(root, got, other, ".warp/beam.json") or {}
+            rows = published.get("tickets") or {}
+            for tid in wanted.get(other, ()):
+                if tid in rows:
+                    status["%s:%s" % (other, tid)] = (rows[tid] or {}).get("status")
+            # Locks in another repo never overlap this repo's paths, so they are not held here.
     beam["external"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "ref": ref, "status": status, "locks": locks}
+    if remote:
+        beam["external"]["repos"] = remote
     return True
+
+
+def external_repo_ref(root, run: str, where: str) -> Optional[str]:
+    """Fetch another repo's base branch into refs/warp/external/<run> and return that ref, or None.
+
+    `where` is a git URL or a local path, optionally `#branch` (default: main, then master).
+    """
+    text = str(where or "").strip()
+    if not text:
+        return None
+    url, _, branch = text.partition("#")
+    ref = "refs/warp/external/%s" % run
+    for name in ([branch] if branch else ["main", "master"]):
+        done = _git(root, "fetch", "-q", "--depth=1", url, "+%s:%s" % (name, ref))
+        if done.returncode == 0:
+            return ref
+    return None
 
 
 def external_status(beam: dict, dep: str) -> Optional[str]:

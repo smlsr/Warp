@@ -528,15 +528,17 @@ def _rank_key(ticket: dict):
 
 
 def sort_key(ticket: dict, base_red: bool = False):
-    """Starred first, then priority, then lowest rank.
+    """Starred (critical chain) first, then a priority gate's path, then priority, then lowest rank.
 
-    A base fix sorts ahead of every rank while the base branch is red.
+    A base fix sorts ahead of every rank while the base branch is red. `priorityGate` comes from
+    build-schedule/2 (priority_gate): members and ancestors of a priority gate go ahead of rank.
     """
     fix = 0 if base_red and ticket.get("baseFix") else 1
     star = 0 if is_starred(ticket) else 1
+    pgate = 0 if ticket.get("priorityGate") else 1
     pri_bucket, pri_value = _priority_key(ticket)
     rank_bucket, rank_value = _rank_key(ticket)
-    return (fix, star, pri_bucket, pri_value, rank_bucket, rank_value, str(ticket.get("id") or ""))
+    return (fix, star, pgate, pri_bucket, pri_value, rank_bucket, rank_value, str(ticket.get("id") or ""))
 
 
 def base_is_green(beam: dict) -> bool:

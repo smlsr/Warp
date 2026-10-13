@@ -145,13 +145,17 @@ def _note_jira(ticket: dict, raw: Optional[str]) -> None:
     ticket["jiraKeySource"] = "plan"
 
 
-def from_schedule(path: Path) -> Optional[dict]:
+def from_schedule(path: Path, root: Optional[Path] = None) -> Optional[dict]:
     try:
         data = json.loads(path.read_text())
     except Exception:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("tickets"), list):
         return None
+    import buildsched
+
+    if buildsched.is_v2(data):
+        return buildsched.parse(data, path, root)
     if not data["tickets"] or "id" not in data["tickets"][0] and "tempId" not in data["tickets"][0]:
         return None
     tickets = []
@@ -460,12 +464,12 @@ def from_markdown(path: Path) -> Optional[dict]:
 
 def pick(root: Path, found: dict) -> Optional[dict]:
     for rel in found["warp"]:
-        got = from_schedule(root / rel)
+        got = from_schedule(root / rel, root)
         if got:
             got["format"] = "warp-plan"
             return got
     for rel in found["schedules"]:
-        got = from_schedule(root / rel)
+        got = from_schedule(root / rel, root)
         if got:
             return got
     best = None
@@ -585,11 +589,13 @@ def to_schedule(graph: dict, auto_sizes=None) -> dict:
                 "autoMerge": auto_merge(size, auto_sizes if auto_sizes is not None else ["S", "M"]),
                 "externalId": t.get("externalId"),
                 "jiraStatus": t.get("jiraStatus"),
+                **{k: t[k] for k in ("lane", "repo", "wave", "priorityGate", "checks", "planned", "screens", "mock") if t.get(k) not in (None, [], "")},
             }
             for t in graph["tickets"]
         ],
         "gates": graph.get("gates") or [],
         "criticalPath": graph.get("criticalPath") or [],
+        "schedule": graph.get("schedule"),
         "estimate": estimate(
             graph["tickets"],
             graph.get("gates") or [],
@@ -954,8 +960,11 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     held = load_json(beam_path)
     blocks.apply(held, gates)
     cfg = prompt_gate.effective_config(held, root)
-    held["gateOrder"] = blocks.order_mode({"config": cfg})
+    held["gateOrder"] = blocks.order_mode({"config": cfg, "program": held.get("program")})
     held["paths"] = runs.parse_paths(cfg.get("paths"))
+    import buildsched
+
+    held["externalRepos"] = buildsched.parse_map(cfg.get("externalRepos"))
     held["baseFixOwner"] = str(cfg.get("baseFixOwner") or "").strip().lower()
     if held.get("run"):
         try:
@@ -1224,6 +1233,17 @@ def main() -> None:
             where = f" in {folder.relative_to(root)}" if folder else ""
             print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
             sys.exit(2)
+        if graph.get("format") == "build-schedule/2":
+            import buildsched
+            import prompt_gate
+
+            local = prompt_gate.yaml_scalars((warp / "config.yaml").read_text()) if (warp / "config.yaml").is_file() else {}
+            _repo, repo_lines = buildsched.pick_repo(graph, root, local)
+            sched_meta = graph.get("schedule") or {}
+            print(f"schedule: {sched_meta.get('program') or '-'} build-schedule/2, gate order {sched_meta.get('gateOrder')}"
+                  + (" (gates are milestones: only a red gate holds work)" if sched_meta.get("gateOrder") == "deps" else ""))
+            for line in repo_lines:
+                print(line)
         if run:
             owned_code = apply_ownership(root, run, graph, bool(args.skip_owned))
             if owned_code:

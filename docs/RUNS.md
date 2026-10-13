@@ -103,6 +103,24 @@ startAfter: core:G2        # in admin's .warp/config.yaml
 
 Write the dependency as `<run>:<id>`: `deps: ["core:P-014"]` in `schedule.json`, or `core:P-014` in the deps cell of a table or an `after` list. The ticket waits until core's P-014 is merged in core's published beam. The parent reads the other runs' published beams every few minutes, and at start, and keeps what it needs under `external` on its own beam. `/warp-scan` warns when the run is not published yet, or does not have that ticket. `/warp-scan --skip-owned` leaves out the tickets another run owns and rewrites the tickets that depended on them to `core:A-1`.
 
+### Runs in other repos
+
+A build-schedule/2 schedule.json can cover several repos (HOS-Admin: `HumanifyOS` and `HumanifyOS-UI`). Each repo gets its own run, and each run scans the same file:
+
+```yaml
+# HumanifyOS checkout
+run: admin
+repoRuns: {HumanifyOS-UI: admin-ui}
+externalRepos: {admin-ui: https://github.com/acme/HumanifyOS-UI.git}
+
+# HumanifyOS-UI checkout
+run: admin-ui
+repoRuns: {HumanifyOS: admin}
+externalRepos: {admin: https://github.com/acme/HumanifyOS.git}
+```
+
+`/warp-scan` keeps the tickets whose `repo` is this checkout (`repo:` in the config, else origin's name) and prints `repo: HumanifyOS — 72 of 120 tickets` and `deps: blockers in another repo become run:id`. A blocker in the other repo becomes `admin-ui:AU-07` and waits exactly like a ticket in another run of this repo, except the parent fetches the other repo's base branch to read its published beam. Locks written `HumanifyOS/src/...` lose the prefix. Both runs must be named. `python3 scripts/buildsched.py show plan/schedule.json --repo HumanifyOS` shows the split without scanning.
+
 ### Paths and locks
 
 ```yaml

@@ -49,7 +49,7 @@ button { cursor: pointer; }
 .chip b { font-weight: 600; color: var(--ink); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-todo); flex: none; }
 .dot.running { background: var(--c-done); box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-done) 60%, transparent); animation: pulse 2s infinite; }
-.dot.paused { background: var(--c-qa); } .dot.stopped { background: var(--c-todo); } .dot.done { background: var(--brand2); }
+.dot.paused { background: var(--c-qa); } .dot.plan { background: var(--brand2); } .dot.stopped { background: var(--c-todo); } .dot.done { background: var(--brand2); }
 @keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
 .btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); background: var(--panel); border-radius: 8px; font-size: 13px; font-weight: 500; }
@@ -341,10 +341,10 @@ body.dragging .drop { display: flex; }
       </div>
       <div class="seg" id="viewSeg"><button data-view="timeline" class="on">Swimlane</button><button data-view="board">Board</button><button data-view="table">Table</button></div>
       <label class="ctl" id="groupCtl">Lanes
-        <select id="groupBy"><option value="block">Gate block</option><option value="status">Status</option><option value="module">Module</option><option value="size">Size</option></select>
+        <select id="groupBy"><option value="block">Gate block</option><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option><option value="repo">Repo</option><option value="size">Size</option></select>
       </label>
       <label class="ctl" id="colorCtl">Color
-        <select id="colorBy"><option value="status">Status</option><option value="module">Module</option></select>
+        <select id="colorBy"><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option></select>
       </label>
       <label class="ctl" id="zoomCtl">Zoom <input id="zoom" type="range" min="0" max="100" value="0"></label>
     </section>
@@ -436,8 +436,15 @@ function sizeOf(raw) { const m = /^(XL|S|M|L)\b/i.exec(String(raw || "").trim())
 // ---- reading files ------------------------------------------------------------------
 // A source is one JSON document plus where it came from. Files are classified by
 // content, not by name, so a renamed file still works.
+function isScheduleV2(data) {
+  if (!data || !Array.isArray(data.tickets)) return false;
+  if (data.schema === "build-schedule/2") return true;
+  const f = data.tickets[0] || {};
+  return "h" in f && "after" in f && "slot" in f && Array.isArray(data.critical_chain);
+}
 function classify(data) {
   if (!data || typeof data !== "object") return null;
+  if (isScheduleV2(data)) return "schedule";
   if (data.tickets && typeof data.tickets === "object" && (data.gates || data.program || data.runState || data.config || data.instance)) return "beam";
   if (Array.isArray(data.done) || Array.isArray(data.working) || Array.isArray(data.left)) return "status";
   if (typeof data.state === "string" && data.id && !data.tickets) return "ticket";
@@ -478,6 +485,10 @@ function ticketRow(raw, id) {
     minutes: num(t.minutes) || 0, tokens: num(t.tokens) || 0, cost: num(usage.cost),
     claimedAt: t.claimedAt || null, updatedAt: t.updatedAt || null, events: Array.isArray(t.events) ? t.events : [],
     stateNote: null,
+    // build-schedule/2 fields (kept on the beam by Warp 1.6.2+)
+    lane: t.lane || null, repo: t.repo || null, wave: num(t.wave), priorityGate: t.priorityGate || t.priority_gate || null,
+    checks: (Array.isArray(t.checks) ? t.checks : []).map((c) => (typeof c === "string" ? { name: "", check: c } : { name: c.name || "", check: c.check || "" })),
+    planned: t.planned && typeof t.planned === "object" ? t.planned : null,
   };
 }
 
@@ -494,14 +505,43 @@ function runFromBeam(b, path, modified) {
   return {
     kind: "beam", export: b.kind === "warp-plan", exportedAt: parseTime(b.exportedAt), path, dir: dirOf(path), name: b.run || null, instance: inst.id || null, host: inst.host || null,
     runState: b.runState || null, paused: !!b.paused, pauseReason: b.pauseReason || null, range: b.range || null, owner: b.owner || null,
-    gateOrder: b.gateOrder || cfg.gateOrder || "strict", startAfter: cfg.startAfter || null,
+    gateOrder: b.gateOrder || cfg.gateOrder || program.gateOrder || "strict", startAfter: cfg.startAfter || null,
+    schedule: program.schedule || null,
     gates: (b.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: g.status || "pending", blocking: g.blocking !== false, members: (g.members || []).map(String),
-      greenAt: parseTime(g.greenAt), evidence: g.evidence || null, checks: [].concat(g.checks || []).map(String), ifRed: g.ifRed || g.if_red || null })),
+      greenAt: parseTime(g.greenAt), evidence: g.evidence || null, checks: [].concat(g.checks || []).map((c) => (typeof c === "string" ? c : c.check || c.name || "")), ifRed: g.ifRed || g.if_red || null,
+      scope: g.scope || null, onGreen: g.onGreen || g.on_green || null, priority: !!g.priority, starts: [].concat(g.starts || []).map(String),
+      at: num(g.at), hold: g.hold || null, otherMembers: [].concat(g.otherMembers || []).map(String) })),
     tickets, critical: (program.criticalPath || b.criticalPath || []).map(String),
     estimate: est, metrics: b.metrics || null, cap: num(cfg.maxAgents) || DEFAULT_CAP,
     jiraSite: cfg.jiraSite || "", project: cfg.projectName || cfg.jiraProject || null,
     runStartedAt: parseTime(b.runStartedAt), runEndedAt: parseTime(b.runEndedAt), updated,
     folder: (b.source && b.source.folder) || null, repo: null,
+  };
+}
+
+// A build-schedule/2 schedule.json (HOS, HOS-Admin, FORGEQA, WARPDEMO): the plan as written, every ticket To Do.
+function runFromSchedule(d, path, modified) {
+  const model = d.model || {}, n = d.numbers || {};
+  const tickets = (d.tickets || []).map((t) => {
+    const row = ticketRow(Object.assign({}, t, {
+      hours: t.h != null ? t.h : t.hours, deps: [], after: t.after || [], gate: t.gate || null, status: t.status || "queued",
+      priorityGate: t.priority_gate || null, planned: { slot: t.slot, start: t.start, merge: t.merge, ready: t.ready, latest_start: t.latest_start },
+    }), t.id);
+    // locks are written <repo>/<path>; show them as they are
+    return row;
+  });
+  const order = String(model.gate_order || "").toLowerCase() === "strict" ? "strict" : "deps";
+  return {
+    kind: "schedule", export: false, exportedAt: null, path, dir: dirOf(path), name: d.program || null, instance: null, host: null,
+    runState: "plan", paused: false, pauseReason: null, range: null, owner: null, gateOrder: order, startAfter: null,
+    schedule: { program: d.program, repos: d.repos || [], lanes: d.lanes || [], finishHours: num(n.finish_h), agentHours: num(n.agent_hours), priority: model.priority || null, rebuilt: d.rebuilt || null },
+    gates: (d.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: "pending", blocking: g.blocking !== false, members: (g.members || []).map(String),
+      greenAt: null, evidence: null, checks: [].concat(g.checks || []).map((c) => (typeof c === "string" ? c : c.check || c.name || "")), ifRed: g.if_red || g.ifRed || null,
+      scope: g.scope || null, onGreen: g.on_green || g.onGreen || null, priority: !!g.priority, starts: [].concat(g.starts || []).map(String), at: num(g.at), hold: order === "strict" ? "green" : "red", otherMembers: [] })),
+    tickets, critical: (d.critical_chain || []).map(String),
+    estimate: { elapsedHours: num(n.finish_h), agentHours: num(n.agent_hours), approvalHours: DEFAULT_APPROVAL, assumptions: [model.clock, model.merge, model.priority].filter(Boolean) },
+    metrics: null, cap: num(model.slots) || DEFAULT_CAP, jiraSite: "", project: d.program || null,
+    runStartedAt: null, runEndedAt: null, updated: parseTime(d.rebuilt) || modified || null, folder: null, repo: (d.repos || []).join(" + ") || null,
   };
 }
 
@@ -541,6 +581,10 @@ function buildRuns(docs, extra) {
       const prev = runs.get(k);
       // A run's local beam and its published mirror are the same run. Keep the newer one.
       if (!prev || (r.updated || 0) > (prev.updated || 0)) runs.set(k, r);
+    } else if (kind === "schedule") {
+      const r = runFromSchedule(d.data, d.path, d.modified);
+      const k = "sched:" + (r.name || r.dir);
+      if (!runs.has(k)) runs.set(k, r);
     } else if (kind === "status") statuses.push(d);
     else if (kind === "ticket") states.push(d);
     else skipped++;
@@ -565,7 +609,7 @@ function buildRuns(docs, extra) {
   }
   const out = [...runs.values()];
   for (const r of out) {
-    r.repo = (extra && extra.repo) || repoFrom(r);
+    if (r.kind !== "schedule") r.repo = (extra && extra.repo) || repoFrom(r);
     if (extra && extra.jiraSite && !r.jiraSite) r.jiraSite = extra.jiraSite;
     plan(r);
   }
@@ -595,6 +639,11 @@ function applyState(t, st) {
 // that lists it, else the highest block among its dependencies, else the first.
 function gateKeys(run) {
   const ks = run.gates.map((g) => g.key);
+  // build-schedule/2 gates carry `at`: keep the plan's order (G-RBAC between G0 and G1)
+  if (ks.length && run.gates.every((g) => typeof g.at === "number")) {
+    const gnum = (k) => (/^G\d+$/i.test(k) ? parseInt(k.slice(1)) : 1e6);
+    return run.gates.map((g, i) => ({ k: g.key, at: g.at, i })).sort((a, b) => a.at - b.at || gnum(a.k) - gnum(b.k) || a.i - b.i).map((x) => x.k);
+  }
   const num_ = ks.filter((k) => /^G\d+$/i.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
   return num_.concat(ks.filter((k) => !/^G\d+$/i.test(k)));
 }
@@ -665,9 +714,33 @@ function plan(run) {
   ts.forEach((t) => lvl(t.id, new Set()));
   run.waves = ts.length ? Math.max(...depth.values()) : 0;
 
+  if (ts.length && ts.every((t) => t.planned && typeof t.planned.slot === "number" && typeof t.planned.start === "number" && typeof t.planned.merge === "number")) {
+    // The schedule's own picture (build-schedule/2): draw it as written.
+    ts.forEach((t) => { t.slot = t.planned.slot - 1; t.start = t.planned.start; t.end = t.planned.start + t.hours; t.mergeAt = Math.max(t.planned.merge, t.end); t.unplaced = false; });
+    const evs = [];
+    ts.forEach((t) => { evs.push([t.start, 1]); evs.push([t.end, -1]); });
+    evs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let cur = 0, pk = 0;
+    evs.forEach((e) => { cur += e[1]; pk = Math.max(pk, cur); });
+    run.planSource = "schedule";
+    run.finish = Math.max(0, ...ts.map((t) => t.mergeAt));
+    run.peak = pk;
+    run.slots = Math.max(...ts.map((t) => t.slot)) + 1;
+    run.critHours = sum(ts.filter((t) => t.critical).map((t) => t.hours));
+    run.critCount = ts.filter((t) => t.critical).length;
+    run.gateAt = new Map();
+    for (const k of gateKeys(run)) {
+      const g = run.gates.find((x) => x.key === k);
+      if (typeof g.at === "number") { run.gateAt.set(k, g.at); continue; }
+      const ids = g.members.filter((m) => byId.has(m));
+      if (ids.length) run.gateAt.set(k, Math.max(...ids.map((id) => byId.get(id).mergeAt)));
+    }
+    return;
+  }
+  run.planSource = "simulated";
   const strict = run.gateOrder !== "deps" && run.kind === "beam" && run.blockRank && run.blockRank.size > 1;
   const cap = Math.max(1, Math.min(run.cap || DEFAULT_CAP, 64));
-  const prio = (a, b) => (b.critical - a.critical) || (b.starred - a.starred) || ((a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank)) || (tail.get(b.id) - tail.get(a.id)) || natCmp(a.id, b.id);
+  const prio = (a, b) => (b.critical - a.critical) || (b.starred - a.starred) || (!!b.priorityGate - !!a.priorityGate) || ((a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank)) || (tail.get(b.id) - tail.get(a.id)) || natCmp(a.id, b.id);
   const pending = new Set(ts.map((t) => t.id));
   const mergeAt = new Map();
   const slotFree = new Array(cap).fill(0);
@@ -806,7 +879,7 @@ const runLabel = (r) => r.name || (r.instance ? "warp:" + r.instance : r.dir || 
 function matches(t, run) {
   if (S.off.has(t.cat)) return false;
   if (!S.q) return true;
-  const hay = [t.id, t.title, t.jiraKey, t.module, t.layer, t.agent, t.status, t.block, t.size, run.name].join(" ").toLowerCase();
+  const hay = [t.id, t.title, t.jiraKey, t.module, t.layer, t.lane, t.repo, t.priorityGate, t.agent, t.status, t.block, t.size, run.name].join(" ").toLowerCase();
   return S.q.split(/\s+/).every((w) => hay.includes(w));
 }
 
@@ -843,7 +916,7 @@ function renderMeta() {
   if (S.tab !== "all" || S.runs.length === 1) {
     if (r.name) parts.push(`<span class="chip">run <b>${esc(r.name)}</b></span>`);
     if (r.instance) parts.push(`<span class="chip mono">warp:${esc(r.instance)}</span>`);
-    const st = r.runState === "running" && r.paused ? "paused" : r.runState || "unknown";
+    const st = r.kind === "schedule" ? "plan" : r.runState === "running" && r.paused ? "paused" : r.runState || "unknown";
     parts.push(`<span class="chip"><i class="dot ${esc(st)}"></i><b>${esc(st)}</b>${r.pauseReason ? " · " + esc(r.pauseReason) : ""}</span>`);
     if (r.range && r.range.spec) parts.push(`<span class="chip">range <b>${esc(r.range.spec)}</b></span>`);
     if (r.owner && r.owner.by) parts.push(`<span class="chip">owner <b>${esc(r.owner.by)}</b></span>`);
@@ -864,7 +937,7 @@ function renderHeadline(runs) {
   const hours = sum(runs.map((r) => sum(r.tickets.map((t) => t.hours))));
   const cap = one ? one.cap : Math.max(...runs.map((r) => r.cap));
   const bits = [`${fmtN(tickets)} tickets`];
-  if (one && one.kind === "beam") bits.push(`${one.waves} waves`);
+  if (one && one.kind !== "status") bits.push(`${one.waves} waves`);
   bits.push(`${fmtN(hours)} agent-hours`);
   bits.push(`${one ? "" : "up to "}${cap} agent slots`);
   const fin = Math.max(...runs.map((r) => r.finish || 0));
@@ -872,6 +945,7 @@ function renderHeadline(runs) {
   if (one && one.peak) bits.push(`peak ${one.peak} in flight`);
   if (one && one.critCount) bits.push(`critical chain ${fmtH(one.critHours, 0)} over ${one.critCount} tickets`);
   if (one && one.gateOrder) bits.push(`gate order ${one.gateOrder}`);
+  if (one && one.planSource === "schedule") bits.push("plan as written in schedule.json");
   if (one && one.startAfter) bits.push(`starts after ${[].concat(one.startAfter).join(", ")}`);
   $("#subline").textContent = bits.join(" · ");
   const chain = one ? one.tickets.filter((t) => t.critical).sort((a, b) => (a.start - b.start) || natCmp(a.id, b.id)).map((t) => t.id) : [];
@@ -946,8 +1020,8 @@ function renderLegend(runs) {
 }
 
 function barColor(t) {
-  if (S.colorBy === "module") {
-    const h = hashHue(t.module || "none");
+  if (S.colorBy === "module" || S.colorBy === "lane") {
+    const h = hashHue((S.colorBy === "lane" ? t.lane || t.module : t.module) || "none");
     const ui = /ui|front|web|app|screen/i.test(t.layer || "");
     return `hsl(${h} 62% ${ui ? 62 : 46}%)`;
   }
@@ -964,7 +1038,7 @@ function renderTimeline(runs) {
     r._layout = lay;
     const note = actual
       ? `${lay.rows} agents in use · ${lay.items.length} started${lay.unstarted ? ` · ${lay.unstarted} not started` : ""}${lay.now != null ? ` · now +${Math.round(lay.now)}h` : ""}`
-      : `${r.slots} of ${r.cap} slots · planned finish T+${Math.round(r.finish)}h${r.kind !== "beam" ? "" : r.gateOrder === "deps" ? " · dependency order" : " · blocks finish in order"}`;
+      : `${r.slots} of ${r.cap} slots · planned finish T+${Math.round(r.finish)}h${r.planSource === "schedule" ? " · as written in schedule.json" : r.kind !== "beam" ? "" : r.gateOrder === "deps" ? " · dependency order" : " · blocks finish in order"}`;
     return `<section class="panel" data-run="${i}">
     <div class="panel-h"><h2>${esc(runs.length > 1 ? runLabel(r) : "Swimlane")}</h2><span class="muted">${note}</span>
       <div class="seg clock"><button data-clock="plan" class="${actual ? "" : "on"}" title="Estimate-hours: the plan, colored by status now">Plan</button><button data-clock="actual" class="${actual ? "on" : ""}" title="Hours since the run started, from claimed to merged">Actual</button></div></div>
@@ -1025,7 +1099,10 @@ function drawTimeline(run, lay, host, wide) {
   const groups = [];
   lay.gates.slice().sort((a, b) => a.at - b.at).forEach((x) => { const last = groups[groups.length - 1]; if (last && Math.abs(last.at - x.at) * pph < 6) last.items.push(x); else groups.push({ at: x.at, items: [x] }); });
   const gateCls = (items) => (items.some((x) => x.g.status === "red") ? "red" : items.every((x) => x.g.status === "green") ? "green" : "");
-  const gateTip = (x) => [`${x.k} ${x.g.name || ""} — ${x.g.status}`, x.g.greenAt ? "green " + new Date(x.g.greenAt).toISOString() : "", x.g.evidence || "", ...(x.g.checks || []).map((c) => "check: " + c)].filter(Boolean).join("\n");
+  const gateTip = (x) => [`${x.k} ${x.g.name || ""} — ${x.g.status}`, x.g.blocking ? "blocking: a red gate stops everyone" : x.g.scope ? "scope: " + x.g.scope : "",
+    x.g.priority ? "priority gate: its path dispatches ahead of rank" : "", x.g.starts && x.g.starts.length ? "starts: " + x.g.starts.join(", ") : "",
+    x.g.greenAt ? "green " + new Date(x.g.greenAt).toISOString() : "", x.g.evidence || "", ...(x.g.checks || []).map((c) => "check: " + c),
+    x.g.onGreen ? "on green: " + x.g.onGreen : "", x.g.ifRed ? "if red: " + x.g.ifRed : ""].filter(Boolean).join("\n");
   let html = `<div class="tl" style="width:${W + lab}px">`;
   html += `<div class="tl-head"><div class="tl-row gates"><div class="tl-lab"></div><div class="tl-track" style="width:${W}px">`;
   html += groups.map((gr, i) => {
@@ -1094,6 +1171,8 @@ function groupKeyOf(t, run) {
   if (S.groupBy === "status") return t.cat;
   if (S.groupBy === "module") return t.module || "No module";
   if (S.groupBy === "size") return t.size || "No size";
+  if (S.groupBy === "lane") return t.lane || t.module || "No lane";
+  if (S.groupBy === "repo") return t.repo || "No repo";
   return t.block || "All tickets";
 }
 function lanesFor(runs) {
@@ -1104,6 +1183,8 @@ function lanesFor(runs) {
     if (S.groupBy === "status") keys = CATS.map((c) => c.key);
     else if (S.groupBy === "size") keys = ["S", "M", "L", "XL", "No size"];
     else if (S.groupBy === "block") keys = gateKeys(run).length ? gateKeys(run) : ["All tickets"];
+    else if (S.groupBy === "lane") keys = [...new Set(run.tickets.map((t) => t.lane || t.module || "No lane"))].sort(natCmp);
+    else if (S.groupBy === "repo") keys = [...new Set(run.tickets.map((t) => t.repo || "No repo"))].sort(natCmp);
     else keys = [...new Set(run.tickets.map((t) => t.module || "No module"))].sort(natCmp);
     for (const k of keys) {
       const id = (runs.length > 1 && S.groupBy === "block" ? runLabel(run) + " · " : "") + k;
@@ -1135,7 +1216,7 @@ function renderBoard(runs) {
     return `<section class="panel lane ${closed ? "closed" : ""}" data-lane="${esc(lane.id)}">
       <div class="lane-h" role="button" tabindex="0" aria-expanded="${!closed}"><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
         <h2>${S.groupBy === "status" ? `<i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:${catColor(lane.key)}"></i>` : ""}${esc(title)} ${lane.gate && lane.gate.name ? `<span class="gname">${esc(lane.gate.name)}</span>` : ""}</h2>
-        ${lane.gate ? `<span class="pill ${pillCls}" title="${esc([lane.gate.greenAt ? "green " + new Date(lane.gate.greenAt).toISOString() : "", lane.gate.evidence || "", ...lane.gate.checks.map((c) => "check: " + c), lane.gate.ifRed ? "if red: " + lane.gate.ifRed : ""].filter(Boolean).join("\n"))}">gate ${esc(lane.gate.status)}${lane.gate.greenAt ? " · " + esc(stamp(lane.gate.greenAt)) : ""}</span>` : ""}${cleared && S.groupBy === "block" ? '<span class="pill green">cleared</span>' : ""}
+        ${lane.gate && lane.gate.priority ? '<span class="pill" title="priority gate: its path dispatches ahead of rank">priority</span>' : ""}${lane.gate && lane.gate.starts && lane.gate.starts.length ? `<span class="pill" title="these programs start at this gate">starts ${esc(lane.gate.starts.join(", "))}</span>` : ""}${lane.gate ? `<span class="pill ${pillCls}" title="${esc([lane.gate.scope && !lane.gate.blocking ? "scope: " + lane.gate.scope : "", lane.gate.starts && lane.gate.starts.length ? "starts: " + lane.gate.starts.join(", ") : "", lane.gate.greenAt ? "green " + new Date(lane.gate.greenAt).toISOString() : "", lane.gate.evidence || "", ...lane.gate.checks.map((c) => "check: " + c), lane.gate.onGreen ? "on green: " + lane.gate.onGreen : "", lane.gate.ifRed ? "if red: " + lane.gate.ifRed : ""].filter(Boolean).join("\n"))}">gate ${esc(lane.gate.status)}${lane.gate.greenAt ? " · " + esc(stamp(lane.gate.greenAt)) : ""}</span>` : ""}${cleared && S.groupBy === "block" ? '<span class="pill green">cleared</span>' : ""}
         <span class="stat"><span>${doneN}/${total} done</span><span>${fmtH(hours)} agent</span>${visible !== total ? `<span>${visible} shown</span>` : ""}${stackBar(values, total)}</span></div>
       <div class="lane-b">${items.map(({ t, run }) => card(t, run)).join("") || '<div class="empty-lane">Nothing here.</div>'}</div></section>`;
   }).join("");
@@ -1186,6 +1267,9 @@ function openDrawer(runId, id) {
     ["Agent", t.agent ? `<span class="mono">${esc(t.agent)}</span>` : "—"],
     ["Attempts", `${t.attempts}${t.recoveries ? ` · ${t.recoveries} recoveries` : ""}`],
     ["Module", esc([t.module, t.layer].filter(Boolean).join(" · ") || "—")],
+    ...(t.lane || t.repo ? [["Lane / repo", esc([t.lane, t.repo].filter(Boolean).join(" · "))]] : []),
+    ...(t.priorityGate ? [["Priority gate", `<b>${esc(t.priorityGate)}</b> · dispatched after the critical chain, ahead of rank`]] : []),
+    ...(t.planned ? [["Schedule", `slot ${esc(t.planned.slot)} · T+${esc(t.planned.start)}h → T+${esc(t.planned.merge)}h${t.planned.latest_start != null ? ` · latest start T+${esc(t.planned.latest_start)}h` : ""}`]] : []),
     ["Updated", t.updatedAt ? esc(stamp(parseTime(t.updatedAt))) + ` (${esc(ago(parseTime(t.updatedAt)))})` : "—"],
   ];
   if (t.alarm) kv.splice(1, 0, ["Alarm", `<b style="color:var(--c-err)">${esc(t.alarm)}</b>`]);
@@ -1197,6 +1281,7 @@ function openDrawer(runId, id) {
   dr.innerHTML = `<div class="drawer-h"><div class="id">${t.critical ? "★ " : ""}${esc(t.id)}</div><div class="tt">${esc(t.title)}</div><button class="btn icon x" id="drawerClose" aria-label="Close">✕</button></div>
     <div class="drawer-b"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     <h4>Timestamps</h4><dl class="kv">${marks.map(([k, v]) => `<dt>${k}</dt><dd>${v ? esc(stamp(parseTime(v))) + ` <span style="color:var(--muted)">${esc(v)}</span>` : "—"}</dd>`).join("")}</dl>
+    ${t.checks.length ? `<h4>Checks when it merges</h4><ul style="margin:0;padding-left:18px;font-size:13px">${t.checks.map((c) => `<li>${c.name ? `<b>${esc(c.name)}</b> — ` : ""}${esc(c.check)}</li>`).join("")}</ul>` : ""}
     ${t.deps.length ? `<h4>Depends on</h4><div class="tags">${t.deps.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
     ${t.locks.length ? `<h4>Locks</h4><div class="tags">${t.locks.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
     ${ev.length ? `<h4>Events</h4><div class="ev">${ev.map((e) => `<span class="t">${esc(stamp(parseTime(e.at)))}</span><span>${esc(e.type || "")}${e.from || e.to ? ` ${esc(e.from || "")} → ${esc(e.to || "")}` : ""}${e.detail ? " · " + esc(e.detail) : ""}</span>`).join("")}</div>` : ""}</div>`;
