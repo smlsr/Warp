@@ -1334,7 +1334,12 @@ def _joined(value) -> str:
 
 
 def acceptance_text(ticket: dict) -> str:
-    """Acceptance criteria from acs, or acceptance when that is what the plan stored."""
+    """Acceptance criteria, `AC-1: ... | AC-2: ...`, from acs, acceptance, or acceptanceCriteria."""
+    import acceptance
+
+    listed = acceptance.text(ticket)
+    if listed:
+        return listed
     raw = ticket.get("acs")
     if raw is None:
         raw = ticket.get("acceptance")
@@ -1394,7 +1399,7 @@ def review_lines(ticket: dict, config: Optional[dict], parent: str, scripts: str
     mode = str((config or {}).get("bugbotTrigger") or "").strip().casefold()
     record = (
         "python3 %s/ticket_state.py append --root %s --id %s --state review-pass|review-fail --sha <head sha> "
-        "--source shuttle [--finding \"<file:line what is wrong>\" ...]" % (scripts, parent, tid)
+        "--agent %s --source shuttle [--finding \"<file:line what is wrong>\" ...]" % (scripts, parent, tid, agent_of(ticket))
     )
     if step == "review":
         return [
@@ -1413,6 +1418,29 @@ def review_lines(ticket: dict, config: Optional[dict], parent: str, scripts: str
             "Record review-fail with --finding lines only for what you could not fix inside your locks.",
         ]
     return []
+
+
+def done_lines(ticket: dict, done_cmd: str, push: bool = False) -> list:
+    """The Shuttle's last line, with a result for every acceptance criterion when the ticket has them."""
+    import acceptance
+
+    step = str((ticket.get("shuttle") or {}).get("step") or "") if isinstance(ticket.get("shuttle"), dict) else ""
+    if step == "verify":
+        listed = acceptance.items(ticket)
+        return [
+            "VERIFY ONLY. Do not change code, commit, or push. Check out the branch and check each acceptance criterion against it, running what it says to run:",
+            *["  %s: %s" % pair for pair in listed],
+            "Then record a result for every one, pass only when you saw it pass:",
+            "%s %s" % (done_cmd, " ".join("--ac %s=pass|fail" % ident for ident, _body in listed)),
+            "Return one line: result: %s ok acceptance=<n passed>/<n>" % ticket.get("id"),
+        ]
+    head = ("Last, when your step is finished (pushed, check and results recorded), write done and push it. "
+            "On a cloud runner it is the only way the parent knows you returned:") if push else \
+        "Last, when your step is finished (pushed, check and results recorded), write done. It is how the parent knows you returned:"
+    criteria = acceptance.prompt_lines(ticket, done_cmd)
+    if criteria:
+        return criteria[:-2] + [head] + criteria[-1:]
+    return [head, done_cmd]
 
 
 def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional[dict] = None) -> list:
@@ -1446,9 +1474,7 @@ def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused
             "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
             *[line.replace("--root <parent>", "--push") for line in review_lines(ticket, config, "<parent>", "<plugin>/scripts")],
             "The parent patches the beam from that folder. The parent's disk is not shared.",
-            "Last, when your step is finished (pushed, check and results recorded), write done and push it. "
-            "On a cloud runner it is the only way the parent knows you returned:",
-            "python3 <plugin>/scripts/ticket_state.py append --id %s --state done --agent %s --push" % (tid, agent),
+            *done_lines(ticket, "python3 <plugin>/scripts/ticket_state.py append --id %s --state done --agent %s --push" % (tid, agent), push=True),
             "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.",
             "Never merge. Never touch the parent checkout. Never call Jira or Slack.",
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=<cwd> memory=<available-gib>"
@@ -1491,8 +1517,7 @@ def subagent_prompt(
             "Write state with this command. Do not pass --push. It prints the reap line too:",
             "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
             *review_lines(ticket, config, parent, scripts),
-            "Last, when your step is finished (pushed, check and results recorded), write done. It is how the parent knows you returned:",
-            "python3 %s/ticket_state.py append --id %s --state done --agent %s --root %s" % (scripts, tid, agent, parent),
+            *done_lines(ticket, "python3 %s/ticket_state.py append --id %s --state done --agent %s --root %s" % (scripts, tid, agent, parent)),
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=%s memory=<available-gib>"
             % (tid, branch, worktree),
             "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,

@@ -1075,11 +1075,18 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         # Start and resume are "carry on": put every alarmed ticket back on a path
         # that can finish, so no one has to post warp:retry.
         try:
+            import acceptance
+
+            # A beam scanned before criteria were imported: fill them from the pack now.
+            heal_lines.extend(acceptance.backfill(beam_path))
+        except Exception as e:
+            heal_lines.append("acceptance: not backfilled (%s)" % e)
+        try:
             import heal
 
-            heal_lines = heal.heal(beam_path)
+            heal_lines.extend(heal.heal(beam_path))
         except Exception as e:
-            heal_lines = ["heal: skipped (%s)" % e]
+            heal_lines.append("heal: skipped (%s)" % e)
     if state in {"paused", "stopped"}:
         import session_note
 
@@ -1276,6 +1283,18 @@ def main() -> None:
             print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
             print("next: the work is in Jira? /warp-from-jira <label>[,<label>] writes a plan folder from the issues with those labels")
             sys.exit(2)
+        try:
+            import acceptance
+
+            # A schedule has no acceptance criteria of its own; the pack's ticket file does.
+            criteria, used = acceptance.pack_criteria(root, acceptance.ticket_files(root, found))
+            filled = acceptance.fill(graph.get("tickets") or [], criteria)
+            if filled:
+                print("acceptance: criteria for %d tickets from %s" % (len(filled), ", ".join(used)))
+            for line in acceptance.summary_lines(graph.get("tickets") or []):
+                print(line)
+        except Exception as e:
+            print("acceptance: not read (%s)" % e)
         if graph.get("format") == "build-schedule/2":
             import buildsched
             import prompt_gate

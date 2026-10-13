@@ -120,6 +120,9 @@ def load_shuttle_results(root, ticket_id) -> dict:
 
 
 def acs_pass(ticket: dict, root=None) -> bool:
+    """Every acceptance criterion has a pass for the head. With criteria listed, each id needs one."""
+    import acceptance
+
     results = ac_map(ticket)
     if not results:
         loaded = load_shuttle_results(root, ticket.get("id"))
@@ -130,6 +133,8 @@ def acs_pass(ticket: dict, root=None) -> bool:
                 ticket["pr"] = pr
             pr["acResults"] = loaded
             results = ac_map(ticket)
+    if acceptance.items(ticket):
+        return acceptance.all_pass(ticket)
     return bool(results) and all(value in _PASS for value in results.values())
 
 
@@ -322,6 +327,10 @@ def _drop_stale_results(pr: dict, new_sha: str) -> None:
             if tied != new_sha:
                 pr[field] = pending
                 pr[sha_field] = ""
+        if str(pr.get("acSha") or "").strip() != new_sha and pr.get("acResults"):
+            # Acceptance results belong to the commit that was checked.
+            pr["acResults"] = {}
+            pr["acSha"] = ""
         tied_findings = str(pr.get("bugbotFindingsSha") or "").strip()
         if tied_findings != new_sha:
             pr["bugbotFindings"] = []
@@ -1014,6 +1023,41 @@ def start_review(data: dict, ticket: dict, lines: list) -> None:
     lines.append("bugbot: review-shuttle %s %d/%d" % (tid, count, bugbot.MAX_REVIEW_SHUTTLES))
 
 
+def _acceptance_only_left(data: dict, ticket: dict) -> bool:
+    """Bugbot finished, checks green, no findings: only acceptance results are missing."""
+    import acceptance
+
+    cfg = data.get("config") or {}
+    if not acceptance.missing(ticket) or pending(ticket):
+        return False
+    if red_reasons(ticket, cfg) or findings_of(ticket):
+        return False
+    return bugbot_finished(ticket, cfg) and orchestrator.checks_green(ticket, cfg)
+
+
+def start_verify(data: dict, ticket: dict, lines: list) -> None:
+    """One verify Shuttle: check each acceptance criterion against the branch and record it."""
+    import acceptance
+    import agents
+
+    tid = ticket.get("id")
+    if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
+        lines.append("shuttle: hold %s" % tid)
+        return
+    pr = ticket.setdefault("pr", {})
+    if acceptance.verify_shuttles_on_head(pr) >= acceptance.MAX_VERIFY_SHUTTLES:
+        acceptance.ask_by_hand(ticket, lines, str(_beam_path(data) or ".warp/beam.json"))
+        lines.append("review: wait %s" % tid)
+        return
+    count = acceptance.note_verify_shuttle(ticket)
+    ticket["status"] = "review"
+    _phase(ticket, "reviewing", lines)
+    mark_shuttle(ticket, "verify", data)
+    root = data.get("_repoRoot") or "<parent checkout>"
+    lines.extend(_start_lines(data, ticket, "verify", acceptance.verify_detail(ticket, orchestrator.scripts_dir(), root)))
+    lines.append("acceptance: verify-shuttle %s %d/%d missing %s" % (tid, count, acceptance.MAX_VERIFY_SHUTTLES, ", ".join(acceptance.missing(ticket))))
+
+
 def _review_only_left(data: dict, ticket: dict) -> bool:
     """bugbotTrigger: shuttle, the pull request is open, the work came back, and only the review is missing."""
     import bugbot
@@ -1278,6 +1322,9 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
             return
         if _conflicted(ticket):
             start_rebase(data, ticket, lines)
+            return
+        if _acceptance_only_left(data, ticket):
+            start_verify(data, ticket, lines)
             return
         lines.append("review: wait %s" % ticket.get("id"))
         return

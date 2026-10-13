@@ -65,6 +65,7 @@ STATES = (
     "done",
     "review-pass",
     "review-fail",
+    "acceptance",
 )
 # A Bugbot review recorded from the ticket folder: by the Shuttle (bugbotTrigger: shuttle)
 # or by a person (bugbot.py record). It carries the head sha it reviewed.
@@ -190,6 +191,7 @@ def _state_key(state: dict) -> str:
         "pr": state.get("pr"),
         "startedAt": state.get("startedAt"),
         "review": state.get("review"),
+        "acResults": state.get("acResults"),
     }
     blob = json.dumps(keep, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:20]
@@ -375,7 +377,7 @@ def _apply_check(beam_path: Path, data: dict, ticket: dict, result: str, name: s
 
 # Steps whose Shuttle works on a pull request that may already exist. Their return cannot be
 # read from "a pull request appeared", so the folder says it.
-_RETURN_STEPS = {"implement", "restart", "fix", "repair", "review"}
+_RETURN_STEPS = {"implement", "restart", "fix", "repair", "review", "verify"}
 _RETURN_STATES = {"done", "check-green", "check-red", "review-pass", "review-fail"}
 
 
@@ -421,8 +423,35 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
     state = str(event.get("state") or "").strip()
     if state not in STATES:
         return False
+    noted = _apply_acs(ticket, event, lines, heralded)
     returned = note_shuttle_return(ticket, event, str(event.get("at") or now), lines)
-    return _apply_event_state(beam_path, data, ticket, event, now, heralded, lines, state) or returned
+    return _apply_event_state(beam_path, data, ticket, event, now, heralded, lines, state) or returned or noted
+
+
+def _apply_acs(ticket: dict, event: dict, lines: list, heralded: set) -> bool:
+    """Acceptance results on a folder line (`--ac AC-1=pass`), stored for the head commit."""
+    raw = event.get("acs")
+    if not isinstance(raw, dict) or not raw:
+        return False
+    pr = _pr(ticket)
+    head = str(pr.get("headSha") or "")
+    current = pr.get("acResults") if isinstance(pr.get("acResults"), dict) and str(pr.get("acSha") or head) == head else {}
+    merged = dict(current)
+    merged.update({str(k): str(v) for k, v in raw.items()})
+    if merged == pr.get("acResults") and str(pr.get("acSha") or "") == head:
+        return False
+    pr["acResults"] = merged
+    pr["acSha"] = head
+    tid = ticket.get("id")
+    failed = sorted(k for k, v in merged.items() if str(v).casefold() not in {"pass", "passed", "ok", "green"})
+    key = (tid, "acs", tuple(sorted(merged.items())))
+    if key not in heralded:
+        heralded.add(key)
+        if failed:
+            lines.append("herald: %s acceptance: %s failed." % (tid, ", ".join(failed)))
+        else:
+            lines.append("herald: %s acceptance: %d recorded, all pass." % (tid, len(merged)))
+    return True
 
 
 def _apply_event_state(beam_path: Path, data: dict, ticket: dict, event: dict, now: str, heralded: set, lines: list, state: str) -> bool:
@@ -547,6 +576,8 @@ def _event_from_state(state: dict) -> Optional[dict]:
         event["state"] = "check-red"
     elif name == "check-green" or check.get("result") == "green":
         event["state"] = "check-green"
+    if isinstance(state.get("acResults"), dict) and state.get("acResults"):
+        event["acs"] = dict(state["acResults"])
     if name in REVIEW_STATES:
         review = state.get("review") if isinstance(state.get("review"), dict) else {}
         event["sha"] = review.get("sha") or ""
@@ -921,6 +952,7 @@ def append_status(
     findings: Optional[list] = None,
     sha: str = "",
     source: str = "",
+    acs: Optional[dict] = None,
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -968,6 +1000,10 @@ def append_status(
             "name": name or "make ci",
             "log": error,
         }
+    if acs:
+        merged = dict(body.get("acResults") or {}) if isinstance(body.get("acResults"), dict) else {}
+        merged.update(acs)
+        body["acResults"] = merged
     if state in REVIEW_STATES:
         body["review"] = {
             "result": "pass" if state == "review-pass" else "fail",
@@ -1011,6 +1047,8 @@ def append_status(
         line["alarm"] = "lock-escape"
     if alarm and state != "lock-escape":
         line["alarm"] = alarm
+    if acs:
+        line["acs"] = dict(acs)
     if state in REVIEW_STATES:
         line["sha"] = body["review"]["sha"]
         line["findings"] = body["review"]["findings"]
@@ -1022,7 +1060,7 @@ def append_status(
     print("state: %s" % state)
     print("dir: .warp/tickets/%s" % tid)
     code = 0 if not push else _push_dir(root, tid, state)
-    for line in _reap_lines(root, tid, agent or str(body.get("agent") or ""), remote=bool(push)):
+    for line in _reap_lines(root, tid, agent or _current_agent(root, tid) or str(body.get("agent") or ""), remote=bool(push)):
         print(line)
     return code
 
@@ -1035,6 +1073,22 @@ def _cloud_agent() -> str:
         return agents.current_agent_id()
     except Exception:
         return ""
+
+
+def _current_agent(root: Path, tid: str) -> str:
+    """The agent the beam has on this ticket now. A line written without --agent is checked as that one,
+    not as whichever Shuttle last wrote the folder (that was printing a stop line meant for an older Shuttle)."""
+    try:
+        data = json.loads((Path(root) / ".warp" / "beam.json").read_text())
+        return str(((data.get("tickets") or {}).get(tid) or {}).get("agent") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _parse_acs(values) -> dict:
+    import acceptance
+
+    return acceptance.parse_args(values)
 
 
 def _reap_lines(root: Path, tid: str, agent: str, remote: bool = False) -> list:
@@ -1137,6 +1191,7 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--sha", default="", help="with review-pass or review-fail: the head commit that was reviewed")
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
     add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default) or hand")
+    add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
     watch = sub.add_parser("observe", help="fetch in-flight branches and patch the live beam")
     watch.add_argument("--beam", default=".warp/beam.json")
     watch.add_argument("--root", default=".")
@@ -1159,6 +1214,7 @@ def main(argv: Optional[list] = None) -> int:
             findings=args.finding,
             sha=args.sha,
             source=args.source,
+            acs=_parse_acs(args.ac),
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)
