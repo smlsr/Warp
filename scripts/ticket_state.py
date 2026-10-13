@@ -278,8 +278,19 @@ def _escaped(value) -> list:
     return alarm_repair.normalize_paths(value if isinstance(value, list) else [])
 
 
+def uncovered(ticket: dict, paths) -> list:
+    """Escaped paths the ticket's locks do not already cover (a repair may have widened them)."""
+    import alarm_repair
+
+    locks = [lock for lock in (ticket.get("locks") or []) if isinstance(lock, str) and lock.strip()]
+    return [path for path in _escaped(paths) if not alarm_repair._already_locked(locks, path)]
+
+
 def _apply_lock_escape(beam_path: Path, ticket: dict, paths: list, now: str) -> bool:
     paths = _escaped(paths)
+    if paths and not uncovered(ticket, paths):
+        # Every path is inside the locks now. Nothing escaped.
+        return False
     same = (
         ticket.get("status") == "alarm"
         and ticket.get("alarm") == "lock-escape"
@@ -453,6 +464,10 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
     return changed
 
 
+# States that keep the alarm fields already in state.json. Every other state clears them.
+STICKY_STATES = {"heartbeat", "lock-escape", "alarm", "failed"}
+
+
 def _event_from_state(state: dict) -> Optional[dict]:
     """One snapshot event when the directory has current state and the log was short."""
     name = str(state.get("state") or "").strip()
@@ -474,7 +489,9 @@ def _event_from_state(state: dict) -> Optional[dict]:
         event["state"] = "check-red"
     elif name == "check-green" or check.get("result") == "green":
         event["state"] = "check-green"
-    if name == "lock-escape" or state.get("alarm") == "lock-escape":
+    if name == "lock-escape" or (name in STICKY_STATES and state.get("alarm") == "lock-escape"):
+        # A later state (review, pr-opened, check-green) with a leftover alarm
+        # field is that later state, not a new lock-escape.
         event["state"] = "lock-escape"
         event["escaped"] = state.get("escaped")
     return event
@@ -869,6 +886,12 @@ def append_status(
             body["state"] = "started"
     else:
         body["state"] = state
+    if state not in STICKY_STATES:
+        # A newer progress state: the alarm, the escaped paths and the error
+        # belonged to the event that set them. Left here they raise it again.
+        body["alarm"] = ""
+        body["escaped"] = []
+        body["error"] = ""
     if error:
         body["error"] = error
     if state == "pr-opened" and pr:

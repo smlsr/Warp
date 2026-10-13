@@ -346,6 +346,16 @@ def _note_ci_absent(pr: dict, snap: dict, now, cfg: dict) -> None:
     rollup = str(snap.get("rollup") if "rollup" in snap else pr.get("rollup") or "").strip().casefold()
     if count is None and rollup == "absent":
         count = 0
+    if snap.get("ciConfigured") is False:
+        # The repo has no workflow at all. There is nothing to start: do not send a
+        # Shuttle to push empty commits. The Shuttle's own check and Bugbot decide.
+        pr["ciNone"] = True
+        pr["ciAbsent"] = False
+        if count is not None:
+            pr["checkCount"] = count
+        return
+    if snap.get("ciConfigured") is True:
+        pr["ciNone"] = False
     if count is None:
         return
     pr["checkCount"] = count
@@ -812,6 +822,7 @@ def live_provider(data: dict, beam_path) -> dict:
     import provider as provider_mod
 
     root = Path(beam_path).resolve().parent.parent
+    has_ci = provider_mod.repo_has_ci(root)
     found = {}
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
     for ticket in tickets.values():
@@ -824,6 +835,7 @@ def live_provider(data: dict, beam_path) -> dict:
             continue
         snap = provider_mod.fetch_pr_state(root, url)
         if snap:
+            snap["ciConfigured"] = has_ci
             found[ticket.get("id")] = snap
     return found
 
@@ -959,6 +971,9 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
     _phase(ticket, "reviewing", lines)
     lines.append("bugbot: request %s %s" % (ticket.get("id"), pr.get("url") or ""))
+    import bugbot
+
+    bugbot.on_request(data, ticket, lines)
     _queue_in_review(data, ticket, lines)
 
 
@@ -1123,7 +1138,7 @@ def _ensure_acs(data: dict, ticket: dict) -> None:
     pr["acResults"] = loaded
 
 
-def _follow(data: dict, ticket: dict, lines: list) -> None:
+def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
     cfg = data.get("config") or {}
     phase = ticket.get("phase")
     if ticket.get("needsReplacement") and not pending(ticket):
@@ -1182,6 +1197,11 @@ def _follow(data: dict, ticket: dict, lines: list) -> None:
             _hold_or_queue(ticket, lines)
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
+            import bugbot
+
+            # Requested and never started: comment `bugbot run`, switching the trigger when it was auto.
+            if bugbot.check_silence(data, ticket, lines, now=now):
+                return
             _request_bugbot(ticket, lines, data)
             return
         if _conflicted(ticket):
@@ -1235,7 +1255,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
             return
         if _on_return(data, ticket, snap, lines) == "stop":
             return
-    _follow(data, ticket, lines)
+    _follow(data, ticket, lines, now=now)
 
 
 def _refill(data: dict, lines: list) -> None:

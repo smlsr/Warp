@@ -443,3 +443,20 @@ The scan printed `schedule: <program> build-schedule/2, gate order strict — ga
 ## Dashboard shows old data or no data
 
 `/warp-dashboard` runs `dashboard.py write --beam .warp/beam.json`. It prints `dashboard: .warp/dashboard.html tickets=<n> files=<n>` and `open: file://...`. The page has the beam, each ticket's `state.json`, and the other runs' published beams inside it. Once the file exists, every status write rewrites it. Press Reload in the page to see the new state. The file is local: state commits leave it out. Delete it to stop the rewrites. `refuse: no beam at <path>. Run /warp-scan first, or pass --empty to write the page without data.` means there is no run yet. `--empty --out <path>` writes a page with no data, and File > Open reads the files by hand. See the [README](../README.md#dashboard).
+
+## Bugbot never starts
+
+`bugbot: request` only records that a review was asked for. When Bugbot is on for the repo it starts by itself, and its `Cursor Bugbot` check shows up on the pull request. If it does not show up within `bugbotStartMinutes` (default 10), Warp:
+
+1. writes `bugbotTrigger: comment` to `.warp/config.yaml` (the run state publishes it) and prints `config: bugbotTrigger comment. ...` with one Herald line;
+2. posts `bugbot run` on that pull request (`bugbot: commented <id> <url>`). Without gh it prints `bugbot: MUST DO ...`: post the comment with the GitHub MCP, then `bugbot.py run --id <id> --posted`;
+3. from then on posts `bugbot run` each time it asks for a review, once per head commit.
+
+Still nothing `bugbotStartMinutes` after a comment: one more comment. After two, `bugbot: silent <id>` and one Herald line: check that Bugbot is on for the repo in the Cursor dashboard, and that the pull request author's "Run only when mentioned" setting is not the cause, or set `bugbotRequired: false`. `python3 <plugin>/scripts/bugbot.py status` lists every ticket still waiting on Bugbot.
+
+A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelines.yml`) is not a CI that never started: Warp does not send a Shuttle to push empty commits. The Shuttle's own check and Bugbot decide. Bugbot's check alone makes the rollup green once it passes.
+
+## A lock-escape that keeps coming back
+
+The Shuttle's `.warp/tickets/<id>/state.json` used to keep `alarm: lock-escape` and the escaped paths after later states, so every newer state raised the alarm again, even after the repair had widened the locks. A later state now clears those fields, a leftover field is not read as a new lock-escape, and paths already inside the ticket's locks never raise it. `/warp-resume` clears one that is already on a ticket (`heal: <id> lock-escape cleared, ...`).
+

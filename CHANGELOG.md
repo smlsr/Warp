@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.8
+
+- Fix: Bugbot was asked for and never ran. `bugbot: request` only recorded the request; nothing told Bugbot to start, so a repo where Bugbot does not start on its own waited forever (WV-01 on smlsr/WarpDemo: no comment, no check, 50 minutes). New `bugbotTrigger` (`auto` by default, or `comment`) and `bugbotStartMinutes` (default 10):
+  - `auto`: when no `Cursor Bugbot` check shows up on the head within `bugbotStartMinutes` of the request, Warp writes `bugbotTrigger: comment` to `.warp/config.yaml` (published with the run state), says so once (`config: bugbotTrigger comment. ...` and a Herald line), and posts `bugbot run` on that pull request.
+  - `comment`: Warp posts `bugbot run` each time it asks for a review, once per head commit. No answer after `bugbotStartMinutes`: one more comment; after two, `bugbot: silent <id>` and one Herald line on what to check.
+  - `orchestrator.py supervise` posts the comment with `gh pr comment` (`bugbot: commented <id> <url>`). Without gh it prints a `bugbot: MUST DO` line for the GitHub MCP and `bugbot.py run --id <id> --posted`. `bugbot.py status` lists tickets waiting on Bugbot.
+- Fix: a repo with no CI workflows was treated as CI that never started, and Warp kept sending Shuttles to push empty commits. With no `.github/workflows/*.yml` (or `bitbucket-pipelines.yml`) the head is `ciNone`: no CI start, and the Shuttle's own check and Bugbot decide the merge.
+- Fix: a lock-escape kept coming back after the repair had widened the locks. `.warp/tickets/<id>/state.json` kept `alarm: lock-escape` and the escaped paths through later states, and each newer state was read as a new lock-escape. A later state now clears those fields, a leftover field is not a lock-escape, and paths the locks already cover never raise one.
+- `/warp-start` and `/warp-resume` heal every ticket in alarm before the first pass, so no one has to post `warp:retry`. A lock-escape whose paths are locked (or can be locked now) is cleared and the ticket goes back to review, or to the queue without a pull request. One whose paths are held in flight keeps the alarm with a fresh repair count. Any other alarm is retried the way `warp:retry` does it. `gate-red` stays. Each prints a `heal:` line; `heal.py --dry-run` shows what a resume would do. Parked tickets stay parked.
+- Fix: the listener still ended its own generation early by stamping `rotated` itself. `inbound.py returned` from the live holder is now refused unless the script itself would stop it with that reason: `rotated` at `listenerMaxReads`/`listenerMaxMinutes`, `orphaned` when the parent is gone, `stopped` or `polled` once the run halted. The same holds when it is called without `--lease`.
+
 ## 1.6.7
 
 - Fix: the listener kept exiting after one cycle. The prompt from `orchestrator.py supervise` listed `First:`, `Then:` and an `Exit:` line offering `--reason polled`, which read as "poll once and leave". It now says to keep cycling until the script tells you to stop. `Loop:`, `Poll:` and `Wait:` lines name the commands. `Stop:` names the only lines that end a generation (`reap: exit`, `listen: rotate`, `listen: stopped`). The fallback stamp no longer offers `polled`.

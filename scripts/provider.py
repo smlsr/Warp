@@ -367,6 +367,15 @@ def payload_has_merge_queue(doc) -> bool:
     return bool(found)
 
 
+def repo_has_ci(root: Path) -> bool:
+    """True when the checkout has a CI definition: GitHub Actions workflows or bitbucket-pipelines.yml."""
+    root = Path(root)
+    flows = root / ".github" / "workflows"
+    if flows.is_dir() and any(p.suffix in {".yml", ".yaml"} for p in flows.iterdir() if p.is_file()):
+        return True
+    return (root / "bitbucket-pipelines.yml").is_file()
+
+
 def interpret_rollup(checks: list) -> str:
     """GitHub statusCheckRollup or Bitbucket commit statuses.
 

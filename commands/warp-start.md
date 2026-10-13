@@ -3,7 +3,7 @@ name: warp-start
 description: Start Warp dispatch after a scan
 ---
 
-`/warp-start` and `/warp-resume` are the same command. Use either. It works from a stopped run, a paused run, and a run that is already running, and it says which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` From any run state it starts, unless a refusal below applies. There is nothing to choose.
+`/warp-start` and `/warp-resume` are the same command. Use either. It works from a stopped run, a paused run, and a run that is already running, and it says which: `run: was stopped. Starting.`, `run: was paused (<reason>). Continuing.`, or `run: was already running. This session takes it over.` From any run state it starts, unless a refusal below applies. There is nothing to choose. It heals every ticket in alarm before the first pass and prints a `heal:` line for each (`commands/warp-resume.md` lists them), so a lock-escape left over from an earlier event, a dead worker, or a stuck ticket needs no `warp:retry`.
 
 A named run (`run:` in `.warp/config.yaml`) cannot start until `/warp-scan` has run: start prints `refuse: <name> has no scan. Run /warp-scan [folder] first.` On a fresh checkout with no config, `scan.py start --run <name>` takes the run up from the repo first (see `docs/RUNS.md`).
 

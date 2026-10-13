@@ -1047,6 +1047,16 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         stop_lines = agents.halt_local(beam, beam_path=beam_path, reason=state)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
     journal(beam_path, {"type": state, "reason": reason})
+    heal_lines = []
+    if state == "running":
+        # Start and resume are "carry on": put every alarmed ticket back on a path
+        # that can finish, so no one has to post warp:retry.
+        try:
+            import heal
+
+            heal_lines = heal.heal(beam_path)
+        except Exception as e:
+            heal_lines = ["heal: skipped (%s)" % e]
     if state in {"paused", "stopped"}:
         import session_note
 
@@ -1083,6 +1093,8 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         print(agents.instance_line(beam))
         print("parent: session %s" % beam.get("parentSession"))
         print("listener: not started. The next supervise issues it.")
+        for line in heal_lines:
+            print(line)
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")
         for line in session_lines:
             print(line)

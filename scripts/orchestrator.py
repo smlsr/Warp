@@ -442,11 +442,14 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
         return False
     if rollup == "green" or check == "green":
         return True
-    if rollup in {"pending", "absent"}:
+    if rollup == "pending":
+        return False
+    no_ci = bool(pr.get("ciNone"))
+    if rollup == "absent" and not no_ci:
         return False
     if check_command(config):
         return check == "green"
-    if ci != "green":
+    if ci != "green" and not no_ci:
         return False
     if not bugbot_applies(ticket, config):
         return True
@@ -1615,13 +1618,19 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     data = _load(path)
     if not listener_should_run(data):
         return lines
-    if provider is None:
+    live = provider is None
+    if live:
         provider = pipeline.live_provider(data, path)
     try:
         runs.refresh_external(runs.repo_root(path), data)
     except Exception as exc:
         lines.append("runs: other runs not read (%s)" % exc)
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
+    if live:
+        import bugbot
+
+        # Post each `bugbot run` this pass asked for. Without gh it prints a MUST DO line.
+        lines.extend(bugbot.post_pending(data, path, lines, now=now))
     import agents as agents_mod
 
     disk = agents_mod.halted_meanwhile(data, path)
@@ -1717,8 +1726,9 @@ def listener_prompt(beam_path: Path) -> list:
         "Wait: python3 %s/inbound.py wait --beam %s --lease %s --holder %s --cursor <newest> --count <n>"
         % (scripts, beam_file, generation, holder),
         "Stop: only on reap: exit, listen: rotate, or listen: stopped. Return that line. The stamp is already written.",
-        "Stamp, only if you must leave and the script printed none: python3 %s/inbound.py returned --beam %s "
-        "--reason <rotated|orphaned|stopped> --lease %s --holder %s" % (scripts, beam_file, generation, holder),
+        "Stamp, only when poll or wait told you to stop and printed no stamp: python3 %s/inbound.py returned --beam %s "
+        "--reason <rotated|orphaned|stopped> --lease %s --holder %s. A stamp the script did not decide is refused: keep cycling."
+        % (scripts, beam_file, generation, holder),
     ]
     if slug:
         body.insert(6, "model: %s" % slug)

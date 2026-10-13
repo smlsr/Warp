@@ -839,6 +839,22 @@ def take_lease(beam_path: Path, holder: str, now=None) -> str:
     return _locked(beam_path, run)
 
 
+def _script_says_stop(data: dict, beam_path: Path, holder: Optional[str], reason: str, now_dt) -> bool:
+    """True when poll or wait would end this generation now with that reason."""
+    import agents
+
+    if reason == "rotated":
+        return rotation_due(data, beam_path, now_dt)
+    if reason == "orphaned":
+        return parent_orphaned(data, beam_path, now_dt)
+    if reason == "stopped":
+        reap = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
+        return bool(reap and reap[0].startswith("reap: exit"))
+    # polled: only once the run has halted.
+    reap = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
+    return bool(reap and reap[0].startswith("reap: exit"))
+
+
 def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str] = None, now=None) -> str:
     """Write the return stamp for this generation. Refuses a lease this copy does not hold."""
     beam_path = Path(beam_path)
@@ -848,18 +864,20 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
         return "listener: return needs a reason"
 
     def run() -> str:
-        import agents
-
         data = beam.load_json(beam_path)
-        _now_dt, now_s = _moment(now)
+        now_dt, now_s = _moment(now)
         if lease is not None or holder not in (None, ""):
             if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
                 return "listener: return refused"
-            if reason == "polled" and lease_matches(data, lease, holder):
-                # The holder of a live lease does not leave after a cycle. Only the script ends a generation.
-                reap = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
-                if not (reap and reap[0].startswith("reap: exit")):
-                    return "listener: not returned. The run is still listening and you hold the lease. " + KEEP_CYCLING[len("listen: ") :]
+            if lease_matches(data, lease, holder) and not _script_says_stop(data, beam_path, holder, reason, now_dt):
+                # The holder of a live lease does not end its own generation. poll and wait
+                # decide rotation, orphaning, and stops, and they write the stamp themselves.
+                return "listener: not returned. The run is still listening and you hold the lease. " + KEEP_CYCLING[len("listen: ") :]
+        else:
+            live = str(_raw(data).get("holder") or "")
+            if live and not _script_says_stop(data, beam_path, live, reason, now_dt):
+                # No lease given, and a holder is live: the same rule. Only the script ends it.
+                return "listener: not returned. A listener holds the lease and the run is still listening. " + KEEP_CYCLING[len("listen: ") :]
         raw = _raw(data)
         if str(raw.get("returnReason") or "") == reason and not str(raw.get("holder") or ""):
             return "listener: returned %s" % reason

@@ -219,6 +219,12 @@ bugbotManual: true
 # Manual tickets (autoMerge false) only. true: Bugbot must pass before QA Ready,
 # the same gate as auto-merge. false: skip Bugbot on that path. bugbotRequired
 # still covers auto-merge.
+bugbotTrigger: auto
+# How Warp gets a Bugbot review. auto: Bugbot reviews each pull request on its own. If no
+# Bugbot check shows up within bugbotStartMinutes, Warp sets this to comment and says so.
+# comment: Warp posts `bugbot run` on the pull request each time it asks for a review.
+bugbotStartMinutes: 10
+# Minutes to wait for Bugbot to start after a request or a `bugbot run` comment.
 maxFixAttempts: 5
 stuckAfterMinutes: 90
 # Minutes with no progress before supervise marks that state stalled.
