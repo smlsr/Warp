@@ -27,7 +27,7 @@ A team admin on Teams or Enterprise imports the repository. People on that marke
 4. In the Cursor app, open Customize in the sidebar, find Warp, and choose Install for yourself or for the project.
 5. Run Developer: Reload Window.
 
-The plugin manifest is `.cursor-plugin/plugin.json` at the root of that repo. The logo is `assets/logo.svg`, committed in the repo. Listing Warp on the public Cursor Marketplace is a separate review at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Until that review lands, Customize search does not find this repository on its own.
+The plugin manifest is `.cursor-plugin/plugin.json` at the root of that repo. It names `commands`, `skills`, `agents`, and `rules` as directories (`./commands/`, `./skills/`, …), so every file in them is registered; an explicit file list did not reach the published index in 1.6.3, and a fresh install then had no slash commands. After 1.6.4 is published, reinstall or update Warp from Customize and reload. The logo is `assets/logo.svg`, committed in the repo. Listing Warp on the public Cursor Marketplace is a separate review at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Until that review lands, Customize search does not find this repository on its own.
 
 Without a team marketplace, copy this repo to `~/.cursor/plugins/local/warp` so that folder contains `.cursor-plugin/plugin.json`, then reload. Local plugin imports have to be allowed (Dashboard, Settings, Security & Identity, Marketplace and Plugins). A marketplace plugin with the same name takes precedence.
 

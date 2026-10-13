@@ -10,7 +10,7 @@
     {
       "name": "warp",
       "source": ".",
-      "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, keep state out of git."
+      "description": "Scan any repo with a plan, or generate one from specs. Dispatch workers, post status to Slack and Teams, and commit the live state without secrets."
     }
   ]
 }

@@ -54,9 +54,7 @@ class InitTests(Base):
         manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
         on_disk = sorted("./commands/" + path.name for path in (ROOT / "commands").glob("*.md"))
         self.assertGreaterEqual(len(on_disk), 1)
-        self.assertEqual(manifest["commands"], on_disk)
-        missing = [rel for rel in on_disk if rel not in manifest["commands"]]
-        self.assertEqual(missing, [], "command files missing from the manifest")
+        self.assertEqual(manifest["commands"], "./commands/")  # every file in it is registered
         installed = run(INSTALL, "init", "--root", ".", cwd=self.repo)
         self.assertEqual(installed.returncode, 0, installed.stderr + installed.stdout)
         for rel in on_disk:

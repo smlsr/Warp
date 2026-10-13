@@ -2,6 +2,7 @@
 
 ## 1.6.4
 
+- Fix: commands and skills were not registered on a fresh install. `.cursor-plugin/plugin.json` now lists them as directories (`"commands": "./commands/"`, `"skills": "./skills/"`), like `agents` and `rules`; the explicit file list from 1.4.8–1.6.3 never reached the published index. Republish the plugin, then reinstall it (or Customize > update) and reload Cursor. Every command file needs a `name` matching its file name and a `description`, and every skill folder a `SKILL.md`; a test checks both.
 - Shuttle model by ticket size: `modelS`, `modelM`, `modelL`, `modelXL` in `.warp/config.yaml`. Empty (the default) uses `model`. `checkout.py launch` prints `model: <slug> (<why>)` above the prompt mark and `model: <slug>` in the prompt, the supervise `start` line carries `model=<slug>`, and the parent starts the subagent with it. The keys are read from the yaml at each launch, so a change applies to the next Shuttle without a rescan.
 - A stronger model for repeat fixes: `fixModel` and `fixModelAfter` (default 2). The first fix of a ticket (Bugbot finding, red CI, failed acceptance) uses the ticket's model; from the second fix round on the fix Shuttle starts with `fixModel`. Rounds before a `warp:retry` count, so a retried ticket that already failed twice gets `fixModel` on its next fix. Empty `fixModel` keeps the ticket's model.
 

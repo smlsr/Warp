@@ -655,8 +655,8 @@ class ScriptHelpTests(unittest.TestCase):
         help_text = self.help_text("update_state.py", "?")
         for needle in ("--beam", "--root", ".warp/tickets/", "config.yaml"):
             self.assertIn(needle, help_text, needle)
-        self.assertIn("./commands/warp-update-state.md", (ROOT / ".cursor-plugin" / "plugin.json").read_text())
-        self.assertIn("./skills/warp-update-state", (ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        self.assertTrue((ROOT / "commands" / "warp-update-state.md").is_file())
+        self.assertTrue((ROOT / "skills" / "warp-update-state" / "SKILL.md").is_file())
 
     def test_every_jira_sync_subcommand_is_documented(self):
         source = (SCRIPTS / "jira_sync.py").read_text()

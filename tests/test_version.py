@@ -122,20 +122,20 @@ class PluginManifestTests(unittest.TestCase):
             (ROOT / "skills" / "warp-upgrade" / "SKILL.md").parent.name,
         )
         manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
-        listed = manifest["commands"]
-        self.assertIsInstance(listed, list)
-        on_disk = sorted("./commands/" + path.name for path in (ROOT / "commands").glob("*.md"))
-        self.assertEqual(listed, on_disk)
-        self.assertIn("./commands/warp-upgrade.md", listed)
-        self.assertIn("./commands/warp-version.md", listed)
-        skills = manifest["skills"]
-        self.assertIsInstance(skills, list)
-        on_disk_skills = sorted(
-            "./skills/" + path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")
-        )
-        self.assertEqual(skills, on_disk_skills)
-        self.assertIn("./skills/warp-upgrade", skills)
-        self.assertIn("./skills/warp-version", skills)
+        # Directory paths: the published index registers every file in them. An explicit
+        # file list did not reach the published index (1.6.3 fresh installs had no commands).
+        self.assertEqual(manifest["commands"], "./commands/")
+        self.assertEqual(manifest["skills"], "./skills/")
+        for path in sorted((ROOT / "commands").glob("*.md")):
+            self.assertEqual(_frontmatter_value(path.read_text(), "name"), path.stem, path.name)
+            self.assertTrue(_frontmatter_value(path.read_text(), "description"), path.name)
+        for path in sorted((ROOT / "skills").glob("*/SKILL.md")):
+            self.assertEqual(_frontmatter_value(path.read_text(), "name"), path.parent.name, str(path))
+            self.assertTrue(_frontmatter_value(path.read_text(), "description"), str(path))
+        self.assertEqual(sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir() and p.name != "__pycache__"),
+                         sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")), "a skills folder without SKILL.md")
+        self.assertTrue((ROOT / "commands" / "warp-upgrade.md").is_file())
+        self.assertTrue((ROOT / "commands" / "warp-version.md").is_file())
         self.assertTrue((ROOT / "scripts" / "upgrade.py").is_file())
 
 
