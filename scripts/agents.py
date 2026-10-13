@@ -803,6 +803,15 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     if decision.get("id"):
         extra += " agent=%s" % decision["id"]
     verb = "resume" if action == "resume" else "start"
+    model_cfg = dict(cfg)
+    if beam_path is not None:
+        try:
+            import prompt_gate
+
+            model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
+        except Exception:
+            model_cfg = dict(cfg)
+    extra += " model=%s" % orchestrator.model_for(ticket, model_cfg, step)[0]
     lines = ["%s %s checkout=%s branch=%s%s step=%s" % (verb, tid, kind, branch, extra, step)]
     if detail:
         lines.append("fix: %s %s" % (tid, detail))

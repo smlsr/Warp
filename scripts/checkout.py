@@ -149,6 +149,16 @@ def branch_state(root: Path, branch: str, base: str, run: str = "") -> str:
     return "work"
 
 
+def _model_config(root: Path, data: dict) -> dict:
+    """The beam's config with .warp/config.yaml on top, so a model key changed after the scan applies."""
+    import prompt_gate
+
+    try:
+        return prompt_gate.effective_config(data, Path(root))
+    except Exception:
+        return dict(data.get("config") or {})
+
+
 def launch_lines(ticket: dict, config: Optional[dict], branch: str, state: str, instance: str = "") -> list:
     """IMPLEMENT prompt for the optional new Agent mode. The branch does not have to exist.
 
@@ -158,6 +168,7 @@ def launch_lines(ticket: dict, config: Optional[dict], branch: str, state: str, 
     prompt = orchestrator.implement_prompt(ticket, config, branch_state=state, instance=instance)
     ticket_id = ticket.get("id") or ""
     return prompt.splitlines() + [
+        orchestrator.model_line(ticket, config),
         "name: %s" % orchestrator.agent_name(ticket, instance),
         "launch: one new Agent per ticket",
         "refuse: in-process",
@@ -322,10 +333,12 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
         print("reused: branch %s" % branch)
     else:
         print("branch: %s" % branch)
+    cfg = _model_config(root, data)
     print("for the parent: %s" % orchestrator.VM_INSTRUCTION)
     print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
+    print(orchestrator.model_line(ticket, cfg))
     print(orchestrator.PROMPT_MARK)
-    print(orchestrator.subagent_vm_prompt(ticket, data.get("config") or {}, branch, reused=had, instance=instance))
+    print(orchestrator.subagent_vm_prompt(ticket, cfg, branch, reused=had, instance=instance))
     return 0
 
 
@@ -370,9 +383,11 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     else:
         print("created: branch %s" % branch)
     print("base: %s" % start)
-    prompt = orchestrator.subagent_prompt(ticket, data.get("config") or {}, branch, str(wt), str(root), instance=instance)
+    cfg = _model_config(root, data)
+    prompt = orchestrator.subagent_prompt(ticket, cfg, branch, str(wt), str(root), instance=instance)
     print("for the parent: %s" % orchestrator.SUBAGENT_INSTRUCTION)
     print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
+    print(orchestrator.model_line(ticket, cfg))
     print(orchestrator.PROMPT_MARK)
     print(prompt)
     return 0
@@ -403,7 +418,7 @@ def _launch_agent(root: Path, path: Path, data: dict, ticket: dict, branch: str,
     if not _save_launch(path, data, ticket_id):
         return 2
     state = branch_state(root, branch, base, runs.current(root, data))
-    for line in launch_lines(ticket, data.get("config") or {}, branch, state, instance=instance):
+    for line in launch_lines(ticket, _model_config(root, data), branch, state, instance=instance):
         print(line)
     return 0
 

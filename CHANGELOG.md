@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.4
+
+- Shuttle model by ticket size: `modelS`, `modelM`, `modelL`, `modelXL` in `.warp/config.yaml`. Empty (the default) uses `model`. `checkout.py launch` prints `model: <slug> (<why>)` above the prompt mark and `model: <slug>` in the prompt, the supervise `start` line carries `model=<slug>`, and the parent starts the subagent with it. The keys are read from the yaml at each launch, so a change applies to the next Shuttle without a rescan.
+- A stronger model for repeat fixes: `fixModel` and `fixModelAfter` (default 2). The first fix of a ticket (Bugbot finding, red CI, failed acceptance) uses the ticket's model; from the second fix round on the fix Shuttle starts with `fixModel`. Rounds before a `warp:retry` count, so a retried ticket that already failed twice gets `fixModel` on its next fix. Empty `fixModel` keeps the ticket's model.
+
 ## 1.6.3
 
 - `/warp-from-jira <label>[,<label>…]`: when there is no plan file and the work is already in Jira. Warp asks Jira (Atlassian MCP, `jiraMcp`) for the issues with any of the labels (`--match all`: every label), in `jiraProject` unless `--project` or `--any-project`, plus `--jql` for one more clause. It writes `warp-plans/<labels>/plan/schedule.json` (build-schedule/2), `plan/FROM_JIRA.md`, `jira/issues.json` and `.warp/jira-map.json`, then prints `next: /warp-scan <folder>`. A folder that already has a plan is refused unless `--force`. Nothing is written to Jira.
