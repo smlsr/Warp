@@ -373,11 +373,59 @@ def _apply_check(beam_path: Path, data: dict, ticket: dict, result: str, name: s
     return orchestrator.format_send_back(sent, data)
 
 
+# Steps whose Shuttle works on a pull request that may already exist. Their return cannot be
+# read from "a pull request appeared", so the folder says it.
+_RETURN_STEPS = {"implement", "restart", "fix", "repair", "review"}
+_RETURN_STATES = {"done", "check-green", "check-red", "review-pass", "review-fail"}
+
+
+def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[list] = None) -> bool:
+    """The Shuttle that is out wrote its last state: it has returned. True when that is new.
+
+    `done` is the Shuttle's explicit last line. A check result or a recorded review from the
+    same agent, after this Shuttle started, also ends its step: the step's work is pushed and
+    checked. Without this, a Shuttle on an existing pull request (restart, fix, repair) on a
+    cloud runner was never seen to return; it held its slot until its heartbeat went stale and
+    was then called dead and replaced.
+    """
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+    if not shuttle or not shuttle.get("pending") or shuttle.get("returned"):
+        return False
+    state = str(event.get("state") or "")
+    step = str(shuttle.get("step") or "")
+    if state not in _RETURN_STATES or (state != "done" and step not in _RETURN_STEPS):
+        return False
+    if state in {"review-pass", "review-fail"} and step != "review":
+        # The working Shuttle records its review before it returns its own line; "done" or the
+        # check ends that step. Only a review Shuttle's job ends with the review.
+        return False
+    agent = str(event.get("agent") or "")
+    current = str(ticket.get("agent") or "")
+    if agent and current and agent != current and not current.startswith("worktree:"):
+        return False
+    since = shuttle.get("startedAt") or ticket.get("workerStartedAt")
+    started = beam.parse_ts(str(since)) if since else None
+    at = beam.parse_ts(str(event.get("at") or stamp))
+    if started is not None and at is not None and at < started:
+        return False  # a line from an earlier Shuttle on this ticket
+    shuttle["returned"] = True
+    shuttle["returnedAt"] = str(event.get("at") or stamp)
+    _pr(ticket)["shuttleReturned"] = True
+    if lines is not None:
+        lines.append("shuttle: returned %s step=%s (%s)" % (ticket.get("id"), step or "?", state))
+    return True
+
+
 def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: str, heralded: set, lines: list) -> bool:
     """Patch one log line onto this ticket. Returns True when the beam changed."""
     state = str(event.get("state") or "").strip()
     if state not in STATES:
         return False
+    returned = note_shuttle_return(ticket, event, str(event.get("at") or now), lines)
+    return _apply_event_state(beam_path, data, ticket, event, now, heralded, lines, state) or returned
+
+
+def _apply_event_state(beam_path: Path, data: dict, ticket: dict, event: dict, now: str, heralded: set, lines: list, state: str) -> bool:
     tid = ticket.get("id")
     stamp = str(event.get("at") or now)
     changed = False

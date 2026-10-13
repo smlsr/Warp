@@ -1446,6 +1446,9 @@ def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused
             "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
             *[line.replace("--root <parent>", "--push") for line in review_lines(ticket, config, "<parent>", "<plugin>/scripts")],
             "The parent patches the beam from that folder. The parent's disk is not shared.",
+            "Last, when your step is finished (pushed, check and results recorded), write done and push it. "
+            "On a cloud runner it is the only way the parent knows you returned:",
+            "python3 <plugin>/scripts/ticket_state.py append --id %s --state done --agent %s --push" % (tid, agent),
             "Cloud subagents use the MCP servers configured at cursor.com/agents, not the local session's.",
             "Never merge. Never touch the parent checkout. Never call Jira or Slack.",
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=<cwd> memory=<available-gib>"
@@ -1488,6 +1491,8 @@ def subagent_prompt(
             "Write state with this command. Do not pass --push. It prints the reap line too:",
             "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
             *review_lines(ticket, config, parent, scripts),
+            "Last, when your step is finished (pushed, check and results recorded), write done. It is how the parent knows you returned:",
+            "python3 %s/ticket_state.py append --id %s --state done --agent %s --root %s" % (scripts, tid, agent, parent),
             "Return one line: result: %s ok hostname=<hostname> branch=%s cwd=%s memory=<available-gib>"
             % (tid, branch, worktree),
             "On failure return one line: result: %s failed <why> hostname=<hostname> cwd=<cwd>" % tid,

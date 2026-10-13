@@ -48,6 +48,11 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle["step"] = step
     shuttle["hadPr"] = bool((ticket.get("pr") or {}).get("url"))
     shuttle.pop("returned", None)
+    shuttle.pop("returnedAt", None)
+    shuttle.pop("startedAt", None)
+    if isinstance(ticket.get("pr"), dict):
+        # A return belongs to one Shuttle. The next one starts out.
+        ticket["pr"].pop("shuttleReturned", None)
     if isinstance(data, dict) and data.get("parentSession"):
         shuttle["session"] = data["parentSession"]
     ticket["needsReplacement"] = False
@@ -1314,14 +1319,15 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     _ensure_phase(ticket, data)
     if not ticket.get("phase"):
         return
-    if pending(ticket) and not orchestrator.shuttle_is_live(ticket, data, now=now):
-        _release_slot(ticket)
-    elif pending(ticket):
-        if not _returned(ticket, snap):
-            lines.append("shuttle: hold %s" % ticket.get("id"))
-            return
+    if pending(ticket) and _returned(ticket, snap):
+        # A Shuttle that came back is not a dead one: consume its return first.
         if _on_return(data, ticket, snap, lines) == "stop":
             return
+    elif pending(ticket) and not orchestrator.shuttle_is_live(ticket, data, now=now):
+        _release_slot(ticket)
+    elif pending(ticket):
+        lines.append("shuttle: hold %s" % ticket.get("id"))
+        return
     _follow(data, ticket, lines, now=now)
 
 
