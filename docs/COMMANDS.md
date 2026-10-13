@@ -669,7 +669,7 @@ One `warp-listen` listener reads these. It is one background subagent on the par
 | Command | Ack, then the action |
 |---|---|
 | `warp:proceed <id>` | `Received warp:proceed XV-01. Merging and moving Jira to Done.` Plan id or Jira key. Only that awaiting_approval ticket. A bad id acks and merges nothing else. |
-| `warp:retry <id>` | `Received warp:retry XV-01. Requeueing XV-01.` Status `queued`, alarm cleared, attempts kept. |
+| `warp:retry <id>` | `Received warp:retry XV-01. Sending XV-01 back to fix on its pull request (was parked).` or `Requeueing XV-01 (was coding).` It works on any ticket that is not merged or done, whatever its state (parked, alarm, blocked, stalled, in flight). With an open pull request it goes back to `fix` on the same branch and the next pass starts a fix Shuttle; without one it is `queued` and its next claim reuses the branch. Either way the old Shuttle is ended, the alarm is cleared, and the fix, stall and recovery counts start again (the old counts are kept on `retryLog`). A merged or done ticket: `XV-01 is already merged. Nothing was requeued.` |
 | `warp:pause [run]` | `Received warp:pause. Pausing the run and stopping the listener.` The same teardown as `/warp-pause`: every agent is ended. |
 | `warp:resume [run]` | `Received warp:resume. Resuming the run.` Does not launch a second listener. |
 | `warp:stop [run]` | `Received warp:stop. Stopping the run and the listener.` The same teardown as `/warp-stop`: every agent is ended. |

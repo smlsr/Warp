@@ -191,6 +191,51 @@ class InboundTests(unittest.TestCase):
         self.assertIn("Nothing was merged.", coding["ack"])
         self.assertEqual(self.beam()["tickets"]["XV-01"]["status"], "coding")
 
+    def test_retry_any_unfinished_state(self):
+        parked = ticket("XV-01", status="parked", alarm="parked", attempts=5, parkReason="fixer cap: shuttle",
+                        watch={"fixerAttempts": 5, "seenAlarm": "stalled"}, shuttle={"pending": True, "step": "fix"})
+        coding = ticket("XV-02", status="coding", alarm=None, pr={"url": None}, attempts=1)
+        blocked = ticket("XV-03", status="blocked", alarm=None, pr={"url": None}, branch=None)
+        merged = ticket("XV-04", status="merged")
+        self.write_beam({"XV-01": parked, "XV-02": coding, "XV-03": blocked, "XV-04": merged})
+
+        got = inbound.handle(self.beam_path, "warp:retry XV-01", by="shawn")
+        self.assertIn("Sending XV-01 back to fix on its pull request (was parked)", got["ack"])
+        t = self.beam()["tickets"]["XV-01"]
+        self.assertEqual((t["status"], t["phase"], t["alarm"], t["agent"], t["attempts"]), ("fix", "fixing", None, None, 0))
+        self.assertNotIn("parkReason", t)
+        self.assertNotIn("fixerAttempts", t["watch"])
+        self.assertFalse(t["shuttle"]["pending"])
+        self.assertTrue(t["plan"]["blockers"][-1]["output"].startswith("warp:retry: was parked (parked)."))
+        self.assertEqual(t["retryLog"][-1]["by"], "shawn")
+        self.assertEqual(t["retryLog"][-1]["fixerAttempts"], 5)
+
+        got = inbound.handle(self.beam_path, "warp:retry XV-02")
+        self.assertEqual(got["ack"], "Received warp:retry XV-02. Requeueing XV-02 (was coding).")
+        t = self.beam()["tickets"]["XV-02"]
+        self.assertEqual((t["status"], t["agent"], t["attempts"]), ("queued", None, 0))
+        self.assertIn("the next claim reuses warp/XV-02", got["detail"])
+
+        got = inbound.handle(self.beam_path, "warp:retry XV-03")
+        self.assertIn("Requeueing XV-03 (was blocked)", got["ack"])
+        self.assertEqual(self.beam()["tickets"]["XV-03"]["status"], "queued")
+
+        got = inbound.handle(self.beam_path, "warp:retry XV-04")
+        self.assertEqual(got["ack"], "Received warp:retry XV-04. XV-04 is already merged. Nothing was requeued.")
+        self.assertEqual(self.beam()["tickets"]["XV-04"]["status"], "merged")
+        self.assertEqual(self.journal_types().count("retry"), 3)
+
+    def test_retried_fix_ticket_gets_a_fix_shuttle(self):
+        import pipeline
+
+        self.write_beam({"XV-01": ticket("XV-01", status="parked", alarm="parked", attempts=5)})
+        inbound.handle(self.beam_path, "warp:retry XV-01")
+        data = self.beam()
+        self.assertEqual(pipeline.unfinished(data)["fix"], ["XV-01"])
+        lines = []
+        pipeline.dispatch_fix_workers(data, lines, scan=True)
+        self.assertTrue(any("XV-01" in line and "fix" in line for line in lines), lines)
+
     def test_retry_status_and_run_control_ack(self):
         self.write_beam(
             {
@@ -199,11 +244,13 @@ class InboundTests(unittest.TestCase):
             }
         )
         retried = inbound.handle(self.beam_path, "warp:retry XV-01")
-        self.assertEqual(retried["ack"], "Received warp:retry XV-01. Requeueing XV-01.")
+        self.assertEqual(retried["ack"], "Received warp:retry XV-01. Sending XV-01 back to fix on its pull request (was alarm).")
         saved = self.beam()["tickets"]["XV-01"]
-        self.assertEqual(saved["status"], "queued")
+        self.assertEqual((saved["status"], saved["phase"]), ("fix", "fixing"))
         self.assertIsNone(saved["alarm"])
-        self.assertEqual(saved["attempts"], 3)
+        self.assertEqual(saved["attempts"], 0)
+        self.assertEqual(saved["retryLog"][-1]["attempts"], 3)
+        self.assertEqual(saved["retryLog"][-1]["alarm"], "bugbot-failed")
         self.assertEqual(self.beam()["tickets"]["XV-02"]["status"], "awaiting_approval")
 
         missed = inbound.handle(self.beam_path, "warp:retry XV-99")

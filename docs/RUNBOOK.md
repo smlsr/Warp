@@ -28,7 +28,7 @@ One agent is long-lived: the parent. Only the parent starts agents, and only the
 
 ## A PR will not go green
 
-`orchestrator.py supervise` starts a fix Shuttle for a Bugbot finding, red CI, or a failed acceptance criterion, then asks Bugbot to review again. After `maxFixAttempts` (default 5) the ticket is `parked`. Warp will not retry it. Reply `warp:retry <id>` after adding a note on the Jira issue. There is no `warp:hold` command. `/warp-pause` ends every agent and stops new claims.
+`orchestrator.py supervise` starts a fix Shuttle for a Bugbot finding, red CI, or a failed acceptance criterion, then asks Bugbot to review again. After `maxFixAttempts` (default 5) the ticket is `parked`. Warp will not retry it by itself. Reply `warp:retry <id>`: a parked ticket with an open pull request goes back to `fix` with a fresh fix budget, and a fix Shuttle starts on the next pass. Add a note on the Jira issue first if the Shuttle needs to know something. There is no `warp:hold` command. `/warp-pause` ends every agent and stops new claims.
 
 Manual tickets (`autoMerge` false) use that loop before anyone is asked to review. `beam.py set --status awaiting_approval` is refused until `pr.bugbot` is `pass` and `pr.ci` is `green`, unless `bugbotManual` is false (Bugbot off for that path only) or `bugbotRequired` is false (Bugbot off for both). QA Ready is the Jira move for that status, not for pull-request open.
 
@@ -135,7 +135,7 @@ Dead Shuttle: the ticket stays on the same work. Branch, pull request, `jira.sta
 
 Two ticks close together reserve the replacement on the first write. The second tick sees the fresh start and does not launch another.
 
-`maxRecoveries` (default 5) caps Shuttle replacements. Past the cap the ticket is `alarm` with reason `worker-died` and no new Shuttle starts. Herald posts `<id> worker died. Recovery cap reached.` Branch, pull request, and `jira.startedAt` stay. `warp:retry <id>` in the Slack or Teams channel is the way back onto the queue. It is a channel verb only. There is no slash command for it. `/warp-init` appends `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
+`maxRecoveries` (default 5) caps Shuttle replacements. Past the cap the ticket is `alarm` with reason `worker-died` and no new Shuttle starts. Herald posts `<id> worker died. Recovery cap reached.` Branch, pull request, and `jira.startedAt` stay. `warp:retry <id>` in the Slack or Teams channel restarts it: back to `fix` when it has a pull request, else `queued`, with the recovery count reset. It is a channel verb only. There is no slash command for it. `/warp-init` appends `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
 
 ## Agents pile up or keep waking
 
@@ -222,7 +222,7 @@ That line is a clean stop, not a failure. `<agent>` is the registry id or the cl
 | Line | What to do |
 |---|---|
 | `refuse: Warp is paused. No agent starts. /warp-resume or /warp-start opens the run.` (also `stopped` and `finished`) | `/warp-resume` or `/warp-start`. Launch from the `start <id>` lines that command prints. A finished run has nothing left to launch. |
-| `refuse: ticket <id> is merged. Nothing starts for it.` (also `parked`) | Nothing. `warp:retry <id>` is the way to start a parked ticket again. |
+| `refuse: ticket <id> is merged. Nothing starts for it.` (also `parked`) | Nothing for a merged ticket. A parked ticket starts again with `warp:retry <id>`. |
 
 ## `parent: exit superseded`
 

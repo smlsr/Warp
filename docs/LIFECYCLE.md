@@ -279,7 +279,7 @@ The parent's own cloud agent is never bound to a Shuttle and never archived.
 | `id` | `subagent:<ticket>`, `shuttle-<ticket>-rN`, `listener`, `parent:<session>`, `bugbot:<ticket>:<sha>`, or a cloud id (`bc-...`) |
 | `role` | `shuttle`, `listener`, `parent`, or `bugbot` |
 | `state` | `starting`, `running`, `ended`, or `stopped` |
-| `endReason` | `returned`, `dead`, `replaced`, `merged`, `parked`, `paused`, `stopped`, `done`, `archived`, `polled`, `rotated`, `orphaned`, `lost`. A listener row ends `polled`, `rotated`, `orphaned`, or `stopped`, the generation's return stamp |
+| `endReason` | `returned`, `dead`, `replaced`, `merged`, `parked`, `paused`, `stopped`, `done`, `archived`, `polled`, `rotated`, `orphaned`, `lost`, `retry` (`warp:retry` ended the Shuttle). A listener row ends `polled`, `rotated`, `orphaned`, or `stopped`, the generation's return stamp |
 | `halted` | the row is from before a pause or a stop, and is never resumed |
 | `reaped` | when the agent read `reap: exit`. A worktree Shuttle stamps its own row. A VM Shuttle does not: the parent stamps the row named by `agent=` or `cloudAgent` |
 | `cloudId`, `retired`, `archivedIds` | the VM the Shuttle is on, VMs it left, and VMs already archived |
