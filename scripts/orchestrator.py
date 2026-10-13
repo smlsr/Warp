@@ -2378,6 +2378,17 @@ def main(argv: Optional[list] = None) -> int:
         note_pr_opened(ticket, args.pr, stamp)
         if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
             ticket["status"] = "review"
+        pr = ticket.setdefault("pr", {})
+        pr.pop("openRequested", None)
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+        if shuttle and shuttle.get("pending") and not shuttle.get("startedAt"):
+            # A step that was only marked (a fix "for no pull request", never launched). The pull
+            # request it was for now exists: nothing is out, and the ticket goes on to review.
+            shuttle["pending"] = False
+            shuttle.pop("launching", None)
+            ticket["phase"] = "pr-open"
+            ticket["needsReplacement"] = False
+            print("%s: the %s step that was never launched is cleared" % (args.id, shuttle.get("step") or "pending"))
         _save(path, data)
         print("%s pr opened %s" % (args.id, args.pr))
         print("slot: held until rollup green")

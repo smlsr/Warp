@@ -157,3 +157,26 @@ if __name__ == "__main__":
     import unittest
 
     unittest.main()
+
+
+class RecordOpenedTest(Repo):
+    def test_recording_a_pr_clears_a_fix_step_that_was_never_launched(self):
+        ticket = row("WV-04", status="fix", phase="fixing", pr={}, branch="warp/view/WV-04-WAR-50",
+                     shuttle={"pending": True, "step": "fix", "launching": True})
+        self.write([ticket])
+        out = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "orchestrator.py"), "opened", "--beam",
+                              str(self.beam_path), "--id", "WV-04", "--pr", "https://github.com/smlsr/WarpDemo/pull/6"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("WV-04: the fix step that was never launched is cleared", out.stdout)
+        saved = self.load()["tickets"]["WV-04"]
+        self.assertEqual((saved["status"], saved["phase"], saved["shuttle"]["pending"]), ("review", "pr-open", False))
+
+    def test_a_launched_fix_shuttle_is_left_running(self):
+        ticket = row("WV-04", status="fix", phase="fixing", pr={},
+                     shuttle={"pending": True, "step": "fix", "startedAt": "2026-10-13T23:00:00Z"})
+        self.write([ticket])
+        subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "orchestrator.py"), "opened", "--beam",
+                        str(self.beam_path), "--id", "WV-04", "--pr", "https://github.com/smlsr/WarpDemo/pull/6"],
+                       capture_output=True, text=True, check=True)
+        self.assertTrue(self.load()["tickets"]["WV-04"]["shuttle"]["pending"])
