@@ -234,6 +234,43 @@ class AlarmRepairTests(unittest.TestCase):
         self.assertIn("alarm-repair: passed WV-01", got)
         self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in got))
 
+    def test_start_prints_the_launch_and_marks_the_repair_step(self):
+        self.write({"WV-01": ticket("WV-01", shuttle={"pending": False, "step": "implement", "returned": True})})
+        got = self.lines()
+        launch = [line for line in got if line.startswith("alarm-repair: launch WV-01.")]
+        self.assertEqual(len(launch), 1, got)
+        self.assertIn("checkout.py launch --root %s --id WV-01" % self.repo.resolve(), launch[0])
+        self.assertIn("Pass --returned WV-01 only after that Shuttle returns", launch[0])
+        row = self.load()["tickets"]["WV-01"]
+        self.assertEqual(row["shuttle"], {"step": "repair", "pending": False, "hadPr": False})
+
+    def test_a_return_with_no_shuttle_launched_is_not_counted(self):
+        self.write({"WV-01": ticket("WV-01")})
+        self.lines()
+        for error in (None, "no worker"):
+            got = self.lines(now=plus(NOW, 1), returned="WV-01", error=error)
+            self.assertIn("alarm-repair: not launched WV-01. No repair Shuttle ran for attempt 1, so it is not counted.", got)
+            self.assertTrue(any(line.startswith("alarm-repair: launch WV-01.") for line in got))
+            self.assertNotIn("alarm-repair: failed WV-01", got)
+            row = self.load()["tickets"]["WV-01"]
+            self.assertEqual(row["alarmRepairs"], 1)
+            self.assertEqual(row["alarmRepair"]["state"], "working")
+            self.assertEqual(self.load()["alarmRepair"]["active"], "WV-01")
+        # The launch is recorded; the same return now settles the attempt.
+        data = self.load()
+        data["tickets"]["WV-01"]["alarmRepair"]["launchedAt"] = plus(NOW, 2)
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        got = self.lines(now=plus(NOW, 3), returned="WV-01")
+        self.assertIn("alarm-repair: failed WV-01", got)
+
+    def test_a_heartbeat_counts_as_a_launched_shuttle(self):
+        self.write({"WV-01": ticket("WV-01")})
+        self.lines()
+        data = self.load()
+        data["tickets"]["WV-01"]["lastSeenAt"] = plus(NOW, 1)
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        self.assertIn("alarm-repair: failed WV-01", self.lines(now=plus(NOW, 2), returned="WV-01"))
+
     def test_cap_skips_later_passes(self):
         self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/b"])})
         now = NOW
@@ -340,3 +377,25 @@ class AlarmRepairTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+sys.path.insert(0, str(ROOT / "tests"))
+from test_isolation import GitRepo, run  # noqa: E402
+
+
+class RepairLaunchTest(GitRepo):
+    def test_checkout_launch_records_the_repair_launch(self):
+        row = ticket("WV-01", locks=["src/a"], escaped=["src/b"], plan={}, branch=None)
+        self.beam([row], runner="local", baseBranch="main", launch="worktree", subagentVm=False)
+        path = self.repo / ".warp" / "beam.json"
+        data = json.loads(path.read_text())
+        data["runState"] = "running"
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        alarm_repair.next_repair(path, now=NOW)
+        out = run("checkout.py", "launch", "--root", str(self.repo), "--id", "WV-01", cwd=self.repo)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("WV-01 repair", out.stdout)
+        saved = json.loads(path.read_text())["tickets"]["WV-01"]
+        self.assertTrue(saved["alarmRepair"].get("launchedAt"))
+        self.assertTrue(saved["shuttle"]["pending"])
+        self.assertTrue(alarm_repair.worker_seen(saved))

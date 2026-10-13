@@ -61,6 +61,7 @@ NEEDS_ID = {"proceed", "retry"}
 ADDRESSABLE = {"pause", "resume", "stop", "start", "status"}
 STATE_VERBS = {"pause", "resume", "stop", "start"}
 EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped")
+KEEP_CYCLING = "listen: keep cycling. Run poll again now with the same lease and holder. Do not return."
 DEFAULT_FAST_SECONDS = 15
 DEFAULT_SLOW_SECONDS = 60
 DEFAULT_ORPHAN_MINUTES = 5
@@ -783,7 +784,7 @@ def wait_for(
             return found
         waited = float(tick()) - began
         if waited >= limit:
-            return ["listen: wait"]
+            return ["listen: wait", KEEP_CYCLING]
         nap(max(0.0, min(float(step), limit - waited)))
 
 
@@ -847,11 +848,18 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
         return "listener: return needs a reason"
 
     def run() -> str:
+        import agents
+
         data = beam.load_json(beam_path)
         _now_dt, now_s = _moment(now)
         if lease is not None or holder not in (None, ""):
             if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
                 return "listener: return refused"
+            if reason == "polled" and lease_matches(data, lease, holder):
+                # The holder of a live lease does not leave after a cycle. Only the script ends a generation.
+                reap = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
+                if not (reap and reap[0].startswith("reap: exit")):
+                    return "listener: not returned. The run is still listening and you hold the lease. " + KEEP_CYCLING[len("listen: ") :]
         raw = _raw(data)
         if str(raw.get("returnReason") or "") == reason and not str(raw.get("holder") or ""):
             return "listener: returned %s" % reason

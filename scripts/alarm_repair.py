@@ -11,6 +11,11 @@ Only alarm reason lock-escape is repaired. Other reasons stay alarmed.
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01 --error "boom"
 
+`alarm-repair: start` is followed by `alarm-repair: launch <id>`: run
+checkout.py launch for that ticket and start one Shuttle with its prompt.
+`--returned <id>` before any repair Shuttle was launched prints
+`alarm-repair: not launched <id>` and does not use an attempt.
+
 A second call while a repair Shuttle is still working prints
 alarm-repair: working and does not start another. A failure records the
 attempt, leaves the alarm, and starts the next lock-escape ticket in that
@@ -79,6 +84,10 @@ ready set is not empty: `send-back <id> fix` and a start line. Launch
 that Shuttle with the log. A Shuttle already in fix is not started
 again. Parked does not launch. A green `make ci` is recorded and is
 not a failure.
+`alarm-repair: start <id>` is followed by `alarm-repair: launch <id>`: run the
+checkout.py launch it names and start one Shuttle with the prompt. Pass
+--returned <id> only after that Shuttle returns. A return with no Shuttle
+launched prints `alarm-repair: not launched <id>` and uses no attempt.
 The repair widens the ticket's locks to the paths on `escaped` and does not
 clear the alarm. It waits when an in-flight ticket holds one of those paths.
 A queued ticket does not block the widen. Herald lines, including the paths
@@ -304,6 +313,8 @@ def _start(data: dict, ticket: dict, now_s: str, beam_path: Path, lines: list) -
     if not ticket.get("claimedAt"):
         ticket["claimedAt"] = now_s
     ticket.pop("lastSeenAt", None)
+    # The launch marks it pending. Until then no repair Shuttle is out.
+    ticket["shuttle"] = {"step": "repair", "pending": False, "hadPr": bool((ticket.get("pr") or {}).get("url"))}
     info = _info(ticket)
     info.update(
         {
@@ -317,6 +328,7 @@ def _start(data: dict, ticket: dict, now_s: str, beam_path: Path, lines: list) -
     )
     info.pop("error", None)
     info.pop("failedAt", None)
+    info.pop("launchedAt", None)
     ticket["updatedAt"] = now_s
     repair = _repair_state(data)
     repair["active"] = ticket.get("id")
@@ -353,10 +365,34 @@ def _start(data: dict, ticket: dict, now_s: str, beam_path: Path, lines: list) -
     lines.append(
         "alarm-repair: start %s agent=%s locks=%s added=%s" % (ticket.get("id"), agent, lock_text, added_text)
     )
+    lines.append(launch_line(ticket.get("id"), beam_path))
     herald = "%s lock-escape repair started." % ticket.get("id")
     if added:
         herald += " Added %s." % ", ".join(added)
     lines.append("herald: " + herald)
+
+
+def launch_line(tid: str, beam_path: Path) -> str:
+    """What the parent does with a started repair: launch one Shuttle, then wait for it."""
+    root = Path(beam_path).resolve().parent.parent
+    return (
+        "alarm-repair: launch %s. Run python3 %s/checkout.py launch --root %s --id %s and start one Shuttle "
+        "subagent with the prompt it prints, in that ticket's worktree. Pass --returned %s only after that "
+        "Shuttle returns. A return with no Shuttle launched is refused and does not use an attempt."
+        % (tid, orchestrator.scripts_dir(), root, tid, tid)
+    )
+
+
+def worker_seen(ticket: dict) -> bool:
+    """True once a repair Shuttle was launched or has touched the ticket since the repair started."""
+    info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+    if info.get("launchedAt") or ticket.get("lastSeenAt"):
+        return True
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    if shuttle.get("pending") or shuttle.get("returned"):
+        return True
+    # The Shuttle moved the ticket off the state the repair left it in.
+    return ticket.get("status") != "claimed" or ticket.get("alarm") != REASON
 
 
 def _consider(data: dict, cap: int, lines: list) -> Optional[dict]:
@@ -446,6 +482,17 @@ def _settle_active(data: dict, beam_path: Path, now_s: str, cap: int, returned: 
         return True
     ticket = tickets[tid]
     mine = returned == tid
+    if mine and not worker_seen(ticket):
+        # Nothing ran. Counting this would spend an attempt on a Shuttle that never started.
+        info = _info(ticket)
+        lines.append(
+            "alarm-repair: not launched %s. No repair Shuttle ran for attempt %d, so it is not counted."
+            % (tid, _attempts(ticket))
+        )
+        if error:
+            lines.append("alarm-repair: error noted, not counted: %s" % error)
+        lines.append(launch_line(tid, beam_path))
+        return False
     outcome = _observe(ticket, mine, error if mine else None)
     if outcome == "working":
         lines.append("alarm-repair: working %s" % tid)

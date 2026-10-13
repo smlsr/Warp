@@ -469,6 +469,9 @@ def _note_live(data: dict, ticket: dict) -> None:
         else:
             step = "implement"
     pipeline.mark_shuttle(ticket, step, data)
+    repair = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else None
+    if repair is not None and repair.get("state") == "working" and not repair.get("launchedAt"):
+        repair["launchedAt"] = beam_mod.utcnow()
     if not ticket.get("workerStartedAt"):
         ticket["workerStartedAt"] = beam_mod.utcnow()
 

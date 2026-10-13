@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.7
+
+- Fix: the listener kept exiting after one cycle. The prompt from `orchestrator.py supervise` listed `First:`, `Then:` and an `Exit:` line offering `--reason polled`, which read as "poll once and leave". It now says to keep cycling until the script tells you to stop. `Loop:`, `Poll:` and `Wait:` lines name the commands. `Stop:` names the only lines that end a generation (`reap: exit`, `listen: rotate`, `listen: stopped`). The fallback stamp no longer offers `polled`.
+- `inbound.py wait` prints `listen: keep cycling. Run poll again now with the same lease and holder. Do not return.` after `listen: wait`.
+- `inbound.py returned --reason polled` from the holder of a live lease is refused with `listener: not returned`, so the generation is not ended. Once the run halts it is accepted as before. `inbound.py polled` is unchanged, for a listener someone starts by hand.
+- Fix: a lock-escape repair could be marked returned without a repair Shuttle ever starting, and that counted as a failed attempt (1 of `maxAlarmRepairs`). `alarm-repair: start` is now followed by `alarm-repair: launch <id>`, which gives the `checkout.py launch` command, and the launch names the Shuttle `<id> repair`. `checkout.py launch` records `alarmRepair.launchedAt`. `alarm_repair.py next --returned <id>` with no launch, heartbeat or ticket change since the repair started prints `alarm-repair: not launched <id>`, uses no attempt, and repeats the launch line.
+- Docs: warp-listen and warp skills, `agents/listener.md`, COMMANDS, LIFECYCLE and RUNBOOK.
+
 ## 1.6.6
 
 - Fix: `notify.py scan` run on its own wrote a scan message with `Format: None` and `Tickets: None` over the one the scan had written. It was only built to take its details from `scan.py`. It now rebuilds the whole message from `.warp/beam.json` (format, ticket count, gates, estimate, plan used and the other plan files found) with the Jira counts as they are now, so run it after resolving keys and post what it writes. With no beam, or a beam with no tickets, it writes nothing, leaves `.warp/notify-post.json` as it was, and says so.

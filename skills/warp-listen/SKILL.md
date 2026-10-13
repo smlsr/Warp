@@ -17,6 +17,8 @@ Slack stays on the plugin's MCP tools. There is no bot token.
 
 ## The cycle
 
+Keep cycling until the script tells you to stop. Only `reap: exit`, `listen: rotate`, or `listen: stopped` from `poll` or `wait` ends a generation. An empty read, a quiet channel, or a finished cycle is not a reason to leave. Do not return after one cycle.
+
 1. Ask whether to go on, and where to read from. This runs before any channel read.
 
 ```bash
@@ -45,14 +47,14 @@ python3 <plugin>/scripts/inbound.py wait --beam .warp/beam.json --lease <gen> --
 python3 <plugin>/scripts/inbound.py wait --beam .warp/beam.json --lease <gen> --holder <id> --fast --cursor <newest> --count <count>
 ```
 
-`listen: wait` means run the poll command again with the same lease and holder. `reap: exit`, `listen: rotate`, and `listen: stopped` mean return that line. The script already wrote the return stamp. Do not start a second listener.
+`listen: wait` is followed by `listen: keep cycling. Run poll again now with the same lease and holder. Do not return.` Run the poll command again: the next cycle starts there. `reap: exit`, `listen: rotate`, and `listen: stopped` mean return that line. The script already wrote the return stamp. Do not start a second listener.
 
-6. If you are leaving and the script did not already stamp, write it yourself. A copy that is no longer the holder is refused.
+6. Only when the script told you to stop and printed no stamp, write it yourself. A copy that is no longer the holder is refused. `polled` is not an exit for a listener the parent started: while you hold a live lease, `returned --reason polled` prints `listener: not returned` and you keep cycling.
 
 ```bash
-python3 <plugin>/scripts/inbound.py returned --beam .warp/beam.json --reason <polled|rotated|orphaned|stopped> --lease <gen> --holder <id>
+python3 <plugin>/scripts/inbound.py returned --beam .warp/beam.json --reason <rotated|orphaned|stopped> --lease <gen> --holder <id>
 ```
 
 Then return one line and stop. The parent starts the next generation only after that stamp, and only when no holder is live.
 
-`inbound.py ?` prints poll, wait, take, returned, polled, accept, enqueue, apply, apply-pending, release, and status. `claim` and `heartbeat` are for a listener someone starts by hand. `listener: already running` from `claim` means do not start a second. A run does not use them. `polled` writes a `polled` return stamp. Prefer `returned` with the reason the script already chose.
+`inbound.py ?` prints poll, wait, take, returned, polled, accept, enqueue, apply, apply-pending, release, and status. `claim` and `heartbeat` are for a listener someone starts by hand. `listener: already running` from `claim` means do not start a second. A run does not use them. `polled` is for a listener someone starts by hand. It writes a `polled` return stamp.
