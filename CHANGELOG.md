@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.11
+
+- Fix: no ticket from a pack could merge. A ticket merges only when every acceptance criterion is recorded as pass, and three gaps kept that from ever happening (WV-01 sat in `review: wait`, `ac=unknown`, with Bugbot pass and the check green):
+  - The criteria never reached the run state. The pack's `tickets/tickets.json` keeps them under `acceptanceCriteria` (`[{id, kind, text}]`); no script read that field, so every ticket had `acs: null` and the prompt said `acceptance:` with nothing after it. `/warp-scan` now fills each ticket's criteria from the pack's ticket file (matched by `tempId`, `externalId`, or `id`) and prints how many tickets have them; `/warp-start` and `/warp-resume` fill a beam scanned before (`acceptance: criteria added to <n> tickets from ...`). Plain `acs`/`acceptance` strings still work; a string with no id is `AC-<n>` by position.
+  - Shuttles were never asked for them. The prompt now lists each criterion and the Shuttle's `done` line carries a result for each: `--ac AC-1=pass --ac AC-2=fail`.
+  - Nothing could record them. `ticket_state.py append --ac ID=pass|fail` (on `done`, or the new `acceptance` state for a person) writes them to the ticket folder; the parent reads them each pass, stores them on `pr.acResults` for the head commit, and heralds the outcome. A `fail` goes to fix. Results are matched by id or by the criterion's text, and a new commit clears them.
+- When the work is done (Bugbot finished, checks green, no findings) and acceptance results are missing with no Shuttle out, the parent starts a verify Shuttle (`step=verify`) that checks each criterion against the branch and records them, up to 2 per head commit; then `acceptance: MUST DO` asks for them by hand.
+- Fix: a state line written without `--agent` was checked against whichever Shuttle last wrote the folder, so a Shuttle saw a stop line meant for the previous one (`shuttle-WV-01-r2`). It is now checked as the ticket's current agent, and the review record command passes `--agent`.
+- `acceptance.py show` and `acceptance.py backfill`.
+- Docs: RUNBOOK "Acceptance criteria", LIFECYCLE lines, the warp and shuttle-run skills.
+
 ## 1.6.10
 
 - Fix: a Shuttle on an existing pull request was never seen to return. Only a first implement step that opened a new pull request counted as back; nothing recorded the return of a restart, fix, or repair Shuttle, and on a cloud runner nothing else could. It held its slot until its heartbeat went stale (15 minutes), then the parent counted it dead and launched another (WV-01's restart wrote `pr-opened` and `check-green` at 19:45 and was later replaced as dead). The return is now read from the ticket folder: `done` (the new last line every Shuttle writes), or a check result from the same agent after it started, or, for a review Shuttle, the review it recorded. `supervise` prints `shuttle: returned <id> step=<step> (<state>)`, consumes the return before any liveness check, and moves the ticket on. The watchdog leaves a returned Shuttle alone (`shuttle: returned <id>`). A return belongs to one Shuttle: the next launch starts out again, and lines from before a Shuttle started do not count.

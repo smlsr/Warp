@@ -302,6 +302,8 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `pass: aborted. The run was <state> during this pass.` | `supervise` | a pause or stop landed mid-pass. Start nothing from it |
 | `parent: stay` / `parent: exit` / `parent: exit superseded` | `parent-exit` | run another pass, or end the turn |
 | `listener: poll` / `hold reason=live` / `hold reason=await-return` / `idle` / `none` | `supervise` | start one background listener, or start nothing |
+| `acceptance: verify-shuttle <id> <n>/2 missing <ids>` | `supervise` | the work is done but acceptance results are missing: launch the `step=verify` Shuttle it started |
+| `acceptance: MUST DO <id>: ...` | `supervise` | two verify Shuttles recorded nothing: check the criteria and record them by hand |
 | `shuttle: returned <id> step=<step> (<state>)` | `supervise`, `beam.py watchdog` | that Shuttle came back: its folder has `done`, a check result, or (a review Shuttle) the review, written after it started. Its slot is free; it is not dead |
 | `listener: generation <n> belonged to the previous session and ended with it.` | `scan.py start`, `scan.py resume` | the old lease is closed; the next supervise prints `listener: poll` |
 | `config: published to <path> (machine keys and secrets left out)` | `scan.py start`, `scan.py resume` | the config copy is in the repo |

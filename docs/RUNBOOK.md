@@ -486,3 +486,24 @@ A Shuttle's return is read from its ticket folder, the one channel that works on
 
 Before 1.6.10, only a first implement step that opened a new pull request was seen to return. A restart, fix, or repair Shuttle on a pull request that already existed stayed "out" until its heartbeat went stale (`staleMinutes`, 15), then was counted dead and replaced (`shuttle: replace`, `worker died`). That is how WV-01's restart was marked dead after it had pushed and recorded a green check. A returned Shuttle whose heartbeat later goes stale is not dead: the watchdog prints `shuttle: returned <id>` and leaves it.
 
+## Acceptance criteria
+
+A ticket merges only when every acceptance criterion has a `pass` for the head commit. Where they come from: `acs` or `acceptance` on the plan's ticket, or `acceptanceCriteria` (`[{id, kind, text}]`) in the pack's `tickets/tickets.json`. A build-schedule/2 schedule.json has none of its own, so `/warp-scan` fills them from the pack's ticket file (matched by `tempId`, `externalId`, or `id`) and prints `acceptance: <n> of <m> tickets have criteria`, with the tickets that have none. `/warp-start` and `/warp-resume` fill them on a beam scanned before 1.6.11 (`acceptance: criteria added to <n> tickets from ...`).
+
+The Shuttle's prompt lists them, one line each, and its last line records a result for each:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state done --agent <agent> --ac AC-1=pass --ac AC-2=pass
+```
+
+The parent reads them from the ticket folder each pass (`herald: WV-01 acceptance: 5 recorded, all pass.`). A `fail` sends the ticket to fix with that criterion. Results belong to the commit that was checked; a new commit needs them again.
+
+When the work is done (Bugbot finished, checks green, no findings) and some criteria have no result, and no Shuttle is out, the parent starts a verify Shuttle (`start <id> ... step=verify`, `acceptance: verify-shuttle <id> 1/2 missing AC-1, ...`). It changes no code: it checks each criterion against the branch and records the results with its `done` line. After two with nothing recorded, `acceptance: MUST DO <id>` asks for them by hand:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root . --id WV-01 --state acceptance --ac AC-1=pass --ac AC-2=pass
+python3 <plugin>/scripts/acceptance.py show --beam .warp/beam.json --id WV-01
+```
+
+A ticket with no criteria at all still cannot merge until a result is recorded for it; scan names those tickets so the pack can be fixed.
+

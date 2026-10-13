@@ -178,7 +178,7 @@ class WorktreeTests(GitRepo):
         self.assertIn("ticket: T-1", text)
         self.assertIn("jira: WAR-1", text)
         self.assertIn("locks: src/T-1", text)
-        self.assertIn("acceptance: viewer serves the page", text)
+        self.assertIn("acceptance: AC-1: viewer serves the page", text)
         self.assertIn("branch: warp/T-1-WAR-1", text)
         self.assertIn("worktree: %s" % worktree, text)
         self.assertIn(orchestrator.SUBAGENT_INSTRUCTION, text)
