@@ -163,6 +163,96 @@ def add_missing_keys(text: str, example: str) -> tuple[str, list[str]]:
     return text.rstrip("\n") + "\n\n" + "\n\n".join(extra) + "\n", added
 
 
+# Commented hint blocks: a block that starts with `# --- ` and holds commented keys
+# (`# modelS: ...`). They are documentation the user uncomments. Init adds one to an
+# existing config when none of its keys is there yet, active or commented.
+_HINT_KEY = re.compile(r"^#\s*([A-Za-z][A-Za-z0-9_]*):")
+# What 1.6.4's example wrote as live lines: blank or default values and these comments.
+# Init swaps them for the commented model hints; no Shuttle changes model.
+MODEL_KEYS_164 = ("modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter")
+COMMENTS_164 = {
+    "# The Shuttle model for a ticket of that size. Empty uses model above.",
+    "# For example modelS: claude-haiku-5-5 and modelXL: claude-opus-5-5.",
+    "# A stronger model for fix rounds that keep failing (Bugbot findings, red CI,",
+    "# failed acceptance). The first fix uses the ticket's own model; from fix round",
+    "# fixModelAfter on, the fix Shuttle starts with fixModel. Empty keeps the",
+    "# ticket's model. Rounds before a warp:retry count too.",
+}
+
+
+def _plain_value(line: str) -> str:
+    value = line.split(":", 1)[1].strip()
+    value = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+    return value.strip("\"'")
+
+
+def swap_models_164(text: str, block: str) -> tuple[str, bool]:
+    """Replace 1.6.4's blank model lines with the commented block. Only when every one is blank or default."""
+    lines = text.split("\n")
+    found = {}
+    for line in lines:
+        m = _KEY_LINE.match(line)
+        if m and m.group(1) in MODEL_KEYS_164:
+            found[m.group(1)] = _plain_value(line)
+    if set(found) != set(MODEL_KEYS_164):
+        return text, False
+    if any(found[k] for k in MODEL_KEYS_164 if k != "fixModelAfter") or found["fixModelAfter"] not in ("", "2"):
+        return text, False
+    out, inserted = [], False
+    for line in lines:
+        m = _KEY_LINE.match(line)
+        if (m and m.group(1) in MODEL_KEYS_164) or line.strip() in COMMENTS_164:
+            if not inserted:
+                out.extend(block.rstrip("\n").split("\n"))
+                inserted = True
+            continue
+        out.append(line)
+    joined = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).rstrip("\n") + "\n"
+    return joined, True
+
+
+def hint_blocks(example: str) -> list[tuple[list[str], str]]:
+    """(commented keys, block text) for each `# --- ` block of commented keys in the example."""
+    out = []
+    lines = example.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].startswith("# --- "):
+            i += 1
+            continue
+        block = []
+        while i < len(lines) and lines[i].startswith("#"):
+            block.append(lines[i])
+            i += 1
+        keys = [m.group(1) for line in block[1:] if (m := _HINT_KEY.match(line))]
+        if keys:
+            out.append((keys, "\n".join(block) + "\n"))
+    return out
+
+
+def add_missing_hints(text: str, example: str) -> tuple[str, list[str]]:
+    """Add each hint block whose keys are all absent. Swap 1.6.4's blank model lines for the hint.
+
+    Returns (text, notes). The plain `model` key does not count, since most configs set it.
+    """
+    notes: list[str] = []
+    norm = text.replace("\r\n", "\n")
+    for keys, block in hint_blocks(example):
+        watched = [k for k in keys if k != "model"] or keys
+        swapped = False
+        if "modelS" in watched:
+            norm, swapped = swap_models_164(norm, block)
+        if swapped:
+            notes.append("model keys from 1.6.4 were blank; replaced them with the commented model lines (nothing changes until you uncomment one)")
+            continue
+        present = set(active_keys(norm)) | {m.group(1) for line in norm.splitlines() if (m := _HINT_KEY.match(line.strip()))}
+        if any(k in present for k in watched):
+            continue
+        norm = norm.rstrip("\n") + "\n\n" + block
+        notes.append("added the commented " + ", ".join(watched) + " lines")
+    return norm, notes
+
+
 def has_ignore_entry(text: str) -> bool:
     return any(l.strip() in IGNORE_ENTRIES for l in text.splitlines())
 
@@ -257,18 +347,22 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
         new, changed = apply_channels(text, channel)
         src = example_config(root)
         added: list[str] = []
+        hints: list[str] = []
         if src:
             new, added = add_missing_keys(new, src.read_text())
+            new, hints = add_missing_hints(new, src.read_text())
         elif not active_keys(new):
             steps.append(("warn", "assets/config.example.yaml not found; could not add missing config keys"))
-        if changed or added:
+        if changed or added or hints:
             if not dry:
                 cfg.write_text(new)
+        for note in hints:
+            steps.append(("done", note))
         if changed:
             steps.append(("done", f"set {', '.join(changed)} to {channel!r} in existing config (was empty or the old default)"))
         if added:
             steps.append(("done", "added missing config keys: " + ", ".join(added) + " (existing values and comments kept)"))
-        if not changed and not added:
+        if not changed and not added and not hints:
             steps.append(("skip", ".warp/config.yaml exists, channels already set; left as is"))
         _, slack = channel_value(new, "slackChannel")
         if slack != slack.lower():

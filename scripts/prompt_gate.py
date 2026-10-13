@@ -67,8 +67,25 @@ def yaml_scalars(text: str) -> dict:
         match = _KEY.match(line)
         if not match:
             continue
-        out[match.group(1)] = match.group(2).strip().strip("\"'")
+        out[match.group(1)] = scalar_value(match.group(2))
     return out
+
+
+def scalar_value(raw: str) -> str:
+    """A yaml scalar without quotes or a trailing ` # comment`.
+
+    `modelS: claude-haiku-5-5   # empty = use model` is `claude-haiku-5-5`. A value that
+    starts with `#` (`slackChannel: #warp`) is kept, as before. Quoted values keep a `#`.
+    """
+    text = str(raw or "").strip()
+    if text[:1] in {'"', "'"}:
+        end = text.find(text[0], 1)
+        if end > 0:
+            return text[1:end]
+        return text.strip("\"'")
+    if not text.startswith("#"):
+        text = re.split(r"\s+#", text, maxsplit=1)[0]
+    return text.strip().strip("\"'")
 
 
 def effective_config(beam: dict, root: Path) -> dict:

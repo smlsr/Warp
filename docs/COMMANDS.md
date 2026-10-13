@@ -132,7 +132,7 @@ Steps: create `.cursor/plugins` and `.warp` if missing; copy plugin files that a
 
 If `.cursor/plugins/warp` is older than the plugin this command ran from, it prints `plugin is vOLD, repo copy is vNEW: run /warp-upgrade` and does not replace plugin files. `/warp-upgrade` is the command that replaces them. An old `.gitignore` line that is exactly `.warp/` is replaced with the snippet that commits the beam, journal, STATUS, and BOARD and still ignores `.warp/config.yaml` and token files. Other gitignore lines stay.
 
-Commented lines in the example (`# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, `# ghCli: false`) are hints. A line that starts with `#` is not a key.
+Commented lines in the example (`# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, `# ghCli: false`) are hints. A line that starts with `#` is not a key. The Shuttle model lines are a commented block (`# --- Shuttle models ...`, then `# model:`, `# modelS:` … `# fixModelAfter: 2`). On an existing config, init adds that block when none of its keys is there, active or commented, and prints `added the commented modelS, modelM, modelL, modelXL, fixModel, fixModelAfter lines`. A config 1.6.4 wrote with those keys blank gets them replaced by the block: `model keys from 1.6.4 were blank; replaced them with the commented model lines (nothing changes until you uncomment one)`. See [CONFIG.md](CONFIG.md) "Shuttle models".
 
 When init changes something and `notify` is `verbose`, it writes `.warp/notify-post.json`. The footer starts with `Warp v<version>`.
 
