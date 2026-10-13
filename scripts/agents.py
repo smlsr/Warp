@@ -285,6 +285,10 @@ def shuttle_busy(data: dict, ticket: dict, now=None, beam_path: Optional[Path] =
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     if not shuttle.get("pending"):
         return False
+    if shuttle.get("launching"):
+        # Marked for this launch and not launched yet. The heartbeat and start on the ticket belong
+        # to the Shuttle before it; counting them held the launch and nothing ever started.
+        return False
     return bool(ticket.get("lastSeenAt") or ticket.get("workerStartedAt"))
 
 

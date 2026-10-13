@@ -71,7 +71,9 @@ GITHUB_COMMENT = "add_issue_comment"
 # The merge, when gh cannot merge on this runner (read-only token). Warp still records a merge only
 # when the provider shows the pull request merged.
 GITHUB_MERGE = "merge_pull_request"
-GITHUB_TOOLS = (GITHUB_COMMENT, GITHUB_MERGE)
+# Opening the pull request for a Shuttle that pushed its branch but could not open one (a 403 on its VM).
+GITHUB_OPEN = "create_pull_request"
+GITHUB_TOOLS = (GITHUB_COMMENT, GITHUB_MERGE, GITHUB_OPEN)
 
 # Channel post tools, plus the reads Herald uses for warp:status.
 # slack_read_channel, slack_read_thread, and slack_search_channels are the

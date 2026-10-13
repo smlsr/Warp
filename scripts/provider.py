@@ -692,6 +692,33 @@ def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tupl
     return "merged", sha or "merged"
 
 
+def open_pr(root: Path, branch: str, base: str, title: str, body: str, runner=None) -> tuple[str, str]:
+    """A pull request for a Shuttle's pushed branch: (found|opened|missing|failed, url or reason).
+
+    found: one is already open for the branch. missing: the branch is not on origin.
+    """
+    run = runner or (lambda cmd: _run(cmd, root, timeout=60))
+    if not shutil.which("gh") and runner is None:
+        return "failed", "gh is not installed"
+    listed = run(["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--limit", "1"])
+    if listed.returncode == 0:
+        try:
+            rows = json.loads(listed.stdout or "[]")
+        except json.JSONDecodeError:
+            rows = []
+        if rows and isinstance(rows[0], dict) and rows[0].get("url"):
+            return "found", str(rows[0]["url"])
+    remote = run(["git", "ls-remote", "--heads", "origin", branch])
+    if remote.returncode == 0 and not (remote.stdout or "").strip():
+        return "missing", "branch %s is not on origin" % branch
+    made = run(["gh", "pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body])
+    text = ((made.stdout or "") + "\n" + (made.stderr or "")).strip()
+    if made.returncode != 0:
+        return "failed", (text.splitlines() or ["gh pr create failed"])[-1]
+    urls = re.findall(r"https://\S+/pull/\d+", text)
+    return ("opened", urls[-1]) if urls else ("failed", "no pull request url in the gh output")
+
+
 def merge_queue_on(cfg: dict, detected: Optional[bool]) -> bool:
     raw = (cfg or {}).get("mergeQueue")
     if isinstance(raw, bool):

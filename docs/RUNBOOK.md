@@ -515,3 +515,11 @@ When the merge cannot run here (gh missing, a read-only token, branch protection
 
 Before 1.6.12 a pass with no merge result from the provider recorded the merge without one, cleared the gate, and asked for the Jira Done move while the pull request stayed open. `/warp-resume` now checks every ticket recorded merged that has a pull request and no confirmed merge: an open pull request goes back to ready (`heal: <id> was recorded merged, but <url> is open on the provider. Back to ready to merge; the next pass merges it.`) and its gate is pending again.
 
+## A Shuttle that could not open its pull request
+
+A Shuttle on a cloud VM can be refused when it opens the pull request (a 403) after it pushed its branch. When it comes back with no pull request, the supervise pass prints `pr: open <id> <branch>` and, in the same pass, opens it: it looks for a pull request already open for the branch, checks the branch is on origin, then runs `gh pr create` (`pr: opened <id> <url>`). Only a branch that is not on origin goes back to the Shuttle as a fix. When gh cannot open it here, `pr: MUST DO <id>` names the GitHub MCP `create_pull_request` tool and the `orchestrator.py opened --id <id> --pr <url>` command that records it; the ticket waits and is not relaunched. `/warp-allow-notify --with-git` allows `create_pull_request`.
+
+## Jira moves when a pass starts a ticket
+
+A ticket started by a supervise pass gets its move to In Progress and its claim comment as `jira: MUST DO` lines right after its `start` line, once per ticket (`jira.startedAt` records it). Before 1.6.13 only `beam.py set --status claimed` asked for that move, so tickets the pass started stayed To Do.
+

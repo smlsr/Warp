@@ -51,6 +51,8 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle.pop("returned", None)
     shuttle.pop("returnedAt", None)
     shuttle.pop("startedAt", None)
+    # Marked, not launched yet: the previous Shuttle's heartbeat does not make this one busy.
+    shuttle["launching"] = True
     if isinstance(ticket.get("pr"), dict):
         # A return belongs to one Shuttle. The next one starts out.
         ticket["pr"].pop("shuttleReturned", None)
@@ -981,6 +983,9 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     import agents
 
     pr = ticket.setdefault("pr", {})
+    if not pr.get("url"):
+        lines.append("bugbot: wait %s (no pull request yet)" % ticket.get("id"))
+        return
     cycle = int(pr.get("reviewCycle") or 0)
     rollup = str(pr.get("rollup") or "").strip().casefold()
     if not agents.allow_bugbot(ticket):
@@ -1226,6 +1231,11 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
         return "continue"
     if phase in {"implementing", "pr-open"} or not phase:
         if not pr.get("url"):
+            if data.get("_live") and ticket.get("branch"):
+                # The Shuttle may have pushed and been refused the pull request (a 403 on its VM).
+                # The parent opens it; only a branch that is not on origin goes back to the Shuttle.
+                request_pr_open(ticket, lines)
+                return "stop"
             begin_fix(data, ticket, red_reasons(ticket, data.get("config") or {}) or ["no pull request"], lines)
             return "stop"
         _phase(ticket, "pr-open", lines)
@@ -1278,6 +1288,12 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         _defer_fix(data, ticket)
         return
     if phase == "pr-open":
+        if not (ticket.get("pr") or {}).get("url") and (ticket.get("pr") or {}).get("openRequested"):
+            if data.get("_live"):
+                request_pr_open(ticket, lines)
+            else:
+                lines.append("pr: wait %s (no pull request yet)" % ticket.get("id"))
+            return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
             _request_bugbot(ticket, lines, data)
             return
@@ -1415,7 +1431,22 @@ def _refill(data: dict, lines: list) -> None:
         ticket["status"] = "coding"
         _phase(ticket, "implementing", lines)
         mark_shuttle(ticket, "implement", data)
-        lines.extend(_start_lines(data, ticket, "implement"))
+        started = _start_lines(data, ticket, "implement")
+        lines.extend(started)
+        if started and started[0].startswith("start "):
+            _queue_claim(data, ticket, lines)
+
+
+def _queue_claim(data: dict, ticket: dict, lines: list) -> None:
+    """The Jira move to In Progress for a ticket this pass started (once per ticket)."""
+    path = _beam_path(data)
+    if not path:
+        return
+    import jira_sync
+
+    text = jira_sync.queue_claim(Path(path), data, ticket)
+    if text:
+        lines.extend(text.splitlines())
 
 
 def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
@@ -1438,7 +1469,7 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         return
     _ensure_records(ticket)
     snap = (provider or {}).get(tid) or {}
-    if data.get("_liveMerge") and "merge" not in snap:
+    if data.get("_live") and "merge" not in snap:
         # A live pass. Merged means the provider says merged, never "nothing said otherwise".
         request_merge(data, ticket, snap, lines)
         return
@@ -1462,6 +1493,62 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         lines.append("not merged")
         return
     finish_merge(data, ticket, lines)
+
+
+def request_pr_open(ticket: dict, lines: list) -> None:
+    ticket.setdefault("pr", {})["openRequested"] = True
+    ticket["phase"] = "pr-open"
+    lines.append("pr: open %s %s" % (ticket.get("id"), ticket.get("branch") or ""))
+
+
+_PR_LINE = re.compile(r"^pr: open (\S+) (\S+)")
+
+
+def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
+    """Open the pull request for each `pr: open` this pass printed (gh), or say how to."""
+    import beam as beam_mod
+    import provider as provider_mod
+
+    out = []
+    root = Path(beam_path).resolve().parent.parent
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    cfg = dict(data.get("config") or {})
+    try:
+        base = str(cfg.get("baseBranch") or provider_mod.resolve(root, cfg).get("baseBranch") or "main")
+    except Exception:
+        base = str(cfg.get("baseBranch") or "main")
+    for line in list(lines):
+        match = _PR_LINE.match(line)
+        if not match or match.group(1) not in tickets:
+            continue
+        tid, branch = match.group(1), match.group(2)
+        ticket = tickets[tid]
+        key = ticket.get("jiraKey") or ""
+        title = "[%s] %s" % (tid, ticket.get("summary") or tid)
+        body = "Warp ticket %s%s.\n\nOpened by the Warp parent: the Shuttle pushed `%s` but could not open the pull request.\n\nAcceptance:\n%s" % (
+            tid, " (%s)" % key if key else "", branch,
+            "\n".join("- %s: %s" % pair for pair in __import__("acceptance").items(ticket)) or "- (none listed)")
+        outcome, detail = (opener or provider_mod.open_pr)(root, branch, base, title, body)
+        if outcome in {"opened", "found"}:
+            orchestrator.note_pr_opened(ticket, detail, beam_mod.utcnow())
+            ticket["pr"].pop("openRequested", None)
+            if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
+                ticket["status"] = "review"
+            ticket["phase"] = "pr-open"
+            out.append("pr: %s %s %s (%s)" % ("opened" if outcome == "opened" else "found", tid, detail,
+                                             "the Shuttle pushed but could not open it" if outcome == "opened" else "already open"))
+            continue
+        if outcome == "missing":
+            ticket["pr"].pop("openRequested", None)
+            begin_fix(data, ticket, ["the Shuttle returned without a pull request and %s; push it and open the pull request" % detail], out)
+            continue
+        scripts = orchestrator.scripts_dir()
+        out.append(
+            "pr: MUST DO %s: open a pull request from %s into %s with the GitHub MCP create_pull_request tool (title %r), "
+            "then record it: python3 %s/orchestrator.py opened --beam %s --id %s --pr <url>. (%s)"
+            % (tid, branch, base, title, scripts, Path(beam_path).resolve(), tid, detail)
+        )
+    return out
 
 
 def request_merge(data: dict, ticket: dict, snap: dict, lines: list) -> None:
@@ -1640,4 +1727,4 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         data.pop("_fixDefer", None)
         if owned_root:
             data.pop("_repoRoot", None)
-        data.pop("_liveMerge", None)
+        data.pop("_live", None)

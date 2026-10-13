@@ -471,6 +471,7 @@ def _note_live(data: dict, ticket: dict) -> None:
     pipeline.mark_shuttle(ticket, step, data)
     # When this Shuttle really started. Its folder lines before this are an earlier Shuttle's.
     ticket["shuttle"]["startedAt"] = beam_mod.utcnow()
+    ticket["shuttle"].pop("launching", None)
     repair = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else None
     if repair is not None and repair.get("state") == "working" and not repair.get("launchedAt"):
         repair["launchedAt"] = beam_mod.utcnow()
