@@ -585,6 +585,8 @@ python3 <plugin>/scripts/checkout.py verify --beam .warp/beam.json --id T-1 --ro
 python3 <plugin>/scripts/checkout.py result --beam .warp/beam.json --id T-1 --line "result: T-1 failed"
 ```
 
+`launch` prints `model: <slug> (<why>)` above the prompt mark, and the prompt carries `model: <slug>`. The parent starts the subagent with that model: `model<Size>` for the ticket's size, else `model`, and `fixModel` for a fix from round `fixModelAfter` (default 2) on. The supervise `start <id> ... model=<slug> step=<step>` line names the same model.
+
 A Shuttle that exits with a pull request records it (`orchestrator.py opened` or `beam.py set --pr`). That is the agent finishing. The slot stays occupied until the GitHub or Bitbucket check rollup is green (`provider.py rollup`, stored as `pr.rollup`, or `beam.py set --rollup green`). Bugbot runs on the pull request after the push, not inside the VM. Locks stay until merge or park.
 
 `mergeQueue: false` is the default. `true`, or a GitHub ruleset the provider can read, enqueues the pull request (`provider.py merge-pr`) instead of merging it from the agent. A direct merge that branch protection rejects is printed `not merged` and the ticket stays unmerged.

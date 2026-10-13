@@ -1220,6 +1220,59 @@ REAP_RULE = (
     "`reap: exit` means stop now and return `result: %s stopped <reason> agent=%s`. "
     "That agent id is yours. A later Shuttle on this ticket is not ended by your line."
 )
+DEFAULT_MODEL = "claude-sonnet-5-5-high"
+MODEL_SIZES = ("S", "M", "L", "XL")
+_NO_MODEL = {"", "none", "null", "default", "-", "~"}
+
+
+def _slug(value) -> str:
+    text = str(value or "").strip().strip('"').strip("'").strip()
+    return "" if text.casefold() in _NO_MODEL else text
+
+
+def fix_round(ticket: dict) -> int:
+    """Fix rounds this ticket has had, across warp:retry (retryLog keeps the counts a retry reset)."""
+    total = int(ticket.get("attempts") or 0)
+    for row in ticket.get("retryLog") or []:
+        if isinstance(row, dict):
+            total += int(row.get("attempts") or 0)
+    return total
+
+
+def model_for(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> tuple:
+    """(slug, why) for this ticket's Shuttle.
+
+    `model<Size>` (modelS, modelM, modelL, modelXL) when set for the ticket's size, else `model`,
+    else the product default. A fix step from fix round `fixModelAfter` (default 2) on uses
+    `fixModel` when it is set. Blank values fall through to the next rule.
+    """
+    cfg = config or {}
+    base = _slug(cfg.get("model")) or DEFAULT_MODEL
+    size = str(ticket.get("size") or "").strip().upper()
+    sized = _slug(cfg.get("model" + size)) if size in MODEL_SIZES else ""
+    slug, why = (sized, "model%s for size %s" % (size, size)) if sized else (base, "model")
+    if step is None:
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        step = shuttle.get("step")
+    if step == "fix":
+        better = _slug(cfg.get("fixModel"))
+        try:
+            after = int(str(cfg.get("fixModelAfter") or "").strip() or 2)
+        except ValueError:
+            after = 2
+        after = max(1, after)
+        rounds = fix_round(ticket)
+        if better and rounds >= after:
+            return better, "fixModel: fix round %d, fixModelAfter %d" % (rounds, after)
+    return slug, why
+
+
+def model_line(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> str:
+    """The line above the prompt mark that tells the parent which model to start the Shuttle with."""
+    slug, why = model_for(ticket, config, step)
+    return "model: %s (%s). Start the subagent with this model; the slug must match the Cursor model picker." % (slug, why)
+
+
 PROMPT_MARK = "prompt: pass every line below this one to the subagent, and nothing above it"
 
 
@@ -1323,7 +1376,7 @@ def name_line(name: str) -> str:
     ) % name
 
 
-def _prompt_head(ticket: dict, branch: str, instance: str = "") -> list:
+def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional[dict] = None) -> list:
     tid = str(ticket.get("id") or "")
     return [
         agent_name(ticket, instance),
@@ -1333,15 +1386,15 @@ def _prompt_head(ticket: dict, branch: str, instance: str = "") -> list:
         "locks: %s" % _joined(ticket.get("locks")),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
+        "model: %s" % model_for(ticket, config)[0],
     ]
 
 
 def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False, instance: str = "") -> str:
     """Prompt that asks for a dedicated VM. Isolation is not a subagent setting."""
-    del config
     tid = str(ticket.get("id") or "")
     agent = agent_of(ticket)
-    lines = _prompt_head(ticket, branch, instance)
+    lines = _prompt_head(ticket, branch, instance, config)
     lines.extend(
         [
             "agent: %s" % agent,
@@ -1374,12 +1427,11 @@ def subagent_prompt(
     instance: str = "",
 ) -> str:
     """Prompt for one subagent in a git worktree on this machine. The path is absolute."""
-    del config
     tid = str(ticket.get("id") or "")
     agent = agent_of(ticket)
     state_dir = str(Path(parent) / ".warp" / "tickets" / tid)
     scripts = scripts_dir()
-    lines = _prompt_head(ticket, branch, instance)
+    lines = _prompt_head(ticket, branch, instance, config)
     lines.extend(
         [
             "agent: %s" % agent,
@@ -1434,6 +1486,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         "locks: %s" % _joined(ticket.get("locks")),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
+        "model: %s" % model_for(ticket, config)[0],
         TICKET_AGENT_INSTRUCTION,
         clone,
         "Write .warp/tickets/%s/ and push it. The parent reads that folder later." % tid,

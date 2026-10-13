@@ -27,7 +27,7 @@ A team admin on Teams or Enterprise imports the repository. People on that marke
 4. In the Cursor app, open Customize in the sidebar, find Warp, and choose Install for yourself or for the project.
 5. Run Developer: Reload Window.
 
-The plugin manifest is `.cursor-plugin/plugin.json` at the root of that repo. The logo is `assets/logo.svg`, committed in the repo. Listing Warp on the public Cursor Marketplace is a separate review at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Until that review lands, Customize search does not find this repository on its own.
+The plugin manifest is `.cursor-plugin/plugin.json` at the root of that repo. It names `commands`, `skills`, `agents`, and `rules` as directories (`./commands/`, `./skills/`, …), so every file in them is registered; an explicit file list did not reach the published index in 1.6.3, and a fresh install then had no slash commands. After 1.6.4 is published, reinstall or update Warp from Customize and reload. The logo is `assets/logo.svg`, committed in the repo. Listing Warp on the public Cursor Marketplace is a separate review at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Until that review lands, Customize search does not find this repository on its own.
 
 Without a team marketplace, copy this repo to `~/.cursor/plugins/local/warp` so that folder contains `.cursor-plugin/plugin.json`, then reload. Local plugin imports have to be allowed (Dashboard, Settings, Security & Identity, Marketplace and Plugins). A marketplace plugin with the same name takes precedence.
 
@@ -672,6 +672,8 @@ One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-read
 | `baseFixOwner` | `""` | The run that fixes a red shared base branch, such as `core`. The other runs hold merging and dispatch no fix of their own. Empty means every run fixes its own. |
 | `checkpointMinutes` | `10` | A named run publishes `.warp/runs/<name>/` on each status or run-state change, and at least this often while it runs. |
 | `model` | `claude-sonnet-5-5-high` | Coding slug: Claude Sonnet 5.5 High. Must match the Cursor model picker. |
+| `modelS` … `modelXL` | empty | The Shuttle model for that ticket size. Empty uses `model`. |
+| `fixModel`, `fixModelAfter` | empty, 2 | A stronger model for a ticket's second and later fix rounds (Bugbot findings, red CI, failed acceptance). Empty keeps the ticket's model. |
 | `maxAgents` | `18` | Agents that run at once: every Shuttle, whatever its step (implement, fix, rebase, rerun, restart, repair), in a worktree on this machine or on its own VM. The one cap on running agents. A dead Shuttle does not count. `memoryCheck` can lower it on a shared machine. Separate from `maxInProgress`. |
 | `maxInProgress` | `20` | Tickets that are open at once: started, and not merged or parked. A ticket waiting on review or CI is open and uses no agent. At the cap, nothing new leaves the ready queue. Fixes, rebases, reruns, and merges keep running, because those tickets are already open. Parked tickets do not count. Status says `holding new launches (N/20), N fix workers running`. |
 | `checkCommand` | empty | Optional command the orchestrator runs on a rebased head before merge. Empty means Bugbot and CI as configured. `make ci` is kept as the full check command. A red result is stored on `pr.check` and the ticket is sent back with the log. Past `maxFixAttempts` (default 5) the ticket parks. The name alone is not a red check. |
