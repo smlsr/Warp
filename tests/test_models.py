@@ -109,3 +109,72 @@ class LaunchTest(GitRepo):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigHintTest(unittest.TestCase):
+    """The model keys ship commented out; init adds them to a config that lacks them."""
+
+    def setUp(self):
+        import install
+
+        self.install = install
+        self.example = (ROOT / "assets" / "config.example.yaml").read_text()
+
+    def test_example_has_the_block_commented_out(self):
+        active = self.install.active_keys(self.example)
+        for key in ("model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter"):
+            self.assertNotIn(key, active)
+        for line in ("# model: claude-sonnet-5-5-high", "# modelS: claude-haiku-5-5", "# modelXL: claude-opus-5-5",
+                     "# fixModel: claude-opus-5-5", "# fixModelAfter: 2"):
+            self.assertIn(line, self.example)
+
+    def test_init_adds_the_block_once_and_keeps_user_values(self):
+        text, notes = self.install.add_missing_hints("slackChannel: warp\n", self.example)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("# modelS: claude-haiku-5-5", text)
+        again, notes = self.install.add_missing_hints(text, self.example)
+        self.assertEqual((again, notes), (text, []))
+        mine = "modelS: my-small\n"
+        self.assertEqual(self.install.add_missing_hints(mine, self.example), (mine, []))
+
+    def test_blank_164_lines_become_the_commented_block(self):
+        old = ('model: claude-sonnet-5-5-high\n\nmodelS: ""\n\nmodelM: ""\nmodelL: ""\nmodelXL: ""\n'
+               "# The Shuttle model for a ticket of that size. Empty uses model above.\n"
+               'fixModel: ""\nfixModelAfter: 2\nmaxAgents: 18\n')
+        text, notes = self.install.add_missing_hints(old, self.example)
+        self.assertIn("were blank", notes[0])
+        self.assertEqual([k for k in self.install.active_keys(text)], ["model", "maxAgents"])
+        self.assertIn("# fixModel: claude-opus-5-5", text)
+        # a value someone set is not swapped
+        kept = old.replace('fixModel: ""', "fixModel: big")
+        self.assertEqual(self.install.add_missing_hints(kept, self.example)[0], kept)
+
+    def test_uncommented_line_drops_its_comment(self):
+        import prompt_gate
+
+        found = prompt_gate.yaml_scalars("modelS: claude-haiku-5-5        # empty = use model\n"
+                                         "fixModel: claude-opus-5-5       # empty = keep the ticket's model\n")
+        self.assertEqual(orchestrator.model_for(ticket("S"), found)[0], "claude-haiku-5-5")
+        self.assertEqual(orchestrator.model_for(ticket("M", attempts=2), found, "fix")[0], "claude-opus-5-5")
+        self.assertEqual(prompt_gate.yaml_scalars("slackChannel: #warp\n")["slackChannel"], "#warp")
+
+
+class InitTest(GitRepo):
+    @staticmethod
+    def install_active(text):
+        import install
+
+        return install.active_keys(text)
+
+    def test_init_writes_the_block_into_an_existing_config(self):
+        warp = self.repo / ".warp"
+        warp.mkdir()
+        (warp / "config.yaml").write_text("slackChannel: warp\nteamsChannel: warp\n")
+        out = run("install.py", "init", "--root", str(self.repo), "--no-allow", cwd=self.repo)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        text = (warp / "config.yaml").read_text()
+        self.assertEqual(text.count("# --- Shuttle models"), 1)
+        self.assertIn("# modelS: claude-haiku-5-5", text)
+        self.assertNotIn("modelS", self.install_active(text))
+        again = run("install.py", "init", "--root", str(self.repo), "--no-allow", cwd=self.repo)
+        self.assertEqual((warp / "config.yaml").read_text().count("# --- Shuttle models"), 1, again.stdout)

@@ -159,7 +159,28 @@ Start prints `range: G0 through G3 (G0-G3).` and `blocks: G0 cleared, G1 3/8, G2
 
 ## Model
 
-Coding steps use `config.model`, default `claude-sonnet-5-5-high` (Claude Sonnet 5.5 High). The slug must match the Cursor model picker. Change the yaml, then the next Shuttle picks it up. In-flight tickets keep the model they started with; the branch records it in the PR body.
+Each Shuttle runs on one model, chosen when it starts:
+
+1. `model<Size>` (`modelS`, `modelM`, `modelL`, `modelXL`) when it is set for the ticket's size;
+2. else `model`;
+3. else the default, `claude-sonnet-5-5-high` (Claude Sonnet 5.5 High).
+
+A fix Shuttle (a Bugbot finding, red CI, or a failed acceptance criterion sent back to the ticket) uses `fixModel` from fix round `fixModelAfter` (default 2) on, so the first fix runs on the ticket's own model and the second and later on the stronger one. Rounds before a `warp:retry` count. Rebase, CI start, restart and repair steps keep the ticket's model. An empty value falls through to the next rule.
+
+`/warp-init` writes these lines commented out, so nothing changes until you uncomment one:
+
+```yaml
+# --- Shuttle models. Uncomment a line to use it; the slug must match the Cursor model picker. ---
+# model: claude-sonnet-5-5-high   # the default, as before
+# modelS: claude-haiku-5-5        # empty = use model
+# modelM: ""
+# modelL: ""
+# modelXL: claude-opus-5-5
+# fixModel: claude-opus-5-5       # empty = keep the ticket's model
+# fixModelAfter: 2
+```
+
+A trailing `# comment` on an uncommented line is ignored. `checkout.py launch` prints `model: <slug> (<why>)` above the prompt mark and the parent starts the subagent with it; the `start` line says `model=<slug>`. The yaml is read at each launch, so the next Shuttle picks up a change. In-flight Shuttles keep the model they started with. The slug must match the Cursor model picker.
 
 ## 24/7 board
 

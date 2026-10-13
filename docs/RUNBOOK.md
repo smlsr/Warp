@@ -323,6 +323,10 @@ One repair at a time, one ticket at a time, in plan order. If the repair alarms 
 
 `maxAlarmRepairs` (default 5) is the cap. After that the alarm stays and later passes skip the ticket. Herald posts `<id> lock-escape repair given up.` An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before it edits. Pause and stop do not repair, because the run is not running. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired this way. `/warp-init` appends `alarmRepairMinutes` and `maxAlarmRepairs` when the config does not have them yet.
 
+## Which model did a Shuttle run on
+
+`checkout.py launch` printed `model: <slug> (<why>)` above the prompt mark, and the supervise line `start <id> ... model=<slug> step=<step>` names it too. `<why>` is `modelL for size L`, `model`, or `fixModel: fix round 2, fixModelAfter 2`. A slug the Cursor model picker does not list makes the subagent start fail: fix the line in `.warp/config.yaml`; the next launch reads it. Nothing changes while the lines are still commented out (`# modelS: ...`). A value with a trailing `# comment` reads as the value alone.
+
 ## Cap change
 
 Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-reads yaml. Also set the copy inside the beam if a tick reads only the beam: a rescan (`/warp-scan`) is wrong for a live run; edit `beam.config.maxAgents` with a journal note, or set it in both places.

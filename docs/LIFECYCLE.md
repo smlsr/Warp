@@ -313,6 +313,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `listener: polled <n>` | `inbound.py polled` | the poll is recorded |
 | `spawn: closed <id>` and `refuse: ...` | `checkout.py launch` | no prompt was printed |
 | `name: [warp:<instance>] <ticket> <step>` | `checkout.py launch` | the name to give the subagent. It is the tag |
+| `model: <slug> (<why>)` | `checkout.py launch` | the model to start the subagent with: the ticket's size model, `model`, or `fixModel` from fix round `fixModelAfter` on |
 | `cleanup: tag [warp:<instance>]` | cleanup | which tag this cleanup matches |
 | `reap: continue` / `reap: exit <reason>` | `agents.py reap`, `ticket_state.py append`, `beam.py heartbeat`, `inbound.py poll` | carry on, or stop now |
 | `stop: <id>` | pause, stop | that registry row was ended |

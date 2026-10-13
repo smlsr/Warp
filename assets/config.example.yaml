@@ -47,21 +47,17 @@ baseFixOwner: ""
 # where that run's repo is (git URL or local path, #branch optional), so the
 # parent can read its published beam.
 
-model: claude-sonnet-5-5-high
-# Cursor model slug for coding steps. Claude Sonnet 5.5 High.
-# The slug must match the Cursor model picker. Override it here.
-modelS: ""
-modelM: ""
-modelL: ""
-modelXL: ""
-# The Shuttle model for a ticket of that size. Empty uses model above.
-# For example modelS: claude-haiku-5-5 and modelXL: claude-opus-5-5.
-fixModel: ""
-fixModelAfter: 2
-# A stronger model for fix rounds that keep failing (Bugbot findings, red CI,
-# failed acceptance). The first fix uses the ticket's own model; from fix round
-# fixModelAfter on, the fix Shuttle starts with fixModel. Empty keeps the
-# ticket's model. Rounds before a warp:retry count too.
+# --- Shuttle models. Uncomment a line to use it; the slug must match the Cursor model picker. ---
+# model: claude-sonnet-5-5-high   # the default, as before
+# modelS: claude-haiku-5-5        # empty = use model
+# modelM: ""
+# modelL: ""
+# modelXL: claude-opus-5-5
+# fixModel: claude-opus-5-5       # empty = keep the ticket's model
+# fixModelAfter: 2
+# model is every Shuttle's model unless modelS/M/L/XL sets one for that ticket
+# size. fixModel starts the fix Shuttle from fix round fixModelAfter on (Bugbot
+# findings, red CI, failed acceptance); rounds before a warp:retry count too.
 
 # Two caps, and only two.
 #   maxAgents      how many agents run at once
