@@ -1,0 +1,100 @@
+{
+ "issues": [
+  {
+   "key": "WAR-1",
+   "id": "10001",
+   "fields": {
+    "summary": "A",
+    "labels": [
+     "v"
+    ],
+    "status": {
+     "name": "To Do",
+     "statusCategory": {
+      "key": "new",
+      "name": "new"
+     }
+    },
+    "issuetype": {
+     "name": "Story"
+    },
+    "priority": {
+     "name": "Medium"
+    },
+    "components": [],
+    "issuelinks": [
+     {
+      "type": {
+       "name": "Blocks",
+       "inward": "is blocked by",
+       "outward": "blocks"
+      },
+      "inwardIssue": {
+       "key": "WAR-2",
+       "fields": {
+        "status": {
+         "name": "To Do",
+         "statusCategory": {
+          "key": "new",
+          "name": "new"
+         }
+        },
+        "summary": "WAR-2"
+       }
+      }
+     }
+    ],
+    "description": "",
+    "timeoriginalestimate": null
+   }
+  },
+  {
+   "key": "WAR-2",
+   "id": "10002",
+   "fields": {
+    "summary": "B",
+    "labels": [
+     "v"
+    ],
+    "status": {
+     "name": "To Do",
+     "statusCategory": {
+      "key": "new",
+      "name": "new"
+     }
+    },
+    "issuetype": {
+     "name": "Story"
+    },
+    "priority": {
+     "name": "Medium"
+    },
+    "components": [],
+    "issuelinks": [
+     {
+      "type": {
+       "name": "Blocks",
+       "inward": "is blocked by",
+       "outward": "blocks"
+      },
+      "inwardIssue": {
+       "key": "WAR-1",
+       "fields": {
+        "status": {
+         "name": "To Do",
+         "statusCategory": {
+          "key": "new",
+          "name": "new"
+         }
+        },
+        "summary": "WAR-1"
+       }
+      }
+     }
+    ],
+    "description": "",
+    "timeoriginalestimate": null
+   }
+  }
+ ]
+}

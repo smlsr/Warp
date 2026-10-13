@@ -32,11 +32,12 @@ python3 <plugin>/scripts/install.py uninstall --remove-gitignore --yes
 | Target | Rule |
 |---|---|
 | `.cursor/plugins/warp` | The project copy. Empty `.cursor/plugins` and `.cursor` are removed too. |
-| `.warp` | Beam, config, exports, journal. |
+| `.warp` | Beam, config, exports, journal, and every run's `.warp/runs/<name>/` folder. |
+| `.cursor/commands/warp*.md` | The slash commands `/warp-init` and `/warp-upgrade` wrote there. Other command files stay. |
 | `.gitignore` snippet | Only with `--remove-gitignore`, and only the exact block `/warp-init` added. Other lines are kept. A hand-written `.warp/` entry is left alone. |
 | Project allow-notify entries | The hook command, `mcpAllowlist` entries, and CLI allow entries recorded by `/warp-allow-notify` in this repo (`.cursor/warp-allow.json`). Other hooks and other allow entries stay. |
 
-It does not touch product code, `warp/<id>` branches, pull requests, a `stateDir` outside the repo, a plugin installed for the user through Cursor Settings, or user-level allow-notify files (`~/.cursor/permissions.json`, `~/.cursor/cli-config.json`, `~/.cursor/hooks.json`).
+It does not touch product code, `warp/<id>-<jira>` branches, a named run's `warp/<name>/*` branches, pull requests, a `stateDir` outside the repo, a plugin installed for the user through Cursor Settings, or user-level allow-notify files (`~/.cursor/permissions.json`, `~/.cursor/cli-config.json`, `~/.cursor/hooks.json`).
 
 ## After
 

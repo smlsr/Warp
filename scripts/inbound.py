@@ -1021,18 +1021,30 @@ def plan_command(data: dict, parsed: dict, cfg: Optional[dict] = None) -> dict:
                 "action": "none",
                 "ok": False,
             }
-        if len(hits) != 1 or hits[0][1].get("status") != "alarm":
-            label = hits[0][0] if len(hits) == 1 else shown
+        if len(hits) != 1:
             return {
-                "ack": "Received warp:retry %s. No alarmed ticket matches that id. Nothing was requeued." % label,
+                "ack": "Received warp:retry %s. No ticket matches that id. Nothing was requeued." % shown,
                 "verb": verb,
-                "ticket": hits[0][0] if len(hits) == 1 else None,
+                "ticket": None,
                 "action": "none",
                 "ok": False,
             }
-        tid = hits[0][0]
+        tid, row = hits[0][0], hits[0][1]
+        status = str(row.get("status") or "queued")
+        if status in RETRY_DONE:
+            return {
+                "ack": "Received warp:retry %s. %s is already %s. Nothing was requeued." % (tid, tid, status),
+                "verb": verb,
+                "ticket": tid,
+                "action": "none",
+                "ok": False,
+            }
+        if retry_mode(row) == "fix":
+            ack = "Received warp:retry %s. Sending %s back to fix on its pull request (was %s)." % (tid, tid, status)
+        else:
+            ack = "Received warp:retry %s. Requeueing %s (was %s)." % (tid, tid, status)
         return {
-            "ack": "Received warp:retry %s. Requeueing %s." % (tid, tid),
+            "ack": ack,
             "verb": verb,
             "ticket": tid,
             "action": "retry",
@@ -1097,18 +1109,78 @@ def write_ack(root: Path, text: str) -> dict:
     return payload
 
 
-def _requeue(beam_path: Path, tid: str) -> str:
+# warp:retry works on any ticket that is not finished. Merged and done are finished.
+RETRY_DONE = {"merged", "done"}
+
+
+def retry_mode(ticket: dict) -> str:
+    """`fix` when the ticket has an open pull request, else `queued`."""
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    return "fix" if pr.get("url") and not pr.get("mergedAt") else "queued"
+
+
+def _requeue(beam_path: Path, tid: str, by: Optional[str] = None) -> str:
+    """Retry one ticket whatever its state, with a fresh fix budget.
+
+    An open pull request goes back to `fix` on the same branch: the next supervise pass starts
+    a fix Shuttle with the retry note as its latest blocker. Without one the ticket is
+    `queued`; its next claim reuses the branch when it exists. Either way the old Shuttle is
+    ended (its cloud agent cancelled with CURSOR_API_KEY), the alarm is cleared, and the fix,
+    stall and recovery counters start again. The old counts are kept on `retryLog`.
+    """
+    import agents
+
     data = beam.load_json(beam_path)
     ticket = data["tickets"][tid]
-    prev = ticket.get("status")
-    attempts = ticket.get("attempts")
-    ticket["status"] = "queued"
+    prev = str(ticket.get("status") or "queued")
+    alarm = ticket.get("alarm")
+    mode = retry_mode(ticket)
+    now = beam.utcnow()
+    lines = []
+    try:
+        lines.extend(agents.release_ticket(data, ticket, "retry", beam_path=Path(beam_path)))
+    except Exception as exc:  # housekeeping never blocks the retry
+        lines.append("cleanup: skipped (%s)" % exc)
+    watch = ticket.get("watch") if isinstance(ticket.get("watch"), dict) else {}
+    log = ticket.get("retryLog") if isinstance(ticket.get("retryLog"), list) else []
+    log.append({"at": now, "by": by or "", "from": prev, "alarm": alarm, "to": mode,
+                "attempts": ticket.get("attempts") or 0, "fixerAttempts": watch.get("fixerAttempts") or 0,
+                "recoveries": ticket.get("recoveries") or 0, "stuckRestarts": ticket.get("stuckRestarts") or 0})
+    ticket["retryLog"] = log
+    ticket["attempts"] = 0
+    ticket["recoveries"] = 0
+    ticket["stuckRestarts"] = 0
+    for key in ("fixerAttempts", "seenAlarm"):
+        watch.pop(key, None)
+    for key in ("parkReason", "recoveryPriorStatus"):
+        ticket.pop(key, None)
     ticket["alarm"] = None
-    ticket["updatedAt"] = beam.utcnow()
+    ticket["agent"] = None
+    ticket["needsReplacement"] = False
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+    if shuttle is not None:
+        shuttle["pending"] = False
+    if mode == "fix":
+        import orchestrator
+
+        ticket["status"] = "fix"
+        ticket["phase"] = "fixing"
+        plan = orchestrator.ensure_plan(ticket)
+        why = "was %s%s" % (prev, " (%s)" % alarm if alarm else "")
+        plan["blockers"].append({"attempt": 0, "retry": True, "parked": False,
+                                 "output": "warp:retry: %s. Find why this ticket stopped and fix it on this branch and pull request." % why})
+        tail = "status fix on %s; the next pass starts a fix Shuttle on %s" % (ticket["pr"].get("url"), ticket.get("branch") or "its branch")
+    else:
+        ticket["status"] = "queued"
+        ticket.pop("phase", None)
+        tail = "status queued; the next claim reuses %s" % (ticket.get("branch") or "its branch") if ticket.get("branch") else "status queued; it starts from the ready queue"
+    ticket["updatedAt"] = now
     data["metrics"] = beam.metrics(data)
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    beam.journal(beam_path, {"type": "retry", "id": tid, "from": prev, "to": "queued"})
-    return "%s requeued (attempts still %s). Status is queued and alarm is clear." % (tid, attempts)
+    beam.journal(beam_path, {"type": "retry", "id": tid, "from": prev, "to": mode, "by": by or ""})
+    head = "%s retried: was %s%s, %s. Alarm cleared; fix, stall and recovery counts start again (old counts on retryLog)." % (
+        tid, prev, " (%s)" % alarm if alarm else "", tail)
+    return "\n".join([head] + lines)
 
 
 def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
@@ -1140,7 +1212,7 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
             extra = "\nlistener: the parent starts the next poll on `listener: poll`. Do not start one now."
         return "action: %s%s" % (action, extra)
     if action == "retry":
-        return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"]))
+        return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"], by))
     if action == "status":
         import status_post
 

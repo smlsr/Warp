@@ -57,7 +57,7 @@ One checkout runs one run. Asking for a different name in a checkout that alread
 | `HOS/UI/Admin` | Scans that folder and saves it as `scanFolder`. |
 | `/` | Clears the saved folder: `folder: was HOS/UI/Admin, now whole repo`. Scans the root. |
 
-A ticket id belongs to one run. When a scan finds an id another run already owns, it refuses and writes nothing (exit 4). `--skip-owned` leaves those tickets out and warns that tickets depending on them will not start until a cross-run dependency exists.
+A ticket id belongs to one run. When a scan finds an id another run already owns, it refuses and writes nothing (exit 4). `--skip-owned` leaves those tickets out and rewrites each dependency on one of them to `<owner>:<id>` (`deps: these tickets depend on a ticket another run owns. They now wait for it as <run>:<id>: ...`). Those tickets wait until the owner merges it, as in "Depending on another run's ticket" below.
 
 ## What is saved to the repo
 
@@ -75,9 +75,11 @@ Local files stay at `.warp/` on each machine, as before. The repo gets a mirror 
   tickets/<id>/state.json  log.jsonl
 ```
 
-A ticket's own folder travels on its ticket branch. The shared files (beam, journal, status, stats) are published by the parent to the base branch when a ticket merges, and at a checkpoint: when status or run state changes, or every `checkpointMinutes` (default 10). That keeps three runs from flooding the base branch. A run's branch names are `warp/<name>/<id>-<jira>`, so one run's branches never collide with another's.
+A ticket's own folder travels on its ticket branch. The shared files (beam, journal, status, stats) are published by the parent to the base branch when a ticket merges, and at a checkpoint: when status or run state changes, or every `checkpointMinutes` (default 10). That keeps three runs from flooding the base branch. A run's branch names are `warp/<name>/<id>-<jira>` (`warp/<name>/<id>` when the ticket has no Jira key), so one run's branches never collide with another's.
 
-A fresh VM with no config finds its run from the branch name, the beam, or `WARP_RUN`, in that order after the config's `run:`.
+Each process finds its run in this order: an explicit `--run <name>` (`/warp-start` and `/warp-resume`), then `WARP_RUN`, then `run:` in this checkout's config, then the beam's `run`, then a ticket branch named `warp/<name>/...`. A fresh VM with no config, such as a Shuttle on its own VM, finds it from `WARP_RUN`, the beam, or its branch.
+
+A checkout that runs a named run adds its live `.warp/` files (beam, journal, status and board files, agents, scan, stats, `checkpoint.json`, and `tickets/`) to `.git/info/exclude`, so `git status` does not list a second copy of what the run folder holds. `.warp/checkpoint.json` records when this checkout last published (`at`) and a hash of run state and ticket statuses (`sig`). A publish with no change in `sig` inside `checkpointMinutes` prints `state: <name> is current on <base>` and commits nothing.
 
 ## Running together
 
@@ -139,11 +141,12 @@ When the base branch goes red, every run holds merging. `baseFixOwner: core` mak
 
 ```
 /warp-runs                    runs on the base branch: state, owner, folder, progress, what each waits for
+/warp-runs admin              one run: what /warp-init admin would show (runs.py show admin)
 /warp-delete admin            a dry run: what would be removed, what is kept
 /warp-delete admin --apply    remove .warp/runs/admin/ from the base branch in one commit, and push
 ```
 
-`/warp-delete` refuses a run whose parent saved state in the last 30 minutes, and a run that another run waits on (`startAfter`, or a ticket dependency), unless `--force`. It keeps merged code, Jira, and merged pull requests. Branches `warp/<name>/*` stay unless `--branches`, which deletes them on origin and closes their open pull requests. If this checkout runs `<name>`, its local files move to `.warp/previous-<name>/` and `run:` is cleared. The deletion is a commit on the base branch, so it merges like any other change.
+`/warp-delete` refuses a run whose parent saved state in the last 30 minutes, and a run that another run waits on (`startAfter`, or a ticket dependency), unless `--force`. It keeps merged code, Jira, and merged pull requests. Branches `warp/<name>/*` stay unless `--branches`, which deletes them on origin (`git push origin --delete`). Deleting a branch closes its open pull request on GitHub. If this checkout runs `<name>`, its local files move to `.warp/previous-<name>/` and `run:` is cleared. The deletion is a commit on the base branch, so it merges like any other change.
 
 ## Slack and Teams
 
@@ -151,4 +154,4 @@ Every message header names the run: `Warp | <repo> / <project> | run admin | war
 
 ## What does not change
 
-Unnamed runs (no `run:`) behave exactly as before: `.warp/` on the base branch, `warp/<id>` branches.
+Unnamed runs (no `run:`) behave exactly as before: `.warp/` on the base branch, `warp/<id>-<jira>` branches (`warp/<id>` with no Jira key).

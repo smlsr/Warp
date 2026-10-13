@@ -3,8 +3,9 @@
 
 `assets/warp-dashboard.html` is a single file with no install and no server. Open
 it from disk and use File > Open to read `beam.json`, `status.json`, ticket
-`state.json` files, or a whole `.warp` folder. Dropping them on the page works
-too. Nothing leaves the browser.
+`state.json` files, or a whole `.warp` folder. It also reads a build-schedule/2
+`schedule.json` (drawn as planned) and a /warp-export `WARP_PLAN.json`. Dropping
+them on the page works too. Nothing leaves the browser.
 
 `/warp-dashboard` writes a copy with the run's files already inside, so it
 opens with data:

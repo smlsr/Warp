@@ -22,6 +22,6 @@ python3 <plugin>/scripts/jira_sync.py sync ?
 5. `--apply` writes the beam, journal, and board. `--force` is required before a ticket moves to an earlier status. Do not pass `--force` unless the user asked.
 6. Tell the user the per-ticket lines and the summary (`sync: N differ, N refused, N unchanged`).
 
-Mapping uses the configured status names. To Do (or category `new`) is `queued`. `jiraInProgressStatus` needs a Shuttle. `jiraInReviewStatus` is `reviewing`. `jiraQaReadyStatus` is `awaiting_approval`. `jiraDoneStatus` (or category `done`) is `merged`. A missing `jiraInReviewStatus` is `In Review`. An empty value maps nothing to In Review; an open pull request stays `reviewing`. A merged pull request wins over Jira.
+Mapping uses the configured status names. To Do (or category `new`) is `queued`. `jiraInProgressStatus` needs a Shuttle. `jiraInReviewStatus` is `reviewing`. `jiraQaReadyStatus` is `awaiting_approval`. `jiraDoneStatus` (or category `done`) is `merged`. A missing `jiraInReviewStatus` is `In Review`. An empty value maps nothing to In Review; an open pull request stays `reviewing`. A ticket already in `fix` stays there while Jira is still In Review. A merged pull request wins over Jira.
 
 Do not dispatch. Do not start a listener. Do not merge. After `--apply`, `/warp-start` picks the work up through the unfinished-first pass.

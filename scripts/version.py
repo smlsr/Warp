@@ -172,14 +172,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         "  python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n"
         "  python3 .cursor/plugins/warp/scripts/update_state.py ?\n"
         "That script is on a 1.4.12 install and does not need the slash command.\n"
-        "When /warp-cleanup is missing, it also prints:\n"
+        "When /warp-list or /warp-cleanup is missing, it also prints:\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running\n"
         "  python3 .cursor/plugins/warp/scripts/agents.py ?\n"
-        "The --cloud line is a dry run for this repo: registry rows or Warp roles, IDLE only.\n"
-        "It leaves the agent running the command, and every RUNNING or ACTIVE agent.\n"
-        "--apply archives that list. --all-idle stays on this repo. --any-repo is the wide sweep.\n"
+        "The --cloud line is a dry run for this repo: agents in .warp/agents.json, or whose name\n"
+        "or prompt carries this run's [warp:<instance>] tag. It leaves the agent running the command and\n"
+        "this run's parent. A RUNNING or ACTIVE match is skipped (reason=running) unless --running;\n"
+        "a dry run with --running shows it as `cleanup: would cancel <id>`.\n"
+        "--apply archives the IDLE matches. --apply --running also cancels each running match, then\n"
+        "archives it; pause or stop the run first. --all-idle stays on this repo. --any-repo is the wide sweep.\n"
         "?, help, -h, and --help print this text.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -5,7 +5,7 @@ description: "Run one claimed ticket on its own VM, or in its own git worktree, 
 
 # Shuttle run
 
-You were started as one subagent, for one step of one ticket. The prompt contains the claim: ticket id, Jira key, locks, acceptance, branch `warp/<id>-<jira>`, and your agent id on the line `agent: <agent>`. A `resume` prompt is this same Shuttle, not a second one.
+You were started as one subagent, for one step of one ticket. The prompt contains the claim: ticket id, Jira key, locks, acceptance, branch `warp/<id>-<jira>` (`warp/<name>/<id>-<jira>` on a named run), and your agent id on the line `agent: <agent>`. A `resume` prompt is this same Shuttle, not a second one.
 
 ## The contract
 

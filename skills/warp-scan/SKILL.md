@@ -17,13 +17,13 @@ python3 <plugin>/scripts/scan.py scan --root . --out .warp/beam.json
 
 ## Scope to a folder
 
-`/warp-scan` takes an optional folder, as a path or a name. Without it the whole repo is scanned, as before.
+`/warp-scan` takes an optional folder, as a path or a name. Without it the folder saved by the last scan is used, or the whole repo when none is saved.
 
 ```bash
 python3 <plugin>/scripts/scan.py scan --root . --folder HOS/spec --out .warp/beam.json
 ```
 
-Only that folder is searched for plans, schedules, and exports. `.warp/` stays at the repo root, and `scan.json` and the beam record the folder.
+Only that folder is searched for plans, schedules, and exports. `.warp/` stays at the repo root, and `scan.json` and the beam record the folder. The folder is saved as `scanFolder` and reused by the next bare `/warp-scan` (`folder: <path> (saved by an earlier scan). /warp-scan / scans the whole repo.`). `/warp-scan /` clears it and scans the whole repo (`folder: was X, now whole repo`).
 
 | Argument | Result |
 |---|---|
@@ -40,7 +40,7 @@ The scan writes `.warp/scan.json` (what it found) and `.warp/beam.json` (the pla
 
 ## Named runs
 
-On a named run (`run:` in the config) the folder is saved as `scanFolder` and reused by the next `/warp-scan`. `/warp-scan /` clears it and scans the whole repo (`folder: was X, now whole repo`). A ticket id belongs to one run. If another run owns an id the scan refuses and writes nothing (exit 4). `--skip-owned` leaves those ids out. After the scan the run folder is published to the repo. `/warp-start` is refused until a scan has run. Details: `docs/RUNS.md`.
+On a named run (`run:` in the config) a ticket id belongs to one run. If another run owns an id the scan refuses and writes nothing (exit 4). `--skip-owned` leaves those ids out. After the scan the run folder is published to the repo. `/warp-start` is refused until a scan has run. Details: `docs/RUNS.md`.
 
 ## What it looks for
 
@@ -48,11 +48,12 @@ On a named run (`run:` in the config) the folder is saved as `scanFolder` and re
 |---|---|
 | `WARP_PLAN.json` | Warp exchange format. Wins if present. |
 | `schedule.json` with a `tickets` array | Deps, locks, gates, size. Preferred when there is no Warp plan. |
+| `schedule.json` with `schema: "build-schedule/2"` | Hours (`h`), `after` blockers, `critical_chain` first, milestone gates, `priority_gate`. A schedule that spans several repos is split by repo (`repo`, `repoRuns`, `externalRepos` in `.warp/config.yaml`). `python3 <plugin>/scripts/buildsched.py show <file> --repo <name>` prints the split without scanning. |
 | `CURSOR_PLAN.md`, `CURSOR_PLAN_FAST.md` | Wave headings, ticket ids, `after` blockers, `Gates before` checks. |
 | `*tickets*.json`, `jira/*.json` | Jira export: `blockedBy`, `blockedByTempIds`, or Blocks links. |
 | Markdown table | Columns `id` and `deps` or `blockers`. |
 
-A connected Jira plugin is the live source after the scan. If the repo has no plan file, ask the user to export the Jira filter to JSON or to connect the Atlassian MCP, then scan again. Do not invent tickets.
+A connected Jira plugin is the live source after the scan. If the scan prints `no plan found`, relay its `next:` line: `/warp-from-jira <label>[,<label>]` writes a plan folder from the Jira issues with those labels; then run `/warp-scan <folder>`. Do not invent tickets.
 
 ## Message to Slack or Teams
 
@@ -97,4 +98,4 @@ Read the `N tickets: K keyed, U need mapping` line from that command to the user
 
 ## After the scan
 
-Tell the user the format, ticket count, gate count, the Jira line `N tickets: K keyed, U need mapping`, and that the plan is stopped. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.
+Tell the user the format, ticket count, gate count, the Jira line `N tickets: K keyed, U need mapping`, and that the plan is stopped. On a build-schedule/2 scan, read the `schedule:`, `repo:` (or `repos:`) and `deps:` lines to the user. A `deps: set externalRepos …` line needs a config change: until then those tickets wait. A `schedule:` line that ends `— gateOrder: <order> in .warp/config.yaml overrides the schedule's <order>; delete that line to use the schedule's` means `gateOrder` in `.warp/config.yaml` decides the gate order, not the schedule. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.

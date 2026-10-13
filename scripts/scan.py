@@ -1232,6 +1232,7 @@ def main() -> None:
         if not graph:
             where = f" in {folder.relative_to(root)}" if folder else ""
             print(f"no plan found{where} — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json")
+            print("next: the work is in Jira? /warp-from-jira <label>[,<label>] writes a plan folder from the issues with those labels")
             sys.exit(2)
         if graph.get("format") == "build-schedule/2":
             import buildsched
@@ -1240,8 +1241,13 @@ def main() -> None:
             local = prompt_gate.yaml_scalars((warp / "config.yaml").read_text()) if (warp / "config.yaml").is_file() else {}
             _repo, repo_lines = buildsched.pick_repo(graph, root, local)
             sched_meta = graph.get("schedule") or {}
-            print(f"schedule: {sched_meta.get('program') or '-'} build-schedule/2, gate order {sched_meta.get('gateOrder')}"
-                  + (" (gates are milestones: only a red gate holds work)" if sched_meta.get("gateOrder") == "deps" else ""))
+            own = sched_meta.get("gateOrder") or "deps"
+            cfg_order = str(local.get("gateOrder") or "").strip().lower()
+            order = cfg_order if cfg_order in ("strict", "deps") else own
+            print(f"schedule: {sched_meta.get('program') or '-'} build-schedule/2, gate order {order}"
+                  + (" (gates are milestones: only a red gate holds work)" if order == "deps" else "")
+                  + (f" — gateOrder: {cfg_order} in .warp/config.yaml overrides the schedule's {own}; delete that line to use the schedule's"
+                     if cfg_order in ("strict", "deps") and cfg_order != own else ""))
             for line in repo_lines:
                 print(line)
         if run:

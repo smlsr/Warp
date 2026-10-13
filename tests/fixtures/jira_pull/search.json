@@ -1,0 +1,468 @@
+{
+ "names": {
+  "customfield_10050": "External ID"
+ },
+ "pages": [
+  {
+   "issues": [
+    {
+     "key": "WAR-1",
+     "id": "10001",
+     "fields": {
+      "summary": "[APP-01] App scaffold",
+      "labels": [
+       "version:1.5.5",
+       "warp:APP-01",
+       "size:S",
+       "gate:G0"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [
+       {
+        "name": "App"
+       }
+      ],
+      "issuelinks": [
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "outwardIssue": {
+         "key": "WAR-2",
+         "fields": {
+          "status": {
+           "name": "To Do",
+           "statusCategory": {
+            "key": "new",
+            "name": "new"
+           }
+          },
+          "summary": "WAR-2"
+         }
+        }
+       },
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "outwardIssue": {
+         "key": "WAR-3",
+         "fields": {
+          "status": {
+           "name": "To Do",
+           "statusCategory": {
+            "key": "new",
+            "name": "new"
+           }
+          },
+          "summary": "WAR-3"
+         }
+        }
+       }
+      ],
+      "description": "h2. Size\nS \u2014 auto-merge\n\nh2. Locks\n{{app/build/}}\n\nh2. Blocked by\nNone\n\nh2. Acceptance\n* build runs\n* test runs",
+      "timeoriginalestimate": null,
+      "customfield_10050": "APP-01"
+     }
+    },
+    {
+     "key": "WAR-2",
+     "id": "10002",
+     "fields": {
+      "summary": "[APP-02] Data model",
+      "labels": [
+       "version:1.5.5",
+       "warp:APP-02",
+       "size:M",
+       "gate:G1"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [],
+      "issuelinks": [
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "inwardIssue": {
+         "key": "WAR-1",
+         "fields": {
+          "status": {
+           "name": "To Do",
+           "statusCategory": {
+            "key": "new",
+            "name": "new"
+           }
+          },
+          "summary": "WAR-1"
+         }
+        }
+       }
+      ],
+      "description": "h2. Size\nM\n\nh2. Locks\n{{app/model/}}\n\nh2. Blocked by\nAPP-01\n\nh2. Acceptance\n* model loads",
+      "timeoriginalestimate": null,
+      "customfield_10050": "APP-02"
+     }
+    },
+    {
+     "key": "WAR-3",
+     "id": "10003",
+     "fields": {
+      "summary": "Settings page",
+      "labels": [
+       "version:1.5.5",
+       "gate:G1",
+       "lane:ui"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [
+       {
+        "name": "UI"
+       }
+      ],
+      "issuelinks": [
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "inwardIssue": {
+         "key": "WAR-1",
+         "fields": {
+          "status": {
+           "name": "To Do",
+           "statusCategory": {
+            "key": "new",
+            "name": "new"
+           }
+          },
+          "summary": "WAR-1"
+         }
+        }
+       },
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "inwardIssue": {
+         "key": "WAR-9",
+         "fields": {
+          "status": {
+           "name": "Done",
+           "statusCategory": {
+            "key": "done",
+            "name": "done"
+           }
+          },
+          "summary": "WAR-9"
+         }
+        }
+       }
+      ],
+      "description": {
+       "type": "doc",
+       "version": 1,
+       "content": [
+        {
+         "type": "heading",
+         "attrs": {
+          "level": 2
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "Locks"
+          }
+         ]
+        },
+        {
+         "type": "bulletList",
+         "content": [
+          {
+           "type": "listItem",
+           "content": [
+            {
+             "type": "paragraph",
+             "content": [
+              {
+               "type": "text",
+               "text": "app/ui/settings/"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "type": "heading",
+         "attrs": {
+          "level": 2
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "Acceptance criteria"
+          }
+         ]
+        },
+        {
+         "type": "bulletList",
+         "content": [
+          {
+           "type": "listItem",
+           "content": [
+            {
+             "type": "paragraph",
+             "content": [
+              {
+               "type": "text",
+               "text": "saves"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "type": "listItem",
+           "content": [
+            {
+             "type": "paragraph",
+             "content": [
+              {
+               "type": "text",
+               "text": "validates input"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      "timeoriginalestimate": 39600
+     }
+    },
+    {
+     "key": "WAR-4",
+     "id": "10004",
+     "fields": {
+      "summary": "Export button",
+      "labels": [
+       "version:1.5.5",
+       "gate:G2"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [],
+      "issuelinks": [
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "inwardIssue": {
+         "key": "WAR-2",
+         "fields": {
+          "status": {
+           "name": "To Do",
+           "statusCategory": {
+            "key": "new",
+            "name": "new"
+           }
+          },
+          "summary": "WAR-2"
+         }
+        }
+       },
+       {
+        "type": {
+         "name": "Blocks",
+         "inward": "is blocked by",
+         "outward": "blocks"
+        },
+        "inwardIssue": {
+         "key": "WAR-77",
+         "fields": {
+          "status": {
+           "name": "In Progress",
+           "statusCategory": {
+            "key": "indeterminate",
+            "name": "indeterminate"
+           }
+          },
+          "summary": "WAR-77"
+         }
+        }
+       }
+      ],
+      "description": {
+       "type": "doc",
+       "version": 1,
+       "content": [
+        {
+         "type": "paragraph",
+         "content": [
+          {
+           "type": "text",
+           "text": "No sections at all."
+          }
+         ]
+        }
+       ]
+      },
+      "timeoriginalestimate": null
+     }
+    }
+   ],
+   "nextPageToken": "abc",
+   "isLast": false
+  },
+  {
+   "issues": [
+    {
+     "key": "WAR-5",
+     "id": "10005",
+     "fields": {
+      "summary": "Release notes",
+      "labels": [
+       "version:1.5.5",
+       "size:XL",
+       "gate:G2"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [],
+      "issuelinks": [],
+      "description": "## Locks\n- docs/release.md\n\n## Blocked by\nWAR-3, view:WV-15\n",
+      "timeoriginalestimate": null
+     }
+    },
+    {
+     "key": "WAR-6",
+     "id": "10006",
+     "fields": {
+      "summary": "Old work",
+      "labels": [
+       "version:1.5.5",
+       "size:S"
+      ],
+      "status": {
+       "name": "Done",
+       "statusCategory": {
+        "key": "done",
+        "name": "done"
+       }
+      },
+      "issuetype": {
+       "name": "Story"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [],
+      "issuelinks": [],
+      "description": "",
+      "timeoriginalestimate": null
+     }
+    },
+    {
+     "key": "WAR-7",
+     "id": "10007",
+     "fields": {
+      "summary": "The 1.5.5 epic",
+      "labels": [
+       "version:1.5.5"
+      ],
+      "status": {
+       "name": "To Do",
+       "statusCategory": {
+        "key": "new",
+        "name": "new"
+       }
+      },
+      "issuetype": {
+       "name": "Epic"
+      },
+      "priority": {
+       "name": "Medium"
+      },
+      "components": [],
+      "issuelinks": [],
+      "description": "",
+      "timeoriginalestimate": null
+     }
+    }
+   ],
+   "isLast": true
+  }
+ ]
+}
