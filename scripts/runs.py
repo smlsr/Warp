@@ -1134,9 +1134,30 @@ def checkpoint_file(warp) -> Path:
     return Path(warp) / "checkpoint.json"
 
 
-def signature(beam: dict) -> str:
+# An unnamed run's published config. A named run's is .warp/runs/<run>/config.yaml.
+PUBLISHED_CONFIG = "config.published.yaml"
+
+
+def published_config_text(warp) -> Optional[str]:
+    """`.warp/config.yaml` as it is published (machine keys and secrets left out), or None."""
+    path = Path(warp) / "config.yaml"
+    if not path.is_file():
+        return None
+    try:
+        return mirror_config(path.read_text())
+    except OSError:
+        return None
+
+
+def config_hash(warp) -> str:
+    text = published_config_text(warp) if warp is not None else None
+    return hashlib.sha256(text.encode()).hexdigest()[:16] if text else ""
+
+
+def signature(beam: dict, warp=None) -> str:
+    """What a checkpoint compares: run state, every ticket's status, and the published config."""
     rows = sorted((str(tid), str((row or {}).get("status"))) for tid, row in (beam.get("tickets") or {}).items() if isinstance(row, dict))
-    text = json.dumps([beam.get("runState"), bool(beam.get("paused")), rows], sort_keys=True)
+    text = json.dumps([beam.get("runState"), bool(beam.get("paused")), rows, config_hash(warp)], sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
@@ -1156,7 +1177,7 @@ def checkpoint_due(warp, beam: dict, now: Optional[datetime] = None) -> bool:
         last = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return True
-    if not isinstance(last, dict) or last.get("sig") != signature(beam):
+    if not isinstance(last, dict) or last.get("sig") != signature(beam, warp):
         return True
     minutes = age_minutes(last.get("at"), now)
     return minutes is None or minutes >= checkpoint_minutes(beam)
@@ -1164,7 +1185,7 @@ def checkpoint_due(warp, beam: dict, now: Optional[datetime] = None) -> bool:
 
 def record_checkpoint(warp, beam: dict, at: str) -> None:
     try:
-        checkpoint_file(warp).write_text(json.dumps({"at": at, "sig": signature(beam)}) + "\n")
+        checkpoint_file(warp).write_text(json.dumps({"at": at, "sig": signature(beam, warp)}) + "\n")
     except OSError:
         pass
 

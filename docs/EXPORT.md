@@ -1,6 +1,6 @@
 # Export, edit, import
 
-Shuttles commit product code on `warp/<id>-<jira>` branches (`warp/<id>` when the ticket has no Jira key). Warp commits the beam, journal, STATUS, and BOARD with `state_commit.py`, and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. A named run commits these files, plus `stats.json` and a config mirror, under `.warp/runs/<name>/` (see [RUNS.md](RUNS.md)); its branches are `warp/<name>/<id>-<jira>`. Add the snippet in `assets/gitignore-snippet.txt` (`/warp-init` does it) to the repo `.gitignore`. An old `.warp/` line is replaced.
+Shuttles commit product code on `warp/<id>-<jira>` branches (`warp/<id>` when the ticket has no Jira key). Warp commits the beam, journal, STATUS, and BOARD with `state_commit.py`, and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. Its published copy, `.warp/runs/<run>/config.yaml` (`.warp/config.published.yaml` when the run has no name), is committed with the state with the machine keys and secrets left out, and `/warp-start` and `/warp-resume` always push it. A named run commits these files, plus `stats.json` and a config mirror, under `.warp/runs/<name>/` (see [RUNS.md](RUNS.md)); its branches are `warp/<name>/<id>-<jira>`. Add the snippet in `assets/gitignore-snippet.txt` (`/warp-init` does it) to the repo `.gitignore`. An old `.warp/` line is replaced.
 
 ## Where the files are
 

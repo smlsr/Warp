@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.9
+
+- `/warp-start` and `/warp-resume` always publish the config. `.warp/config.yaml` stays gitignored; its copy without machine keys or secrets goes to the repo as `.warp/runs/<run>/config.yaml` on a named run, or `.warp/config.published.yaml` when the run has no name. Start and resume publish the state with `force`, so a setting changed by hand reaches the repo even when no ticket moved, and print `config: published to <path> (machine keys and secrets left out)` (or `config: not published ...` with the reason). Before, a named run published only at a checkpoint (a status change or `checkpointMinutes`), and an unnamed run never published its config.
+- A change to the published config is now a checkpoint, so a hand edit, or Warp's own change such as `bugbotTrigger: comment`, is pushed at the next pass of a running run. Machine keys are never published, so changing one does not trigger a publish.
+- `/warp-init` on a fresh checkout of an unnamed run, with no `.warp/config.yaml` yet, takes the values in `.warp/config.published.yaml`. A named run already restores its copy with `/warp-init <name>`.
+- Fix: no listener after `/warp-resume`. The lease still named the previous session's listener (generation 7 on WarpDemo, started 19:52, 0 reads), which ended with that session. `supervise` held for it as live, or expired it and then waited for a return stamp that a dead listener never writes, so no listener ever started. Each generation now records its parent session. Start and resume close the previous session's lease with an `orphaned` stamp (`listener: generation <n> belonged to the previous session and ended with it.`), and `supervise` does the same for a lease from another session, so the first pass prints `listener: poll`. A lease a person holds with `/warp-listen` is left alone.
+- Fix: `supervise` did not read the ticket folders. Only `beam.py watchdog` (start and resume) applied `.warp/tickets/<id>/`, so a Shuttle's update mid-run, such as a recorded `review-pass`, reached the beam only if something ran the watchdog by hand. Every `supervise` pass now reads the in-flight ticket folders first.
+- Fix: a review Shuttle (`bugbotTrigger: shuttle`, `step=review`) held its slot until its return was recorded, after it had already recorded the review. A recorded review for the head is now that Shuttle's return.
+- Docs: README and CONFIG "Where the config is stored", RUNS (what is saved and when), `/warp-start`, `/warp-resume`, the gitignore snippet comment, and the mentions in GUIDE, RUNBOOK, MERGE-POLICY, EXPORT, CONNECTORS, AGENTS.md and the operating rules. The scan message footer says `/warp-start` publishes the config copy.
+
 ## 1.6.8
 
 - Fix: Bugbot was asked for and never ran. `bugbot: request` only recorded the request; nothing told Bugbot to start, so a repo where Bugbot does not start on its own waited forever (WV-01 on smlsr/WarpDemo: no comment, no check, 50 minutes). New `bugbotTrigger` (`auto`, `comment`, or `manual`) and `bugbotStartMinutes` (default 10):

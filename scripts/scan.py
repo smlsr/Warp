@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -1018,6 +1019,20 @@ def orchestrator_notes(beam_path: Path) -> list:
         return []
 
 
+def _config_published_line(root: Path, beam_path: Path, beam: dict, code: int) -> str:
+    """Where the start or resume put the config in the repo, or why it did not."""
+    warp = Path(beam_path).resolve().parent
+    if not (warp / "config.yaml").is_file():
+        return "config: no .warp/config.yaml to publish"
+    if subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode != 0:
+        return "config: not published (not a git checkout)"
+    run = runs.current(root, beam)
+    where = runs.git_rel(run, ".warp/config.yaml") if run else ".warp/%s" % runs.PUBLISHED_CONFIG
+    if code != 0:
+        return "config: not published to %s (state publish failed; see the state: lines)" % where
+    return "config: published to %s (machine keys and secrets left out)" % where
+
+
 def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report: bool = True) -> None:
     beam = load_json(beam_path)
     was = _was(beam)
@@ -1033,6 +1048,14 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         session_lines = pipeline.open_parent_session(beam)
         if beam.get("run"):
             runs.stamp_owner(beam, str(beam.get("parentSession") or ""))
+        try:
+            import inbound
+
+            closed = inbound.close_for_new_parent(beam, beam_path, utcnow())
+            if closed:
+                session_lines.append(closed)
+        except Exception as e:
+            session_lines.append("listener: previous lease not closed (%s)" % e)
     stop_lines = []
     if state == "running":
         import agents
@@ -1078,13 +1101,18 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
             update_state.update_state(beam_path, finalize=halt_again)
         except Exception as e:
             print("state: not synced (%s)" % e)
+    config_line = ""
     if state == "running":
         # A Shuttle on its own VM reads the beam from origin. Push the new
         # state before any start line, or it would still read the pause.
+        # Forced: start and resume always publish, so a config edited by hand
+        # since the last publish reaches the repo now.
         try:
             import state_commit
 
-            state_commit.publish_base(beam_path.resolve().parent.parent, str(beam_path.resolve()))
+            root_dir = beam_path.resolve().parent.parent
+            code = state_commit.publish_base(root_dir, str(beam_path.resolve()), force=True)
+            config_line = _config_published_line(root_dir, beam_path, beam, code)
         except Exception as e:
             print("state: not synced (%s)" % e)
     print(state)
@@ -1093,6 +1121,8 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         print(agents.instance_line(beam))
         print("parent: session %s" % beam.get("parentSession"))
         print("listener: not started. The next supervise issues it.")
+        if config_line:
+            print(config_line)
         for line in heal_lines:
             print(line)
         print("orchestrator: rebuild from the base branch, open branches, and open pull requests, then dispatch")

@@ -2,7 +2,10 @@
 """Commit the beam, journal, and board so the next Agent can see them.
 
 Tokens, cost, API keys, and webhook URLs are stripped before the commit.
-`.warp/config.yaml` stays gitignored and is not added.
+`.warp/config.yaml` stays gitignored and is not added. Its published copy is:
+`.warp/runs/<run>/config.yaml` on a named run, `.warp/config.published.yaml`
+otherwise. Machine keys (runner, launch, worktreeRoot, ...) and secrets are left
+out. `/warp-start` and `/warp-resume` always publish it.
 
 `commit` lands on the current branch. Pass --base when that branch must be
 the configured base branch.
@@ -222,6 +225,10 @@ def state_payload(warp: Path, run: str = "", now: Optional[str] = None, extras: 
                     path = folder / fname
                     if path.is_file():
                         payload[key("tickets/%s/%s" % (folder.name, fname))] = redact_text(path.read_text())
+    if not run and extras:
+        published = runs.published_config_text(warp)
+        if published:
+            payload[key(runs.PUBLISHED_CONFIG)] = published
     return payload
 
 
@@ -793,6 +800,13 @@ def commit_state(root: Path, beam_name: str = ".warp/beam.json", base: str = "")
         path = warp / name
         if path.is_file():
             rels.append(str(path.relative_to(root)))
+    published = runs.published_config_text(warp)
+    if published:
+        # The config you edit stays gitignored. Its published copy is committed with the state.
+        target = warp / runs.PUBLISHED_CONFIG
+        if not target.is_file() or target.read_text() != published:
+            target.write_text(published)
+        rels.append(str(target.relative_to(root)))
     if not rels:
         print("state: nothing to commit")
         return 0

@@ -1,5 +1,7 @@
 # Warp state is committed so the next agent sees who is in flight.
-# .warp/config.yaml and other secrets stay ignored. The old ".warp/" line
+# .warp/config.yaml and other secrets stay ignored. Warp commits a copy of the
+# config without machine keys or secrets (.warp/runs/<run>/config.yaml, or
+# .warp/config.published.yaml) on every /warp-start and /warp-resume. The old ".warp/" line
 # ignored the beam, journal, and board; /warp-init replaces that line.
 .warp/config.yaml
 .warp/worktrees/

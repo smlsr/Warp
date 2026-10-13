@@ -212,7 +212,7 @@ Gates: 2
 Run: stopped
 Estimate: agent 60.0h, human 2.5h, elapsed 43.5h
 - Plan used: spec/CURSOR_PLAN.md (https://github.com/acme/Demo-App/blob/main/spec/CURSOR_PLAN.md)
-Links point at branch main; they work once it is pushed. Warp v<version>. Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored.
+Links point at branch main; they work once it is pushed. Warp v<version>. Next: /warp-start. The beam, journal, and board are committed. .warp/config.yaml stays gitignored; /warp-start publishes its copy.
 ```
 
 - `/warp-init` posts only if it changed something. A second run posts nothing.
@@ -512,7 +512,7 @@ To create the field yourself: Jira admin, Short text custom field named `Externa
 
 ## Where the files are
 
-A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>-<jira>` (`warp/<id>` when the ticket has no Jira key). A named run (`/warp-init <name>`) saves the same files, plus `stats.json` and a config mirror without machine keys or secrets, to `.warp/runs/<name>/`, and its branches are `warp/<name>/<id>-<jira>`. [docs/RUNS.md](docs/RUNS.md) has the layout. `/warp-dashboard` writes `.warp/dashboard.html` locally; state commits leave it out, and the gitignore snippet ignores it.
+A local agent uses your clone. A cloud agent uses a Cursor virtual machine with its own clone. Warp commits `.warp/beam.json`, `.warp/journal.jsonl`, `.warp/STATUS.md`, and `.warp/BOARD.md` on the base branch so the next agent sees who is in flight, which locks are held, and which tickets are parked. `.warp/config.yaml` stays gitignored. Its published copy, `.warp/runs/<run>/config.yaml` (`.warp/config.published.yaml` when the run has no name), is committed with the state with the machine keys and secrets left out, and `/warp-start` and `/warp-resume` always push it. Tokens, cost, API keys, and webhook URLs are stripped before that commit. `state_commit.py commit` writes it. Product code is still a Shuttle pull request on `warp/<id>-<jira>` (`warp/<id>` when the ticket has no Jira key). A named run (`/warp-init <name>`) saves the same files, plus `stats.json` and a config mirror without machine keys or secrets, to `.warp/runs/<name>/`, and its branches are `warp/<name>/<id>-<jira>`. [docs/RUNS.md](docs/RUNS.md) has the layout. `/warp-dashboard` writes `.warp/dashboard.html` locally; state commits leave it out, and the gitignore snippet ignores it.
 
 Review files from the Cursor file tree. On a cloud VM, download them before the VM is discarded. Ask for a bundle and Warp writes `.warp/warp-review.zip` (status, board, plan; no journal). Set `stateDir` to an absolute path to keep the beam outside the repo.
 
@@ -656,7 +656,21 @@ Set `teamsChannel` and `slackChannel` in `.warp/config.yaml`. If a connector is 
 
 ## Configuration
 
-One file, `.warp/config.yaml`. Change it, then restart, so the next tick re-reads it.
+One file, `.warp/config.yaml`. Change it, then `/warp-resume`, so the next tick re-reads it and the repo gets the new copy.
+
+### Where the config is stored
+
+You edit `.warp/config.yaml`, on your machine. It stays gitignored. The repo keeps a published copy:
+
+| Run | Published copy |
+|---|---|
+| Named run (`run:` in the config) | `.warp/runs/<run>/config.yaml` |
+| No run name | `.warp/config.published.yaml` |
+
+- **What is left out:** the machine keys (`run`, `runner`, `launch`, `worktreeRoot`, `stateDir`, `subagentVm`, `memoryCheck`, `cloudSnapshot`), and any key that looks like a secret (tokens, webhooks, passwords, keys). Values are redacted the same way the beam is.
+- **When it is pushed:** `/warp-start` and `/warp-resume` always publish it to the base branch and print `config: published to <path> (machine keys and secrets left out)`. While a run is going, a change to it is a checkpoint, so the next pass publishes it too. Warp's own changes to the config (for example `bugbotTrigger: comment` after Bugbot never started) travel the same way.
+- **Where it is read back:** a new checkout of a named run gets it with `/warp-init <name>` (machine keys stay as they are on that machine). For an unnamed run, `/warp-init` on a fresh checkout with no `.warp/config.yaml` takes the values in `.warp/config.published.yaml`.
+- **Changing a setting mid-run:** edit `.warp/config.yaml`, then `/warp-resume`. Agents re-read the yaml at each launch, and the repo copy is updated in the same step.
 
 | Key | Default | Meaning |
 |---|---|---|

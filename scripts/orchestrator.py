@@ -1653,6 +1653,15 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         lines.extend(listener_prompt(path))
     if not path.is_file():
         return lines
+    if provider is None:
+        # Read every in-flight ticket's folder first (state, log, a recorded review), so this
+        # pass acts on what the Shuttles wrote since the last one, not only on start or resume.
+        try:
+            import ticket_state
+
+            lines.extend(line for line in ticket_state.observe(path, now=now) if not line.startswith("observe: skipped"))
+        except Exception as exc:
+            lines.append("observe: ticket folders not read (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
         return lines
@@ -1846,6 +1855,12 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
     inbound.set_parent_seen(data, now_s)
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
     holder = str(raw.get("holder") or "")
+    session = str(data.get("parentSession") or "")
+    if holder == inbound.LISTENER_ID and session and str(raw.get("session") or session) != session:
+        # The lease is from an earlier parent session. Its listener ended with that session.
+        inbound.close_for_new_parent(data, beam_path, now_s)
+        raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+        holder = ""
     if holder:
         started = beam_mod.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt"))
         age = None if started is None else (now_dt - started).total_seconds()

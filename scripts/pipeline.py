@@ -858,6 +858,10 @@ def _returned(ticket: dict, snap: Optional[dict]) -> bool:
     if pr.get("shuttleReturned"):
         return True
     shuttle = _shuttle(ticket)
+    head = str(pr.get("headSha") or "")
+    if shuttle.get("pending") and shuttle.get("step") == "review" and head and str(pr.get("bugbotRecordedSha") or "") == head:
+        # A review Shuttle's only output is the review. Once it is recorded for the head, it is done.
+        return True
     if shuttle.get("pending") and shuttle.get("step") in {"implement", "restart"} and pr.get("url") and not shuttle.get("hadPr"):
         return True
     return False
