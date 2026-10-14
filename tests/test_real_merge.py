@@ -81,7 +81,7 @@ class MergeTest(Repo):
             lines = orchestrator.supervise(self.beam_path, now="2026-10-13T22:00:00Z")
         self.assertEqual(live.calls, ["4"])
         self.assertIn("merge: request WV-01 %s" % URL, lines)
-        self.assertIn("merge: WV-01 merged on the provider (gh pr merge --squash, confirmed MERGED)", lines)
+        self.assertIn("merge: WV-01 merged on the provider (gh pr merge --merge, confirmed MERGED)", lines)
         self.assertIn("merge: WV-01 merged", lines)
         saved = self.load()["tickets"]["WV-01"]
         self.assertEqual((saved["status"], saved["pr"]["mergeConfirmed"], saved["pr"]["sha"]), ("merged", True, "b" * 40))
@@ -91,7 +91,7 @@ class MergeTest(Repo):
             lines = orchestrator.supervise(self.beam_path, now="2026-10-13T22:00:00Z")
         self.assertEqual(live.calls, ["4"])
         self.assertIn("merge: not merged WV-01: GraphQL: Resource not accessible by integration", lines)
-        self.assertTrue(any(line.startswith("merge: MUST DO WV-01: merge %s (squash)" % URL) for line in lines), lines)
+        self.assertTrue(any(line.startswith("merge: MUST DO WV-01: merge %s (merge)" % URL) for line in lines), lines)
         self.assertNotIn("merge: WV-01 merged", lines)
         self.assertFalse(any(line.startswith("jira: MUST DO WV-01") for line in lines), lines)
         saved = self.load()

@@ -210,9 +210,12 @@ def describe(beam_path: Path, token: str, by: Optional[str]) -> tuple[int, str]:
         f"proceed: awaiting_approval {state}",
         "proceed: merge in this turn. Do not stop after the provider merge.",
     ]
+    import provider as provider_mod
+
+    method = provider_mod.merge_method(cfg)
     if mode == "local":
         lines.append(
-            "proceed: local mode. Run this. It squash-merges and sets status merged, "
+            f"proceed: local mode. Run this. It merges ({'a squash' if method == 'squash' else 'a merge commit'}) and sets status merged, "
             "which prints the post-merge MUST DO:"
         )
         lines.append(
@@ -220,12 +223,12 @@ def describe(beam_path: Path, token: str, by: Optional[str]) -> tuple[int, str]:
         )
     else:
         lines.append(
-            "proceed: connected mode. Squash-merge the pull request, then run this in the same turn. "
+            f"proceed: connected mode. Merge the pull request (merge_method {method}), then run this in the same turn. "
             "Do not stop after the GitHub or Bitbucket merge:"
         )
         lines.append(
             f"python3 {beam_py} set --beam {beam_path} --id {tid} --status merged "
-            f"--sha <sha> --via connected --proceeded-by {who} --approved-by {who} --merge-method squash"
+            f"--sha <sha> --via connected --proceeded-by {who} --approved-by {who} --merge-method {method}"
         )
     if jira_sync.moves_to_done(ticket, cfg):
         lines.append(

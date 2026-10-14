@@ -95,9 +95,10 @@ mergeCheck: auto
 # `make ci` from a root Makefile. off: run nothing before a merge.
 mergeCheckMinutes: 10
 # The merge check's time limit. Past it, the check counts as red.
-mergeMethod: squash
-# squash: one commit on the base (the branch's own commits never join it). merge: a
-# merge commit that joins the branch. rebase: the branch's commits replayed onto the base.
+mergeMethod: merge
+# merge: a merge commit, so each ticket branch joins the base in a git graph. squash:
+# one commit on the base (the branch's own commits never join it). rebase: the
+# branch's commits replayed onto the base.
 deleteBranchOnMerge: false
 # true: delete a merged ticket's branch on origin (and locally when no worktree holds it).
 publishOnChange: true

@@ -136,7 +136,7 @@ If `.cursor/plugins/warp` is older than the plugin this command ran from, it pri
 
 Commented lines in the example (`# pushMerge: false`, `# runner: local`, `# baseBranch: "develop"`, `# gitProvider: github`, `# ghCli: false`) are hints. A line that starts with `#` is not a key. The Shuttle model lines are a commented block (`# --- Shuttle models ...`, then `# model:`, `# modelS:` … `# fixModelAfter: 2`). On an existing config, init adds that block when none of its keys is there, active or commented, and prints `added the commented modelS, modelM, modelL, modelXL, fixModel, fixModelAfter lines`. A config 1.6.4 wrote with those keys blank gets them replaced by the block: `model keys from 1.6.4 were blank; replaced them with the commented model lines (nothing changes until you uncomment one)`. See [CONFIG.md](CONFIG.md) "Shuttle models".
 
-When init changes something and `notify` is `verbose`, it writes `.warp/notify-post.json`. The footer starts with `Warp v<version>`.
+When init changes something and `notify` is `verbose`, it writes `.warp/notify-post.json`. The footer starts with `Warp v<version>`. During a run, each `orchestrator.py supervise` pass writes its `herald:` lines to `.warp/notify-pass.json` as one "Run update (pass <n>)" and ends with `herald: post .warp/notify-pass.json …` and `herald: then run: … notify.py posted --root .`. `notify.py posted --root .` marks it posted; lines not marked are carried into the next pass's update. `notify.py outbox --pass --root .` saves it to `.warp/outbox.md` when the connector is missing. With `notify: quiet` the update keeps only alarms, parks, approval waits, red results and work needed by hand.
 
 ## /warp-scan
 
@@ -207,7 +207,7 @@ If the channel is empty or the server is missing, the text is appended to `.warp
 | `baseBranch` | empty | Branch tickets start from and merge into. Empty uses origin's default, then `main` or `master`. |
 | `runner` | `cloud` | `cloud` is a Cursor cloud agent VM. `local` is this machine. |
 
-`provider.py merge-local --id --branch` squash-merges locally. `provider.py note --reason [--branch]` writes the outbox line when the run went local. It checks the branch on origin: a pushed branch with no pull request is noted as "Pull request not opened" (`pr-not-opened`), and the parent opens it, not as local-only.
+`provider.py merge-local --id --branch` merges locally with `mergeMethod`: a merge commit by default, a squash with `squash` (`rebase` gets a merge commit locally). `provider.py note --reason [--branch]` writes the outbox line when the run went local. It checks the branch on origin: a pushed branch with no pull request is noted as "Pull request not opened" (`pr-not-opened`), and the parent opens it, not as local-only.
 
 ## Jira
 
@@ -593,6 +593,8 @@ A Shuttle that exits with a pull request records it (`orchestrator.py opened` or
 
 `mergeQueue: false` is the default. `true`, or a GitHub ruleset the provider can read, enqueues the pull request (`provider.py merge-pr`) instead of merging it from the agent. A direct merge that branch protection rejects is printed `not merged` and the ticket stays unmerged.
 
+`mergeMethod` (default `merge`, also `squash` or `rebase`) is how the merge runs: `gh pr merge --<method>`, `--auto --<method>` in a merge queue, and `merge_method <method>` on the GitHub MCP line. When the merge is confirmed, `deleteBranchOnMerge: true` (default `false`) deletes the ticket's branch (`merge: branch deleted <id> <branch>`), and the pass publishes the run state to the base branch (`state: published (merged <id>)`). `launch` publishes it too when it creates a ticket's branch (`state: published (started <id> on <branch>)`, printed before the prompt mark). `publishOnChange: false` turns both publishes off, and so does `WARP_PUBLISH=0` in the environment (the tests whose origin is a real repository use it).
+
 `state_commit.py commit` commits the beam, journal, STATUS, and BOARD on the base branch (`--base` when that must be HEAD). Tokens, cost, API keys, and webhook URLs are removed first. `.warp/config.yaml` is not added. `state_commit.py publish --id T-1` commits that ticket's beam, journal, board, and claim onto the ticket branch and pushes it. The default `checkout.py launch` does not run this. It creates the worktree from `origin/main`. Optional `launch: agent` still prints an IMPLEMENT prompt and does not publish the beam first. `--no-push` commits the branch and does not push. A beam file does not have to exist on the branch before an optional new Agent starts.
 
 ```bash
@@ -662,7 +664,7 @@ python3 <plugin>/scripts/proceed.py ?
 | `--beam` | Beam file. Default `.warp/beam.json`. |
 | `--by` | Who said `warp:proceed`. Stored on `pr.proceededBy` and, when empty, `pr.approvedBy`. |
 
-The token is a plan id, a Jira key, or a `#` number (`01` and `#01` match a ticket whose id or key ends in that number). One match that is `awaiting_approval` with the gate open is accepted. The status stays `awaiting_approval` until the merge command in the same output is run. Local mode prints `provider.py merge-local`. Connected mode prints the squash-merge, then `beam.py set --status merged --sha --via connected`. That set prints one post-merge MUST DO: Jira transition to Done, merged comments, lock release, dependents that are now ready, `status` and `board`, and the Slack reply with the merge sha and the Jira status. Do not stop after the provider merge. A miss, a ticket in any other status, or a closed gate is a refusal and a Slack reply. Nothing is merged.
+The token is a plan id, a Jira key, or a `#` number (`01` and `#01` match a ticket whose id or key ends in that number). One match that is `awaiting_approval` with the gate open is accepted. The status stays `awaiting_approval` until the merge command in the same output is run. Local mode prints `provider.py merge-local`. Connected mode prints the merge (with `mergeMethod`), then `beam.py set --status merged --sha --via connected --merge-method <method>`. That set prints one post-merge MUST DO: Jira transition to Done, merged comments, lock release, dependents that are now ready, `status` and `board`, and the Slack reply with the merge sha and the Jira status. Do not stop after the provider merge. A miss, a ticket in any other status, or a closed gate is a refusal and a Slack reply. Nothing is merged.
 
 ## Channel verbs
 

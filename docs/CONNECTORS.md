@@ -48,7 +48,7 @@ Who moves the issue:
 | PR opened | Shuttle, after `beam.py set --pr` | Jira comment with the link. Connected mode also comments on the pull request (ticket and Jira key). Local mode does not. When Bugbot is off, this is also the In Review move. |
 | Bugbot / CI | Reed, after `beam.py set --bugbot` / `--ci` | Jira comment, and a pull-request comment in connected mode. |
 | Waiting (sizes not in `autoMergeSizes`, `autoMerge` false) | Reed, on `awaiting_approval` after Bugbot pass and CI green | QA Ready (`jiraQaReadyStatus`) and a comment: Bugbot clean, ready for manual review, plus `warp:proceed <id>`. |
-| Merge, auto (`autoMerge` true) | The orchestrator. Connected: `provider.py merge-pr`. A merge queue (`mergeQueue` or a GitHub ruleset) enqueues and does not mark the ticket merged. A direct merge that branch protection rejects is not marked merged. Local: `provider.py merge-local`, which sets merged only when the squash commit lands. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected) after a real merge. |
+| Merge, auto (`autoMerge` true) | The orchestrator. Connected: `provider.py merge-pr`. A merge queue (`mergeQueue` or a GitHub ruleset) enqueues and does not mark the ticket merged. A direct merge that branch protection rejects is not marked merged. Local: `provider.py merge-local`, which sets merged only when the merge commit (or the squash, with `mergeMethod: squash`) lands. | Done (`jiraDoneStatus`) and a merged comment (PR link, sha, local or connected) after a real merge. |
 | Merge, manual | The orchestrator, after `warp:proceed` or a provider approval. Connected: `provider.py merge-pr`, then `beam.py set --status merged --sha` only when the provider reports the pull request merged. Local: `provider.py merge-local`. | Done (`jiraDoneStatus`) and a merged comment, unless `jiraDoneOnManualMerge` is false. The set prints one post-merge MUST DO. |
 | Release back to queued | dispatch | No move, unless `jiraRestoreOnRelease` is true. |
 | Pause / stop | nobody | No Jira change. |
@@ -75,11 +75,11 @@ Connected mode, in order:
 - Open the pull request from `warp/<id>-<jiraKey>` (`warp/<name>/<id>-<jiraKey>` on a named run) into `baseBranch` (empty detects origin's default, then `main` or `master`).
 - Read CI and approvals. A GitHub approving review, or a Bitbucket participant status APPROVED, is the merge signal for a size not in `autoMergeSizes`, along with `warp:proceed <id>`.
 - Comment Bugbot evidence and acceptance-criterion ids.
-- Squash-merge only from Reed, only on the policy in MERGE-POLICY.md.
+- Merge only from Reed (with `mergeMethod`, a merge commit by default), only on the policy in MERGE-POLICY.md.
 
 Warp does not install `gh`, create SSH keys, or connect an app. If the connector and the CLI are both missing or error, do not raise an alarm and do not scrape credentials: run `scripts/provider.py note` and take the local path for that ticket.
 
-Local-only: stay on the ticket branch. Reed squash-merges it into `baseBranch` with `scripts/provider.py merge-local`, which also writes `.warp/outbox.md` and asks Herald to post that it was local. A conflict leaves the branches untouched.
+Local-only: stay on the ticket branch. Reed merges it into `baseBranch` (`mergeMethod`) with `scripts/provider.py merge-local`, which also writes `.warp/outbox.md` and asks Herald to post that it was local. A conflict leaves the branches untouched.
 
 ## Slack and Teams
 

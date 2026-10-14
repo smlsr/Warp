@@ -26,10 +26,10 @@ URL = "https://github.com/smlsr/WarpDemo/pull/4"
 
 class MethodTest(unittest.TestCase):
     def test_the_method_is_read_from_the_config(self):
-        self.assertEqual(provider.merge_method({}), "squash")
-        self.assertEqual(provider.merge_method({"mergeMethod": "Merge"}), "merge")
+        self.assertEqual(provider.merge_method({}), "merge")
+        self.assertEqual(provider.merge_method({"mergeMethod": "Squash"}), "squash")
         self.assertEqual(provider.merge_method({"mergeMethod": "rebase"}), "rebase")
-        self.assertEqual(provider.merge_method({"mergeMethod": "fast-forward"}), "squash")
+        self.assertEqual(provider.merge_method({"mergeMethod": "fast-forward"}), "merge")
         self.assertFalse(provider.delete_on_merge({}))
         self.assertTrue(provider.delete_on_merge({"deleteBranchOnMerge": "true"}))
 
@@ -43,9 +43,12 @@ class MethodTest(unittest.TestCase):
 
         with mock.patch.object(provider, "_run", fake), mock.patch.object(provider, "resolve", lambda root, cfg: {"provider": "github"}), \
                 mock.patch.object(provider, "detect_merge_queue", lambda root, cfg: None), mock.patch.object(provider.shutil, "which", lambda name: "/usr/bin/gh"):
-            outcome = provider.merge_connected(Path("."), "24", {"mergeMethod": "merge"})
+            outcome = provider.merge_connected(Path("."), "24", {})
+            squashed = provider.merge_connected(Path("."), "25", {"mergeMethod": "squash"})
         self.assertEqual(outcome, ("merged", "c" * 40))
-        self.assertIn(["gh", "pr", "merge", "24", "--merge"], calls)
+        self.assertIn(["gh", "pr", "merge", "24", "--merge"], calls)  # the default
+        self.assertEqual(squashed[0], "merged")
+        self.assertIn(["gh", "pr", "merge", "25", "--squash"], calls)
 
 
 class Origin(GitRepo):
@@ -98,12 +101,12 @@ class LocalMergeTest(Origin):
     def test_merge_makes_a_merge_commit_and_squash_does_not(self):
         self.branch("warp/T-1")
         self.beam([{"id": "T-1", "status": "review", "pr": {}}])
-        ok, _ = provider.merge_local(self.repo, "warp/T-1", "main", "[T-1] work", method="merge")
+        ok, _ = provider.merge_local(self.repo, "warp/T-1", "main", "[T-1] work")  # the default
         self.assertTrue(ok)
         parents = git(self.repo, "rev-list", "--parents", "-n", "1", "main").stdout.split()
         self.assertEqual(len(parents), 3, parents)  # the commit and its two parents
         self.branch("warp/T-2", "more\n")
-        ok, _ = provider.merge_local(self.repo, "warp/T-2", "main", "[T-2] work")
+        ok, _ = provider.merge_local(self.repo, "warp/T-2", "main", "[T-2] work", method="squash")
         self.assertTrue(ok)
         self.assertEqual(len(git(self.repo, "rev-list", "--parents", "-n", "1", "main").stdout.split()), 2)
 

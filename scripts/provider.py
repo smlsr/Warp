@@ -8,7 +8,7 @@ local-only instead of failing. Warp never installs gh, creates keys, or
 connects an app. It only reports what is missing.
 
   resolve      print the mode, provider, and the order of tools to try
-  merge-local  squash-merge a ticket branch into the base branch, locally
+  merge-local  merge a ticket branch into the base branch, locally (mergeMethod: a merge commit by default, or a squash)
   note         record that a ticket ran local-only (outbox + Herald message)
   init         (used by /warp-init) detect the provider and write it to config
 
@@ -243,7 +243,7 @@ def note(root: Path, beam_path: Optional[Path], tid: Optional[str], reason: str,
 
 
 def drop_ticket_beam(root: Path) -> None:
-    """Unstage `.warp/beam.json` from a squash that is about to be committed.
+    """Unstage `.warp/beam.json` from a local merge that is about to be committed.
 
     If the base already has a beam, that copy is restored into the index.
     Ticket directories under `.warp/tickets/` are left staged.
@@ -320,13 +320,17 @@ def _stage_live(root: Path, payload: dict) -> None:
         _run(["git", "add", "--", rel], root)
 
 
-MERGE_METHODS = ("squash", "merge", "rebase")
+MERGE_METHODS = ("merge", "squash", "rebase")
+DEFAULT_MERGE_METHOD = "merge"
 
 
 def merge_method(cfg: Optional[dict]) -> str:
-    """`mergeMethod` from the config: squash (default), merge, or rebase. Anything else is squash."""
+    """`mergeMethod` from the config: merge (default, a merge commit that joins the branch), squash, or rebase.
+
+    Anything else is merge. Before 1.6.20 every pull request was squash-merged.
+    """
     value = str((cfg or {}).get("mergeMethod") or "").strip().lower()
-    return value if value in MERGE_METHODS else "squash"
+    return value if value in MERGE_METHODS else DEFAULT_MERGE_METHOD
 
 
 def _truthy(value) -> bool:
@@ -364,10 +368,10 @@ def delete_merged_branch(root: Path, branch: str, base: str = "", runner=None) -
     return remote_ok, "; ".join(notes)
 
 
-def merge_local(root: Path, branch: str, base: str, message: str, method: str = "squash") -> tuple[bool, str]:
-    """Merge `branch` into `base` here: squash (default) or a merge commit. Leaves the repo as it found it on failure.
+def merge_local(root: Path, branch: str, base: str, message: str, method: str = DEFAULT_MERGE_METHOD) -> tuple[bool, str]:
+    """Merge `branch` into `base` here: a merge commit (default) or a squash. Leaves the repo as it found it on failure.
 
-    `rebase` is merged as a squash locally: rebasing the ticket branch would rewrite a branch a Shuttle may still use.
+    `rebase` gets a merge commit locally: rebasing the ticket branch would rewrite a branch a Shuttle may still use.
 
     The ticket branch's beam is dropped. The parent's live beam, journal, and
     board are what land on the base. Secrets are stripped. config.yaml is not
@@ -388,10 +392,10 @@ def merge_local(root: Path, branch: str, base: str, message: str, method: str = 
     if _run(["git", "checkout", "-q", base], root).returncode != 0:
         return False, f"could not check out {base}"
     try:
-        if method == "merge":
-            r = _run(["git", "merge", "--no-ff", "--no-commit", branch], root)
-        else:
+        if method == "squash":
             r = _run(["git", "merge", "--squash", branch], root)
+        else:
+            r = _run(["git", "merge", "--no-ff", "--no-commit", branch], root)
         if r.returncode != 0:
             _run(["git", "reset", "--merge"], root)
             return False, "merge conflict; nothing was merged. Resolve on the ticket branch and retry"
@@ -401,6 +405,8 @@ def merge_local(root: Path, branch: str, base: str, message: str, method: str = 
         drop_ticket_beam(root)
         _stage_live(root, live)
         if not fmt.git(root, "diff", "--cached", "--name-only"):
+            if method != "squash":
+                _run(["git", "merge", "--abort"], root)
             return True, f"{branch} has no changes beyond {base}; nothing to merge"
         c = _run(["git", "commit", "-q", "-m", message], root)
         if c.returncode != 0:
@@ -1132,7 +1138,7 @@ examples:
 
 resolve reads gitProvider (auto, github, bitbucket). auto uses the origin
 host. No origin, another host, or pushMerge false is local-only.
-merge-local squash-merges --branch into --base (default baseBranch) and
+merge-local merges --branch into --base (default baseBranch; mergeMethod, a merge commit by default) and
 requires --id and --branch. note requires --reason and writes the outbox line.
 merge-pr enqueues when mergeQueue is true or GitHub reports a merge queue.
 A direct merge that branch protection rejects is not marked merged.
@@ -1224,7 +1230,7 @@ def main() -> None:
                 pass
             method = merge_method(local_cfg)
             if method == "rebase":
-                print("merge-local: mergeMethod rebase is merged as a squash locally")
+                print("merge-local: mergeMethod rebase is merged with a merge commit locally")
             ok, detail = merge_local(root, args.branch, base, msg, method=method)
             if ok and delete_on_merge(local_cfg):
                 gone, why = delete_merged_branch(root, args.branch, base)
