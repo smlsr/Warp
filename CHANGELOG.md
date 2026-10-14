@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.16
+
+- Fix: Bugbot follow-ups landed in block G0 and reopened it. A follow-up has no gate of its own, and a ticket with no gate, gate membership, or dependency belongs to the first block. Under `gateOrder: strict` that could hold every later block's queued tickets behind the fix. A follow-up (`followUpOf`) now belongs to its parent's block: WV-11-BB1, WV-12-BB1 and WV-16-BB1 are in G2. It never reopens a cleared block or holds a later one, because it fixes work that is already merged; `blocks.states` lists it under `followUps`. A `/warp-start` range is not complete while a follow-up in it is open.
+
 ## 1.6.15
 
 - Fix: late Bugbot findings were never queued on a run whose tickets were all merged. `supervise` returned early once nothing was left to merge, before the late-Bugbot check, so WV-11's, WV-12's and WV-16's findings had no follow-up and `/warp-resume` had nothing to start. The check now runs first in every live pass, before the run is judged finished. Follow-ups it queues reopen the run (`run: reopened for Bugbot follow-ups`, and the end-of-run teardown runs again when they settle), and the same pass starts their Shuttles.
