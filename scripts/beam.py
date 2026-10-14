@@ -1734,6 +1734,7 @@ def default_config() -> dict:
         "deleteBranchOnMerge": False,
         "publishOnChange": True,
         "pushStateNew": False,
+        "stateInMerge": True,
         "maxFixAttempts": 5,
         "stuckAfterMinutes": 90,
         "stallImplementingMinutes": 90,

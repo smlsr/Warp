@@ -326,6 +326,10 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `run: next is pass <n>` | `parent-exit --wait` | the number the next `supervise` prints |
 | `state: published (merged <id>)` / `state: published (started <id> on <branch>)` | `supervise`, `checkout.py launch` (with `pushStateNew: true`) | the run state is on the base branch. Nothing to push. `state: not published (…)` says why; push it with `session_note.py` or the next checkpoint |
 | `merge: branch deleted <id> <branch>` / `merge: branch not deleted <id> <branch>: <why>` | `supervise` | `deleteBranchOnMerge` is on and the merged ticket's branch was deleted, or why not |
+| `merge: <id> merged on the provider (a merge commit with the run state, <sha>, confirmed MERGED)` | `supervise` | Warp pushed one merge commit with the run state and GitHub shows the pull request merged (`stateInMerge`) |
+| `merge: <id> pushed <sha> to the base branch with the run state. …` | `supervise` | the merge commit is on the base; the next pass records it merged when GitHub shows it. Nothing to do |
+| `merge: <id> through the provider (<why>)` | `supervise` | the state-carrying merge was not possible (a refused push, a moved branch, a conflict, `squash`); `gh pr merge` runs instead |
+| `state: in the merge commit (<id>)` | `supervise` | that merge carried the run state; no separate `Warp state` commit |
 | `action: sync` + `state: …` + `herald: Run state pushed to <base> at <sha> (…)` | `inbound.py apply-pending` | `warp:sync` from the channel: the run state was pushed. Post the pass update the lines after it name, then `notify.py posted` |
 | `run: stopped at <time>. Start nothing …` / `run: paused …` | `supervise` | the run is stopped or paused: no Shuttle, no listener, no resume. Run `parent-exit` and end the turn |
 | `herald: post .warp/notify-pass.json to <channel> …` + `herald: then run: … notify.py posted --root .` | `supervise` (last lines) | this pass's `herald:` lines as one payload. Post it, then mark it posted. Unmarked lines are carried into the next pass's payload |

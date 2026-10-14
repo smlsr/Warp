@@ -1905,6 +1905,9 @@ def push_state_new(path: Path) -> bool:
 
 def refresh_state_files(path: Path) -> list:
     """Rewrite BOARD.md, board.html, STATUS.md and status.json from the live beam. Quiet unless it fails."""
+    import io
+    from contextlib import redirect_stdout
+
     try:
         import beam as beam_mod
 
@@ -1912,7 +1915,8 @@ def refresh_state_files(path: Path) -> list:
         beam_mod.write_board_files(Path(path), data)
         import scan
 
-        scan.write_status(Path(path))
+        with redirect_stdout(io.StringIO()):  # it prints the files it wrote and the version block
+            scan.write_status(Path(path))
         return []
     except Exception as exc:
         return ["state: board and status not refreshed (%s)" % exc]
@@ -1930,7 +1934,16 @@ def publish_on_change(path: Path, lines: list, why: str = "", requested: bool = 
 
     if not why:
         merged = [m.group(1) for m in (re.match(r"^merge: (\S+) merged$", line) for line in lines) if m]
+        try:
+            tickets = _load(path).get("tickets") or {}
+        except Exception:
+            tickets = {}
+        # A merge commit that already carried the run state needs no separate `Warp state` commit.
+        carried = [tid for tid in merged if ((tickets.get(tid) or {}).get("pr") or {}).get("stateInMerge")]
+        merged = [tid for tid in merged if tid not in carried]
         why = ("merged " + ", ".join(merged)) if merged else ""
+        if carried and not merged:
+            return ["state: in the merge commit (%s)" % ", ".join(carried)]
     if not why:
         return []
     import os

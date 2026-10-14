@@ -1911,6 +1911,20 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             continue
         number = str(url).rstrip("/").split("/")[-1]
         method = provider_mod.merge_method(cfg)
+        if merger is None:
+            # One merge commit that also carries the run state, pushed by Warp (mergeMethod merge, stateInMerge).
+            outcome, detail = provider_mod.merge_with_state(root, Path(beam_path), data, ticket, number, cfg)
+            if outcome == "merged":
+                ticket.setdefault("pr", {}).update(mergeMethod=method, stateInMerge=detail)
+                finish_merge(data, ticket, out, sha=detail,
+                             how="merged on the provider (a merge commit with the run state, %s, confirmed MERGED)" % detail[:12])
+                continue
+            if outcome == "pushed":
+                ticket.setdefault("pr", {}).update(mergeAttempt="pushed", mergeMethod=method, stateInMerge=detail)
+                out.append("merge: %s pushed %s to the base branch with the run state. Marked merged when the provider "
+                           "shows the pull request merged." % (tid, detail[:12]))
+                continue
+            out.append("merge: %s through the provider (%s)" % (tid, detail))
         outcome, detail = (merger or provider_mod.merge_connected)(root, number, cfg)
         if outcome == "merged":
             ticket.setdefault("pr", {})["mergeMethod"] = method

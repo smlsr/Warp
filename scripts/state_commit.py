@@ -323,18 +323,20 @@ def _is_local_config(rel: str) -> bool:
     return rel == ".warp/config.yaml" or rel.endswith("/config.yaml")
 
 
-def _build_commit(root: Path, basis: str, files: dict, message: str, remove: tuple = ()) -> tuple:
+def _build_commit(root: Path, basis: str, files: dict, message: str, remove: tuple = (), tree: str = "",
+                  parents: tuple = ()) -> tuple:
     """A commit on top of `basis` holding `files`, without moving HEAD, a branch, or the working tree.
 
     `remove` lists paths (files or folders) to delete from the tree. Returns
-    (code, sha). sha is None when the tree did not change.
+    (code, sha). sha is None when the tree did not change. `tree` starts from that tree instead of
+    basis's, and `parents` replaces basis as the parents: a merge commit that carries the run state.
     """
     tmp = Path(tempfile.mkdtemp(prefix="warp-publish-"))
     index = tmp / "index"
     env = os.environ.copy()
     env["GIT_INDEX_FILE"] = str(index)
     try:
-        read = _git(root, "read-tree", basis, env=env)
+        read = _git(root, "read-tree", tree or basis, env=env)
         if read.returncode != 0:
             print("refuse: could not read %s" % basis)
             print((read.stderr or read.stdout).strip())
@@ -365,11 +367,21 @@ def _build_commit(root: Path, basis: str, files: dict, message: str, remove: tup
                 print("refuse: could not stage %s" % rel)
                 print((cached.stderr or cached.stdout).strip())
                 return 2, None
-        tree = _git(root, "write-tree", env=env)
-        if tree.returncode != 0 or not tree.stdout.strip():
+        written = _git(root, "write-tree", env=env)
+        if written.returncode != 0 or not written.stdout.strip():
             print("refuse: could not write the tree")
             return 2, None
-        new_tree = tree.stdout.strip()
+        new_tree = written.stdout.strip()
+        if parents:
+            flags = []
+            for sha in parents:
+                flags += ["-p", sha]
+            committed = _git(root, "commit-tree", new_tree, *flags, "-m", message)
+            if committed.returncode != 0 or not committed.stdout.strip():
+                print("refuse: could not write the merge commit")
+                print((committed.stderr or committed.stdout).strip())
+                return 2, None
+            return 0, committed.stdout.strip()
         old = _git(root, "rev-parse", "%s^{tree}" % basis)
         parent = _git(root, "rev-parse", basis)
         if old.returncode == 0 and old.stdout.strip() == new_tree:

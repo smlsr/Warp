@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -860,6 +861,131 @@ def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:
     if not state:
         return "pending"
     return str(state.get("rollup") or "pending")
+
+
+_STATE_IGNORE = ("worktrees", "previous-*", "*.lock", ".*.lock", "outbox.md", "notify-*.json", "dashboard.html")
+
+
+def _merged_state_payload(root: Path, beam_path: Path, data: dict, tid: str, method: str, now_s: str) -> dict:
+    """The run state as it will be once this ticket is merged: a copy of the live `.warp/` with the ticket
+    marked merged and the board and status rewritten from it. The live files are not touched."""
+    import tempfile
+
+    import beam as beam_mod
+    import runs as runs_mod
+    import state_commit
+
+    warp = Path(beam_path).parent
+    tmp = Path(tempfile.mkdtemp(prefix="warp-merge-state-"))
+    try:
+        copy = tmp / ".warp"
+        shutil.copytree(warp, copy, ignore=shutil.ignore_patterns(*_STATE_IGNORE))
+        doc = json.loads((copy / "beam.json").read_text())
+        ticket = (doc.get("tickets") or {}).get(tid)
+        if isinstance(ticket, dict):
+            ticket["status"] = "merged"
+            ticket["phase"] = "merged"
+            pr = ticket.setdefault("pr", {})
+            pr["mergedAt"] = pr.get("mergedAt") or now_s
+            pr["mergeMethod"] = method
+            pr["stateInMerge"] = True
+        beam_mod.atomic_write(copy / "beam.json", json.dumps(doc, indent=2) + "\n")
+        try:
+            beam_mod.write_board_files(copy / "beam.json", doc)
+            import io
+            from contextlib import redirect_stdout
+
+            import scan
+
+            with redirect_stdout(io.StringIO()):
+                scan.write_status(copy / "beam.json")
+        except Exception:
+            pass  # the beam is what matters; a board that did not render keeps its last copy
+        return state_commit.state_payload(copy, runs_mod.current(root, data), now=now_s)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def merge_with_state(root: Path, beam_path: Path, data: dict, ticket: dict, number: str, cfg: Optional[dict] = None,
+                     confirm=None, wait=None) -> tuple[str, str]:
+    """Merge the pull request with one merge commit that also carries the run state, and push it to the base.
+
+    The commit's parents are the base branch and the pull request's reviewed head, so GitHub marks the pull
+    request merged as soon as main has it. Its tree is the merge plus `.warp/runs/<run>/` (`.warp/` for an
+    unnamed run) as it is with this ticket merged: no separate `Warp state` commit follows. Returns
+    ("merged", sha) once the provider shows the pull request MERGED, ("pushed", sha) when main has it and the
+    provider has not caught up yet, or ("fallback", why) when Warp should merge through `gh pr merge` as before:
+    mergeMethod is not merge, stateInMerge or publishing is off, a merge queue, the branch moved past the reviewed
+    head, a conflict outside the run state, or a push the base branch refused (branch protection).
+    """
+    import time
+
+    import beam as beam_mod
+    import runs as runs_mod
+    import state_commit
+
+    cfg = cfg or {}
+    if os.environ.get("WARP_PUBLISH", "").strip().lower() in {"0", "false", "no", "off"}:
+        return "fallback", "publishing is off here (WARP_PUBLISH=0)"
+    if merge_method(cfg) != "merge":
+        return "fallback", "mergeMethod is %s" % merge_method(cfg)
+    if not _truthy(cfg.get("stateInMerge", True)) or not _truthy(cfg.get("publishOnChange", True)):
+        return "fallback", "stateInMerge or publishOnChange is off"
+    if resolve(root, cfg).get("provider") != "github":
+        return "fallback", "not a GitHub repository"
+    if merge_queue_on(cfg, detect_merge_queue(root, cfg)):
+        return "fallback", "a merge queue merges it"
+    tid = str(ticket.get("id") or "")
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    branch = str(ticket.get("branch") or pr.get("branch") or "")
+    reviewed = str(pr.get("headSha") or "")
+    base = runs_mod.base_name(root, cfg)
+    if not branch or not reviewed:
+        return "fallback", "no branch or reviewed head recorded"
+    fetched = _run(["git", "fetch", "-q", "origin", base, branch], root, timeout=60)
+    if fetched.returncode != 0:
+        return "fallback", "fetch failed: " + ((fetched.stderr or fetched.stdout).strip().splitlines() or ["?"])[-1]
+    head = fmt.git(root, "rev-parse", "origin/%s" % branch)
+    if head != reviewed:
+        return "fallback", "the branch is at %s, not the reviewed head %s" % (head[:12], reviewed[:12])
+    onto = fmt.git(root, "rev-parse", "origin/%s" % base)
+    merged = _run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", onto, head], root, timeout=60)
+    lines = [line.strip() for line in (merged.stdout or "").splitlines() if line.strip()]
+    if merged.returncode not in (0, 1) or not lines:
+        return "fallback", "git merge-tree failed: " + ((merged.stderr or "").strip().splitlines() or ["?"])[-1]
+    tree, conflicts = lines[0], lines[1:]
+    now_s = beam_mod.utcnow()
+    payload = _merged_state_payload(root, Path(beam_path), data, tid, "merge", now_s)
+    outside = [path for path in conflicts if path not in payload]
+    if outside:
+        return "fallback", "conflicts outside the run state: " + ", ".join(outside[:5])
+    owner, _repo, _num = _repo_and_number(pr.get("url") or "")
+    title = "[%s] %s" % (tid, ticket.get("summary") or "")
+    run = runs_mod.current(root, data)
+    message = "Merge pull request #%s from %s%s\n\n%s\n\nWarp state: %s, with %s merged." % (
+        number, (owner + "/") if owner else "", branch, title.strip(), ("%s run" % run) if run else "the run", tid)
+    code, sha = state_commit._build_commit(root, onto, payload, message, tree=tree, parents=(onto, head))
+    if code != 0 or not sha:
+        return "fallback", "could not write the merge commit"
+    pushed = _run(["git", "push", "origin", "%s:refs/heads/%s" % (sha, base)], root, timeout=120)
+    if pushed.returncode != 0:
+        text = (pushed.stderr or pushed.stdout or "").strip()
+        return "fallback", "the push to %s was refused: %s" % (base, (text.splitlines() or ["?"])[-1])
+    look = confirm or (lambda: _pr_state(root, number))
+    nap = wait or time.sleep
+    for attempt in range(6):
+        if look() == "MERGED":
+            return "merged", sha
+        nap(2)
+    return "pushed", sha
+
+
+def _pr_state(root: Path, number: str) -> str:
+    viewed = _run(["gh", "pr", "view", str(number), "--json", "state"], root)
+    try:
+        return str(json.loads(viewed.stdout or "{}").get("state") or "").upper()
+    except json.JSONDecodeError:
+        return ""
 
 
 def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tuple[str, str]:
