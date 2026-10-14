@@ -106,6 +106,21 @@ def similarity(left: str, right: str) -> float:
     return round(min(ratio, token), 4)
 
 
+def summary_contained(warp_summary: str, jira_summary: str, chars: int = DEFAULT_CHARS) -> bool:
+    """The schedule's summary, up to its first `chars` characters, appears anywhere in the Jira summary.
+
+    Both are normalized first (case, punctuation, spaces), so `[WE-01] Editor scaffold on WarpView's modules`
+    contains `Editor scaffold on WarpView's modules`. It need not match the whole Jira summary.
+    """
+    wanted = normalize_summary(warp_summary)[: max(1, int(chars))].strip()
+    return bool(wanted) and wanted in normalize_summary(jira_summary)
+
+
+def external_hit(issue: dict, tid: str, field: str) -> bool:
+    """The issue's External ID (the configured field, or the usual names) is this plan id."""
+    return any(jira_sync._same_id(value, tid) for value in jira_sync._external_values(issue, field))
+
+
 def classify_pair(warp_summary: str, jira_summary: str, chars: int, min_score: float) -> tuple[Optional[str], float]:
     """exact, then a shared prefix of `chars`, then fuzzy at or above min_score."""
     left = normalize_summary(warp_summary)
@@ -230,7 +245,7 @@ def search_truncated(data: dict) -> bool:
 
 
 def _confidence(kind: str) -> str:
-    if kind == "exact":
+    if kind in {"exact", "external"}:
         return "high"
     if kind == "prefix":
         return "medium"
@@ -247,8 +262,14 @@ def rank_ticket(
     include_done: bool,
     taken: dict[str, str],
     project: Optional[str],
+    field: str = "",
 ) -> dict:
-    """One ticket against a candidate list. Does not write."""
+    """One ticket against a candidate list. Does not write.
+
+    An issue whose External ID is this plan id, and whose summary contains the first `chars` characters of the
+    plan summary anywhere, is an `external` match: as good as exact. A Jira summary that puts the id in front
+    (`WE-01 Editor scaffold …`) no longer misses.
+    """
     ranked = []
     notes = []
     for issue in issues:
@@ -264,7 +285,10 @@ def rank_ticket(
         if is_done(issue) and not include_done:
             notes.append(f"{key} is Done")
             continue
-        kind, score = classify_pair(summary, _issue_summary(issue), chars, min_score)
+        if external_hit(issue, tid, field) and summary_contained(summary, _issue_summary(issue), chars):
+            kind, score = "external", 1.0
+        else:
+            kind, score = classify_pair(summary, _issue_summary(issue), chars, min_score)
         if not kind:
             continue
         ranked.append(
@@ -275,7 +299,7 @@ def rank_ticket(
                 "score": score,
             }
         )
-    exact = [row for row in ranked if row["type"] == "exact"]
+    exact = [row for row in ranked if row["type"] in {"exact", "external"}]
     prefix = [row for row in ranked if row["type"] == "prefix"]
     fuzzy = [row for row in ranked if row["type"] == "fuzzy"]
 
@@ -344,6 +368,7 @@ def rank_all(tickets: list[dict], issues: list[dict], **opts) -> list[dict]:
             )
             continue
         rows.append(rank_ticket(ticket["id"], ticket.get("summary") or "", issues, **opts))
+    # opts carries field= for the External ID check; rank_ticket ignores an empty one.
     _mark_duplicates(rows)
     return rows
 
@@ -441,7 +466,7 @@ def apply_rows(beam_path: Path, rows: list[dict], *, do_apply: bool, yes: bool) 
             beam_path,
             tid,
             key,
-            source="summary",
+            source="external" if kind == "external" else "summary",
             confidence=row.get("confidence") or _confidence(kind or ""),
         )
         lines.append(text.split("\n", 1)[0])
@@ -467,6 +492,7 @@ def match_results(beam_path: Path, data: dict, *, only_id: Optional[str], includ
         include_done=include_done,
         taken=taken,
         project=project,
+        field=jira_sync.external_field(cfg),
     )
     _store_report(beam_path, rows)
     lines = render_rows(rows, search_truncated(data))

@@ -300,7 +300,7 @@ The report starts with `resolved: WAR-1 (external id)` or `resolved: WAR-1 (issu
 
 Link Warp tickets to Jira issues by summary, then optionally write the plan id into the External ID field. Dry-run is the default. The script does not call Jira. `summary ~` in Jira is fuzzy, so the agent fetches a bounded candidate list (50 issues, at most 2 pages) and the script matches locally.
 
-Order for each unmapped ticket: exact summary (case-insensitive, punctuation and whitespace ignored), then the first `--chars` characters (default 60) when both summaries are at least that long, then a token/ratio score at or above `--min-score` (default 0.9) as a proposal only. `--all` includes tickets that already have a key; those keys are not replaced. A manual key is never overwritten. Done and closed issues are skipped unless `--include-done`. An issue already mapped to another ticket is skipped. Two matches, or one issue claimed by two tickets, are listed and not stored.
+Order for each unmapped ticket: exact summary (case-insensitive, punctuation and whitespace ignored), or an issue whose External ID is the plan id and whose summary contains the plan summary's first `--chars` characters (default 60) anywhere, so `WE-01 Editor scaffold …` matches `Editor scaffold …` (`external`, high); then the first `--chars` characters (default 60) when both summaries are at least that long, then a token/ratio score at or above `--min-score` (default 0.9) as a proposal only. `--all` includes tickets that already have a key; those keys are not replaced. A manual key is never overwritten. Done and closed issues are skipped unless `--include-done`. An issue already mapped to another ticket is skipped. Two matches, or one issue claimed by two tickets, are listed and not stored.
 
 ```bash
 python3 <plugin>/scripts/jira_match.py
@@ -320,7 +320,7 @@ python3 <plugin>/scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --y
 | `--apply` | Store one exact or prefix match on the beam and in `.warp/jira-map.json` (source `summary`). |
 | `--yes` | Also store one fuzzy proposal. Confirms an External ID write. |
 | `--all` | Report tickets that already have a key. Do not replace them. |
-| `--chars N` | Prefix length. Default 60. |
+| `--chars N` | Prefix length, and how much of the plan summary an External ID hit must find in the Jira summary. Default 60. |
 | `--min-score N` | Fuzzy threshold. Default 0.9. |
 | `--include-done` | Match Done and closed issues. |
 | `--id ID` | One plan id. |

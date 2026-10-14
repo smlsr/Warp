@@ -2330,6 +2330,9 @@ def match_search(beam_path: Path, results_path: Path, yes: bool) -> str:
         summary = (t.get("summary") or "").strip().casefold()
         issues = found.get(tid) or []
         hits = []
+        field = external_field(cfg)
+        import jira_match
+
         for issue in issues:
             if not isinstance(issue, dict):
                 continue
@@ -2337,6 +2340,9 @@ def match_search(beam_path: Path, results_path: Path, yes: bool) -> str:
             if not key:
                 continue
             if summary and _issue_summary(issue).casefold() == summary:
+                hits.append(key)
+            elif summary and jira_match.external_hit(issue, tid, field) and jira_match.summary_contained(summary, _issue_summary(issue)):
+                # The External ID is this plan id and the summary contains the plan's (its first 60 characters).
                 hits.append(key)
         if len(hits) == 1:
             proposals.append((tid, hits[0]))
