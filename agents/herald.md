@@ -35,7 +35,7 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 
 Each `supervise` pass writes its `herald:` lines into `.warp/notify-pass.json` as one `pass` payload (its own file, so a start or scan message in `notify-post.json` is never overwritten) ("Run update (pass <n>)", one bullet per line). Post it like any payload, then run `notify.py posted --root .`; a payload not marked posted is carried into the next pass's. Its lines are not posted again one by one. In quiet mode the pass payload keeps only alarms, parks, approval waits, red results, and work needed by hand.
 
-Quiet mode posts only alarms, approval waits, gate red, pause/stop, and the completion report. A `warp:status` request is always answered.
+Quiet mode posts only alarms, approval waits, gate red, pause/stop, and the completion report. A `warp:status` request is always answered, and so is `warp:sync` (`Run state pushed to <base> at <sha> …`, or why it could not push).
 
 ## Message format
 

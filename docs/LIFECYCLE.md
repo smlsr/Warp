@@ -326,6 +326,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `run: next is pass <n>` | `parent-exit --wait` | the number the next `supervise` prints |
 | `state: published (merged <id>)` / `state: published (started <id> on <branch>)` | `supervise`, `checkout.py launch` | the run state is on the base branch. Nothing to push. `state: not published (…)` says why; push it with `session_note.py` or the next checkpoint |
 | `merge: branch deleted <id> <branch>` / `merge: branch not deleted <id> <branch>: <why>` | `supervise` | `deleteBranchOnMerge` is on and the merged ticket's branch was deleted, or why not |
+| `action: sync` + `state: …` + `herald: Run state pushed to <base> at <sha> (…)` | `inbound.py apply-pending` | `warp:sync` from the channel: the run state was pushed. Post the pass update the lines after it name, then `notify.py posted` |
 | `run: stopped at <time>. Start nothing …` / `run: paused …` | `supervise` | the run is stopped or paused: no Shuttle, no listener, no resume. Run `parent-exit` and end the turn |
 | `herald: post .warp/notify-pass.json to <channel> …` + `herald: then run: … notify.py posted --root .` | `supervise` (last lines) | this pass's `herald:` lines as one payload. Post it, then mark it posted. Unmarked lines are carried into the next pass's payload |
 | `herald: <id> claimed: <summary> (size, auto-merge or approval; locks …)` | `supervise` | the first start of a ticket |
