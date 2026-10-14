@@ -33,6 +33,11 @@ def glob_match(pattern: str, value: str) -> bool:
     return re.fullmatch(pat, value.casefold()) is not None
 
 
+# Warp's GitHub tools (scripts/mcp_tools.GITHUB_TOOLS). A server allowed one is allowed all three, so a
+# list written before merge_pull_request and create_pull_request were added still allows them.
+GITHUB_TOOLS = ("add_issue_comment", "merge_pull_request", "create_pull_request")
+
+
 def decide(server: str, tool: str) -> str:
     path = Path(__file__).resolve().parent / "warp-allow.json"
     try:
@@ -44,10 +49,17 @@ def decide(server: str, tool: str) -> str:
         return "ask"
     if not server or not tool or "*" in server or "*" in tool:
         return "ask"
+    github = tool.casefold() in GITHUB_TOOLS
     for pair in pairs:
         if not isinstance(pair, dict):
             continue
-        if glob_match(str(pair.get("server") or ""), server) and glob_match(str(pair.get("tool") or ""), tool):
+        stored_server = str(pair.get("server") or "")
+        stored_tool = str(pair.get("tool") or "")
+        if not glob_match(stored_server, server):
+            continue
+        if glob_match(stored_tool, tool):
+            return "allow"
+        if github and stored_tool.casefold() in GITHUB_TOOLS:
             return "allow"
     return "ask"
 

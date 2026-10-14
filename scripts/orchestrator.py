@@ -438,6 +438,10 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     rollup = provider_rollup(ticket)
     check = _for_head(pr, "check", "checkSha")
     ci = _for_head(pr, "ci", "ciSha")
+    if rollup == "pending" and _only_bugbot_pending(pr, ci):
+        # The only check still running is Cursor's Bugbot, and a review is already recorded for this
+        # head (a review Shuttle, or by hand). The rest of the rollup decides; Bugbot is read below.
+        rollup = ci if ci in {"green", "absent"} else "absent"
     if rollup == "red" or check == "red" or ci == "red":
         return False
     if rollup == "green" or check == "green":
@@ -454,6 +458,16 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     if not bugbot_applies(ticket, config):
         return True
     return _for_head(pr, "bugbot", "bugbotSha") == "pass"
+
+
+def _only_bugbot_pending(pr: dict, ci: str) -> bool:
+    """A pending rollup that is only the Bugbot check, on a head with a recorded review."""
+    head = str(pr.get("headSha") or "")
+    if not head or str(pr.get("bugbotRecordedSha") or "") != head:
+        return False
+    if str(pr.get("ciSha") or "") not in {"", head}:
+        return False
+    return ci in {"green", "absent"}
 
 
 def bugbot_where() -> str:
@@ -627,7 +641,7 @@ RETIRED_KEYS = {
     "maxFixWorkers": "a fix is an agent like any other and counts against maxAgents",
     "listenerRestartNote": "one background listener is replaced only from its return stamp",
     "maxListenerRestartsPerHour": "one background listener is replaced only from its return stamp",
-    "listenerStaleMinutes": "a stale listener heartbeat does not start another listener. The return stamp does",
+    "listenerStaleMinutes": "the return stamp starts the next listener; a holder that stops polling for listenerSilentMinutes hands back its slot",
 }
 
 
@@ -1679,7 +1693,7 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     path = Path(beam_path)
     started = beam_mod.coerce_now(now)[1]
     lines = supervise_listener(path, returned=returned, now=now)
-    if lines == ["listener: poll"]:
+    if lines and lines[-1] == "listener: poll":
         lines.extend(listener_prompt(path))
     if not path.is_file():
         return lines
@@ -1900,6 +1914,15 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         inbound.close_for_new_parent(data, beam_path, now_s)
         raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
         holder = ""
+    lost = []
+    silent = inbound.holder_silent(data, beam_path, now_dt) if holder else None
+    if silent is not None:
+        # The holder stopped polling and waiting (Cursor cut it off as a loop, or it crashed). It cannot
+        # write its return stamp, so the slot is handed back here and a new listener starts in this pass.
+        inbound.stamp_return(data, beam_path, "lost", now_s, holder=holder)
+        lost.append("listener: lost holder=%s generation=%s (no poll or wait for %dm). Its slot is free."
+                    % (holder, inbound.generation_of(data), silent))
+        holder = ""
     if holder:
         started = beam_mod.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt"))
         age = None if started is None else (now_dt - started).total_seconds()
@@ -1914,7 +1937,7 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    return ["listener: poll"]
+    return lost + ["listener: poll"]
 
 
 def parent_wait(

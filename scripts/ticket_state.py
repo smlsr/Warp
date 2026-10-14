@@ -466,6 +466,9 @@ def _apply_event_state(beam_path: Path, data: dict, ticket: dict, event: dict, n
             ticket["updatedAt"] = stamp
             return True
         return changed
+    if _apply_heartbeat(ticket, stamp):
+        # Any line the Shuttle writes (planning, coding, a check, a review) shows it is alive.
+        changed = True
     if state == "started":
         remote = _remote(ticket)
         if not remote.get("startedAt"):
@@ -824,6 +827,98 @@ def _read_local_dir(root: Path, tid: str):
     return state, rows
 
 
+_ACTIVITY_SKIP = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", "target", ".warp"}
+_ACTIVITY_CAP = 5000
+
+
+def _latest_mtime(folder: Path, cap: int = _ACTIVITY_CAP) -> float:
+    """The newest file change under folder, skipping build and dependency trees. 0 when there is none."""
+    import os
+
+    newest = 0.0
+    seen = 0
+    stack = [str(folder)]
+    while stack and seen < cap:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in _ACTIVITY_SKIP:
+                        stack.append(entry.path)
+                    continue
+                newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+            except OSError:
+                continue
+            if seen >= cap:
+                break
+    return newest
+
+
+def _git_dir_activity(worktree: Path) -> float:
+    """A commit, a stage, or a checkout in the worktree: its git dir's HEAD, index, and HEAD log."""
+    marker = worktree / ".git"
+    gitdir = marker
+    try:
+        if marker.is_file():
+            text = marker.read_text().strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text.split(":", 1)[1].strip())
+                if not gitdir.is_absolute():
+                    gitdir = (worktree / gitdir).resolve()
+    except OSError:
+        return 0.0
+    newest = 0.0
+    for name in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD", "FETCH_HEAD"):
+        try:
+            newest = max(newest, (gitdir / name).stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def worktree_activity(root: Path, ticket: dict) -> str:
+    """When the Shuttle in this ticket's worktree last changed anything, as a UTC stamp. Empty when unknown.
+
+    A Shuttle that edits, builds, or commits for longer than staleMinutes without writing a heartbeat
+    line is still working. Its worktree shows it. Only a worktree on this disk is read.
+    """
+    from datetime import datetime, timezone
+
+    raw = str(ticket.get("worktree") or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(root) / path
+    if not path.is_dir():
+        return ""
+    newest = max(_latest_mtime(path), _git_dir_activity(path))
+    if newest <= 0:
+        return ""
+    return datetime.fromtimestamp(newest, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _apply_activity(root: Path, ticket: dict, now_s: str) -> bool:
+    """Count worktree activity since this Shuttle started as its heartbeat. Never a time in the future."""
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    if not shuttle.get("pending") or shuttle.get("returned"):
+        return False
+    stamp = worktree_activity(root, ticket)
+    if not stamp:
+        return False
+    if _newer(stamp, now_s):
+        stamp = now_s
+    began = shuttle.get("startedAt") or ticket.get("workerStartedAt")
+    if began and not _newer(stamp, began):
+        # Changes from before this Shuttle started are the previous one's.
+        return False
+    return _apply_heartbeat(ticket, stamp)
+
+
 def _local_checkout(ticket: dict) -> bool:
     """Worktree tickets write state on the parent disk. A VM ticket does not."""
     if str(ticket.get("checkout") or "") == "subagent-vm" and ticket.get("isolation") != "fallback":
@@ -905,6 +1000,8 @@ def observe_locked(
         except Exception:
             checks = None
         if apply_directory(beam_path, data, ticket, state, log_rows, now_s, heralded, lines, checks):
+            changed = True
+        if local and _apply_activity(root, ticket, now_s):
             changed = True
     if changed:
         data["metrics"] = beam.metrics(data)

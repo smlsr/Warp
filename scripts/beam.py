@@ -1504,8 +1504,13 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
             changed = True
             continue
         number = count + 1
-        new_agent, number = _unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
         import agents as agents_mod
+
+        new_agent, number = _unique_id("shuttle-%s" % tid, number, ticket.get("agent"))
+        used = {str(row.get("id")) for row in agents_mod._rows(agents_mod.registry(data, beam_path)) if isinstance(row, dict)}
+        if new_agent in used:
+            # Never an id an earlier Shuttle on this run already had.
+            new_agent = agents_mod._new_id(ticket, agents_mod.registry(data, beam_path))
 
         blocked = agents_mod.record_replacement(data, ticket, new_agent, now=now_s, beam_path=beam_path)
         if blocked:
@@ -1743,6 +1748,7 @@ def default_config() -> dict:
         "listenerFastSeconds": 15,
         "listenerSlowSeconds": 60,
         "listenerOrphanMinutes": 5,
+        "listenerSilentMinutes": 5,
         "listenerMaxMinutes": 60,
         "listenerMaxReads": 60,
         "listenerModel": "",

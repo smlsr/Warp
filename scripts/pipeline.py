@@ -419,8 +419,10 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     head_now = new_sha or str(pr.get("headSha") or "")
     by_hand = bool(head_now) and str(pr.get("bugbotRecordedSha") or "") == head_now
     for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
-        if key == "bugbot" and by_hand and not str(snap.get(key) or "").strip():
-            # A Bugbot review recorded by hand for this head. No Bugbot check is not a reset.
+        if key == "bugbot" and by_hand and str(snap.get(key) or "").strip().casefold() in {"", "pending"}:
+            # A review recorded for this head (by a Shuttle or by hand). No Bugbot check, or Cursor's own
+            # Bugbot check still running on the pull request, is not a reset: the recorded result stands.
+            # A finished Bugbot check (pass or fail) for the head still counts.
             continue
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
@@ -1006,6 +1008,27 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     _queue_in_review(data, ticket, lines)
 
 
+def _step_out(data: dict, ticket: dict, step: str, counted_on_head: bool) -> str:
+    """This step is already out on this head: `hold` (launched, not back, not dead) or `relaunch` (never launched).
+
+    Empty means it is not out, and a new Shuttle is counted. A review or verify Shuttle is counted once,
+    when it is first marked. Before 1.6.13 every pass that did not see it running counted it again,
+    so one review Shuttle that was still working reached 2/2 and the ticket fell back to a person.
+    """
+    import agents
+
+    shuttle = _shuttle(ticket)
+    if not counted_on_head or not shuttle.get("pending") or shuttle.get("step") != step or shuttle.get("returned"):
+        return ""
+    if _returned(ticket, None):
+        return ""
+    if shuttle.get("launching") and not shuttle.get("startedAt"):
+        return "relaunch"
+    if agents.confirmed_dead(ticket, data):
+        return ""
+    return "hold"
+
+
 def start_review(data: dict, ticket: dict, lines: list) -> None:
     """bugbotTrigger: shuttle. The work is done and no review is recorded for the head: one review Shuttle."""
     import agents
@@ -1016,6 +1039,16 @@ def start_review(data: dict, ticket: dict, lines: list) -> None:
         lines.append("shuttle: hold %s" % tid)
         return
     pr = ticket.setdefault("pr", {})
+    out = _step_out(data, ticket, "review", str(pr.get("bugbotReviewSha") or "") == bugbot._head(pr))
+    if out == "hold":
+        lines.append("shuttle: hold %s" % tid)
+        return
+    if out == "relaunch":
+        # Marked in an earlier pass and never launched: the same review Shuttle, not a second one.
+        count = bugbot.review_shuttles_on_head(pr)
+        lines.extend(_start_lines(data, ticket, "review", bugbot.review_detail(ticket, data)))
+        lines.append("bugbot: review-shuttle %s %d/%d" % (tid, count, bugbot.MAX_REVIEW_SHUTTLES))
+        return
     if bugbot.review_shuttles_on_head(pr) >= bugbot.MAX_REVIEW_SHUTTLES:
         # Two review Shuttles came back with nothing recorded for this head. Ask a person.
         bugbot.ask_manual(data, ticket, lines)
@@ -1051,6 +1084,16 @@ def start_verify(data: dict, ticket: dict, lines: list) -> None:
         lines.append("shuttle: hold %s" % tid)
         return
     pr = ticket.setdefault("pr", {})
+    out = _step_out(data, ticket, "verify", str(pr.get("acVerifySha") or "") == str(pr.get("headSha") or ""))
+    if out == "hold":
+        lines.append("shuttle: hold %s" % tid)
+        return
+    if out == "relaunch":
+        count = acceptance.verify_shuttles_on_head(pr)
+        root = data.get("_repoRoot") or "<parent checkout>"
+        lines.extend(_start_lines(data, ticket, "verify", acceptance.verify_detail(ticket, orchestrator.scripts_dir(), root)))
+        lines.append("acceptance: verify-shuttle %s %d/%d missing %s" % (tid, count, acceptance.MAX_VERIFY_SHUTTLES, ", ".join(acceptance.missing(ticket))))
+        return
     if acceptance.verify_shuttles_on_head(pr) >= acceptance.MAX_VERIFY_SHUTTLES:
         acceptance.ask_by_hand(ticket, lines, str(_beam_path(data) or ".warp/beam.json"))
         lines.append("review: wait %s" % tid)

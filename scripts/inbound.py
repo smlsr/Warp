@@ -60,7 +60,7 @@ LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
 ADDRESSABLE = {"pause", "resume", "stop", "start", "status"}
 STATE_VERBS = {"pause", "resume", "stop", "start"}
-EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped")
+EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost")
 KEEP_CYCLING = "listen: keep cycling. Run poll again now with the same lease and holder. Do not return."
 DEFAULT_FAST_SECONDS = 15
 DEFAULT_SLOW_SECONDS = 60
@@ -347,6 +347,32 @@ def orphan_minutes(data: dict, beam_path: Path) -> int:
 
 def max_minutes(data: dict, beam_path: Path) -> int:
     return max(1, _cfg_int(data, beam_path, "listenerMaxMinutes", DEFAULT_MAX_MINUTES))
+
+
+def silent_minutes(data: dict, beam_path: Path) -> int:
+    """A holder with no poll and no wait for this long is gone. `listenerSilentMinutes`; default 5,
+    and never under three slow waits plus a minute. (listenerStaleMinutes is retired and stays ignored.)"""
+    floor = (3 * slow_seconds(data, beam_path)) // 60 + 1
+    return max(floor, _cfg_int(data, beam_path, "listenerSilentMinutes", 5))
+
+
+def holder_silent(data: dict, beam_path: Path, now_dt) -> Optional[int]:
+    """Minutes since the lease holder last polled or waited, when that is past silent_minutes. None otherwise.
+
+    Cursor can cut a listener off (it flags the poll-and-wait calls as a loop). It cannot run another
+    command, so it never writes its return stamp, and its lease looked live until listenerMaxMinutes.
+    """
+    raw = _raw(data)
+    if not str(raw.get("holder") or ""):
+        return None
+    marks = [beam.parse_ts(raw.get(key)) for key in ("lastSeenAt", "generationStartedAt", "pollStartedAt", "startedAt")]
+    marks = [mark for mark in marks if mark is not None]
+    if not marks:
+        return None
+    quiet = (now_dt - max(marks)).total_seconds() / 60.0
+    if quiet < silent_minutes(data, beam_path):
+        return None
+    return int(quiet)
 
 
 def max_reads(data: dict, beam_path: Path) -> int:
@@ -789,6 +815,9 @@ def wait_for(
         raw = _raw(data)
         _apply_cursor(raw, cursor, count)
         raw["interval"] = "fast" if fast else "slow"
+        if lease_matches(data, lease, holder):
+            # The wait is the holder at work too; only a holder that stops calling goes stale.
+            raw["lastSeenAt"] = beam.utcnow() if now is None else _moment(now)[1]
         data["listener"] = raw
         beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
         return fast_seconds(data, beam_path) if fast else slow_seconds(data, beam_path)
@@ -887,6 +916,12 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
     def run() -> str:
         data = beam.load_json(beam_path)
         now_dt, now_s = _moment(now)
+        silent = holder_silent(data, beam_path, now_dt)
+        if silent is not None:
+            # The holder stopped polling (cut off, crashed). Anyone may hand its slot back.
+            stamp_return(data, beam_path, "lost", now_s, holder=str(_raw(data).get("holder") or "") or holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return "listener: returned lost (no poll or wait for %dm; the slot is free)" % silent
         if lease is not None or holder not in (None, ""):
             if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
                 return "listener: return refused"
