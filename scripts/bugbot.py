@@ -239,6 +239,185 @@ def _age_minutes(stamp, now_dt) -> Optional[float]:
     return max(0.0, (now_dt - seen).total_seconds() / 60.0)
 
 
+# A Bugbot result older than this when Warp first sees it (a resume, an upgrade) is shown, not posted.
+ANNOUNCE_MINUTES = 30
+
+
+def _duration(minutes: Optional[float]) -> str:
+    if minutes is None:
+        return "?"
+    whole = int(minutes)
+    if whole < 1:
+        return "<1m"
+    if whole < 60:
+        return "%dm" % whole
+    return "%dh %02dm" % (whole // 60, whole % 60)
+
+
+def _clock(stamp) -> str:
+    seen = beam_mod.parse_ts(str(stamp or ""))
+    return seen.strftime("%H:%MZ") if seen else "?"
+
+
+def _pr_label(url: str) -> str:
+    match = re.search(r"/pull/(\d+)", str(url or ""))
+    return ("PR #%s" % match.group(1)) if match else (str(url or "") or "its pull request")
+
+
+def _run_record(pr: dict, sha: str) -> dict:
+    run = pr.get("bugbotRun") if isinstance(pr.get("bugbotRun"), dict) else {}
+    if str(run.get("sha") or "") != sha:
+        run = {"sha": sha}
+    pr["bugbotRun"] = run
+    return run
+
+
+def progress(ticket: dict, snap: Optional[dict], now=None, late: bool = False) -> list:
+    """Cursor Bugbot's own check on the head, as lines a person can see: when it starts, while it runs, when it ends.
+
+    `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)` and one Herald line when the check starts on a head;
+    `bugbot: running <id> on <sha>, <m> so far` on each pass while it runs (no Herald line); and
+    `bugbot: done <id> pass|<n> finding(s) on <sha> (took <m>)` with one Herald line when it ends. Before 1.6.18 a
+    ticket waiting on Bugbot printed nothing, so a run that waited on it looked stalled. The record is
+    `pr.bugbotRun` ({sha, startedAt, doneAt, result}), one per head commit.
+    """
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+    if pr is None or not isinstance(snap, dict):
+        return []
+    result = str(snap.get("bugbot") or "").strip().casefold()
+    sha = str(snap.get("headSha") or snap.get("sha") or pr.get("headSha") or "")
+    if result not in {"pending", "pass", "fail"} or not sha:
+        return []
+    now_dt, now_s = beam_mod.coerce_now(now)
+    run = _run_record(pr, sha)
+    tid = ticket.get("id")
+    url = str(pr.get("url") or "")
+    label = _pr_label(url)
+    after = " after the merge" if late else ""
+    started = str(snap.get("bugbotStartedAt") or "")
+    out = []
+    if result == "pending":
+        if run.get("doneAt"):
+            # Asked again on the same head (`bugbot run`): a new run of the check.
+            for key in ("doneAt", "result", "startedAt", "announced"):
+                run.pop(key, None)
+        if not run.get("startedAt"):
+            run["startedAt"] = started or now_s
+            run["announced"] = True
+            out.append("bugbot: running %s %s on %s (started %s)%s" % (tid, url, sha[:12], _clock(run["startedAt"]), after))
+            out.append("herald: %s Cursor Bugbot is reviewing %s%s (%s)." % (tid, label, after, sha[:7]))
+        else:
+            out.append("bugbot: running %s on %s, %s so far" % (tid, sha[:12], _duration(_age_minutes(run["startedAt"], now_dt))))
+        return out
+    if run.get("doneAt"):
+        return []
+    done = str(snap.get("bugbotAt") or "") or now_s
+    begin = str(run.get("startedAt") or started or "")
+    run.update(doneAt=done, result=result)
+    if begin:
+        run["startedAt"] = begin
+    took = ""
+    if begin:
+        begin_dt = beam_mod.parse_ts(begin)
+        done_dt = beam_mod.parse_ts(done)
+        if begin_dt and done_dt:
+            took = " (took %s)" % _duration(max(0.0, (done_dt - begin_dt).total_seconds() / 60.0))
+    age = _age_minutes(done, now_dt)
+    post = bool(run.get("announced")) or (age is not None and age <= ANNOUNCE_MINUTES)
+    if result == "pass":
+        out.append("bugbot: done %s pass on %s%s%s" % (tid, sha[:12], took, after))
+        if post:
+            out.append("herald: %s Cursor Bugbot finished %s%s: no issues%s." % (tid, label, after, took))
+        return out
+    import pipeline
+
+    findings = pipeline.coerce_findings(snap.get("findings"))
+    count = len(findings) or 1
+    shown = "; ".join(findings[:3]) + ("; ..." if len(findings) > 3 else "")
+    out.append("bugbot: done %s %d finding(s) on %s%s%s%s" % (tid, count, sha[:12], took, after, (": " + shown) if shown else ""))
+    if post and not late:
+        # A late finding has its own Herald line, with the follow-up ticket's id.
+        out.append("herald: %s Cursor Bugbot finished %s: %d finding(s)%s. Back to fix." % (tid, label, count, took))
+    return out
+
+
+def waiting_line(ticket: dict, now=None) -> str:
+    """`bugbot: not started <id> on <sha> (asked <m> ago)`: Bugbot was asked on this head and has no check yet."""
+    pr = _pr(ticket)
+    head = _head(pr)
+    if not head or not pr.get("bugbotRequested") or answered(ticket):
+        return ""
+    run = pr.get("bugbotRun") if isinstance(pr.get("bugbotRun"), dict) else {}
+    if str(run.get("sha") or "") == head:
+        return ""
+    since = pr.get("bugbotRequestedAt")
+    age = _age_minutes(since, beam_mod.coerce_now(now)[0])
+    return "bugbot: not started %s on %s (asked %s ago)" % (ticket.get("id"), head[:12], _duration(age))
+
+
+def activity(pr: dict, now=None) -> str:
+    """Bugbot on the head, for status tables: `running(<m>)`, `pass(<m>)`, `fail(<m>)`, or empty."""
+    run = pr.get("bugbotRun") if isinstance(pr.get("bugbotRun"), dict) else {}
+    head = str(pr.get("headSha") or "")
+    if not run.get("startedAt") or (head and str(run.get("sha") or "") != head):
+        return ""
+    now_dt = beam_mod.coerce_now(now)[0]
+    if not run.get("doneAt"):
+        return "running(%s)" % _duration(_age_minutes(run["startedAt"], now_dt))
+    begin_dt = beam_mod.parse_ts(str(run.get("startedAt")))
+    done_dt = beam_mod.parse_ts(str(run.get("doneAt")))
+    took = _duration(max(0.0, (done_dt - begin_dt).total_seconds() / 60.0)) if begin_dt and done_dt else "?"
+    return "%s(%s)" % (run.get("result") or "done", took)
+
+
+POLL_KEY = "bugbotPollSeconds"
+DEFAULT_POLL_SECONDS = 120
+
+
+def waiting_on(data: dict, now=None) -> list:
+    """Each ticket the run is waiting on Cursor Bugbot for, as `<id> running 4m` or `<id> not started 2m`.
+
+    Open tickets whose head Bugbot was asked about or is checking, and merged tickets whose late check runs.
+    """
+    import pipeline
+
+    now_dt = beam_mod.coerce_now(now)[0]
+    out = []
+    for tid in sorted((data.get("tickets") or {})):
+        ticket = data["tickets"][tid]
+        if not isinstance(ticket, dict) or ticket.get("status") in {"parked", "skipped", "done"}:
+            continue
+        pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+        if not pr.get("url"):
+            continue
+        merged = ticket.get("status") == "merged"
+        if merged and pr.get("lateBugbot"):
+            continue
+        shown = activity(pr, now)
+        if shown.startswith("running("):
+            out.append("%s running %s%s" % (tid, shown[len("running("):-1], " after the merge" if merged else ""))
+            continue
+        if merged or shown:
+            continue
+        head = _head(pr)
+        if ticket.get("phase") not in {"reviewing", "pr-open"} or not head or not pr.get("bugbotRequested") \
+                or str(pr.get("bugbotRequestedSha") or head) != head:
+            continue
+        shuttle_only = str(pr.get("bugbotSource") or "") == "shuttle"
+        if pipeline.bugbot_state(ticket) in {"pass"} | pipeline._FAIL_BUG and not shuttle_only:
+            continue
+        if shuttle_only and not pipeline.bugbot_runs_here(data):
+            continue  # the Shuttle's review is the review here
+        out.append("%s not started %s" % (tid, _duration(_age_minutes(pr.get("bugbotRequestedAt"), now_dt))))
+    return out
+
+
+def waiting_summary(data: dict, now=None) -> str:
+    """`bugbot: waiting on Cursor Bugbot: WE-01 running 4m, WE-03 not started 2m`, or empty."""
+    items = waiting_on(data, now)
+    return ("bugbot: waiting on Cursor Bugbot: %s" % ", ".join(items)) if items else ""
+
+
 def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
     """A requested Bugbot that never started. Returns True when it queued a comment or warned."""
     pr = _pr(ticket)

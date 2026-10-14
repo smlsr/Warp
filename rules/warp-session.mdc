@@ -29,7 +29,7 @@ If you are a Shuttle: do not start an agent, subscribe, set a timer, loop, sleep
 python3 <plugin>/scripts/agents.py reap --beam .warp/beam.json --id <agent> --ticket <id>
 ```
 
-If you are the parent: start a Shuttle only from the prompt `checkout.py launch` prints, start the listener only on `listener: poll` (one background subagent, and do not wait for it), and wait only with this command at the end of each pass. `listener: hold reason=live` and `listener: hold reason=await-return` mean do not start a second. A stale heartbeat does not start one. The return stamp does.
+If you are the parent: start a Shuttle only from the prompt `checkout.py launch` prints, start the listener only on `listener: poll` (one background subagent, and do not wait for it), and wait only with this command at the end of each pass. `listener: hold reason=live` and `listener: hold reason=await-return` mean do not start a second. Only a return stamp, or a holder that has not polled or waited for `listenerSilentMinutes` (`listener: lost`), starts one. The return stamp does.
 
 ```bash
 python3 <plugin>/scripts/orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>

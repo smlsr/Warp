@@ -236,12 +236,31 @@ def _yaml(beam_path: Path) -> str:
         return ""
 
 
+# What each ticket folder state says in Slack or Teams. Before 1.6.18 the line was the bare state
+# (`WE-01 done`), and the parent did not post it.
+HERALD_TEXT = {
+    "started": "the Shuttle started",
+    "planning": "the Shuttle is planning",
+    "coding": "the Shuttle is coding",
+    "review": "the Shuttle is reviewing its own work",
+    "bugbot": "waiting for the review",
+    "fix": "the Shuttle is fixing",
+    "pr-opened": "pull request opened",
+    "check-red": "checks are red",
+    "check-green": "checks are green",
+    "lock-escape": "touched files outside its locks; Warp is repairing it",
+    "alarm": "alarm raised",
+    "failed": "the Shuttle failed",
+    "done": "code complete; the Shuttle finished and returned",
+}
+
+
 def _herald(lines: list, seen: set, tid: str, state: str) -> None:
     key = "%s %s" % (tid, state)
     if key in seen:
         return
     seen.add(key)
-    lines.append("herald: %s" % key)
+    lines.append("herald: %s: %s." % (tid, HERALD_TEXT.get(state, state)))
 
 
 def _note_status(beam_path: Path, ticket: dict, prev: str, now: str) -> None:
@@ -493,7 +512,7 @@ def _apply_event_state(beam_path: Path, data: dict, ticket: dict, event: dict, n
         before = _pr(ticket).get("url")
         orchestrator.note_pr_opened(ticket, url, stamp)
         if url and url != before:
-            _herald(lines, heralded, tid, "pr-opened")
+            # The pass posts `<id> pull request opened: <url>` once, however the pull request was opened.
             ticket["updatedAt"] = stamp
             return True
         return changed

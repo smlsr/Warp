@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -1459,11 +1460,23 @@ def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional
         "SUBAGENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
-        "locks: %s" % _joined(ticket.get("locks")),
+        "locks: %s" % locks_text(ticket),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
     ] + step_lines(ticket)
+
+
+def locks_text(ticket: dict) -> str:
+    """The prompt's locks line, with the lockfiles a locked manifest covers."""
+    import alarm_repair
+
+    locks = [str(lock) for lock in ticket.get("locks") or [] if str(lock).strip()]
+    text = _joined(locks)
+    implied = alarm_repair.implied_locks(locks)
+    if implied:
+        text += " (and the lockfiles of those manifests: %s)" % ", ".join(implied)
+    return text
 
 
 def step_lines(ticket: dict) -> list:
@@ -1588,7 +1601,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         "IMPLEMENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
-        "locks: %s" % _joined(ticket.get("locks")),
+        "locks: %s" % locks_text(ticket),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
@@ -1747,6 +1760,18 @@ def parent_may_exit(beam: dict) -> bool:
 
 
 def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
+    """One parent pass, then its `herald:` lines written as one Slack and Teams payload to post."""
+    lines = _supervise_pass(beam_path, returned=returned, now=now, provider=provider)
+    path = Path(beam_path)
+    if path.is_file() and lines and not lines[0].startswith("pass: aborted"):
+        import notify
+
+        match = re.match(r"run: pass (\d+) ", lines[0])
+        lines.extend(notify.pass_post(path.resolve().parent.parent, lines, int(match.group(1)) if match else None))
+    return lines
+
+
+def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
     """One parent pass: the listener, then the ticket pipeline.
 
     The listener decision stays first. The pipeline adopts open pull requests,
@@ -1783,6 +1808,15 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
             lines.append("observe: ticket folders not read (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
+        state = str(data.get("runState") or "")
+        if state in {"stopped", "paused"} or data.get("paused"):
+            state = state if state in {"stopped", "paused"} else "paused"
+            run = str(data.get("run") or "")
+            lines.append("run: %s%s%s. Start nothing: no Shuttle, no listener, no resume. Run parent-exit and end the turn; "
+                         "only /warp-resume or warp:resume%s starts it again." % (
+                             state, " at %s" % data["stoppedAt"] if state == "stopped" and data.get("stoppedAt") else "",
+                             " (%s)" % (data.get("pauseReason") or data.get("stopReason")) if (data.get("pauseReason") or data.get("stopReason")) else "",
+                             " " + run if run else ""))
         return lines
     live = provider is None
     if live:
@@ -2059,6 +2093,13 @@ def parent_wait(
             stamp = beam_mod.parse_ts(mark.get("startedAt"))
             since = stamp.timestamp() if stamp is not None else began
         poll = max(int(beam_mod.config_int(data, path, "pollSeconds", 300)), 0)
+        if limit is None or limit < 0:
+            import bugbot as bugbot_mod
+
+            if bugbot_mod.waiting_on(data, now_s):
+                # Cursor Bugbot is checking a head (or was asked to): look again sooner, so its result shows
+                # within bugbotPollSeconds and not up to pollSeconds later.
+                poll = min(poll, max(int(beam_mod.config_int(data, path, bugbot_mod.POLL_KEY, bugbot_mod.DEFAULT_POLL_SECONDS)), 30))
         cap = poll if limit is None or limit < 0 else int(limit)
         cap = max(0, min(cap, 3600))
         changed = _changed_ticket(path, since)
@@ -2153,6 +2194,15 @@ def parent_exit(
         out = verdict(_load(path))
         if out:
             return lines + out
+        try:
+            import bugbot as bugbot_mod
+
+            waiting = bugbot_mod.waiting_summary(_load(path))
+        except Exception:
+            waiting = ""
+        if waiting:
+            # The run is waiting on Cursor Bugbot, not stalled.
+            lines.append(waiting)
         lines.append("run: next is pass %d" % _pass_number(path))
     lines.append("parent: stay")
     return lines
@@ -2305,7 +2355,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                     "SUBAGENT %s" % ticket.get("id"),
                     "ticket: %s" % ticket.get("id"),
                     "jira: %s" % (ticket.get("jiraKey") or ""),
-                    "locks: %s" % _joined(ticket.get("locks")),
+                    "locks: %s" % locks_text(ticket),
                     "acceptance: %s" % acceptance_text(ticket),
                     "branch: %s" % action["branch"],
                     SUBAGENT_INSTRUCTION,

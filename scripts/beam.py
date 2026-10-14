@@ -1729,6 +1729,7 @@ def default_config() -> dict:
         "bugbotManual": True,
         "bugbotTrigger": "auto",
         "bugbotStartMinutes": 10,
+        "bugbotPollSeconds": 120,
         "maxFixAttempts": 5,
         "stuckAfterMinutes": 90,
         "stallImplementingMinutes": 90,

@@ -941,7 +941,10 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     elif lines and (lines[0].startswith("start ") or lines[0].startswith("resume ")):
         # Printed again on each pass until checkout.py launch records the start (see _advance_one).
         _shuttle(ticket)["launchLines"] = [line for line in lines if not line.startswith("herald:")]
+        first = not ticket.get("claimedAt")
         note_claim(ticket)
+        if first and step == "implement" and not replacing and not detail and lines[0].startswith("start "):
+            lines.append(claim_herald(ticket))
     if detail:
         # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
         _shuttle(ticket)["detail"] = detail
@@ -1009,7 +1012,7 @@ def _queue_in_review(data: dict, ticket: dict, lines: list) -> None:
         lines.extend(text.splitlines())
 
 
-def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> None:
+def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None, now=None) -> None:
     """Ask Bugbot once for the current head commit."""
     import agents
 
@@ -1023,6 +1026,11 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
         ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
         ticket["phase"] = "reviewing"
         lines.append("bugbot: hold %s" % ticket.get("id"))
+        import bugbot
+
+        waiting = bugbot.waiting_line(ticket, now=now)
+        if waiting:
+            lines.append(waiting)
         return
     if data is None:
         data = {}
@@ -1189,6 +1197,37 @@ def note_times(ticket: dict, snap: Optional[dict], now=None) -> None:
             and str(pr.get("reviewedSha") or "") != head:
         pr["reviewedAt"] = snap["bugbotAt"]
         pr["reviewedSha"] = head
+
+
+def claim_herald(ticket: dict) -> str:
+    """`herald: <id> claimed: <summary> (size, auto-merge or approval, locks). A Shuttle is coding it on <branch>.`"""
+    locks = [str(lock) for lock in ticket.get("locks") or []]
+    shown = ", ".join(locks[:4]) + (" and %d more" % (len(locks) - 4) if len(locks) > 4 else "")
+    how = "auto-merge" if ticket.get("autoMerge") else "merges on approval"
+    summary = str(ticket.get("summary") or "").strip()
+    return "herald: %s claimed%s (size %s, %s%s). A Shuttle is coding it%s." % (
+        ticket.get("id"), (": " + summary) if summary else "", ticket.get("size") or "?", how,
+        ("; locks " + shown) if shown else "", (" on " + str(ticket["branch"])) if ticket.get("branch") else "")
+
+
+def note_pr_announced(ticket: dict, lines: list, now=None) -> None:
+    """One Herald line when a ticket's pull request first shows up, however it was opened.
+
+    A pull request opened more than bugbot.ANNOUNCE_MINUTES before Warp first sees it (a resume) is noted, not posted.
+    """
+    import beam as beam_mod
+    import bugbot
+
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+    url = str((pr or {}).get("url") or "")
+    if not url or pr.get("heraldUrl") == url:
+        return
+    pr["heraldUrl"] = url
+    now_dt = beam_mod.coerce_now(now)[0]
+    age = bugbot._age_minutes(pr.get("openedAt"), now_dt)
+    if age is not None and age > bugbot.ANNOUNCE_MINUTES:
+        return
+    lines.append("herald: %s pull request opened: %s" % (ticket.get("id"), url))
 
 
 def note_claim(ticket: dict, now=None) -> None:
@@ -1492,7 +1531,7 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
                 lines.append("pr: wait %s (no pull request yet)" % ticket.get("id"))
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
-            _request_bugbot(ticket, lines, data)
+            _request_bugbot(ticket, lines, data, now=now)
             return
         ticket["phase"] = "reviewing"
         phase = "reviewing"
@@ -1525,20 +1564,26 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
                 head = str(pr_now.get("headSha") or "")
                 if not pr_now.get("bugbotRequested") or (head and str(pr_now.get("bugbotRequestedSha") or "") != head):
                     # Record the request (and the Jira In Review move) for this head first.
-                    _request_bugbot(ticket, lines, data)
+                    _request_bugbot(ticket, lines, data, now=now)
                     return
                 if bugbot.shuttle_reviewed(pr_now):
                     # The Shuttle passed. Cursor Bugbot must report on this head before the merge.
                     if bugbot.check_silence(data, ticket, lines, now=now):
                         return
                     lines.append("bugbot: wait %s (the Shuttle's review passed; waiting for Cursor Bugbot on %s)" % (ticket.get("id"), head[:12]))
+                    run = pr_now.get("bugbotRun") if isinstance(pr_now.get("bugbotRun"), dict) else {}
+                    if str(run.get("sha") or "") != head:
+                        import beam as beam_mod
+
+                        since = bugbot._age_minutes(pr_now.get("bugbotRequestedAt"), beam_mod.coerce_now(now)[0])
+                        lines.append("bugbot: not started %s on %s (asked %s ago)" % (ticket.get("id"), head[:12], bugbot._duration(since)))
                     return
                 start_review(data, ticket, lines)
                 return
             # Requested and never started: comment `bugbot run`, switching the trigger when it was auto.
             if bugbot.check_silence(data, ticket, lines, now=now):
                 return
-            _request_bugbot(ticket, lines, data)
+            _request_bugbot(ticket, lines, data, now=now)
             return
         if _conflicted(ticket):
             start_rebase(data, ticket, lines)
@@ -1577,6 +1622,8 @@ def _hold_or_queue(ticket: dict, lines: list) -> None:
     ticket["phase"] = "ready"
     if not already:
         lines.append("approve: wait %s" % ticket.get("id"))
+        lines.append("herald: %s is ready and waits for approval%s. Reply warp:proceed %s to merge it." % (
+            ticket.get("id"), (": " + str(pr["url"])) if pr.get("url") else "", ticket.get("id")))
 
 
 def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list, now=None) -> None:
@@ -1591,6 +1638,10 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
         return
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
     note_times(ticket, snap, now=now)
+    import bugbot as bugbot_progress
+
+    note_pr_announced(ticket, lines, now=now)
+    lines.extend(bugbot_progress.progress(ticket, snap, now=now))
     if confirm_merge(data, ticket, snap, lines):
         return
     _hold_for_bugbot(data, ticket, snap)
@@ -1982,6 +2033,9 @@ def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> l
         result = str(snap.get("bugbot") or "").strip().casefold()
         if result:
             data["bugbotSeen"] = True
+        import bugbot as bugbot_progress
+
+        out.extend(bugbot_progress.progress(ticket, snap, now=now_s, late=True))
         if result == "pass":
             pr["lateBugbot"] = "pass"
         elif result == "fail":

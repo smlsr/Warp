@@ -1240,7 +1240,7 @@ Default tools come from scripts/mcp_tools.py:
   getVisibleJiraProjects, editJiraIssue, getJiraIssueEditmeta, getJiraScreen,
   updateJiraScreen, createJiraIssueRemoteIssueLink, createJiraField,
   createCustomField, createJiraCustomField
---with-git adds GitHub add_issue_comment only. No Bitbucket tool is named;
+--with-git adds GitHub add_issue_comment, merge_pull_request, and create_pull_request. No Bitbucket tool is named;
   put that in notifyAllow. lookupJiraAccountId is not called.
 
 Each tool is written for several server ids: the configured name (slack,
@@ -1287,7 +1287,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--user", action="store_true", help="edit ~/.cursor instead of the repo")
     p.add_argument("--yes", action="store_true", help="required with --user before anything is written")
     p.add_argument("--with-jira", action="store_true", help="allow the Jira tools Warp calls (already the default)")
-    p.add_argument("--with-git", action="store_true", help="also allow GitHub add_issue_comment")
+    p.add_argument("--with-git", action="store_true", help="also allow GitHub add_issue_comment, merge_pull_request, and create_pull_request")
     p.add_argument("--server", action="append", default=[], help="also allow these tools on this server id (repeatable)")
     p.add_argument("--list", action="store_true", help="print detected MCP servers and write nothing")
     p.add_argument("--check", action="store_true", help="show which Warp tools permissions and hooks already cover")

@@ -658,6 +658,12 @@ def pr_times(doc: dict, checks: list) -> dict:
             and item.get("completedAt")]
     if done:
         out["bugbotAt"] = max(done)
+    # When Bugbot's check started on this head. A check that has not started yet carries no time, and GitHub
+    # fills an unset time with year 1.
+    started = [str(item.get("startedAt") or "") for item in checks
+               if isinstance(item, dict) and _bugbot_check(item) and str(item.get("startedAt") or "")[:4] not in {"", "0001"}]
+    if started:
+        out["bugbotStartedAt"] = max(started)
     reviews = doc.get("latestReviews") if isinstance(doc.get("latestReviews"), list) else []
     approved = [r for r in reviews if isinstance(r, dict) and str(r.get("state") or "").upper() == "APPROVED" and r.get("submittedAt")]
     if approved:

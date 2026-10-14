@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from beam import load_json, utcnow  # noqa: E402
 from scan import write_status  # noqa: E402
 import herald_fmt as fmt  # noqa: E402
+import bugbot  # noqa: E402
 
 
 def _instance(beam: dict) -> str:
@@ -38,7 +39,7 @@ def payload(beam_path: Path) -> dict:
         "left": sum(1 for t in beam["tickets"].values() if t["status"] in {"queued", "blocked", "alarm"}),
     }
     working = [
-        f"{t['id']} {t['status']} bugbot={(t.get('pr') or {}).get('bugbot') or 'none'} ci={(t.get('pr') or {}).get('ci') or 'none'}"
+        f"{t['id']} {t['status']} bugbot={bugbot.activity(t.get('pr') or {}) or (t.get('pr') or {}).get('bugbot') or 'none'} ci={(t.get('pr') or {}).get('ci') or 'none'}"
         for t in beam["tickets"].values()
         if t["status"] in {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
     ]

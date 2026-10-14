@@ -7,6 +7,7 @@
 .warp/worktrees/
 .warp/outbox.md
 .warp/notify-post.json
+.warp/notify-pass.json
 .warp/events.jsonl
 .warp/dashboard.html
 .warp/secrets.yaml

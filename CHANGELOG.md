@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.18
+
+- New: Bugbot's progress is shown. Shuttles show up as background agents and Cursor Bugbot does not, so a run waiting on it looked stalled (WE-01 on PR #24). Each pass now prints, per ticket:
+  - `bugbot: not started <id> on <sha> (asked <m> ago)` until its check shows up;
+  - `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)` when it starts, then `bugbot: running <id> on <sha>, <m> so far`;
+  - `bugbot: done <id> pass on <sha> (took <m>)` or `bugbot: done <id> <n> finding(s) on <sha> (took <m>): …` when it ends.
+  - Slack and Teams get one Herald line at the start and one at the end (not the lines in between). A result older than 30 minutes when first seen, as on a resume, is shown and not posted.
+  - `parent-exit --wait` ends with `bugbot: waiting on Cursor Bugbot: WE-01 running 4m, …`, and while anything waits on Bugbot it returns every `bugbotPollSeconds` (120) instead of `pollSeconds` (300).
+  - `/warp-status`, `status.json`, `STATUS.md` and the status post show `bugbot=running(4m)`, `pass(6m)` or `fail(7m)`, and `next=wait for Bugbot (running 4m)` or `(not started)`.
+  - The late check on a merged pull request prints the same lines with `after the merge`.
+  - The record is `pr.bugbotRun`; the start time is read from Bugbot's check (`startedAt`).
+- Fix: Slack and Teams got the run's start message and nothing about its tickets. In the edit run, WE-01's claim, code done, pull request and Bugbot results were printed as `herald:` lines (some only as `WE-01 done`) and never posted. Each `supervise` pass now writes its `herald:` lines into `.warp/notify-pass.json` as one payload ("Run update (pass <n>)") and ends with `herald: post .warp/notify-pass.json …` and `herald: then run: … notify.py posted --root .`, the same way the start message is posted. Lines not marked posted are carried into the next pass. New lines: `<id> claimed: <summary> (size, auto-merge or approval; locks …)`, `<id> pull request opened: <url>` (once, however it was opened), and `<id> is ready and waits for approval`. The ticket folder's states read as sentences (`WE-01: code complete; the Shuttle finished and returned.`). With `notify: quiet` the payload keeps only alarms, parks, approval waits, red results and work needed by hand.
+- Fix: a bare `warp:stop` was refused while a finished run was published. With the view run finished (20 of 20 merged), `warp:stop` in the edit run's channel got "This repo has more than one run (edit, view). Name the run", the listener handed back its slot, and the parent started the next one, so the run looked like it stopped and started again. Only open runs count now. A stopped or paused run's `supervise` prints `run: stopped at <time>. Start nothing …`.
+- Docs: README, LIFECYCLE, COMMANDS, STATE, GUIDE, MERGE-POLICY, the warp, warp-init and warp-allow-notify skills, the start and resume commands, the Shuttle rule, and the `--with-git` help now cover everything from 1.6.12 through 1.6.17:
+  - Bugbot: its `neutral` check is a finding, the Shuttle trigger still waits for Bugbot's result, and late findings become follow-up tickets.
+  - Merges: the merge check before a merge, and a merge recorded only when the provider shows it.
+  - Fix Shuttles: the fix prompt's `FIX` lines, a fix that pushed nothing, and `git stash` forbidden.
+  - Liveness: worktree activity counts as a heartbeat.
+  - Listener: short generations, `cut-off`, `lost`, and the lease closed on parent exit.
+  - Passes: numbered, and launch lines nobody launched are printed again.
+  - The recorded pull request times and Spent, and the `CURSOR_API_KEY` rule.
+  - The new beam fields, config rows and output lines.
+- Fix: a lockfile beside a locked manifest counted as outside the ticket's locks. WE-01 locked `app/package.json`, `npm install` wrote `app/package-lock.json`, and the parent had to check it by hand. A locked `package.json` now covers its `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` and `bun.lockb`. The same goes for `go.mod` → `go.sum`, `Cargo.toml` → `Cargo.lock`, `pyproject.toml` → `poetry.lock`, `uv.lock` and `pdm.lock`, `Pipfile` → `Pipfile.lock`, `Gemfile` → `Gemfile.lock`, and `composer.json` → `composer.lock`. The Shuttle prompt's `locks:` line names them, and the lock-escape check counts them as covered.
+- Docs: "A stale heartbeat does not start another listener" was untrue after 1.6.13 and is gone from 17 places. So is "the merge queue rebases and runs `checkCommand`", which no code did. `--with-git` is documented as allowing `merge_pull_request` and `create_pull_request` too.
+
 ## 1.6.17
 
 - Fix: the fix prompt had no findings. `checkout.py launch` built the same implement prompt for every step, so the first fix of WV-11-BB1 never saw the Bugbot finding it was sent to fix, and it re-recorded a pass on the same commit. The prompt now says `step: <step>`. A fix prompt lists each item under `FIX <id>` and says to add a test that fails without the fix, rebuild generated files, push a new commit, and never record a pass on the commit the findings were made on. Review and verify Shuttles get their instructions the same way.

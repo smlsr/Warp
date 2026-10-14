@@ -233,3 +233,18 @@ class CloudKeyTest(Repo):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LockfileTest(unittest.TestCase):
+    def test_a_locked_manifest_covers_its_lockfile(self):
+        import alarm_repair
+
+        locks = ["WARPDEMO/WarpEdit/app/package.json", "WARPDEMO/WarpEdit/app/build.mjs", "go.mod"]
+        self.assertTrue(alarm_repair._already_locked(locks, "WARPDEMO/WarpEdit/app/package-lock.json"))
+        self.assertTrue(alarm_repair._already_locked(locks, "go.sum"))
+        self.assertFalse(alarm_repair._already_locked(locks, "WARPDEMO/WarpView/app/package-lock.json"))
+        self.assertFalse(alarm_repair._already_locked(["WARPDEMO/WarpEdit/app/build.mjs"], "WARPDEMO/WarpEdit/app/package-lock.json"))
+        ticket = {"id": "WE-01", "locks": locks}
+        self.assertEqual(ticket_state.uncovered(ticket, ["WARPDEMO/WarpEdit/app/package-lock.json"]), [])
+        prompt = orchestrator.subagent_prompt(ticket, {}, "warp/edit/WE-01", "/w", "/repo")
+        self.assertIn("(and the lockfiles of those manifests: WARPDEMO/WarpEdit/app/package-lock.json", prompt)

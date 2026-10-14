@@ -409,6 +409,38 @@ def known_names(root) -> set:
     return names
 
 
+SETTLED = {"merged", "parked", "skipped", "done"}
+
+
+def finished(beam: Optional[dict], registry: Optional[dict] = None) -> bool:
+    """A published run with nothing left: every ticket merged, parked or skipped, or its teardown ran."""
+    if not isinstance(beam, dict):
+        return False
+    if beam.get("runComplete") or (isinstance(registry, dict) and registry.get("finishedAt")):
+        return True
+    tickets = [t for t in (beam.get("tickets") or {}).values() if isinstance(t, dict)]
+    return bool(tickets) and all(str(t.get("status") or "") in SETTLED for t in tickets)
+
+
+def open_names(root) -> set:
+    """Published runs that are not finished: the ones a bare `warp:stop` or `warp:pause` could mean.
+
+    Before 1.6.18 every published run counted, so with the view run finished (20 of 20 merged) a bare
+    `warp:stop` in the edit run's channel was refused as ambiguous and the edit run kept going.
+    """
+    base = base_name(root)
+    out: set = set()
+    for name in known_names(root):
+        for ref in ("origin/%s" % base, base):
+            beam = show_json(root, ref, name, ".warp/beam.json")
+            if beam is None:
+                continue
+            if not finished(beam, show_json(root, ref, name, ".warp/agents.json")):
+                out.add(name)
+            break
+    return out
+
+
 def owners(root, run: str, ref: str) -> dict:
     """Ticket ids that another run has published, mapped to that run."""
     found: dict = {}
