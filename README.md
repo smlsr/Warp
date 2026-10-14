@@ -620,7 +620,7 @@ Upload by dragging the file into the agent chat, or saving it in the workspace. 
 
 ### Times and Spent
 
-Each pull request's times are recorded as the run reaches them. `openedAt` and `mergedAt` come from the provider. `reviewedAt` is Cursor Bugbot's finished check, or the head passing its review and checks. `approvedAt` is a GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`). A pass stamps `claimedAt` when it starts a ticket, and Spent (`minutes`) is the sum of the ticket's Shuttles' time out from `.warp/agents.json`. `/warp-start` and `/warp-resume` fill these in for tickets from earlier runs (`times: filled in …`).
+Each pull request's times are recorded as the run reaches them. `openedAt` and `mergedAt` come from the provider. `reviewedAt` is Cursor Bugbot's finished check, or the head passing its review and checks. `approvedAt` is a GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`). A pass stamps `claimedAt` when it starts a ticket, and Spent (`minutes`) is the sum of the ticket's Shuttles' time out from `.warp/agents.json`. `/warp-start` and `/warp-resume` fill these in for tickets from earlier runs (`times: filled in …`). Runs before 1.6.22 recorded no merge time: each pass fills it from the merge commit, `warp:sync` reads it from the pull requests, and `heal.py --times --beam .warp/runs/<run>/beam.json` repairs a published run.
 
 ## Completion report
 

@@ -357,6 +357,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `listener: returned lost (no poll or wait for <m>m; the slot is free)` | `inbound.py returned` | a silent holder's slot was handed back by anyone |
 | `listen: cycle <n> of <max> at <time>Z (generation <g>)` | `inbound.py poll` | which cycle this is. The generation rotates after `listenerMaxReads` |
 | `times: filled in <ids> from the pull requests` | `scan.py start`, `scan.py resume` | opened, reviewed, approved, merged, and Spent were read in for tickets from earlier runs |
+| `times: merged time filled in for <ids> from the merge commits` | `supervise`, `heal.py --times`, `warp:sync` | a merged ticket had no `pr.mergedAt` (every merge before 1.6.22); its merge commit's time was written |
 | `refuse: CURSOR_API_KEY is not set. …` | `scan.py start`, `scan.py resume` | this run starts cloud agents and Warp could not cancel or archive them. Set the key, or `requireCursorApiKey: false` |
 | `listener: not returned. ...` | `inbound.py returned --reason polled` or `rotated` | a live holder tried to leave after a cycle. Keep cycling. A holder that has to stop uses `--reason cut-off` |
 | `alarm-repair: launch <id>. Run ... checkout.py launch ...` | `alarm_repair.py next`, `supervise` | launch the repair Shuttle with that command. `--returned <id>` only after it returns |

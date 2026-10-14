@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.22
+
+- Fix: no merge recorded its time, so the viewer's Merged column was empty (all 20 view-run and 14 edit-run tickets had `pr.mergedAt: null`). A scanned ticket's `pr` starts with `"mergedAt": null`, and `finish_merge` used `setdefault`, which keeps an existing null. Every place that records a merge now stamps `pr.mergedAt` when it is empty: a merge supervise ran, one it confirmed on the provider (the provider's own time wins), `beam.py set --status merged`, a reported merge, and `stateInMerge`.
+- Fix: with no merge time, the late Bugbot check took a merge for one from before 1.6.14 and settled it as `none` without looking. The check now takes the provider's merge time from the pull request it reads, then looks.
+- Repair for earlier runs:
+  - every supervise pass fills a merged ticket's missing time from its merge commit in git (`times: merged time filled in for <ids> from the merge commits`), with no provider call;
+  - the `/warp-start` and `/warp-resume` backfill reads a merged pull request again when its merge time is missing, even if it was read while the ticket was open (`pr.timesRead`);
+  - `warp:sync` runs the backfill before it pushes;
+  - `heal.py --times --beam <path>` fills the missing times in any beam, including a published `.warp/runs/<run>/beam.json` in a checkout of main. On WarpDemo it filled all 20 view-run and 14 edit-run merges.
+
 ## 1.6.21
 
 - New: `stateInMerge` (default `true`). With `mergeMethod: merge`, Warp merges a ready pull request with one merge commit it writes itself and pushes to the base branch: its parents are the base and the reviewed head (so GitHub marks the pull request merged), and its tree is the merge plus the run state with that ticket merged. No separate `Warp state` commit follows a merge any more (`state: in the merge commit (WE-01)`). It falls back to `gh pr merge` and a state commit when the push is refused (branch protection), the branch moved past the reviewed head, a file outside the run state conflicts, a merge queue is on, or the method is `squash` or `rebase` (`merge: <id> through the provider (<why>)`). `pr.stateInMerge` records the commit. `state_commit._build_commit` can start from a given tree and take several parents.
