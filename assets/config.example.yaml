@@ -208,6 +208,9 @@ jiraCreateExternalIdField: false
 # change. The Rovo MCP catalog has no create-field tool; if the probe finds
 # none, or permission is denied, Warp does not fail. false: print the one
 # command /warp-jira-external-id --create-field --yes and use the fallback.
+jiraMatchOnText: false
+# true: a Jira summary that contains the plan summary's first 60 characters anywhere is a
+# match on its own, whatever the External ID says (another tool's id). The scan stores it.
 jiraExternalIdFallback: label
 # When the External ID field is missing: label (add warp:<id>, default),
 # remote-link (createJiraIssueRemoteIssueLink), or none. label uses

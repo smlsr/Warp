@@ -76,6 +76,7 @@ CONFIRMED_SOURCES = {"plan", "export", "map", "manual", "external", "label", "li
 LOOKUP_SOURCES = {"external", "label", "link", "summary"}
 DEFAULTS = {
     "mergeMethod": "merge",
+    "jiraMatchOnText": False,
     "jiraTransition": True,
     "jiraInProgressStatus": "In Progress",
     "jiraInReviewStatus": "In Review",
@@ -2344,6 +2345,9 @@ def match_search(beam_path: Path, results_path: Path, yes: bool) -> str:
             elif summary and jira_match.external_hit(issue, tid, field) and jira_match.summary_contained(summary, _issue_summary(issue)):
                 # The External ID is this plan id and the summary contains the plan's (its first 60 characters).
                 hits.append(key)
+            elif summary and cfg.get("jiraMatchOnText") and jira_match.summary_contained(summary, _issue_summary(issue)):
+                # jiraMatchOnText: the summary alone decides, whatever the External ID says.
+                hits.append(key)
         if len(hits) == 1:
             proposals.append((tid, hits[0]))
             lines.append(f"jira: propose {tid}={hits[0]}")
@@ -2722,7 +2726,8 @@ def apply_jira_lookup(beam_path: Path, client, dry_run: bool = False, confirm_su
             continue
         if jira_key(t, prefixes):
             continue
-        row = jira_lookup.resolve_ticket(tid, t.get("summary") or "", project, configured, client, prefixes)
+        row = jira_lookup.resolve_ticket(tid, t.get("summary") or "", project, configured, client, prefixes,
+                                         text_only=bool(cfg.get("jiraMatchOnText")))
         outcome = row.get("outcome")
         notes = row.get("notes") or []
         if outcome != "hit" or any(configured in note for note in notes):

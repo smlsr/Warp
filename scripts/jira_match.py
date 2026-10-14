@@ -245,7 +245,7 @@ def search_truncated(data: dict) -> bool:
 
 
 def _confidence(kind: str) -> str:
-    if kind in {"exact", "external"}:
+    if kind in {"exact", "external", "text"}:
         return "high"
     if kind == "prefix":
         return "medium"
@@ -263,6 +263,7 @@ def rank_ticket(
     taken: dict[str, str],
     project: Optional[str],
     field: str = "",
+    text_only: bool = False,
 ) -> dict:
     """One ticket against a candidate list. Does not write.
 
@@ -287,6 +288,9 @@ def rank_ticket(
             continue
         if external_hit(issue, tid, field) and summary_contained(summary, _issue_summary(issue), chars):
             kind, score = "external", 1.0
+        elif text_only and summary_contained(summary, _issue_summary(issue), chars):
+            # jiraMatchOnText / --text-only: the summary alone decides, whatever the External ID says.
+            kind, score = "text", 1.0
         else:
             kind, score = classify_pair(summary, _issue_summary(issue), chars, min_score)
         if not kind:
@@ -299,7 +303,7 @@ def rank_ticket(
                 "score": score,
             }
         )
-    exact = [row for row in ranked if row["type"] in {"exact", "external"}]
+    exact = [row for row in ranked if row["type"] in {"exact", "external", "text"}]
     prefix = [row for row in ranked if row["type"] == "prefix"]
     fuzzy = [row for row in ranked if row["type"] == "fuzzy"]
 
@@ -477,7 +481,8 @@ def apply_rows(beam_path: Path, rows: list[dict], *, do_apply: bool, yes: bool) 
     return lines
 
 
-def match_results(beam_path: Path, data: dict, *, only_id: Optional[str], include_all: bool, chars: int, min_score: float, include_done: bool, do_apply: bool, yes: bool) -> str:
+def match_results(beam_path: Path, data: dict, *, only_id: Optional[str], include_all: bool, chars: int, min_score: float, include_done: bool, do_apply: bool, yes: bool,
+                  text_only: bool = False) -> str:
     beam_path = beam_path.resolve()
     beam = _load_beam(beam_path)
     cfg = jira_sync.settings(beam_path, beam)
@@ -493,6 +498,7 @@ def match_results(beam_path: Path, data: dict, *, only_id: Optional[str], includ
         taken=taken,
         project=project,
         field=jira_sync.external_field(cfg),
+        text_only=bool(text_only or cfg.get("jiraMatchOnText")),
     )
     _store_report(beam_path, rows)
     lines = render_rows(rows, search_truncated(data))
@@ -1530,6 +1536,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--chars", type=int, default=DEFAULT_CHARS, help="prefix length (default 60)")
     parser.add_argument("--min-score", type=float, default=DEFAULT_SCORE, help="fuzzy threshold (default 0.9)")
     parser.add_argument("--include-done", action="store_true", help="match Done and closed issues too")
+    parser.add_argument("--text-only", action="store_true",
+                        help="a summary that contains the plan summary's first --chars characters is a match, whatever the External ID says (jiraMatchOnText)")
     parser.add_argument("--results", help="JSON candidate list or edit transcript")
     parser.add_argument("--apply", action="store_true", help="store one exact or prefix match")
     parser.add_argument("--yes", action="store_true", help="also store one fuzzy proposal, and confirm an External ID write")
@@ -1585,6 +1593,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 include_done=bool(args.include_done),
                 do_apply=do_apply,
                 yes=bool(args.yes),
+                text_only=bool(args.text_only),
             )
         )
         return 0

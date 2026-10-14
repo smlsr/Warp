@@ -167,7 +167,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-import` | Replace the plan from a file. The run stays stopped | `--keep-status` |
 | `/warp-jira-check` | Per ticket: keyed or unmapped, what is missing, one fix | `verify --link`, `verify --apply` |
 | `/warp-jira-view` | Every field on one issue, by key or plan id | `--comments`, `--links`, `--all`, `--full`, `--verbose`, `--json` |
-| `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--write-external-id` |
+| `/warp-jira-match` | Match unmapped summaries. Optionally write External ID | `--apply`, `--yes`, `--chars`, `--min-score`, `--include-done`, `--text-only`, `--write-external-id` |
 | `/warp-jira-external-id` | Write existing mappings into External ID, or a label if that field is missing | `--apply`, `--yes`, `--force`, `--force-external-id`, `--ticket`, `--create-field`, `--recheck` |
 | `/warp-jira-map` | Review or set plan id to issue key | `--set`, `--import`, `--from-jira`, `--yes` |
 | `/warp-allow-notify` | Allow specific Slack, Teams, Jira, and GitHub tools | `--dry-run`, `--with-jira`, `--with-git`, `--list`, `--check`, `--server`, `--allow-server-tools`, `--user`, `--yes`, `--revoke` |
@@ -726,6 +726,7 @@ You edit `.warp/config.yaml`, on your machine. It stays gitignored. The repo kee
 | `jiraKeyPrefixes` | empty | More prefixes that confirm a Jira key. |
 | `jiraKeyMap` | empty | Plan id to issue key, for example `{"WV-01": "WAR-1"}`. |
 | `jiraExternalIdField` | `externalId` | Field name or `customfield_NNNNN` matched to the plan id. One exact hit is stored on scan and claim. |
+| `jiraMatchOnText` | `false` | `true`: a Jira summary that contains the plan summary's first 60 characters (`--chars`) anywhere is a match on its own, whatever the issue's External ID says (an External ID that is another tool's id, not the plan id). Text is compared normalized (case, punctuation, spaces). Two issues with the text are ambiguous and nothing is stored. The scan stores it as a hit. `/warp-jira-match --text-only` does the same for one run. |
 | `jiraWriteExternalId` | `false` | When true, `/warp-scan` and `/warp-jira-check` queue a write for every mapped ticket that is not already confirmed. The flag is the consent, so `--yes` is not required. A missing External ID field falls back to `jiraExternalIdFallback` (default `label`). |
 | `jiraExternalIdFieldName` | `External ID` | Name used if field creation is allowed. |
 | `jiraCreateExternalIdField` | `false` | Probe for a create-field tool when the field is missing. Site-wide admin change. Off by default. `--create-field --yes` is the one-shot consent. |

@@ -281,8 +281,13 @@ def _search(client, jql: str, notes: list[str], label: str):
         return None
 
 
-def resolve_ticket(tid: str, summary: str, project: Optional[str], configured: str, client, prefixes: Optional[list[str]] = None) -> dict:
-    """One ticket. Does not write. `client.search` raises FieldNotFound when Jira has no such field."""
+def resolve_ticket(tid: str, summary: str, project: Optional[str], configured: str, client, prefixes: Optional[list[str]] = None,
+                   text_only: bool = False) -> dict:
+    """One ticket. Does not write. `client.search` raises FieldNotFound when Jira has no such field.
+
+    `text_only` (jiraMatchOnText): a Jira summary that contains the plan summary's first 60 characters anywhere is
+    a hit on its own, whatever the issue's External ID says. Without it a summary match is only a proposal.
+    """
     prefixes = prefixes or []
     notes: list[str] = []
     clauses, missing = external_clauses(configured, client.fields() if hasattr(client, "fields") else [])
@@ -331,6 +336,14 @@ def resolve_ticket(tid: str, summary: str, project: Optional[str], configured: s
             import jira_match
 
             wanted = jira_match.normalize_summary(text)
+            if text_only:
+                keys = _unique_keys(issues, prefixes, lambda issue: jira_match.summary_contained(text, _summary_text(issue)))
+                if len(keys) == 1:
+                    return _result(tid, "hit", key=keys[0], source="summary", confidence="high", matches=keys,
+                                   notes=notes + ["text match (jiraMatchOnText)"])
+                if len(keys) > 1:
+                    return _result(tid, "ambiguous", source="summary", matches=keys, notes=notes)
+                return _result(tid, "miss", notes=notes)
             keys = _unique_keys(
                 issues,
                 prefixes,
