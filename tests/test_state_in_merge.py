@@ -1,4 +1,4 @@
-"""1.6.20: the merge commit carries the run state; no separate `Warp state` commit follows a merge."""
+"""1.6.21: the merge commit carries the run state; no separate `Warp state` commit follows a merge."""
 
 from __future__ import annotations
 
