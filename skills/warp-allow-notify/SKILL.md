@@ -22,7 +22,7 @@ Tool names come from `scripts/mcp_tools.py`. Jira tools are included. Extra pair
 
 Setting `mcpAllowlist` replaces the in-app MCP allowlist. Entries that exist only in Cursor Settings prompt again until they are in the file. The terminal allowlist and `autoRun` are left alone. Ask Every Time does not consult the file. A team admin Run Mode override ignores it.
 
-The default list is Slack (post and the `warp:status` reads), Teams, and Jira, on the configured name plus `user-<name>`, `project-<name>`, `plugin-<name>-<name>`, and `*<name>*:<tool>`. `--with-jira` changes nothing. `--with-git` adds GitHub `add_issue_comment` only. Warp does not name a Bitbucket comment tool; that belongs in `notifyAllow`. `--list` and `--check` write nothing. `--check` is the diagnostic when a prompt is still there.
+The default list is Slack (post and the `warp:status` reads), Teams, and Jira, on the configured name plus `user-<name>`, `project-<name>`, `plugin-<name>-<name>`, and `*<name>*:<tool>`. `--with-jira` changes nothing. `--with-git` adds GitHub `add_issue_comment`, `merge_pull_request`, and `create_pull_request` only. Warp does not name a Bitbucket comment tool; that belongs in `notifyAllow`. `--list` and `--check` write nothing. `--check` is the diagnostic when a prompt is still there.
 
 ## Run
 

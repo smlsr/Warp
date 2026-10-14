@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.18
+
+- Docs only: README, LIFECYCLE, COMMANDS, STATE, GUIDE, MERGE-POLICY, the warp, warp-init and warp-allow-notify skills, the start and resume commands, the Shuttle rule, and the `--with-git` help now cover everything from 1.6.12 through 1.6.17:
+  - Bugbot: its `neutral` check is a finding, the Shuttle trigger still waits for Bugbot's result, and late findings become follow-up tickets.
+  - Merges: the merge check before a merge, and a merge recorded only when the provider shows it.
+  - Fix Shuttles: the fix prompt's `FIX` lines, a fix that pushed nothing, and `git stash` forbidden.
+  - Liveness: worktree activity counts as a heartbeat.
+  - Listener: short generations, `cut-off`, `lost`, and the lease closed on parent exit.
+  - Passes: numbered, and launch lines nobody launched are printed again.
+  - The recorded pull request times and Spent, and the `CURSOR_API_KEY` rule.
+  - The new beam fields, config rows and output lines.
+- Docs: "A stale heartbeat does not start another listener" was untrue after 1.6.13 and is gone from 17 places. So is "the merge queue rebases and runs `checkCommand`", which no code did. `--with-git` is documented as allowing `merge_pull_request` and `create_pull_request` too.
+
 ## 1.6.17
 
 - Fix: the fix prompt had no findings. `checkout.py launch` built the same implement prompt for every step, so the first fix of WV-11-BB1 never saw the Bugbot finding it was sent to fix, and it re-recorded a pass on the same commit. The prompt now says `step: <step>`. A fix prompt lists each item under `FIX <id>` and says to add a test that fails without the fix, rebuild generated files, push a new commit, and never record a pass on the commit the findings were made on. Review and verify Shuttles get their instructions the same way.
