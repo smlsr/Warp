@@ -1639,14 +1639,47 @@ def listener_returned_stop(text: str) -> bool:
     return folded == "listen: stopped" or folded.startswith("listen: stopped ")
 
 
-def pipeline_unfinished(beam: dict) -> bool:
-    """True while any ticket is not merged, done, parked, or skipped."""
+def _late_findings(path: Path, now=None) -> list:
+    """pipeline.late_findings on the beam on disk, saved when it changed anything. Never raises."""
+    import pipeline
+
+    try:
+        data = _load(path)
+        if not isinstance(data, dict) or data.get("paused") or (data.get("runState") or "running") in {"paused", "stopped"}:
+            return []
+        before = json.dumps(data.get("tickets") or {}, sort_keys=True)
+        out = pipeline.late_findings(data, path, [], now=now)
+        if any(line.startswith("bugbot: late ") for line in out):
+            # A finished run has work again: its end-of-run teardown runs once more when the follow-ups settle.
+            import agents as agents_mod
+
+            doc = agents_mod.registry(data, path)
+            if doc.pop("finishedAt", None):
+                agents_mod.flush(data, path)
+                out.append("run: reopened for Bugbot follow-ups")
+        if json.dumps(data.get("tickets") or {}, sort_keys=True) != before:
+            _save(path, data)
+        return out
+    except Exception as exc:
+        return ["bugbot: late findings not checked (%s)" % exc]
+
+
+def pipeline_unfinished(beam: dict, now=None) -> bool:
+    """True while any ticket is not merged, done, parked, or skipped, or a merge still waits for Bugbot.
+
+    A ticket merged before Cursor Bugbot reported on it keeps the run open for pipeline.LATE_WINDOW_MINUTES,
+    so a finding that arrives a few minutes after the last merge still queues its follow-up in this run.
+    """
     if not isinstance(beam, dict):
         return False
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
     for ticket in tickets.values():
         if isinstance(ticket, dict) and ticket.get("status") not in SETTLED:
             return True
+    if beam.get("bugbotSeen"):
+        import pipeline
+
+        return any(pipeline.awaiting_late_bugbot(ticket, beam, now=now) for ticket in tickets.values() if isinstance(ticket, dict))
     return False
 
 
@@ -1685,7 +1718,13 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
 
     path = Path(beam_path)
     started = beam_mod.coerce_now(now)[1]
-    lines = supervise_listener(path, returned=returned, now=now)
+    late = []
+    if provider is None and path.is_file():
+        # Before anything decides the run is finished: a Bugbot finding on a merged pull request queues a
+        # follow-up ticket. Before 1.6.15 this ran after the early return below, so a run whose tickets
+        # were all merged never queued one, and /warp-resume had nothing to start.
+        late = _late_findings(path, now)
+    lines = late + supervise_listener(path, returned=returned, now=now)
     if lines and lines[-1] == "listener: poll":
         lines.extend(listener_prompt(path))
     if not path.is_file():
@@ -1740,8 +1779,6 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         lines.extend(pipeline.run_merges(data, path, lines))
         # Open the pull request for a Shuttle that pushed but could not (a 403 on its VM).
         lines.extend(pipeline.run_pr_opens(data, path, lines))
-        # A Bugbot finding that arrived after a merge becomes a follow-up fix ticket.
-        lines.extend(pipeline.late_findings(data, path, lines, now=now))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}

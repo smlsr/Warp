@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.15
+
+- Fix: late Bugbot findings were never queued on a run whose tickets were all merged. `supervise` returned early once nothing was left to merge, before the late-Bugbot check, so WV-11's, WV-12's and WV-16's findings had no follow-up and `/warp-resume` had nothing to start. The check now runs first in every live pass, before the run is judged finished. Follow-ups it queues reopen the run (`run: reopened for Bugbot follow-ups`, and the end-of-run teardown runs again when they settle), and the same pass starts their Shuttles.
+- A ticket merged before Cursor Bugbot has reported on it keeps the run open for up to 60 minutes after the merge, so a finding on the last merges still queues its follow-up in the same run instead of the next resume.
+
 ## 1.6.14
 
 - Fix: Warp read Cursor Bugbot's findings as a pass, in every trigger mode. Bugbot finishes its check `neutral` when it finds issues (`success` when it finds none), and Warp counted `neutral` as green. Bugbot's `neutral` is now a finding (`fail`), in the rollup and in the ticket folder's checks. The findings are read from Bugbot's review comments on the head commit (`path:line title (severity)`) and go to the fix step.

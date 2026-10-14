@@ -1766,6 +1766,30 @@ def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str 
 LATE_WINDOW_MINUTES = 60
 
 
+def _bugbot_passed_head(pr: dict) -> bool:
+    head = str(pr.get("headSha") or "")
+    return bool(head) and str(pr.get("bugbotSource") or "") == "provider" and pr.get("bugbot") == "pass" \
+        and str(pr.get("bugbotProviderSha") or "") == head
+
+
+def awaiting_late_bugbot(ticket: dict, data: dict, now=None) -> bool:
+    """Merged, Bugbot has not reported on it yet, and the merge is inside LATE_WINDOW_MINUTES."""
+    import beam as beam_mod
+
+    if ticket.get("status") != "merged":
+        return False
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if not pr.get("url") or pr.get("lateBugbot") or not orchestrator.bugbot_applies(ticket, data.get("config") or {}):
+        return False
+    if _bugbot_passed_head(pr):
+        return False  # Bugbot itself passed the merged head: nothing can arrive late
+    merged = beam_mod.parse_ts(pr.get("mergedAt"))
+    if merged is None:
+        return False
+    now_dt, _now_s = beam_mod.coerce_now(now)
+    return (now_dt - merged).total_seconds() / 60.0 < LATE_WINDOW_MINUTES
+
+
 def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> list:
     """Cursor Bugbot findings that arrived after a merge become a follow-up fix ticket.
 
@@ -1790,8 +1814,7 @@ def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> l
         pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
         if not pr.get("url") or pr.get("lateBugbot") or not orchestrator.bugbot_applies(ticket, cfg):
             continue
-        head = str(pr.get("headSha") or "")
-        if str(pr.get("bugbotSource") or "") == "provider" and pr.get("bugbot") == "pass" and head and pr.get("bugbotProviderSha") == head:
+        if _bugbot_passed_head(pr):
             pr["lateBugbot"] = "pass"
             continue
         try:
