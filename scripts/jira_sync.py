@@ -3297,6 +3297,9 @@ def _write_intent(ticket: dict, intent: str, jira_name: str, cfg: Optional[dict]
         if ticket.get("status") != "done":
             ticket["status"] = "merged"
         ticket["phase"] = "merged"
+        pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else ticket.setdefault("pr", {})
+        if not pr.get("mergedAt"):
+            pr["mergedAt"] = stamp
         ticket["needsReplacement"] = False
         ticket["agent"] = None
         jira["startedAt"] = jira.get("startedAt") or stamp

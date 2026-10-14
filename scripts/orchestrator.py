@@ -1208,6 +1208,10 @@ def apply_reported_merge(ticket: dict, outcome: str, sha: Optional[str] = None) 
         pr["mergeAttempt"] = outcome
         return False
     ticket["status"] = "merged"
+    if not pr.get("mergedAt"):
+        import beam as beam_mod
+
+        pr["mergedAt"] = beam_mod.utcnow()
     if sha:
         pr["sha"] = sha
     return True
@@ -1865,6 +1869,10 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
     import blocks
 
     lines.extend(blocks.check(path))
+    import heal
+
+    # A merge recorded with no time (every merge before 1.6.22) gets its merge commit's time.
+    lines.extend(heal.fill_merge_times(path))
     # Every transition this pass made is in the live beam; bring the board and status files up to it,
     # so whatever publishes next (a merge, warp:sync, a checkpoint) carries all of it.
     lines.extend(refresh_state_files(path))
@@ -2329,7 +2337,15 @@ def sync_state(path: Path, by: str = "") -> list:
         data = _load(path)
     except Exception:
         data = {}
-    out = refresh_state_files(path) or ["state: board and status refreshed"]
+    try:
+        import heal
+
+        # Timestamps the run never wrote (a merge time, a review time) come from the pull requests first.
+        out = heal.backfill_times(path) + heal.fill_merge_times(path)
+        data = _load(path)
+    except Exception as exc:
+        out = ["times: not filled (%s)" % exc]
+    out += refresh_state_files(path) or ["state: board and status refreshed"]
     published = publish_on_change(path, [], why="warp:sync" + (" from %s" % by if by else ""), requested=True)
     out.extend(published or ["state: not published (WARP_PUBLISH=0)"])
     ok = any(line.startswith("state: published") for line in out)

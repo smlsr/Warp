@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -182,6 +183,33 @@ def check_merged(beam_path: Path, fetch=None) -> list:
     return lines
 
 
+def _repo_root(beam_path: Path) -> Path:
+    """The checkout that holds this beam: `.warp/beam.json`, or a published `.warp/runs/<run>/beam.json`."""
+    import subprocess
+
+    folder = Path(beam_path).resolve().parent
+    top = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode == 0 and top.stdout.strip():
+        return Path(top.stdout.strip())
+    return folder.parent
+
+
+def _merge_commit_time(root: Path, pr: dict) -> str:
+    """The committer time of the ticket's merge commit (`pr.sha` or `pr.mergeSha`), as `YYYY-MM-DDTHH:MM:SSZ`."""
+    import subprocess
+    from datetime import datetime, timezone
+
+    for key in ("mergeSha", "sha", "stateInMerge"):
+        sha = str(pr.get(key) or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+            continue
+        shown = subprocess.run(["git", "-C", str(root), "show", "-s", "--format=%ct", sha], capture_output=True, text=True)
+        if shown.returncode == 0 and shown.stdout.strip().isdigit():
+            moment = datetime.fromtimestamp(int(shown.stdout.strip()), tz=timezone.utc)
+            return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ""
+
+
 def backfill_times(beam_path: Path, fetch=None) -> list:
     """Fill in the timestamps and Spent that runs before 1.6.17 never wrote. Each ticket is read once.
 
@@ -196,7 +224,7 @@ def backfill_times(beam_path: Path, fetch=None) -> list:
     if not beam_path.is_file():
         return []
     data = beam_mod.load_json(beam_path)
-    root = beam_path.resolve().parent.parent
+    root = _repo_root(beam_path)
     fetch = fetch or (lambda url: provider_mod.fetch_pr_state(root, url))
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
     filled = []
@@ -208,9 +236,15 @@ def backfill_times(beam_path: Path, fetch=None) -> list:
             if isinstance(parent, dict):
                 ticket["gate"] = pipeline._parent_block(data, parent)
         pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-        if not pr.get("url") or pr.get("timesRead"):
-            continue
         merged = ticket.get("status") == "merged"
+        if merged and not pr.get("mergedAt") and _merge_commit_time(root, pr):
+            # The merge commit's own time, from git: no provider call needed.
+            pr["mergedAt"] = _merge_commit_time(root, pr)
+            filled.append(tid)
+        # Read again once merged with no merge time: before 1.6.22 an open ticket's read set timesRead, and its
+        # merge (recorded with no time) was never read back.
+        if not pr.get("url") or (pr.get("timesRead") and not (merged and not pr.get("mergedAt"))):
+            continue
         wanted = [key for key in ("openedAt", "reviewedAt", "approvedAt") if not pr.get(key)]
         if merged and not pr.get("mergedAt"):
             wanted.append("mergedAt")
@@ -239,7 +273,32 @@ def backfill_times(beam_path: Path, fetch=None) -> list:
     pipeline.note_spent(data, beam_path)
     data["metrics"] = beam_mod.metrics(data)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    return ["times: filled in %s from the pull requests" % ", ".join(sorted(filled))] if filled else []
+    return ["times: filled in %s from the pull requests" % ", ".join(sorted(set(filled)))] if filled else []
+
+
+def fill_merge_times(beam_path: Path) -> list:
+    """Each merged ticket with no pr.mergedAt gets its merge commit's time from git. No provider call. Never raises."""
+    try:
+        beam_path = Path(beam_path)
+        data = beam_mod.load_json(beam_path)
+        root = _repo_root(beam_path)
+        filled = []
+        for tid, ticket in (data.get("tickets") or {}).items():
+            if not isinstance(ticket, dict) or ticket.get("status") != "merged":
+                continue
+            pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+            if pr is None or pr.get("mergedAt"):
+                continue
+            when = _merge_commit_time(root, pr)
+            if when:
+                pr["mergedAt"] = when
+                filled.append(tid)
+        if filled:
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return ["times: merged time filled in for %s from the merge commits" % ", ".join(sorted(filled))]
+        return []
+    except Exception as exc:
+        return ["times: merged times not filled (%s)" % exc]
 
 
 def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
@@ -291,9 +350,17 @@ def main() -> None:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--beam", default=".warp/beam.json")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--times", action="store_true",
+                   help="fill in missing pull request times (merged, opened, reviewed, approved) from the merge commits and "
+                        "the pull requests, then exit. Works on a published .warp/runs/<run>/beam.json too")
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
+    if args.times:
+        lines = backfill_times(Path(args.beam)) + fill_merge_times(Path(args.beam))
+        for line in lines or ["times: nothing missing"]:
+            print(line)
+        return
     lines = heal(Path(args.beam), dry_run=bool(args.dry_run))
     for line in lines or ["heal: nothing in alarm"]:
         print(line)

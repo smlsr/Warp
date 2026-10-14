@@ -1987,6 +1987,12 @@ def after_merges(data: dict, beam_path, lines: list, deleter=None) -> list:
     return out
 
 
+def stamp_merged(pr: dict, when: str) -> None:
+    """pr.mergedAt, unless it already has a time (the provider's own, from a snapshot, wins)."""
+    if isinstance(pr, dict) and not pr.get("mergedAt") and when:
+        pr["mergedAt"] = when
+
+
 def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str = "") -> None:
     """The pull request is merged on the provider (or locally in local mode). Record it and say so."""
     tid = ticket.get("id")
@@ -2000,7 +2006,9 @@ def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str 
     pr["mergeAnnounced"] = True
     import beam as beam_mod
 
-    pr.setdefault("mergedAt", beam_mod.utcnow())
+    # Not setdefault: a scanned ticket's pr starts with "mergedAt": null, and setdefault kept that null, so no
+    # merge before 1.6.22 recorded its time (the viewer's Merged column was empty).
+    stamp_merged(pr, beam_mod.utcnow())
     if sha:
         ticket.setdefault("pr", {})["sha"] = sha
     if how:
@@ -2087,6 +2095,9 @@ def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> l
             snap = fetch(pr["url"]) or {}
         except Exception:
             snap = {}
+        # The provider's merge time. Without it a merge recorded with no time looked like one from before 1.6.14,
+        # and its late Bugbot check was settled as `none` without looking.
+        stamp_merged(pr, str(snap.get("mergedAt") or ""))
         result = str(snap.get("bugbot") or "").strip().casefold()
         if result:
             data["bugbotSeen"] = True
