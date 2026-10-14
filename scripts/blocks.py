@@ -4,7 +4,9 @@
 A plan's work comes in gates: G0, G1, G2 and so on. A ticket belongs to one
 block, the gate it names, else the lowest gate that lists it as a member, else
 the highest block among the tickets it depends on. A ticket with none of those
-belongs to the first block.
+belongs to the first block. A Bugbot follow-up (`followUpOf`) belongs to its
+parent's block and never holds a block that was cleared: it fixes work already
+merged, so the plan does not wait on it. A range is not complete while one is open.
 
 With the default `gateOrder: strict`, a ticket in block N does not start until
 every block before it is cleared. A block is cleared when every ticket in it is
@@ -118,7 +120,11 @@ def assign(beam: dict) -> dict:
             return found[tid]
         row = tickets.get(tid) or {}
         explicit = str(row.get("gate") or "")
-        if explicit in rank:
+        parent = str(row.get("followUpOf") or "")
+        if parent and parent in tickets and parent not in seen:
+            # A Bugbot follow-up sits in its parent's block (it landed in G0 before 1.6.16).
+            found[tid] = block(parent, seen + (tid,))
+        elif explicit in rank:
             found[tid] = explicit
         elif tid in members:
             found[tid] = members[tid]
@@ -147,6 +153,10 @@ def states(beam: dict, mapping: Optional[dict] = None) -> list:
     for key in order:
         ids = sorted(tid for tid, k in mapping.items() if k == key)
         counts = {"merged": 0, "open": 0, "parked": 0, "queued": 0}
+        plan_ids = [tid for tid in ids if not (tickets.get(tid) or {}).get("followUpOf")]
+        follow_open = [tid for tid in ids if (tickets.get(tid) or {}).get("followUpOf")
+                       and (tickets.get(tid) or {}).get("status") not in TERMINAL and (tickets.get(tid) or {}).get("status") != "parked"]
+        plan_merged = sum(1 for tid in plan_ids if (tickets.get(tid) or {}).get("status") in TERMINAL)
         minutes = tokens = 0
         cost = 0.0
         for tid in ids:
@@ -176,7 +186,9 @@ def states(beam: dict, mapping: Optional[dict] = None) -> list:
                 "total": len(ids),
                 **counts,
                 "gate": gate.get("status") or "pending",
-                "cleared": counts["merged"] == len(ids) and not red,
+                # Follow-ups do not hold a cleared block; they are counted and listed on their own.
+                "cleared": plan_merged == len(plan_ids) and not red,
+                "followUps": follow_open,
                 "minutes": minutes,
                 "tokens": tokens,
                 "cost": round(cost, 2),
@@ -394,7 +406,7 @@ def range_done(beam: dict) -> bool:
     if lo is None:
         return False
     hi = len(info["order"]) - 1 if hi is None else hi
-    return all(info["rows"][i]["cleared"] for i in range(lo, hi + 1))
+    return all(info["rows"][i]["cleared"] and not info["rows"][i]["followUps"] for i in range(lo, hi + 1))
 
 
 def check(beam_path: Path) -> list:

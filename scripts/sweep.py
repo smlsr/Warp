@@ -100,7 +100,8 @@ def _ticket_action(data: dict, ticket: dict, snap: dict) -> str:
         return "fix"
     ci = str(pr.get("ci") or snap.get("ci") or "").strip().casefold()
     rollup = str(pr.get("rollup") or snap.get("rollup") or "").strip().casefold()
-    if ci in _RED_CI or rollup in _RED_CI:
+    if ci in _RED_CI or (rollup in _RED_CI and ci != "absent"):
+        # ci absent: the head has no CI checks, and a red rollup is Cursor Bugbot's finding. Rerunning CI does nothing.
         return "ci"
     if ticket.get("stalled") and (ci in _PENDING_CI or rollup in _PENDING_CI):
         return "ci"

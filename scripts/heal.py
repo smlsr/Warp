@@ -182,6 +182,66 @@ def check_merged(beam_path: Path, fetch=None) -> list:
     return lines
 
 
+def backfill_times(beam_path: Path, fetch=None) -> list:
+    """Fill in the timestamps and Spent that runs before 1.6.17 never wrote. Each ticket is read once.
+
+    openedAt, mergedAt, reviewedAt (Cursor Bugbot's finished check), and approvedAt (the last GitHub approval,
+    else the auto-merge rule at the review) come from the provider. Spent comes from the agent registry. A
+    Bugbot follow-up with no block gets its parent's.
+    """
+    import pipeline
+    import provider as provider_mod
+
+    beam_path = Path(beam_path)
+    if not beam_path.is_file():
+        return []
+    data = beam_mod.load_json(beam_path)
+    root = beam_path.resolve().parent.parent
+    fetch = fetch or (lambda url: provider_mod.fetch_pr_state(root, url))
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    filled = []
+    for tid, ticket in tickets.items():
+        if not isinstance(ticket, dict):
+            continue
+        if ticket.get("followUpOf") and not ticket.get("gate"):
+            parent = tickets.get(ticket["followUpOf"])
+            if isinstance(parent, dict):
+                ticket["gate"] = pipeline._parent_block(data, parent)
+        pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+        if not pr.get("url") or pr.get("timesRead"):
+            continue
+        merged = ticket.get("status") == "merged"
+        wanted = [key for key in ("openedAt", "reviewedAt", "approvedAt") if not pr.get(key)]
+        if merged and not pr.get("mergedAt"):
+            wanted.append("mergedAt")
+        if not wanted:
+            continue
+        try:
+            snap = fetch(pr["url"]) or {}
+        except Exception:
+            snap = {}
+        if not snap:
+            continue
+        pr["timesRead"] = True
+        for key in ("openedAt", "mergedAt"):
+            if snap.get(key) and not pr.get(key):
+                pr[key] = snap[key]
+        if snap.get("bugbotAt") and not pr.get("reviewedAt"):
+            pr["reviewedAt"] = snap["bugbotAt"]
+            pr["reviewedSha"] = pr.get("headSha")
+        if snap.get("approvedAt") and not pr.get("approvedAt"):
+            pr["approvedAt"] = snap["approvedAt"]
+            pr["approvedBy"] = snap.get("approvedBy") or "github review"
+        if merged and ticket.get("autoMerge") and not pr.get("approvedAt"):
+            pr["approvedAt"] = pr.get("reviewedAt") or pr.get("mergedAt")
+            pr.setdefault("approvedBy", "auto-merge")
+        filled.append(tid)
+    pipeline.note_spent(data, beam_path)
+    data["metrics"] = beam_mod.metrics(data)
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    return ["times: filled in %s from the pull requests" % ", ".join(sorted(filled))] if filled else []
+
+
 def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
     beam_path = Path(beam_path)
     if not beam_path.is_file():

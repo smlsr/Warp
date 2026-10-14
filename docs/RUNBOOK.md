@@ -543,4 +543,16 @@ Since 1.6.14 a generation hands off before Cursor's cutoff. It rotates after `li
 
 Cursor Bugbot finishes its check `neutral` when it finds issues and `success` when it finds none. Before 1.6.14 Warp counted `neutral` as green, and with `bugbotTrigger: shuttle` a ticket merged on its Shuttle's review alone. Now a `neutral` Bugbot check is a finding. Warp reads the finding text from Bugbot's review comments on the head commit, and the ticket goes to a fix step. Under `bugbotTrigger: shuttle`, where Bugbot runs on the repo, the merge waits for Bugbot's own result after the Shuttle's review passes (`bugbot: wait <id> (the Shuttle's review passed; ...)`).
 
-A finding that arrives after a merge, for a pull request merged before 1.6.14 or one merged by hand, queues a follow-up ticket: `bugbot: late <id> <url> <n> finding(s) after the merge. Follow-up ticket <id>-BB<n> queued.` It has each finding as an acceptance criterion and the original's locks plus the files the findings name. It runs like any ticket and asks for no Jira move. Do not fix those findings by hand on main. The check runs at the start of every pass, also when every ticket is merged: run `/warp-resume` on a finished run, and the first pass queues the follow-ups, reopens the run, and starts their Shuttles. A merge Bugbot has not reported on yet keeps the run open for up to an hour after it.
+A finding that arrives after a merge, for a pull request merged before 1.6.14 or one merged by hand, queues a follow-up ticket: `bugbot: late <id> <url> <n> finding(s) after the merge. Follow-up ticket <id>-BB<n> queued.` It has each finding as an acceptance criterion and the original's locks plus the files the findings name. It runs like any ticket and asks for no Jira move. Do not fix those findings by hand on main. The check runs at the start of every pass, also when every ticket is merged: run `/warp-resume` on a finished run, and the first pass queues the follow-ups, reopens the run, and starts their Shuttles. A merge Bugbot has not reported on yet keeps the run open for up to an hour after it. A follow-up sits in its parent's block. It does not reopen that block or hold a later one under `gateOrder: strict`, but a `/warp-start` range is not complete while one is open.
+
+## The table shows `—` for a time or for Spent
+
+Warp records each pull request's times as the run reaches them:
+- **Opened:** `openedAt`, from GitHub's `createdAt`.
+- **Reviewed:** `reviewedAt`. This is Cursor Bugbot's finished check on the head, or the moment the head passed its review and checks.
+- **Approved:** `approvedAt`. This is the last GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`).
+- **Merged:** `mergedAt`, from GitHub.
+
+A pass also stamps `claimedAt` when it starts a ticket. Spent is the sum of the ticket's Shuttles' time out, from `.warp/agents.json`.
+
+Runs before 1.6.17 recorded almost none of these. `/warp-start` or `/warp-resume` fills them in from each pull request once and prints `times: filled in <ids> from the pull requests`. A `—` that remains is a step that has not happened. For example, Approved stays `—` for a ticket that needs a person and has not been approved.

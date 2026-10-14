@@ -53,6 +53,8 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle.pop("startedAt", None)
     # Marked, not launched yet: the previous Shuttle's heartbeat does not make this one busy.
     shuttle["launching"] = True
+    shuttle.pop("launchLines", None)
+    shuttle["headAtMark"] = str((ticket.get("pr") or {}).get("headSha") or "")
     if isinstance(ticket.get("pr"), dict):
         # A return belongs to one Shuttle. The next one starts out.
         ticket["pr"].pop("shuttleReturned", None)
@@ -265,6 +267,13 @@ def red_reasons(ticket: dict, config: Optional[dict]) -> list:
     reasons = []
     if bugbot_state(ticket) in _FAIL_BUG:
         reasons.append("bugbot fail")
+    head = str(pr.get("headSha") or "")
+    if head and str(pr.get("shuttleReviewSha") or "") == head and str(pr.get("shuttleReview") or "") == "fail" \
+            and bugbot_state(ticket) not in _FAIL_BUG:
+        # The Shuttle's own review failed this commit. Cursor Bugbot passing it later does not undo that:
+        # before 1.6.17 WV-15-BB1 merged with the red test its Shuttle had named.
+        reasons.append("shuttle review fail")
+        reasons.extend("review: %s" % item for item in (pr.get("shuttleFindings") or []))
     for item in findings_of(ticket):
         reasons.append("bugbot: %s" % item)
     ci = orchestrator._for_head(pr, "ci", "ciSha")
@@ -416,6 +425,10 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     if snap.get("pr"):
         pr["url"] = snap["pr"]
         pr["opened"] = True
+    import bugbot as bugbot_mod
+
+    # A review a Shuttle recorded for a commit this pass now sees as the head.
+    bugbot_mod.apply_held_review(ticket)
     head_now = new_sha or str(pr.get("headSha") or "")
     by_hand = bool(head_now) and str(pr.get("bugbotRecordedSha") or "") == head_now
     by_shuttle = by_hand and str(pr.get("bugbotSource") or "") == "shuttle"
@@ -925,6 +938,15 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     if lines and (lines[0].startswith("spawn: cap") or lines[0].startswith("spawn: closed")):
         shuttle = _shuttle(ticket)
         shuttle["pending"] = False
+    elif lines and (lines[0].startswith("start ") or lines[0].startswith("resume ")):
+        # Printed again on each pass until checkout.py launch records the start (see _advance_one).
+        _shuttle(ticket)["launchLines"] = [line for line in lines if not line.startswith("herald:")]
+        note_claim(ticket)
+    if detail:
+        # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
+        _shuttle(ticket)["detail"] = detail
+    else:
+        _shuttle(ticket).pop("detail", None)
     return lines
 
 
@@ -1114,6 +1136,98 @@ def start_verify(data: dict, ticket: dict, lines: list) -> None:
     lines.append("acceptance: verify-shuttle %s %d/%d missing %s" % (tid, count, acceptance.MAX_VERIFY_SHUTTLES, ", ".join(acceptance.missing(ticket))))
 
 
+def _fix_left_finding(ticket: dict, head_at_mark: str) -> bool:
+    """The fix started on this head, the head did not move, and Cursor Bugbot failed this head."""
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    head = str(pr.get("headSha") or "")
+    if not head or not head_at_mark or head != head_at_mark:
+        return False
+    return str(pr.get("bugbotSource") or "") == "provider" and str(pr.get("bugbotProviderSha") or "") == head \
+        and str(pr.get("bugbot") or "").casefold() == "fail"
+
+
+def bugbot_runs_here(data: dict) -> bool:
+    """Cursor Bugbot has reported on a pull request in this run: on any ticket, open or merged.
+
+    Before 1.6.17 only data["bugbotSeen"] counted, and a resumed run set it only once an open ticket's snapshot
+    carried a Bugbot check, so #20 (WV-12-BB1) merged on its Shuttle's review while #21 and #22 waited.
+    """
+    if data.get("bugbotSeen"):
+        return True
+    for ticket in (data.get("tickets") or {}).values():
+        pr = ticket.get("pr") if isinstance(ticket, dict) and isinstance(ticket.get("pr"), dict) else {}
+        if str(pr.get("bugbotSource") or "") == "provider" or pr.get("bugbotProviderSha") or pr.get("lateBugbot") in {"pass", "followup"}:
+            data["bugbotSeen"] = True
+            return True
+    return False
+
+
+def note_times(ticket: dict, snap: Optional[dict], now=None) -> None:
+    """The pull request's timestamps the viewer and the report read: openedAt, reviewedAt, approvedAt, mergedAt.
+
+    The provider's own times win when the snapshot has them. Before 1.6.17 a supervise pass set none of them
+    except mergedAt, so the table showed `—` for Reviewed, Approved, and (before 1.6.14) Merged.
+    """
+    import beam as beam_mod
+
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+    if pr is None:
+        return
+    snap = snap if isinstance(snap, dict) else {}
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    if snap.get("openedAt"):
+        pr["openedAt"] = snap["openedAt"]
+    elif pr.get("url") and not pr.get("openedAt"):
+        pr["openedAt"] = now_s
+    if snap.get("mergedAt"):
+        pr["mergedAt"] = snap["mergedAt"]
+    if snap.get("approvedAt") and str(snap["approvedAt"]) > str(pr.get("approvedAt") or ""):
+        pr["approvedAt"] = snap["approvedAt"]
+        pr["approvedBy"] = snap.get("approvedBy") or pr.get("approvedBy") or "github review"
+    head = str(pr.get("headSha") or "")
+    if head and bugbot_state(ticket) == "pass" and str(pr.get("bugbotSource") or "") == "provider" and snap.get("bugbotAt") \
+            and str(pr.get("reviewedSha") or "") != head:
+        pr["reviewedAt"] = snap["bugbotAt"]
+        pr["reviewedSha"] = head
+
+
+def note_claim(ticket: dict, now=None) -> None:
+    import beam as beam_mod
+
+    if not ticket.get("claimedAt"):
+        ticket["claimedAt"] = beam_mod.coerce_now(now)[1]
+
+
+def note_spent(data: dict, beam_path=None, now=None) -> None:
+    """Spent minutes per ticket: the sum of its Shuttles' time out, from the agent registry.
+
+    A Shuttle rarely reports its own minutes (`beam.py spend`), so Spent was empty. A larger reported total is kept.
+    """
+    import agents
+    import beam as beam_mod
+
+    try:
+        doc = agents.registry(data, beam_path)
+    except Exception:
+        return
+    now_dt, _now_s = beam_mod.coerce_now(now)
+    totals: dict = {}
+    for row in agents._rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "shuttle" or not row.get("ticket"):
+            continue
+        start = beam_mod.parse_ts(row.get("started"))
+        if start is None:
+            continue
+        end = beam_mod.parse_ts(row.get("ended")) or (now_dt if row.get("state") in {"starting", "running"} else None)
+        if end is None or end < start:
+            continue
+        totals[str(row["ticket"])] = totals.get(str(row["ticket"]), 0.0) + (end - start).total_seconds() / 60.0
+    for tid, minutes in totals.items():
+        ticket = (data.get("tickets") or {}).get(tid)
+        if isinstance(ticket, dict) and int(round(minutes)) > int(ticket.get("minutes") or 0):
+            ticket["minutes"] = int(round(minutes))
+
+
 def _hold_for_bugbot(data: dict, ticket: dict, snap: Optional[dict]) -> None:
     """A Shuttle's review pass does not merge on its own where Cursor Bugbot runs.
 
@@ -1125,7 +1239,7 @@ def _hold_for_bugbot(data: dict, ticket: dict, snap: Optional[dict]) -> None:
     if isinstance(snap, dict) and str(snap.get("bugbot") or "").strip():
         data["bugbotSeen"] = True
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-    if not data.get("bugbotSeen") or str(pr.get("bugbotSource") or "") != "shuttle":
+    if not bugbot_runs_here(data) or str(pr.get("bugbotSource") or "") != "shuttle":
         return
     if str(pr.get("bugbot") or "").casefold() != "pass" or not bugbot_state(ticket):
         return
@@ -1287,6 +1401,7 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
         agents.note_returned(data, ticket, beam_path=_beam_path(data))
     else:
         agents.note_closed(data, ticket, "dead", beam_path=_beam_path(data))
+    shuttle_head = str(_shuttle(ticket).get("headAtMark") or "")
     clear_shuttle(ticket)
     if failed:
         orchestrator.note_subagent_failure(ticket)
@@ -1295,6 +1410,15 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
     pr = ticket.setdefault("pr", {})
     if pr.get("url"):
         orchestrator.note_pr_opened(ticket, pr["url"])
+    if phase == "fixing" and _fix_left_finding(ticket, shuttle_head):
+        # The fix Shuttle came back without a new commit and Cursor Bugbot's finding on this head still
+        # stands. Asking Bugbot again changes nothing (it does not rerun on the same commit): fix again.
+        found = findings_of(ticket) or ["Cursor Bugbot finding on %s" % str(pr.get("headSha") or "")[:12]]
+        lines.append("fix: %s came back with no new commit; Cursor Bugbot's finding on %s still stands: %s"
+                     % (ticket.get("id"), str(pr.get("headSha") or "")[:12], "; ".join(found)))
+        lines.append("herald: %s fix pushed nothing; the Bugbot finding is still open. Fixing again." % ticket.get("id"))
+        begin_fix(data, ticket, ["no new commit after the last fix"] + ["bugbot: %s" % item for item in found], lines)
+        return "stop"
     if phase == "fixing":
         pr["reviewCycle"] = int(pr.get("reviewCycle") or 0) + 1
         pr["bugbot"] = ""
@@ -1431,7 +1555,20 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
 
 
 def _hold_or_queue(ticket: dict, lines: list) -> None:
+    import beam as beam_mod
+
+    pr = ticket.setdefault("pr", {})
+    head = str(pr.get("headSha") or "")
+    if not pr.get("reviewedAt") or (head and str(pr.get("reviewedSha") or "") != head):
+        # Reviewed: the head passed its review (Bugbot, the Shuttle's, or one recorded by hand) and its checks.
+        pr["reviewedAt"] = beam_mod.utcnow()
+        pr["reviewedSha"] = head
     if ticket.get("autoMerge") or orchestrator._proceeded(ticket):
+        if ticket.get("autoMerge") and not pr.get("approvedAt"):
+            # Approved by the auto-merge rule when it is ready to merge. A person's approval (warp:proceed, a
+            # GitHub review) is kept when there is one.
+            pr["approvedAt"] = beam_mod.utcnow()
+            pr.setdefault("approvedBy", "auto-merge")
         ticket["status"] = "review"
         ticket["phase"] = "ready"
         return
@@ -1453,6 +1590,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
             ticket["phase"] = "merged"
         return
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
+    note_times(ticket, snap, now=now)
     if confirm_merge(data, ticket, snap, lines):
         return
     _hold_for_bugbot(data, ticket, snap)
@@ -1465,10 +1603,16 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     _ensure_phase(ticket, data)
     if not ticket.get("phase"):
         return
+    shuttle_now = _shuttle(ticket)
     if pending(ticket) and _returned(ticket, snap):
         # A Shuttle that came back is not a dead one: consume its return first.
         if _on_return(data, ticket, snap, lines) == "stop":
             return
+    elif pending(ticket) and shuttle_now.get("launching") and not shuttle_now.get("startedAt") and shuttle_now.get("launchLines"):
+        # Marked and printed, never launched: say it again instead of holding a Shuttle that is not out.
+        lines.append("shuttle: not launched %s. Launch it now with checkout.py launch and the line below." % ticket.get("id"))
+        lines.extend(shuttle_now["launchLines"])
+        return
     elif pending(ticket) and not orchestrator.shuttle_is_live(ticket, data, now=now):
         _release_slot(ticket)
     elif pending(ticket):
@@ -1658,6 +1802,8 @@ def confirm_merge(data: dict, ticket: dict, snap: Optional[dict], lines: list) -
         return False
     if ticket.get("status") in orchestrator.SETTLED:
         return False
+    if snap.get("mergedAt"):
+        ticket.setdefault("pr", {})["mergedAt"] = snap["mergedAt"]
     finish_merge(data, ticket, lines, sha=str(snap.get("mergeSha") or ""), how="merged on the provider (confirmed)")
     return True
 
@@ -1665,7 +1811,7 @@ def confirm_merge(data: dict, ticket: dict, snap: Optional[dict], lines: list) -
 _MERGE_LINE = re.compile(r"^merge: request (\S+) (\S*)")
 
 
-def run_merges(data: dict, beam_path, lines: list, merger=None) -> list:
+def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) -> list:
     """Merge each `merge: request` this pass printed, through the provider, and confirm it.
 
     `merger(root, number, cfg)` returns (outcome, detail) like provider.merge_connected. A merge
@@ -1696,6 +1842,18 @@ def run_merges(data: dict, beam_path, lines: list, merger=None) -> list:
         tid, url = match.group(1), match.group(2)
         ticket = tickets[tid]
         scripts = orchestrator.scripts_dir()
+        verdict, check_detail = (checker or provider_mod.pre_merge_check)(root, ticket, cfg)
+        if verdict == "red":
+            # The tests fail on this head: not merged. The fix Shuttle gets the failing output.
+            first = check_detail.splitlines()[0] if check_detail else "the merge check"
+            out.append("merge: check red %s (%s). Not merged; back to fix." % (tid, first))
+            ticket["status"] = "fix"
+            begin_fix(data, ticket, ["merge check red: %s" % check_detail.replace("\n", " / ")[-1500:]], out)
+            continue
+        if verdict == "green":
+            out.append("merge: check green %s (%s)" % (tid, check_detail.splitlines()[0] if check_detail else ""))
+        else:
+            out.append("merge: check skipped %s: %s" % (tid, check_detail))
         if mode == "local" or not url:
             out.append("merge: MUST DO %s: local mode, no pull request to merge. Run python3 %s/provider.py merge-local "
                        "--root %s --beam %s --id %s --branch %s" % (tid, scripts, root, Path(beam_path).resolve(), tid, ticket.get("branch") or ""))
@@ -1822,6 +1980,8 @@ def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> l
         except Exception:
             snap = {}
         result = str(snap.get("bugbot") or "").strip().casefold()
+        if result:
+            data["bugbotSeen"] = True
         if result == "pass":
             pr["lateBugbot"] = "pass"
         elif result == "fail":
@@ -1843,6 +2003,35 @@ def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> l
     return out
 
 
+def _module_root(data: dict, ticket: dict) -> str:
+    """The deepest folder that holds every lock of the tickets in this ticket's module, as `dir/`. Empty when none."""
+    module = ticket.get("module")
+    paths = []
+    for other in (data.get("tickets") or {}).values():
+        if isinstance(other, dict) and other.get("module") == module and not other.get("followUpOf"):
+            paths.extend(str(lock) for lock in other.get("locks") or [] if str(lock).strip())
+    if not paths:
+        paths = [str(lock) for lock in ticket.get("locks") or []]
+    parts = [path.strip("/").split("/") for path in paths]
+    # A file lock's own name is not a folder.
+    folders = [p[:-1] if not paths[i].endswith("/") else p for i, p in enumerate(parts)]
+    common = []
+    for segment in zip(*folders):
+        if len(set(segment)) != 1:
+            break
+        common.append(segment[0])
+    return ("/".join(common) + "/") if common else ""
+
+
+def _parent_block(data: dict, ticket: dict):
+    try:
+        import blocks
+
+        return blocks.assign(data).get(str(ticket.get("id") or "")) or ticket.get("gate") or None
+    except Exception:
+        return ticket.get("gate") or None
+
+
 def _follow_up(data: dict, ticket: dict, findings: list, now_s: str) -> str:
     """Queue a fix ticket for findings on a merged pull request. Returns its id."""
     tickets = data.setdefault("tickets", {})
@@ -1852,6 +2041,11 @@ def _follow_up(data: dict, ticket: dict, findings: list, now_s: str) -> str:
         n += 1
     new_id = "%s-BB%d" % (tid, n)
     locks = list(ticket.get("locks") or [])
+    root_lock = _module_root(data, ticket)
+    if root_lock and root_lock not in locks:
+        # The fix may need a regression test or a rebuilt generated file (viewer.html) outside the file the
+        # finding names. Before 1.6.17 the follow-up could touch only that file, and main went red.
+        locks.append(root_lock)
     for finding in findings:
         path = finding.split(" ", 1)[0].split(":", 1)[0]
         if "/" in path and path not in locks and not any(path.startswith(lock.rstrip("/") + "/") for lock in locks if lock.endswith("/")):
@@ -1870,7 +2064,8 @@ def _follow_up(data: dict, ticket: dict, findings: list, now_s: str) -> str:
         "lane": ticket.get("lane"),
         "locks": locks,
         "deps": [],
-        "gate": None,
+        # The parent's block, so the board, the status export and the viewer show it there (it showed G0).
+        "gate": _parent_block(data, ticket),
         "autoMerge": bool(ticket.get("autoMerge", True)),
         "acs": acs,
         "plan": {"body": "Bugbot reviewed %s after it merged and found:\n%s\nFix each on a new branch from the base branch. "
@@ -1924,6 +2119,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
             _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
         dispatch_fix_workers(data, lines)
         dispatch_replacements(data, lines)
+        note_spent(data, beam_path, now=now)
         if deferred and beam_path is not None:
             _run_repairs(data, beam_path, lines, now)
         elif deferred:

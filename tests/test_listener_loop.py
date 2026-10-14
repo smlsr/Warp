@@ -430,7 +430,7 @@ class ParentWaitTests(unittest.TestCase):
 
     def test_parent_exit_waits_then_stays(self):
         lines = orchestrator.parent_exit(self.beam_path, wait=5, sleep=self.clock.sleep, clock=self.clock.time)
-        self.assertEqual(lines, ["pass: timeout", "parent: stay"])
+        self.assertEqual(lines, ["pass: timeout", "run: next is pass %d" % (int((self.beam().get("pass") or {}).get("count") or 0) + 1), "parent: stay"])
 
     def test_parent_exit_without_wait_does_not_sleep(self):
         lines = orchestrator.parent_exit(self.beam_path, sleep=self.clock.sleep, clock=self.clock.time)

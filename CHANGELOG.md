@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.6.17
+
+- Fix: the fix prompt had no findings. `checkout.py launch` built the same implement prompt for every step, so the first fix of WV-11-BB1 never saw the Bugbot finding it was sent to fix, and it re-recorded a pass on the same commit. The prompt now says `step: <step>`. A fix prompt lists each item under `FIX <id>` and says to add a test that fails without the fix, rebuild generated files, push a new commit, and never record a pass on the commit the findings were made on. Review and verify Shuttles get their instructions the same way.
+- Fix: a fix that pushed nothing was re-reviewed instead of fixed. When a fix Shuttle comes back without a new commit and Cursor Bugbot's finding on that commit still stands, the pass prints `fix: <id> came back with no new commit; Cursor Bugbot's finding on <sha> still stands: ...`, counts the round, and fixes again. It does not ask Bugbot again or rerun CI. A Shuttle's `review-pass` on a commit Bugbot failed is kept, but the finding stands.
+- Fix: a Shuttle's `review-fail` was undone by a Bugbot pass, and with no CI WV-15-BB1 merged the red test its Shuttle had named. A Shuttle's review fail on the head now stays a fix reason until a new commit.
+- New: tests run before a merge. `mergeCheck: auto` runs `checkCommand`, or the test script of each package that holds the ticket's locks (`npm test`, after `npm ci` when there is a lockfile), or `make ci`, on the pull request's head in a throwaway worktree. A red result prints `merge: check red <id> (...). Not merged; back to fix.`, and the fix Shuttle gets the output. `mergeCheckMinutes` (10) caps it, and `mergeCheck: off` turns it off.
+- Fix: the merge gate waited for Cursor Bugbot on #21 and #22 but not on #20. Whether Bugbot runs here was known only from an open ticket's snapshot, so a resumed run did not know yet. Any Bugbot result in the run counts now, on open or merged tickets and from the late check.
+- Fix: a red rollup caused only by Bugbot's finding started `ci: rerun` on a repo with no CI. When there are no CI checks on the head, that red is Bugbot's and goes to fix.
+- Fix: a `start` or `resume` line the parent did not launch was held as `shuttle: hold` until the heartbeat went stale. It is printed again under `shuttle: not launched <id>` until `checkout.py launch` records it.
+- Fix: a review a Shuttle recorded for the commit it had just pushed was dropped (`review … ignored: it reviewed 7c69665, the head is c6ec784`), and the ticket then waited for a review-only Shuttle. It is now kept and applied when the pull request shows that commit.
+- Fix: follow-up locks were too narrow. A follow-up could touch only the file a finding named, so it could not add a regression test or rebuild `viewer.html`, and main went red. A follow-up now also locks its module's folder, so follow-ups in one module run one after another.
+- Fix: follow-ups showed in block G0 on the board, the status export and the viewer, which read the ticket's own `gate`. A follow-up's `gate` is now its parent's block (1.6.16 fixed the block order, not the field).
+- Shuttles never run `git stash`. Every worktree shares one stash list, and two Shuttles' stash commands mixed each other's edits. It is forbidden in every Shuttle prompt and in the Shuttle docs.
+- Fix: the run's table showed `—` for Reviewed, Approved, Merged and Spent. A supervise pass set none of the pull request's timestamps except `mergedAt` (new in 1.6.14), and Spent waited for Shuttles to report minutes, which they rarely do. Now:
+  - `openedAt` and `mergedAt` come from the pull request itself. `gh pr view` also reads `createdAt`, `mergedAt` and `latestReviews`.
+  - `reviewedAt` is when Cursor Bugbot's check finished on the head, or when the head passed its review and checks.
+  - `approvedAt` is the last GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`).
+  - `claimedAt` is stamped when a pass starts a ticket.
+  - Spent (`minutes`) is the sum of the ticket's Shuttles' time out, from the agent registry. A larger reported total is kept.
+  - `/warp-start` and `/warp-resume` fill all of these in for tickets from earlier runs, reading each pull request once (`times: filled in …`), and give old follow-ups their parent's block.
+- Every `supervise` output starts with `run: pass <n> at <time>Z`, and `parent-exit --wait` ends with `run: next is pass <n>`, so a lost or overwritten output shows as a gap.
+- New: a run that starts cloud agents needs `CURSOR_API_KEY`. That means a Cursor cloud session, `subagentVm`, or cloud agents already in the registry. Without the key Warp cannot cancel or archive them; the cleanup only said "archive in the Cursor UI". `/warp-init` now warns, and `/warp-start` and `/warp-resume` refuse until the key is set. `requireCursorApiKey: false` allows it anyway.
+
+## 1.6.16
+
+- Fix: Bugbot follow-ups landed in block G0 and reopened it. A follow-up has no gate of its own, and a ticket with no gate, gate membership, or dependency belongs to the first block. Under `gateOrder: strict` that could hold every later block's queued tickets behind the fix. A follow-up (`followUpOf`) now belongs to its parent's block: WV-11-BB1, WV-12-BB1 and WV-16-BB1 are in G2. It never reopens a cleared block or holds a later one, because it fixes work that is already merged; `blocks.states` lists it under `followUps`. A `/warp-start` range is not complete while a follow-up in it is open.
+
 ## 1.6.15
 
 - Fix: late Bugbot findings were never queued on a run whose tickets were all merged. `supervise` returned early once nothing was left to merge, before the late-Bugbot check, so WV-11's, WV-12's and WV-16's findings had no follow-up and `/warp-resume` had nothing to start. The check now runs first in every live pass, before the run is judged finished. Follow-ups it queues reopen the run (`run: reopened for Bugbot follow-ups`, and the end-of-run teardown runs again when they settle), and the same pass starts their Shuttles.

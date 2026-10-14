@@ -941,6 +941,13 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     if blocked:
         print(blocked)
         return 2
+    import agents
+    import herald_fmt
+
+    missing = agents.cloud_key_missing(herald_fmt.read_config(root), beam_path=beam_path)
+    if missing:
+        print("refuse: %s" % missing)
+        return 2
     import blocks
 
     wait_text = runs.read_key(runs.config_path(root).read_text() if runs.config_path(root).is_file() else "", "startAfter") or ""
@@ -1089,6 +1096,13 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
             heal_lines.extend(heal.heal(beam_path))
         except Exception as e:
             heal_lines.append("heal: skipped (%s)" % e)
+        try:
+            import heal
+
+            # Opened, reviewed, approved, merged, and Spent for tickets from runs before 1.6.17.
+            heal_lines.extend(heal.backfill_times(beam_path))
+        except Exception as e:
+            heal_lines.append("times: not filled in (%s)" % e)
     if state in {"paused", "stopped"}:
         import session_note
 

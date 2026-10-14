@@ -58,7 +58,11 @@ class FinishedRunTest(Repo):
         for tid, number in PRS.items():
             self.assertIn("bugbot: late %s https://github.com/smlsr/WarpDemo/pull/%d 1 finding(s) after the merge. "
                           "Follow-up ticket %s-BB1 queued." % (tid, number, tid), lines)
-            self.assertTrue(any(line.startswith("start %s-BB1 " % tid) for line in lines), lines)
+        # Each follow-up locks its module's folder (it may add a test or rebuild a generated file), so follow-ups
+        # in one module run one after another: the first starts now, the others when it merges.
+        started = [line for line in lines if line.startswith("start ") and "-BB1 " in line]
+        self.assertEqual(len(started), 1, lines)
+        self.assertIn("app/src/", self.load()["tickets"]["WV-11-BB1"]["locks"])
         self.assertIn("run: reopened for Bugbot follow-ups", lines)
         self.assertNotIn("finishedAt", json.loads((self.warp / "agents.json").read_text()))
         tickets = self.load()["tickets"]

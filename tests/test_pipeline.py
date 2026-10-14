@@ -219,6 +219,15 @@ class AlarmRecoveryTests(unittest.TestCase):
         self.assertIn("step=restart", text(lines))
         self.assertIn("herald: W-1 worker died. A new Shuttle started.", text(lines))
         self.assertEqual(data["tickets"]["W-1"]["status"], "recovering")
+        first = [line for line in lines if line.startswith("start W-1 ")]
+        # Not launched yet: the same line again (same agent, no second spawn), not a silent hold.
+        again = pipeline.advance(data, now=NOW)
+        self.assertIn("shuttle: not launched W-1. Launch it now with checkout.py launch and the line below.", again)
+        self.assertEqual([line for line in again if line.startswith("start W-1 ")], first)
+        # Once checkout.py launch records the start, the next pass holds it.
+        import checkout
+
+        checkout._note_live(data, data["tickets"]["W-1"])
         held = pipeline.advance(data, now=NOW)
         self.assertIn("shuttle: hold W-1", text(held))
         self.assertEqual(sum(1 for line in held if line.startswith("start ") and "step=restart" in line), 0)

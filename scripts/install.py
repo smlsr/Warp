@@ -398,6 +398,15 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
         steps += provider.init_steps(root, dry)
     except Exception as e:  # provider detection must never fail init
         steps.append(("warn", f"could not check the git provider: {e}"))
+    try:
+        import agents
+        import herald_fmt
+
+        missing = agents.cloud_key_missing(herald_fmt.read_config(root), beam_path=root / ".warp" / "beam.json")
+        if missing:
+            steps.append(("warn", missing + " /warp-start refuses until it is set."))
+    except Exception as e:
+        steps.append(("warn", f"could not check CURSOR_API_KEY: {e}"))
 
     try:
         import jira_project
