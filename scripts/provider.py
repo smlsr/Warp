@@ -812,6 +812,105 @@ def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tupl
     return "merged", sha or "merged"
 
 
+def _package_dirs(root: Path, paths: list) -> list:
+    """Folders with a package.json test script that hold, or sit above, one of these repo paths."""
+    found = []
+    for package in sorted(Path(root).rglob("package.json")):
+        if "node_modules" in package.parts or ".warp" in package.parts:
+            continue
+        try:
+            doc = json.loads(package.read_text())
+        except (OSError, ValueError):
+            continue
+        script = str(((doc.get("scripts") or {}) if isinstance(doc, dict) else {}).get("test") or "")
+        if not script or "no test specified" in script:
+            continue
+        rel = package.parent.relative_to(root).as_posix()
+        rel = "" if rel == "." else rel
+        for path in paths:
+            path = str(path).strip("/")
+            if not rel or path.startswith(rel + "/") or path == rel or rel.startswith(path + "/") or rel == path:
+                if rel not in found:
+                    found.append(rel)
+                break
+    return found
+
+
+def merge_check_command(root: Path, ticket: dict, cfg: Optional[dict]) -> str:
+    """The command run on a pull request's head before Warp merges it. Empty when there is none.
+
+    `checkCommand` when it is set. Otherwise (`mergeCheck: auto`, the default) the test script of each package
+    that holds the ticket's locks (`npm test`, after `npm ci` when there is a lockfile), or `make ci` from a root
+    Makefile with a `ci:` target. `mergeCheck: off` turns it off.
+    """
+    cfg = cfg or {}
+    if str(cfg.get("mergeCheck") or "auto").strip().casefold() in {"off", "false", "no", "0"}:
+        return ""
+    import orchestrator
+
+    explicit = orchestrator.check_command(cfg)
+    if explicit:
+        return explicit
+    root = Path(root)
+    commands = []
+    for rel in _package_dirs(root, list(ticket.get("locks") or [])):
+        where = rel or "."
+        install = "npm ci --silent" if (root / where / "package-lock.json").is_file() else ""
+        step = "(cd %s && %s%snpm test --silent)" % (shlex_quote(where), install, " && " if install else "")
+        commands.append(step)
+    if commands:
+        return " && ".join(commands)
+    makefile = root / "Makefile"
+    if makefile.is_file() and re.search(r"^ci:", makefile.read_text(errors="replace"), re.M):
+        return "make ci"
+    return ""
+
+
+def shlex_quote(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)
+
+
+def pre_merge_check(root: Path, ticket: dict, cfg: Optional[dict], runner=None, minutes: int = 10) -> tuple:
+    """Run the merge check on the pull request's head in a throwaway worktree.
+
+    Returns (green|red|skip, detail). Before 1.6.17 nothing ran the tests before a merge: a repo with no CI merged
+    a Shuttle's red test (WV-15-BB1).
+    """
+    import subprocess
+    import tempfile
+
+    root = Path(root)
+    try:
+        minutes = int((cfg or {}).get("mergeCheckMinutes") or minutes)
+    except (TypeError, ValueError):
+        pass
+    cmd = merge_check_command(root, ticket, cfg)
+    if not cmd:
+        return "skip", "no test command (set checkCommand, or add a test script)"
+    branch = str(ticket.get("branch") or "")
+    if not branch:
+        return "skip", "no branch"
+    run = runner or (lambda argv, cwd=None, timeout=60: subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout))
+    fetched = run(["git", "-c", "maintenance.auto=false", "fetch", "origin", branch], cwd=str(root))
+    if fetched.returncode != 0:
+        return "skip", "could not fetch %s: %s" % (branch, (fetched.stderr or fetched.stdout or "").strip()[-200:])
+    where = tempfile.mkdtemp(prefix="warp-merge-check-")
+    added = run(["git", "-c", "maintenance.auto=false", "worktree", "add", "--detach", where, "FETCH_HEAD"], cwd=str(root))
+    if added.returncode != 0:
+        return "skip", "could not check out %s: %s" % (branch, (added.stderr or added.stdout or "").strip()[-200:])
+    try:
+        try:
+            done = run(["bash", "-c", cmd], cwd=where, timeout=max(1, int(minutes)) * 60)
+        except subprocess.TimeoutExpired:
+            return "red", "%s timed out after %d minutes" % (cmd, minutes)
+        tail = "\n".join(((done.stdout or "") + "\n" + (done.stderr or "")).strip().splitlines()[-25:])
+        return ("green" if done.returncode == 0 else "red"), "%s\n%s" % (cmd, tail)
+    finally:
+        run(["git", "-c", "maintenance.auto=false", "worktree", "remove", "--force", where], cwd=str(root))
+
+
 def open_pr(root: Path, branch: str, base: str, title: str, body: str, runner=None) -> tuple[str, str]:
     """A pull request for a Shuttle's pushed branch: (found|opened|missing|failed, url or reason).
 

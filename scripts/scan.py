@@ -941,6 +941,13 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     if blocked:
         print(blocked)
         return 2
+    import agents
+    import herald_fmt
+
+    missing = agents.cloud_key_missing(herald_fmt.read_config(root), beam_path=beam_path)
+    if missing:
+        print("refuse: %s" % missing)
+        return 2
     import blocks
 
     wait_text = runs.read_key(runs.config_path(root).read_text() if runs.config_path(root).is_file() else "", "startAfter") or ""

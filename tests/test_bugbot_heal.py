@@ -341,12 +341,17 @@ class ShuttleReviewTest(Repo):
         self.assertEqual(ticket["pr"]["bugbotFindings"], ["util.mjs:12 null deref"])
         self.assertIn("herald: WV-01 Bugbot review by the Shuttle: 1 finding(s). Back to fix.", lines)
         self.assertIn("bugbot: util.mjs:12 null deref", pipeline.red_reasons(ticket, {}))
-        # Same line again changes nothing; a review of another commit is ignored.
+        # Same line again changes nothing. A review of another commit (one the Shuttle just pushed) is kept
+        # without touching this head's result, and applies when the head reaches that commit (1.6.17).
         self.assertFalse(ticket_state._apply_event(self.beam_path, {}, ticket, event, "2026-10-13T20:01:00Z", heralded, []))
-        stale = dict(event, state="review-pass", sha="d" * 40)
+        newer = dict(event, state="review-pass", sha="d" * 40, findings=[])
         out = []
-        self.assertFalse(ticket_state._apply_event(self.beam_path, {}, ticket, stale, "2026-10-13T20:02:00Z", heralded, out))
-        self.assertTrue(out[0].startswith("bugbot: review for WV-01 ignored"))
+        self.assertTrue(ticket_state._apply_event(self.beam_path, {}, ticket, newer, "2026-10-13T20:02:00Z", heralded, out))
+        self.assertTrue(out[0].startswith("bugbot: review for WV-01 kept for dddddddddddd; the head Warp has is"), out)
+        self.assertEqual(ticket["pr"]["bugbot"], "fail")
+        pipeline._apply_snapshot(ticket, {"headSha": "d" * 40})
+        self.assertEqual((ticket["pr"]["bugbot"], ticket["pr"]["bugbotSha"]), ("pass", "d" * 40))
+        self.assertNotIn("reviewForSha", ticket["pr"])
 
     def test_append_writes_the_review_into_the_folder(self):
         from contextlib import redirect_stdout

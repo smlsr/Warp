@@ -344,6 +344,7 @@ def record_result(ticket: dict, result: str, findings: Optional[list] = None, ev
         "bugbotRecordedAt": now_s,
     }
     if source == "shuttle":
+        fields["shuttleFindings"] = found if result == "fail" else []
         # The Shuttle's own review comes first. It does not stand in for Cursor Bugbot when Bugbot runs
         # on this repo: the merge still waits for Bugbot's result on the head (see pipeline._hold_for_bugbot).
         fields["shuttleReview"] = result
@@ -370,14 +371,33 @@ def apply_review(beam_path, ticket: dict, event: dict, stamp: str, lines: list, 
     sha = str(event.get("sha") or "").strip()
     tid = ticket.get("id")
     if sha and head and not (head.startswith(sha) or sha.startswith(head)):
-        lines.append("bugbot: review for %s ignored: it reviewed %s, the head is %s" % (tid, sha[:12], head[:12]))
-        return False
+        held = pr.get("reviewForSha") if isinstance(pr.get("reviewForSha"), dict) else {}
+        if held.get("sha") == sha and held.get("state") == event.get("state"):
+            return False
+        # Usually a Shuttle that pushed and reviewed its new commit before this pass read the pull request.
+        # Keep the review for that commit; it applies when the head reaches it (pipeline._apply_snapshot).
+        # Before 1.6.17 it was dropped, and the ticket waited for a review-only Shuttle on that commit.
+        pr["reviewForSha"] = {"sha": sha, "state": event.get("state"), "findings": list(event.get("findings") or []),
+                              "source": str(event.get("source") or "shuttle"), "at": stamp}
+        lines.append("bugbot: review for %s kept for %s; the head Warp has is %s. It applies when the pull request shows that commit."
+                     % (tid, sha[:12], head[:12]))
+        return True
     sha = head or sha
     result = "pass" if event.get("state") == "review-pass" else "fail"
     findings = [str(item) for item in (event.get("findings") or []) if str(item).strip()]
     if recorded_for_head(pr, sha) and str(pr.get("bugbot") or "") == result and list(pr.get("bugbotFindings") or []) == (findings if result == "fail" else []):
         return False
     source = str(event.get("source") or "shuttle")
+    if source == "shuttle" and result == "pass" and str(pr.get("bugbotSource") or "") == "provider" \
+            and str(pr.get("bugbotProviderSha") or "") == sha and str(pr.get("bugbot") or "").casefold() == "fail":
+        # Cursor Bugbot found issues on this commit. The Shuttle's pass is kept, and the finding stands.
+        pr["shuttleReview"] = "pass"
+        pr["shuttleReviewSha"] = sha
+        key = (tid, "review-pass-over-finding")
+        if key not in heralded:
+            heralded.add(key)
+            lines.append("herald: %s Shuttle review: pass, but Cursor Bugbot's finding on %s stands." % (tid, sha[:12]))
+        return True
     fields = record_result(ticket, result, findings, now=stamp, source=source, sha=sha)
     ticket["updatedAt"] = stamp
     key = (tid, "review-" + result)
@@ -392,6 +412,24 @@ def apply_review(beam_path, ticket: dict, event: dict, stamp: str, lines: list, 
         beam_mod.append_ticket_event(Path(beam_path), ticket, {"at": stamp, "type": "bugbot", "value": result, "source": source, "sha": sha})
     except Exception:
         pass
+    return True
+
+
+def apply_held_review(ticket: dict) -> bool:
+    """A review kept for a commit the head has now reached: record it. Drop it once the head moved past it."""
+    pr = _pr(ticket)
+    held = pr.get("reviewForSha") if isinstance(pr.get("reviewForSha"), dict) else None
+    if not held:
+        return False
+    head = str(pr.get("headSha") or "")
+    sha = str(held.get("sha") or "")
+    if not head or not sha:
+        return False
+    if not (head.startswith(sha) or sha.startswith(head)):
+        return False
+    pr.pop("reviewForSha", None)
+    result = "pass" if held.get("state") == "review-pass" else "fail"
+    record_result(ticket, result, held.get("findings") or [], now=held.get("at"), source=str(held.get("source") or "shuttle"), sha=head)
     return True
 
 

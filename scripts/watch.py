@@ -121,6 +121,9 @@ def _bugbot_label(ticket: dict) -> str:
 
 def _ci_label(ticket: dict) -> str:
     pr = _pr(ticket)
+    if str(pr.get("ci") or "").strip().casefold() == "absent" and not str(pr.get("check") or "").strip():
+        # No CI checks on the head. A red rollup is Cursor Bugbot's finding, not CI.
+        return "none"
     for key in ("ci", "rollup", "check"):
         raw = str(pr.get(key) or "").strip().casefold()
         if raw in {"green", "success", "pass", "passed"}:

@@ -1223,7 +1223,9 @@ WORKER_CONTRACT = (
     "You never subscribe to anything, set a timer, loop, sleep, or wait on the pull request, CI, Bugbot, Slack, or an approval. "
     "The parent does all the waiting. "
     "If this conversation is woken later by anything that is not a new step from the parent "
-    "(a CI result, a pull-request comment, a timer), run the reap check and return. Do not act on it."
+    "(a CI result, a pull-request comment, a timer), run the reap check and return. Do not act on it. "
+    "Never run `git stash`: every worktree of this repo shares one stash list, so another Shuttle's pop takes your "
+    "edits and yours takes theirs. Commit work in progress on your branch, or discard it with `git checkout -- <path>`."
 )
 REAP_RULE = (
     "Run the reap check first, and read the reap line after every state you write. "
@@ -1461,7 +1463,32 @@ def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
-    ]
+    ] + step_lines(ticket)
+
+
+def step_lines(ticket: dict) -> list:
+    """What this step is for. Before 1.6.17 every step got the implement prompt: a fix Shuttle never saw the
+    findings it was sent to fix, and the first fix of WV-11-BB1 re-recorded a pass on the same commit."""
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "implement")
+    detail = str(shuttle.get("detail") or "").strip()
+    tid = str(ticket.get("id") or "")
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    lines = ["step: %s" % step]
+    if step == "fix":
+        items = [item.strip() for item in detail.split(" | ") if item.strip()] or ["(no reason recorded; read the pull request's review comments)"]
+        lines.append("FIX %s. The pull request %s is open on this branch. Fix exactly these, on the same branch:" % (tid, pr.get("url") or "(not open yet)"))
+        lines.extend("- %s" % item for item in items)
+        lines.append(
+            "Add or change a test that fails without your fix wherever the change can be tested, and rebuild any generated file "
+            "the change affects. Run the check command, then commit and push a NEW commit. A fix that pushes nothing has not "
+            "fixed anything: never record review-pass on the commit the findings were made on. If you cannot fix an item, "
+            "return `result: %s failed <why>`." % tid)
+    elif step in {"review", "verify"} and detail:
+        lines.append("%s ONLY %s: %s" % (step.upper(), tid, detail))
+    elif detail:
+        lines.append("detail: %s" % detail)
+    return lines
 
 
 def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False, instance: str = "") -> str:
@@ -1565,6 +1592,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
+        *step_lines(ticket),
         TICKET_AGENT_INSTRUCTION,
         clone,
         "Write .warp/tickets/%s/ and push it. The parent reads that folder later." % tid,
@@ -1639,6 +1667,19 @@ def listener_returned_stop(text: str) -> bool:
     return folded == "listen: stopped" or folded.startswith("listen: stopped ")
 
 
+def _pass_number(path: Path) -> int:
+    """The number this supervise pass gets: the count on the beam plus one."""
+    try:
+        data = _load(path)
+    except (OSError, ValueError):
+        return 1
+    prior = data.get("pass") if isinstance(data, dict) and isinstance(data.get("pass"), dict) else {}
+    try:
+        return int(prior.get("count") or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
 def _late_findings(path: Path, now=None) -> list:
     """pipeline.late_findings on the beam on disk, saved when it changed anything. Never raises."""
     import pipeline
@@ -1676,9 +1717,9 @@ def pipeline_unfinished(beam: dict, now=None) -> bool:
     for ticket in tickets.values():
         if isinstance(ticket, dict) and ticket.get("status") not in SETTLED:
             return True
-    if beam.get("bugbotSeen"):
-        import pipeline
+    import pipeline
 
+    if pipeline.bugbot_runs_here(beam):
         return any(pipeline.awaiting_late_bugbot(ticket, beam, now=now) for ticket in tickets.values() if isinstance(ticket, dict))
     return False
 
@@ -1719,12 +1760,14 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     path = Path(beam_path)
     started = beam_mod.coerce_now(now)[1]
     late = []
+    number = _pass_number(path)
     if provider is None and path.is_file():
         # Before anything decides the run is finished: a Bugbot finding on a merged pull request queues a
         # follow-up ticket. Before 1.6.15 this ran after the early return below, so a run whose tickets
         # were all merged never queued one, and /warp-resume had nothing to start.
         late = _late_findings(path, now)
-    lines = late + supervise_listener(path, returned=returned, now=now)
+    # Each pass is numbered, so a lost or overwritten output shows as a gap (pass 41, then pass 43).
+    lines = ["run: pass %d at %sZ" % (number, started[11:19])] + late + supervise_listener(path, returned=returned, now=now)
     if lines and lines[-1] == "listener: poll":
         lines.extend(listener_prompt(path))
     if not path.is_file():
@@ -2110,6 +2153,7 @@ def parent_exit(
         out = verdict(_load(path))
         if out:
             return lines + out
+        lines.append("run: next is pass %d" % _pass_number(path))
     lines.append("parent: stay")
     return lines
 

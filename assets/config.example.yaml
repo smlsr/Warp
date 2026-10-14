@@ -86,9 +86,20 @@ maxInProgress: 20
 # slot unfinished work did not need.
 
 checkCommand: ""
-# Optional. The orchestrator runs this on a rebased head before it merges.
-# Empty: the required checks are Bugbot and CI as configured
-# (bugbotRequired, bugbotManual). Warp does not invent a build command.
+# Optional. The orchestrator runs this on the pull request's head, in a
+# throwaway worktree, before it merges. A red result is not merged and goes to
+# a fix step with the output.
+mergeCheck: auto
+# auto: with checkCommand empty, run the test script of each package that holds
+# the ticket's locks (npm test, after npm ci when there is a lockfile), or
+# `make ci` from a root Makefile. off: run nothing before a merge.
+mergeCheckMinutes: 10
+# The merge check's time limit. Past it, the check counts as red.
+requireCursorApiKey: true
+# A run that starts cloud agents (a Cursor cloud session, subagentVm, or cloud
+# agents already in the registry) needs CURSOR_API_KEY so pause, stop, and the
+# end-of-run cleanup can cancel and archive them. /warp-init warns, and
+# /warp-start refuses, until it is set. false allows it anyway.
 # `make ci` is a valid command. The space is part of the command.
 # A red result is stored on pr.check and sent back to that ticket with the log.
 

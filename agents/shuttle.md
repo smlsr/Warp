@@ -51,3 +51,5 @@ Open the pull request, include the plan record and a result record (`orchestrato
 - Touching files outside the ticket locks and `appendOnlyPaths`.
 - Skipping a failing AC.
 - Asking the user to decide mid-ticket.
+
+Never run `git stash`. Every worktree of the repo shares one stash list, so a pop in one Shuttle takes another Shuttle's edits. Commit work in progress on your branch, or discard it with `git checkout -- <path>`.

@@ -103,6 +103,35 @@ import beam as beam_mod
 
 API_ROOT = "https://api.cursor.com"
 ENV_KEY = "CURSOR_API_KEY"
+
+
+def cloud_key_missing(cfg: Optional[dict], env: Optional[dict] = None, beam_path: Optional[Path] = None) -> str:
+    """Why a run must not start without CURSOR_API_KEY, or empty.
+
+    A cloud run starts cloud agents. Without the key Warp cannot cancel or archive them: pause, stop, and the
+    end-of-run cleanup only print links to archive by hand. `requireCursorApiKey: false` allows it anyway.
+    """
+    import os
+
+    import orchestrator
+
+    env = os.environ if env is None else env
+    if str(env.get(ENV_KEY) or "").strip():
+        return ""
+    cfg = cfg or {}
+    raw = str(cfg.get("requireCursorApiKey") if cfg.get("requireCursorApiKey") is not None else "true").strip().casefold()
+    if raw in {"false", "no", "off", "0"}:
+        return ""
+    if orchestrator.runner_name(cfg, env) != "cloud":
+        return ""
+    import prompt_gate
+
+    if not (prompt_gate.session_is_cloud(env) or orchestrator.subagent_vm(cfg, env) or _has_cloud_agents(beam_path)):
+        return ""  # a local session with worktree Shuttles starts no cloud agent
+    return ("CURSOR_API_KEY is not set. This run starts cloud agents, and without the key Warp cannot cancel or archive "
+            "them: pause, stop, and the end-of-run cleanup only print links to archive in the Cursor UI. Set CURSOR_API_KEY "
+            "in this environment (a Cursor API key; on a cloud runner, as a secret in the environment settings), or set "
+            "requireCursorApiKey: false in .warp/config.yaml to run without it.")
 HOUR_MINUTES = 60
 DEFAULT_MAX_SPAWNS_PER_TICKET = 8
 DEFAULT_MAX_SPAWNS_PER_HOUR = 40
@@ -1710,6 +1739,18 @@ def protected_ids(doc: dict) -> set:
             if _cloud_id(ident):
                 found.add(ident)
     return found
+
+
+def _has_cloud_agents(beam_path: Optional[Path]) -> bool:
+    """The run's registry already holds a cloud agent id: this run starts cloud agents."""
+    if beam_path is None:
+        return False
+    try:
+        path = Path(beam_path).parent / "agents.json"
+        doc = json.loads(path.read_text()) if path.is_file() else {}
+    except (OSError, ValueError):
+        return False
+    return any(isinstance(row, dict) and row_cloud_ids(row) for row in _rows(doc if isinstance(doc, dict) else {}))
 
 
 def _recorded_links(doc: dict) -> list:
