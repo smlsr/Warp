@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.19
+
+- Fix: the status digest counted every open ticket as stalled. It summed the `stalled` column, which is `yes` or `no`, and both count as true, so the edit run's digest said `stalls=14` with 13 tickets queued behind G0 and WE-01 waiting on Bugbot. It now counts a ticket that is stalled and not already an alarm, the same rule as the `stalls:` line in `/warp-status`. `statusDigest` records the ids (`alarms`, `stalls`).
+- The digest also goes out in the pass update (`.warp/notify-pass.json`) as one sentence: `Status: 14 open (13 queued, 1 reviewing), in progress 1/20. No alarms. Nothing stalled.`, naming the alarmed and stalled tickets when there are any. It is a verbose post: `notify: quiet` leaves it out. The `slack: digest` line is unchanged.
+
 ## 1.6.18
 
 - New: Bugbot's progress is shown. Shuttles show up as background agents and Cursor Bugbot does not, so a run waiting on it looked stalled (WE-01 on PR #24). Each pass now prints, per ticket:

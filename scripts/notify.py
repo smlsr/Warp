@@ -307,7 +307,8 @@ def pass_post(root: Path, lines: list, number: Optional[int] = None) -> list:
         items = (carried + new)[-MAX_PASS_LINES:]
         cfg = fmt.read_config(root)
         if cfg["notify"] == "quiet":
-            items = [text for text in items if _QUIET.search(text)]
+            # The status digest is a verbose post ("Alarms: …" in it is not an alarm).
+            items = [text for text in items if _QUIET.search(text) and not text.startswith("Status: ")]
             if not items:
                 return []
         title = "Run update" + (f" (pass {number})" if number else "")
