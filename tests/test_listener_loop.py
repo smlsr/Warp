@@ -220,10 +220,10 @@ class ListenerLoopTests(unittest.TestCase):
     def test_listener_intervals_default_when_unset(self):
         data = self.beam()
         self.assertEqual(inbound.fast_seconds(data, self.beam_path), 15)
-        self.assertEqual(inbound.slow_seconds(data, self.beam_path), 60)
+        self.assertEqual(inbound.slow_seconds(data, self.beam_path), 120)
         self.assertEqual(inbound.orphan_minutes(data, self.beam_path), 5)
         self.assertEqual(inbound.max_minutes(data, self.beam_path), 60)
-        self.assertEqual(inbound.max_reads(data, self.beam_path), 60)
+        self.assertEqual(inbound.max_reads(data, self.beam_path), 4)
         self.assertEqual(inbound.listener_model(data, self.beam_path), "")
 
     def test_the_pass_prints_the_prompt_for_one_background_listener(self):
@@ -635,14 +635,16 @@ class ListenerLeaseTests(unittest.TestCase):
         fast = inbound.wait_for(
             self.beam_path, lease=1, holder="listener", fast=True, sleep=nap, clock=clock.time, step=2, now=None
         )
-        self.assertEqual(fast, ["listen: wait", inbound.KEEP_CYCLING])
+        self.assertEqual(fast[0], "listen: wait")
+        self.assertRegex(fast[1], r"^listen: cycle \d+ of \d+ ended at \d\d:\d\d:\d\dZ\. Run poll again now with the same lease and holder\. Do not return\.$")
         self.assertEqual(self.beam()["listener"]["interval"], "fast")
         self.assertGreaterEqual(clock.now - epoch(NOW), 4)
         started = clock.now
         slow = inbound.wait_for(
             self.beam_path, lease=1, holder="listener", fast=False, sleep=nap, clock=clock.time, step=2
         )
-        self.assertEqual(slow, ["listen: wait", inbound.KEEP_CYCLING])
+        self.assertEqual(slow[0], "listen: wait")
+        self.assertNotEqual(slow[1], fast[1])  # no two waits print the same line
         self.assertEqual(self.beam()["listener"]["interval"], "slow")
         self.assertGreaterEqual(clock.now - started, 6)
 

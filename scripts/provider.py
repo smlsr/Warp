@@ -449,6 +449,10 @@ def interpret_rollup(checks: list) -> str:
             continue
         conclusion = str(item.get("conclusion") or item.get("state") or "").strip().casefold()
         status = str(item.get("status") or "").strip().casefold()
+        if conclusion == "neutral" and _bugbot_check(item):
+            # Cursor Bugbot finishes `neutral` when it found issues (`success` when it found none).
+            bad = True
+            continue
         if conclusion in success:
             continue
         if conclusion in failure:
@@ -633,7 +637,78 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         snap["mergeSha"] = str(commit.get("oid"))
     if bugbot:
         snap["bugbot"] = bugbot
+    if bugbot == "fail" and sha:
+        snap["findings"] = bugbot_findings(root, text, sha) or [
+            "Cursor Bugbot found issues on %s (see its review comments on the pull request)" % sha[:12]]
+    elif bugbot == "pass":
+        snap["findings"] = []
     return snap
+
+
+_SEVERITY = re.compile(r"\*\*(\w+) Severity\*\*", re.I)
+
+
+def _repo_and_number(url: str) -> tuple:
+    match = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", str(url or ""))
+    return (match.group(1), match.group(2), match.group(3)) if match else ("", "", "")
+
+
+def finding_line(comment: dict) -> str:
+    """One Bugbot review comment as one line: `<path>:<line> <title> (<severity>)`."""
+    body = str(comment.get("body") or "")
+    title = ""
+    for raw in body.splitlines():
+        text = raw.strip()
+        if text.startswith("#"):
+            title = text.lstrip("#").strip()
+            break
+    if not title:
+        title = next((raw.strip() for raw in body.splitlines() if raw.strip() and not raw.strip().startswith("<!--")), "Bugbot finding")
+    severity = _SEVERITY.search(body)
+    where = str(comment.get("path") or "")
+    line = comment.get("line") or comment.get("original_line")
+    if where and line:
+        where = "%s:%s" % (where, line)
+    text = ("%s %s" % (where, title)).strip()
+    if severity:
+        text += " (%s)" % severity.group(1).capitalize()
+    return text[:300]
+
+
+def is_bugbot_comment(comment: dict) -> bool:
+    user = str(((comment.get("user") or {}).get("login")) or "").casefold()
+    body = str(comment.get("body") or "")
+    return user.startswith("cursor") or "BUGBOT" in body or "bugbot" in user
+
+
+def bugbot_findings(root: Path, url: str, head: str, runner=None) -> list:
+    """Bugbot's review comments on this head commit, one line each. Empty when gh cannot read them.
+
+    Bugbot reports what it found as review comments; its check only says `neutral`.
+    """
+    owner, repo, number = _repo_and_number(url)
+    if not number:
+        return []
+    run = runner or (lambda cmd: _run(cmd, root, timeout=30))
+    done = run(["gh", "api", "--paginate", "repos/%s/%s/pulls/%s/comments" % (owner, repo, number)])
+    if done.returncode != 0:
+        return []
+    text = (done.stdout or "").strip()
+    try:
+        rows = json.loads(text) if text.startswith("[") and text.count("][") == 0 else json.loads("[" + text.replace("][", ",")[1:-1] + "]")
+    except json.JSONDecodeError:
+        return []
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not is_bugbot_comment(row):
+            continue
+        commit = str(row.get("commit_id") or row.get("original_commit_id") or "")
+        if head and commit and not (commit.startswith(head) or head.startswith(commit)):
+            continue
+        line = finding_line(row)
+        if line and line not in out:
+            out.append(line)
+    return out
 
 
 def lookup_pr(root: Path, branch: str) -> Optional[dict]:

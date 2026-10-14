@@ -718,17 +718,17 @@ You edit `.warp/config.yaml`, on your machine. It stays gitignored. The repo kee
 | `jiraRestoreOnRelease` | `false` | Move the issue back when a claim is released to `queued`. Otherwise it is left alone. |
 | `bugbotRequired` | `true` | Both paths. No auto-merge and no QA Ready until Bugbot passes. |
 | `bugbotManual` | `true` | Manual tickets only. `false` skips Bugbot before QA Ready. Auto-merge still uses `bugbotRequired`. |
-| `bugbotTrigger` | `auto` | `auto`: Bugbot reviews each pull request on its own; if it never starts within `bugbotStartMinutes`, Warp switches to `comment`. `comment`: Warp posts `bugbot run`; two unanswered comments switch to `manual`. `manual`: Bugbot can't be started from here, so Warp asks for a review by hand each commit and waits for `bugbot.py record`. `shuttle`: the Shuttle reviews its own diff once its pull request is open and its check is green, and records the result; finished work with no review gets a review-only Shuttle (2 per commit, then by hand). `bugbotManual` is separate: whether manual-merge tickets need Bugbot at all. |
+| `bugbotTrigger` | `auto` | `auto`: Bugbot reviews each pull request on its own; if it never starts within `bugbotStartMinutes`, Warp switches to `comment`. `comment`: Warp posts `bugbot run`; two unanswered comments switch to `manual`. `manual`: Bugbot can't be started from here, so Warp asks for a review by hand each commit and waits for `bugbot.py record`. `shuttle`: the Shuttle reviews its own diff once its pull request is open and its check is green, and records the result; finished work with no review gets a review-only Shuttle (2 per commit, then by hand). Where Cursor Bugbot runs too, the merge still waits for Bugbot's own pass on the head; a finding goes to fix, and one after a merge queues a follow-up ticket. `bugbotManual` is separate: whether manual-merge tickets need Bugbot at all. |
 | `bugbotStartMinutes` | `10` | How long Warp waits for Bugbot to start before it comments `bugbot run`. |
 | `maxFixAttempts` | `5` | Shared fix loop, then the ticket alarms. |
 | `stuckAfterMinutes` | `90` | No update in this window raises stuck. Separate from a dead worker. |
 | `ciStartGraceMinutes` | `5` | Minutes to wait for the first check run. Zero checks after this starts CI in that pass. A conflict is rebased first. |
 | `staleMinutes` | `15` | Shuttle heartbeat older than this, or no heartbeat and a claim older than this, means the Shuttle is dead. The watchdog replaces it while the run is running. Pause and stop do not. A Shuttle whose turn returned this long ago and was not resumed reads `reap: exit not-resumed` if it wakes up. `/warp-init` backfills this key. |
 | `listenerFastSeconds` | `15` | Seconds `inbound.py wait` sleeps after a cycle that queued a command. |
-| `listenerSlowSeconds` | `60` | Seconds `inbound.py wait` sleeps after an empty read. |
+| `listenerSlowSeconds` | `120` | Seconds `inbound.py wait` sleeps after an empty read. |
 | `listenerOrphanMinutes` | `5` | A `listener.parentSeenAt` older than this exits the listener as orphaned. A stale stamp does not start a replacement. |
 | `listenerMaxMinutes` | `60` | Rotate a generation after this many minutes, or `listenerMaxReads`, whichever comes first. |
-| `listenerMaxReads` | `60` | Successful leased polls in one generation before rotation. |
+| `listenerMaxReads` | `4` | Successful leased polls in one generation before rotation. Kept under the number of repeated calls after which Cursor stops an agent as a loop; the parent starts the next generation as soon as one rotates. |
 | `listenerModel` | empty | Empty inherits the parent's model (`model: inherit`). A slug is `model: <slug>`. |
 | `maxRecoveries` | `5` | Shuttle replacements on one ticket. The next death is `alarm` / `worker-died` and does not start another. `/warp-init` backfills this key. |
 | `alarmRepairMinutes` | `15` | How often the parent tick opens a lock-escape repair pass. The listener does not start the repair Agent. Pause and stop do not. `/warp-init` backfills this key. |

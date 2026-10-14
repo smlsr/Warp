@@ -304,7 +304,7 @@ pollSeconds: 300
 listenerFastSeconds: 15
 # Seconds inbound.py wait sleeps after a cycle that queued a command.
 # The sleep is in Python, in 2-second steps.
-listenerSlowSeconds: 60
+listenerSlowSeconds: 120
 # Seconds inbound.py wait sleeps after an empty read.
 listenerOrphanMinutes: 5
 # A listener.parentSeenAt older than this makes the listener exit orphaned.
@@ -312,11 +312,14 @@ listenerOrphanMinutes: 5
 listenerSilentMinutes: 5
 # A listener that has not polled or waited for this long is gone (Cursor can
 # stop it as a loop). supervise prints `listener: lost` and starts a new one in
-# the same pass. Never under three listenerSlowSeconds waits plus a minute.
+# the same pass. Never under one listenerSlowSeconds wait plus three minutes.
 listenerMaxMinutes: 60
 # Rotate a generation after this many minutes, or listenerMaxReads,
 # whichever comes first. The parent starts the next one from the return stamp.
-listenerMaxReads: 60
+listenerMaxReads: 4
+# Few on purpose: Cursor stops an agent whose calls repeat (it stopped the
+# listener after nine polls). A generation hands off after this many reads and
+# the parent starts the next one at once.
 # Successful poll --lease calls in one generation before rotation.
 listenerModel: ""
 # Empty: the listener inherits the parent's model (model: inherit).

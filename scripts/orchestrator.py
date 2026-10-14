@@ -179,6 +179,13 @@ def resolve_check_command(config: Optional[dict], yaml_text: Optional[str] = Non
     return check_command_text(yaml_text or "")
 
 
+def check_kind(name, value) -> str:
+    """conclusion_kind for one named check. Cursor Bugbot's `neutral` means it found issues: red."""
+    if "bugbot" in str(name or "").casefold() and str(value or "").strip().casefold() == "neutral":
+        return "red"
+    return conclusion_kind(value)
+
+
 def conclusion_kind(value) -> str:
     """`red`, `green`, or empty. The command name `make ci` is neither."""
     raw = str(value or "").strip().casefold()
@@ -438,10 +445,6 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     rollup = provider_rollup(ticket)
     check = _for_head(pr, "check", "checkSha")
     ci = _for_head(pr, "ci", "ciSha")
-    if rollup == "pending" and _only_bugbot_pending(pr, ci):
-        # The only check still running is Cursor's Bugbot, and a review is already recorded for this
-        # head (a review Shuttle, or by hand). The rest of the rollup decides; Bugbot is read below.
-        rollup = ci if ci in {"green", "absent"} else "absent"
     if rollup == "red" or check == "red" or ci == "red":
         return False
     if rollup == "green" or check == "green":
@@ -458,16 +461,6 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     if not bugbot_applies(ticket, config):
         return True
     return _for_head(pr, "bugbot", "bugbotSha") == "pass"
-
-
-def _only_bugbot_pending(pr: dict, ci: str) -> bool:
-    """A pending rollup that is only the Bugbot check, on a head with a recorded review."""
-    head = str(pr.get("headSha") or "")
-    if not head or str(pr.get("bugbotRecordedSha") or "") != head:
-        return False
-    if str(pr.get("ciSha") or "") not in {"", head}:
-        return False
-    return ci in {"green", "absent"}
 
 
 def bugbot_where() -> str:
@@ -1747,6 +1740,8 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         lines.extend(pipeline.run_merges(data, path, lines))
         # Open the pull request for a Shuttle that pushed but could not (a 403 on its VM).
         lines.extend(pipeline.run_pr_opens(data, path, lines))
+        # A Bugbot finding that arrived after a merge becomes a follow-up fix ticket.
+        lines.extend(pipeline.late_findings(data, path, lines, now=now))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
@@ -1993,6 +1988,10 @@ def parent_wait(
             return "command"
         if inbound.return_is_newer(data, since):
             return "return"
+        if inbound.holder_silent(data, path, now_dt) is not None:
+            # The listener stopped polling and waiting (Cursor can stop it as a loop). Wake the parent now:
+            # the next supervise hands its slot back and starts the next listener.
+            return "return"
         waited = tick() - began
         if waited >= cap:
             return "timeout"
@@ -2052,12 +2051,16 @@ def parent_exit(
             return ["parent: exit superseded", "parent: another machine took this run over with /warp-start --takeover. End this turn."]
         if parent_may_exit(current):
             out = ["parent: exit"]
+            closed = _close_listener_on_exit(current, path)
+            if closed:
+                out.append(closed)
             try:
                 done = agents_mod.finish(current, beam_path=path)
             except Exception as exc:
                 done = ["cleanup: skipped (%s)" % exc]
             if done:
                 out.extend(done)
+            if done or closed:
                 _save(path, current)
             return out
         return []
@@ -2072,6 +2075,24 @@ def parent_exit(
             return lines + out
     lines.append("parent: stay")
     return lines
+
+
+def _close_listener_on_exit(data: dict, path: Path) -> str:
+    """The parent is leaving: end the listener lease it still shows, so `.warp/listener.json` agrees.
+
+    Before 1.6.14 a parent exit left lease 24 recorded as running in listener.json while the status
+    said stopped.
+    """
+    import beam as beam_mod
+    import inbound
+
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    holder = str(raw.get("holder") or "")
+    if not holder:
+        return ""
+    gen = inbound.generation_of(data)
+    inbound.stamp_return(data, path, "stopped", beam_mod.utcnow(), holder=holder)
+    return "listener: generation %s closed with the parent's exit." % gen
 
 
 def note_subagent_failure(ticket: dict) -> str:

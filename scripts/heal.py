@@ -161,7 +161,7 @@ def check_merged(beam_path: Path, fetch=None) -> list:
             continue  # the provider could not be read; leave it
         ticket["status"] = "review"
         ticket["phase"] = "ready"
-        for key in ("sha", "mergeRequestedSha", "mergeRequestedAt", "mergeAttempt"):
+        for key in ("sha", "mergeRequestedSha", "mergeRequestedAt", "mergeAttempt", "mergeAnnounced"):
             pr.pop(key, None)
         reopened.append(tid)
         changed = True

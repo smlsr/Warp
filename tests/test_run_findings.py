@@ -113,7 +113,7 @@ class ReviewCountTest(Repo):
 
 
 class RecordedReviewTest(unittest.TestCase):
-    """3. Cursor's own Bugbot check, still running, neither resets a recorded review nor holds the merge."""
+    """3. A Shuttle's review is kept, but Cursor Bugbot's own result decides the merge (1.6.14)."""
 
     def ticket(self):
         ticket = row(status="review", phase="reviewing")
@@ -121,26 +121,23 @@ class RecordedReviewTest(unittest.TestCase):
         ticket["pr"].update({"ciNone": True})
         return ticket
 
-    def test_a_pending_bugbot_check_does_not_reset_the_shuttle_review(self):
+    def test_a_pending_bugbot_check_makes_it_wait_and_keeps_the_shuttle_review(self):
         ticket = self.ticket()
         pipeline._apply_snapshot(ticket, {"headSha": SHA, "rollup": "pending", "ci": "absent", "bugbot": "pending"})
-        self.assertEqual(ticket["pr"]["bugbot"], "pass")
+        self.assertEqual(ticket["pr"]["bugbot"], "pending")
+        self.assertEqual((ticket["pr"]["shuttleReview"], ticket["pr"]["shuttleReviewSha"]), ("pass", SHA))
 
     def test_a_finished_bugbot_fail_still_counts(self):
         ticket = self.ticket()
         pipeline._apply_snapshot(ticket, {"headSha": SHA, "rollup": "red", "ci": "absent", "bugbot": "fail"})
         self.assertEqual(ticket["pr"]["bugbot"], "fail")
 
-    def test_the_merge_does_not_wait_for_the_bugbot_check(self):
+    def test_the_merge_waits_for_the_bugbot_check(self):
         ticket = self.ticket()
         pipeline._apply_snapshot(ticket, {"headSha": SHA, "rollup": "pending", "ci": "absent", "bugbot": "pending"})
-        cfg = {"bugbotRequired": True}
-        self.assertTrue(orchestrator.checks_green(ticket, cfg))
-        # Without a recorded review the pending check still holds it.
-        other = row(status="review", phase="reviewing")
-        other["pr"].update({"ciNone": True})
-        pipeline._apply_snapshot(other, {"headSha": SHA, "rollup": "pending", "ci": "absent", "bugbot": "pending"})
-        self.assertFalse(orchestrator.checks_green(other, cfg))
+        self.assertFalse(orchestrator.checks_green(ticket, {"bugbotRequired": True}))
+        pipeline._apply_snapshot(ticket, {"headSha": SHA, "rollup": "green", "ci": "absent", "bugbot": "pass"})
+        self.assertTrue(orchestrator.checks_green(ticket, {"bugbotRequired": True}))
 
     def test_other_checks_still_running_hold_it(self):
         ticket = self.ticket()
