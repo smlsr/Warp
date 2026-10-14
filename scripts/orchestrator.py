@@ -1865,11 +1865,61 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
     import blocks
 
     lines.extend(blocks.check(path))
+    # Every transition this pass made is in the live beam; bring the board and status files up to it,
+    # so whatever publishes next (a merge, warp:sync, a checkpoint) carries all of it.
+    lines.extend(refresh_state_files(path))
     if live:
         # Publish the run state now when a ticket merged, so main shows it
         # (before 1.6.20 that was left to the parent's `beam: push`, which it skipped).
         lines.extend(publish_on_change(path, lines))
     return lines
+
+
+def _state_cfg(path: Path) -> dict:
+    """The beam's config with .warp/config.yaml over it."""
+    data = _load(path)
+    cfg = dict(data.get("config") or {})
+    try:
+        import prompt_gate
+
+        cfg.update(prompt_gate.effective_config(data, runs.repo_root(path)))
+    except Exception:
+        pass
+    return cfg
+
+
+def _cfg_flag(cfg: dict, key: str, default: bool) -> bool:
+    value = cfg.get(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def push_state_new(path: Path) -> bool:
+    """`pushStateNew` (default false): publish the run state when a ticket's branch is created."""
+    try:
+        return _cfg_flag(_state_cfg(Path(path)), "pushStateNew", False)
+    except Exception:
+        return False
+
+
+def refresh_state_files(path: Path) -> list:
+    """Rewrite BOARD.md, board.html, STATUS.md and status.json from the live beam. Quiet unless it fails."""
+    import io
+    from contextlib import redirect_stdout
+
+    try:
+        import beam as beam_mod
+
+        data = _load(Path(path))
+        beam_mod.write_board_files(Path(path), data)
+        import scan
+
+        with redirect_stdout(io.StringIO()):  # it prints the files it wrote and the version block
+            scan.write_status(Path(path))
+        return []
+    except Exception as exc:
+        return ["state: board and status not refreshed (%s)" % exc]
 
 
 def publish_on_change(path: Path, lines: list, why: str = "", requested: bool = False) -> list:
@@ -1884,7 +1934,16 @@ def publish_on_change(path: Path, lines: list, why: str = "", requested: bool = 
 
     if not why:
         merged = [m.group(1) for m in (re.match(r"^merge: (\S+) merged$", line) for line in lines) if m]
+        try:
+            tickets = _load(path).get("tickets") or {}
+        except Exception:
+            tickets = {}
+        # A merge commit that already carried the run state needs no separate `Warp state` commit.
+        carried = [tid for tid in merged if ((tickets.get(tid) or {}).get("pr") or {}).get("stateInMerge")]
+        merged = [tid for tid in merged if tid not in carried]
         why = ("merged " + ", ".join(merged)) if merged else ""
+        if carried and not merged:
+            return ["state: in the merge commit (%s)" % ", ".join(carried)]
     if not why:
         return []
     import os
@@ -1892,22 +1951,16 @@ def publish_on_change(path: Path, lines: list, why: str = "", requested: bool = 
     if os.environ.get("WARP_PUBLISH", "").strip().lower() in {"0", "false", "no", "off"}:
         return []  # tests whose origin is a real repository
     try:
-        data = _load(path)
-        cfg = dict(data.get("config") or {})
-        try:
-            import prompt_gate
-
-            cfg.update(prompt_gate.effective_config(data, runs.repo_root(path)))
-        except Exception:
-            pass
-        if not requested and str(cfg.get("publishOnChange", True)).strip().lower() in {"false", "0", "no", "off"}:
+        cfg = _state_cfg(path)
+        if not requested and not _cfg_flag(cfg, "publishOnChange", True):
             return []  # warp:sync asks for it by name, so it publishes anyway
+        failed = refresh_state_files(path)  # the board and status as of now, not as of the last refresh
         import state_commit
 
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = state_commit.publish_base(runs.repo_root(path), str(Path(path).resolve()), force=True)
-        out = ["state: %s (%s)" % ("published" if code == 0 else "not published", why)]
+        out = ["state: %s (%s)" % ("published" if code == 0 else "not published", why)] + failed
         out.extend("state: %s" % text[len("state: "):] if text.startswith("state: ") else "state: " + text
                    for text in buf.getvalue().splitlines() if text.strip())
         return out
@@ -2261,6 +2314,9 @@ def sync_state(path: Path, by: str = "") -> list:
     """`warp:sync`: refresh the board and status files from the live beam, publish the run state to the base
     branch, and say where it landed. Never raises.
 
+    The publish is the same one a merge uses: state_commit.publish_base, one `Warp state: <run> run` commit
+    of `.warp/runs/<run>/` (or `.warp/` for an unnamed run) built on origin's base branch and pushed to it.
+
     The run state on the base branch is published on start, stop, checkpoints, merges and new branches. Between
     those it can go stale (the edit run's copy still showed WE-01 in review after it merged); this pushes it now.
     """
@@ -2271,13 +2327,9 @@ def sync_state(path: Path, by: str = "") -> list:
     data: dict = {}
     try:
         data = _load(path)
-        beam_mod.write_board_files(path, data)
-        import scan
-
-        scan.write_status(path)
-        out = ["state: board and status refreshed"]
-    except Exception as exc:
-        out = ["state: board and status not refreshed (%s)" % exc]
+    except Exception:
+        data = {}
+    out = refresh_state_files(path) or ["state: board and status refreshed"]
     published = publish_on_change(path, [], why="warp:sync" + (" from %s" % by if by else ""), requested=True)
     out.extend(published or ["state: not published (WARP_PUBLISH=0)"])
     ok = any(line.startswith("state: published") for line in out)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.21
+
+- New: `stateInMerge` (default `true`). With `mergeMethod: merge`, Warp merges a ready pull request with one merge commit it writes itself and pushes to the base branch: its parents are the base and the reviewed head (so GitHub marks the pull request merged), and its tree is the merge plus the run state with that ticket merged. No separate `Warp state` commit follows a merge any more (`state: in the merge commit (WE-01)`). It falls back to `gh pr merge` and a state commit when the push is refused (branch protection), the branch moved past the reviewed head, a file outside the run state conflicts, a merge queue is on, or the method is `squash` or `rebase` (`merge: <id> through the provider (<why>)`). `pr.stateInMerge` records the commit. `state_commit._build_commit` can start from a given tree and take several parents.
+- New: `pushStateNew` (default `false`). In 1.6.20 every new ticket branch published the run state. Now `checkout.py launch` publishes only with `pushStateNew: true` (`state: published (started <id> on <branch>)`); otherwise the start reaches main with the next merge, `warp:sync`, or checkpoint.
+- The run state stays current between publishes: every supervise pass rewrites `BOARD.md`, `board.html`, `STATUS.md` and `status.json` from the live beam, and each publish rewrites them first, so a merge carries every transition up to it.
+- How the run state reaches the base branch, now in README, CONFIG, COMMANDS and STATE: the merge commit (above), or one `Warp state: <run> run` commit of `.warp/runs/<run>/` built on origin's base branch and pushed straight to it (`warp:sync`, `pushStateNew`, checkpoints, and a merge that fell back). It never goes through a ticket branch or a pull request.
+- Docs: README (config table: `pushStateNew`, `stateInMerge`), CONFIG, COMMANDS, LIFECYCLE (the merge lines), MERGE-POLICY, RUNBOOK, STATE (`pr.stateInMerge`), the warp skill and the example config.
+
 ## 1.6.20
 
 - New: `mergeMethod` picks how a pull request is merged, and the default is now `merge`: a merge commit, so each ticket branch joins the base in a git graph. Before this every pull request was squash-merged, and a squashed branch dead-ends in the graph (PR #24's head `8a69213` became `5796d14` on main), which made merged tickets look unmerged. `squash` keeps the old behavior, and `rebase` replays the commits. It goes to `gh pr merge --<method>`, the merge queue, the `merge: MUST DO` line for the GitHub MCP (`merge_method <method>`), `/warp-proceed`, and `beam.py set --merge-method`. A local merge (`provider.py merge-local`) makes a merge commit or a squash; `rebase` gets a merge commit there, so a branch a Shuttle may still use is never rewritten. `pr.mergeMethod` records the method used.

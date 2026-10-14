@@ -333,9 +333,11 @@ def _launch_vm(root: Path, path: Path, data: dict, ticket: dict, branch: str, ti
         print("reused: branch %s" % branch)
     else:
         print("branch: %s" % branch)
-        # A new ticket is under way: publish the run state so main shows it in progress.
-        for line in orchestrator.publish_on_change(path, [], why="started %s on %s" % (ticket_id, branch)):
-            print(line)
+        # A new ticket is under way. pushStateNew (default false) publishes the run state now, so main shows it
+        # in progress; otherwise the next merge, warp:sync or checkpoint carries it.
+        if orchestrator.push_state_new(path):
+            for line in orchestrator.publish_on_change(path, [], why="started %s on %s" % (ticket_id, branch)):
+                print(line)
     cfg = _model_config(root, data)
     print("for the parent: %s" % orchestrator.VM_INSTRUCTION)
     print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
@@ -385,9 +387,11 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
         print("reused: branch %s" % branch)
     else:
         print("created: branch %s" % branch)
-        # A new ticket is under way: publish the run state so main shows it in progress.
-        for line in orchestrator.publish_on_change(path, [], why="started %s on %s" % (ticket_id, branch)):
-            print(line)
+        # A new ticket is under way. pushStateNew (default false) publishes the run state now, so main shows it
+        # in progress; otherwise the next merge, warp:sync or checkpoint carries it.
+        if orchestrator.push_state_new(path):
+            for line in orchestrator.publish_on_change(path, [], why="started %s on %s" % (ticket_id, branch)):
+                print(line)
     print("base: %s" % start)
     cfg = _model_config(root, data)
     prompt = orchestrator.subagent_prompt(ticket, cfg, branch, str(wt), str(root), instance=instance)
