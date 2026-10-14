@@ -594,7 +594,7 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
             "view",
             text,
             "--json",
-            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits,state,mergeCommit",
+            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits,state,mergeCommit,createdAt,mergedAt,latestReviews",
         ],
         root,
     )
@@ -637,12 +637,34 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         snap["mergeSha"] = str(commit.get("oid"))
     if bugbot:
         snap["bugbot"] = bugbot
+    snap.update(pr_times(doc, checks))
     if bugbot == "fail" and sha:
         snap["findings"] = bugbot_findings(root, text, sha) or [
             "Cursor Bugbot found issues on %s (see its review comments on the pull request)" % sha[:12]]
     elif bugbot == "pass":
         snap["findings"] = []
     return snap
+
+
+def pr_times(doc: dict, checks: list) -> dict:
+    """The pull request's own timestamps from gh pr view: opened, merged, Bugbot's review, the last approval."""
+    out = {}
+    if doc.get("createdAt"):
+        out["openedAt"] = str(doc["createdAt"])
+    if doc.get("mergedAt"):
+        out["mergedAt"] = str(doc["mergedAt"])
+    done = [str(item.get("completedAt") or "") for item in checks
+            if isinstance(item, dict) and _bugbot_check(item) and str(item.get("conclusion") or "").upper() in {"SUCCESS", "NEUTRAL"}
+            and item.get("completedAt")]
+    if done:
+        out["bugbotAt"] = max(done)
+    reviews = doc.get("latestReviews") if isinstance(doc.get("latestReviews"), list) else []
+    approved = [r for r in reviews if isinstance(r, dict) and str(r.get("state") or "").upper() == "APPROVED" and r.get("submittedAt")]
+    if approved:
+        last = max(approved, key=lambda r: str(r.get("submittedAt")))
+        out["approvedAt"] = str(last["submittedAt"])
+        out["approvedBy"] = str(((last.get("author") or {}).get("login")) or "github review")
+    return out
 
 
 _SEVERITY = re.compile(r"\*\*(\w+) Severity\*\*", re.I)

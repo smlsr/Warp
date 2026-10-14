@@ -1096,6 +1096,13 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
             heal_lines.extend(heal.heal(beam_path))
         except Exception as e:
             heal_lines.append("heal: skipped (%s)" % e)
+        try:
+            import heal
+
+            # Opened, reviewed, approved, merged, and Spent for tickets from runs before 1.6.17.
+            heal_lines.extend(heal.backfill_times(beam_path))
+        except Exception as e:
+            heal_lines.append("times: not filled in (%s)" % e)
     if state in {"paused", "stopped"}:
         import session_note
 

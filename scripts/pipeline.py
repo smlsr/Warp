@@ -941,6 +941,7 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     elif lines and (lines[0].startswith("start ") or lines[0].startswith("resume ")):
         # Printed again on each pass until checkout.py launch records the start (see _advance_one).
         _shuttle(ticket)["launchLines"] = [line for line in lines if not line.startswith("herald:")]
+        note_claim(ticket)
     if detail:
         # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
         _shuttle(ticket)["detail"] = detail
@@ -1159,6 +1160,72 @@ def bugbot_runs_here(data: dict) -> bool:
             data["bugbotSeen"] = True
             return True
     return False
+
+
+def note_times(ticket: dict, snap: Optional[dict], now=None) -> None:
+    """The pull request's timestamps the viewer and the report read: openedAt, reviewedAt, approvedAt, mergedAt.
+
+    The provider's own times win when the snapshot has them. Before 1.6.17 a supervise pass set none of them
+    except mergedAt, so the table showed `—` for Reviewed, Approved, and (before 1.6.14) Merged.
+    """
+    import beam as beam_mod
+
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+    if pr is None:
+        return
+    snap = snap if isinstance(snap, dict) else {}
+    _now_dt, now_s = beam_mod.coerce_now(now)
+    if snap.get("openedAt"):
+        pr["openedAt"] = snap["openedAt"]
+    elif pr.get("url") and not pr.get("openedAt"):
+        pr["openedAt"] = now_s
+    if snap.get("mergedAt"):
+        pr["mergedAt"] = snap["mergedAt"]
+    if snap.get("approvedAt") and str(snap["approvedAt"]) > str(pr.get("approvedAt") or ""):
+        pr["approvedAt"] = snap["approvedAt"]
+        pr["approvedBy"] = snap.get("approvedBy") or pr.get("approvedBy") or "github review"
+    head = str(pr.get("headSha") or "")
+    if head and bugbot_state(ticket) == "pass" and str(pr.get("bugbotSource") or "") == "provider" and snap.get("bugbotAt") \
+            and str(pr.get("reviewedSha") or "") != head:
+        pr["reviewedAt"] = snap["bugbotAt"]
+        pr["reviewedSha"] = head
+
+
+def note_claim(ticket: dict, now=None) -> None:
+    import beam as beam_mod
+
+    if not ticket.get("claimedAt"):
+        ticket["claimedAt"] = beam_mod.coerce_now(now)[1]
+
+
+def note_spent(data: dict, beam_path=None, now=None) -> None:
+    """Spent minutes per ticket: the sum of its Shuttles' time out, from the agent registry.
+
+    A Shuttle rarely reports its own minutes (`beam.py spend`), so Spent was empty. A larger reported total is kept.
+    """
+    import agents
+    import beam as beam_mod
+
+    try:
+        doc = agents.registry(data, beam_path)
+    except Exception:
+        return
+    now_dt, _now_s = beam_mod.coerce_now(now)
+    totals: dict = {}
+    for row in agents._rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "shuttle" or not row.get("ticket"):
+            continue
+        start = beam_mod.parse_ts(row.get("started"))
+        if start is None:
+            continue
+        end = beam_mod.parse_ts(row.get("ended")) or (now_dt if row.get("state") in {"starting", "running"} else None)
+        if end is None or end < start:
+            continue
+        totals[str(row["ticket"])] = totals.get(str(row["ticket"]), 0.0) + (end - start).total_seconds() / 60.0
+    for tid, minutes in totals.items():
+        ticket = (data.get("tickets") or {}).get(tid)
+        if isinstance(ticket, dict) and int(round(minutes)) > int(ticket.get("minutes") or 0):
+            ticket["minutes"] = int(round(minutes))
 
 
 def _hold_for_bugbot(data: dict, ticket: dict, snap: Optional[dict]) -> None:
@@ -1488,7 +1555,20 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
 
 
 def _hold_or_queue(ticket: dict, lines: list) -> None:
+    import beam as beam_mod
+
+    pr = ticket.setdefault("pr", {})
+    head = str(pr.get("headSha") or "")
+    if not pr.get("reviewedAt") or (head and str(pr.get("reviewedSha") or "") != head):
+        # Reviewed: the head passed its review (Bugbot, the Shuttle's, or one recorded by hand) and its checks.
+        pr["reviewedAt"] = beam_mod.utcnow()
+        pr["reviewedSha"] = head
     if ticket.get("autoMerge") or orchestrator._proceeded(ticket):
+        if ticket.get("autoMerge") and not pr.get("approvedAt"):
+            # Approved by the auto-merge rule when it is ready to merge. A person's approval (warp:proceed, a
+            # GitHub review) is kept when there is one.
+            pr["approvedAt"] = beam_mod.utcnow()
+            pr.setdefault("approvedBy", "auto-merge")
         ticket["status"] = "review"
         ticket["phase"] = "ready"
         return
@@ -1510,6 +1590,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
             ticket["phase"] = "merged"
         return
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
+    note_times(ticket, snap, now=now)
     if confirm_merge(data, ticket, snap, lines):
         return
     _hold_for_bugbot(data, ticket, snap)
@@ -1721,6 +1802,8 @@ def confirm_merge(data: dict, ticket: dict, snap: Optional[dict], lines: list) -
         return False
     if ticket.get("status") in orchestrator.SETTLED:
         return False
+    if snap.get("mergedAt"):
+        ticket.setdefault("pr", {})["mergedAt"] = snap["mergedAt"]
     finish_merge(data, ticket, lines, sha=str(snap.get("mergeSha") or ""), how="merged on the provider (confirmed)")
     return True
 
@@ -2036,6 +2119,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
             _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
         dispatch_fix_workers(data, lines)
         dispatch_replacements(data, lines)
+        note_spent(data, beam_path, now=now)
         if deferred and beam_path is not None:
             _run_repairs(data, beam_path, lines, now)
         elif deferred:

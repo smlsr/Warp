@@ -13,6 +13,13 @@
 - Fix: follow-up locks were too narrow. A follow-up could touch only the file a finding named, so it could not add a regression test or rebuild `viewer.html`, and main went red. A follow-up now also locks its module's folder, so follow-ups in one module run one after another.
 - Fix: follow-ups showed in block G0 on the board, the status export and the viewer, which read the ticket's own `gate`. A follow-up's `gate` is now its parent's block (1.6.16 fixed the block order, not the field).
 - Shuttles never run `git stash`. Every worktree shares one stash list, and two Shuttles' stash commands mixed each other's edits. It is forbidden in every Shuttle prompt and in the Shuttle docs.
+- Fix: the run's table showed `—` for Reviewed, Approved, Merged and Spent. A supervise pass set none of the pull request's timestamps except `mergedAt` (new in 1.6.14), and Spent waited for Shuttles to report minutes, which they rarely do. Now:
+  - `openedAt` and `mergedAt` come from the pull request itself. `gh pr view` also reads `createdAt`, `mergedAt` and `latestReviews`.
+  - `reviewedAt` is when Cursor Bugbot's check finished on the head, or when the head passed its review and checks.
+  - `approvedAt` is the last GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`).
+  - `claimedAt` is stamped when a pass starts a ticket.
+  - Spent (`minutes`) is the sum of the ticket's Shuttles' time out, from the agent registry. A larger reported total is kept.
+  - `/warp-start` and `/warp-resume` fill all of these in for tickets from earlier runs, reading each pull request once (`times: filled in …`), and give old follow-ups their parent's block.
 - Every `supervise` output starts with `run: pass <n> at <time>Z`, and `parent-exit --wait` ends with `run: next is pass <n>`, so a lost or overwritten output shows as a gap.
 - New: a run that starts cloud agents needs `CURSOR_API_KEY`. That means a Cursor cloud session, `subagentVm`, or cloud agents already in the registry. Without the key Warp cannot cancel or archive them; the cleanup only said "archive in the Cursor UI". `/warp-init` now warns, and `/warp-start` and `/warp-resume` refuse until the key is set. `requireCursorApiKey: false` allows it anyway.
 
