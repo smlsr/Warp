@@ -102,8 +102,11 @@ mergeMethod: merge
 deleteBranchOnMerge: false
 # true: delete a merged ticket's branch on origin (and locally when no worktree holds it).
 publishOnChange: true
-# Publish the run state to the base branch right after a merge and when a ticket's branch
-# is created, so main shows it at once. false: leave it to the parent and the checkpoints.
+# Publish the run state to the base branch right after a merge, so main shows it merged at
+# once. false: leave it to the parent and the checkpoints. warp:sync publishes on request.
+pushStateNew: false
+# true: also publish the run state when a ticket's branch is created (in progress on main
+# at once). false: the next merge, warp:sync or checkpoint carries it.
 requireCursorApiKey: true
 # A run that starts cloud agents (a Cursor cloud session, subagentVm, or cloud
 # agents already in the registry) needs CURSOR_API_KEY so pause, stop, and the

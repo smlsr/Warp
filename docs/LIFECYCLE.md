@@ -324,7 +324,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `listen: wait` + `listen: cycle <n> of <max> ended at <time>Z. Run poll again …` | `inbound.py wait` | the sleep is over. Poll again now with the same lease. Do not return |
 | `run: pass <n> at <time>Z` | `supervise` | the pass number. A number that skips means an output was lost |
 | `run: next is pass <n>` | `parent-exit --wait` | the number the next `supervise` prints |
-| `state: published (merged <id>)` / `state: published (started <id> on <branch>)` | `supervise`, `checkout.py launch` | the run state is on the base branch. Nothing to push. `state: not published (…)` says why; push it with `session_note.py` or the next checkpoint |
+| `state: published (merged <id>)` / `state: published (started <id> on <branch>)` | `supervise`, `checkout.py launch` (with `pushStateNew: true`) | the run state is on the base branch. Nothing to push. `state: not published (…)` says why; push it with `session_note.py` or the next checkpoint |
 | `merge: branch deleted <id> <branch>` / `merge: branch not deleted <id> <branch>: <why>` | `supervise` | `deleteBranchOnMerge` is on and the merged ticket's branch was deleted, or why not |
 | `action: sync` + `state: …` + `herald: Run state pushed to <base> at <sha> (…)` | `inbound.py apply-pending` | `warp:sync` from the channel: the run state was pushed. Post the pass update the lines after it name, then `notify.py posted` |
 | `run: stopped at <time>. Start nothing …` / `run: paused …` | `supervise` | the run is stopped or paused: no Shuttle, no listener, no resume. Run `parent-exit` and end the turn |

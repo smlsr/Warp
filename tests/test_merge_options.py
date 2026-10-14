@@ -114,6 +114,7 @@ class LocalMergeTest(Origin):
 class PublishTest(Origin):
     def ready(self):
         ticket = {"id": "WE-01", "status": "review", "phase": "ready", "autoMerge": True, "size": "S", "gate": "G0",
+                  "module": "WarpEdit", "summary": "Editor scaffold", "hours": 4, "tokens": 0, "minutes": 0,
                   "branch": "warp/edit/WE-01-WAR-63", "locks": ["app/"], "acs": [{"id": "AC-1", "text": "builds"}],
                   "pr": {"url": URL, "headSha": SHA, "bugbot": "pass", "bugbotSha": SHA, "check": "green", "checkSha": SHA,
                          "ciNone": True, "acResults": {"AC-1": "pass"}, "acSha": SHA}}
@@ -142,6 +143,10 @@ class PublishTest(Origin):
         published = git(self.bare, "show", "main:.warp/beam.json")
         self.assertEqual(published.returncode, 0, lines)
         self.assertEqual(json.loads(published.stdout)["tickets"]["WE-01"]["status"], "merged")
+        # The board and status went out as of the merge, not as of an earlier pass.
+        self.assertIn("WE-01", git(self.bare, "show", "main:.warp/BOARD.md").stdout)
+        status = json.loads(git(self.bare, "show", "main:.warp/status.json").stdout)
+        self.assertIn("WE-01", json.dumps(status))
 
     def test_publish_on_change_false_leaves_it_to_the_parent(self):
         path = self.ready()
@@ -153,19 +158,31 @@ class PublishTest(Origin):
         self.assertFalse(any(line.startswith("state: published") for line in lines), lines)
         self.assertNotEqual(git(self.bare, "show", "main:.warp/beam.json").returncode, 0)
 
-    def test_a_new_ticket_branch_publishes_it_in_progress(self):
-        self.beam([self.ticket(status="claimed", agent="shuttle-T-1")], runner="cloud", baseBranch="main", launch="worktree", subagentVm=False)
-        launched = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo,
-                       env=dict(os.environ, WARP_PUBLISH="1"))
+    def launch(self, **config):
+        self.beam([self.ticket(status="claimed", agent="shuttle-T-1")], runner="cloud", baseBranch="main", launch="worktree",
+                  subagentVm=False, **config)
+        return run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo, env=dict(os.environ, WARP_PUBLISH="1"))
+
+    def test_a_new_ticket_branch_does_not_push_by_default(self):
+        launched = self.launch()
+        self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+        self.assertIn("created: branch warp/T-1", launched.stdout)
+        self.assertNotIn("state: published", launched.stdout)
+        self.assertNotEqual(git(self.bare, "show", "main:.warp/beam.json").returncode, 0)
+        # The live board still shows it: the state is current here, and the next merge or warp:sync carries it.
+        self.assertTrue((self.repo / ".warp" / "beam.json").is_file())
+
+    def test_push_state_new_publishes_it_in_progress(self):
+        launched = self.launch(pushStateNew=True)
         self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
         self.assertIn("state: published (started T-1 on warp/T-1)", launched.stdout)
         published = json.loads(git(self.bare, "show", "main:.warp/beam.json").stdout)
         self.assertEqual(published["tickets"]["T-1"]["branch"], "warp/T-1")
+        self.assertEqual(git(self.bare, "show", "main:.warp/BOARD.md").returncode, 0)  # refreshed and published with it
         # The prompt still comes last.
         self.assertLess(launched.stdout.find("state: published"), launched.stdout.find(orchestrator.PROMPT_MARK))
         again = run("checkout.py", "launch", "--root", str(self.repo), "--id", "T-1", cwd=self.repo, env=dict(os.environ, WARP_PUBLISH="1"))
         self.assertNotIn("state: published", again.stdout)  # a reused branch is not a new start
-
 
 if __name__ == "__main__":
     unittest.main()
