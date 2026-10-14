@@ -51,14 +51,14 @@ import runs  # noqa: E402
 
 ACCEPTED_FORMS = (
     "warp:pause, warp:resume, warp:stop, warp:start, "
-    "warp:proceed <id>, warp:retry <id>, warp:status"
+    "warp:proceed <id>, warp:retry <id>, warp:status, warp:sync"
 )
-VERB_RE = re.compile(r"^warp:\s*(pause|resume|stop|start|proceed|retry|status)\b\s*(.*?)\s*$", re.I)
+VERB_RE = re.compile(r"^warp:\s*(pause|resume|stop|start|proceed|retry|status|sync)\b\s*(.*?)\s*$", re.I)
 ACK_NAME = "inbound-ack.json"
 PENDING_NAME = "pending-commands.jsonl"
 LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
-ADDRESSABLE = {"pause", "resume", "stop", "start", "status"}
+ADDRESSABLE = {"pause", "resume", "stop", "start", "status", "sync"}
 STATE_VERBS = {"pause", "resume", "stop", "start"}
 EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost", "cut-off")
 KEEP_CYCLING = "listen: keep cycling. Run poll again now with the same lease and holder. Do not return."
@@ -1117,6 +1117,14 @@ def plan_command(data: dict, parsed: dict, cfg: Optional[dict] = None) -> dict:
             "action": "status",
             "ok": True,
         }
+    if verb == "sync":
+        return {
+            "ack": "Received warp:sync. Pushing the run state (beam, journal, board, status, ticket folders) to the repo.",
+            "verb": verb,
+            "ticket": None,
+            "action": "sync",
+            "ok": True,
+        }
     hits = proceed.resolve_token(data, parsed.get("token") or parsed.get("raw") or "")
     if verb == "retry":
         shown = _token_shown(parsed)
@@ -1320,6 +1328,12 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
         return "action: %s%s" % (action, extra)
     if action == "retry":
         return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"], by))
+    if action == "sync":
+        import orchestrator
+
+        lines = orchestrator.sync_state(beam_path, by=by or "")
+        posted = notify.pass_post(_root(beam_path), lines)
+        return "action: sync\n" + "\n".join(lines + posted)
     if action == "status":
         import status_post
 

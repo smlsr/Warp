@@ -1730,6 +1730,9 @@ def default_config() -> dict:
         "bugbotTrigger": "auto",
         "bugbotStartMinutes": 10,
         "bugbotPollSeconds": 120,
+        "mergeMethod": "merge",
+        "deleteBranchOnMerge": False,
+        "publishOnChange": True,
         "maxFixAttempts": 5,
         "stuckAfterMinutes": 90,
         "stallImplementingMinutes": 90,
@@ -1872,7 +1875,7 @@ def main() -> None:
     ps.add_argument("--via", choices=["local", "connected"], help="how this merge happened; local skips pull-request comments")
     ps.add_argument("--approved-by", help="who approved the merge; stored on pr.approvedBy")
     ps.add_argument("--proceeded-by", help="who said warp:proceed; stored on pr.proceededBy")
-    ps.add_argument("--merge-method", help="merge method, default squash once status is merged")
+    ps.add_argument("--merge-method", help="merge method (merge, squash, rebase); default mergeMethod from the config once status is merged")
     ps.add_argument("--bugbot")
     ps.add_argument("--bugbot-requested", action="store_true", help="Bugbot was requested for the current head")
     ps.add_argument("--ci")

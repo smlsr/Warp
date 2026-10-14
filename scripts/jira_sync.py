@@ -75,6 +75,7 @@ CONFIRMED_SOURCES = {"plan", "export", "map", "manual", "external", "label", "li
 # A search hit is sent even when jiraProject does not list its prefix.
 LOOKUP_SOURCES = {"external", "label", "link", "summary"}
 DEFAULTS = {
+    "mergeMethod": "merge",
     "jiraTransition": True,
     "jiraInProgressStatus": "In Progress",
     "jiraInReviewStatus": "In Review",
@@ -262,7 +263,9 @@ def apply_review(ticket: dict, cfg: Optional[dict], args) -> Optional[str]:
         if method:
             pr["mergeMethod"] = method
         elif not pr.get("mergeMethod"):
-            pr["mergeMethod"] = "squash"
+            import provider
+
+            pr["mergeMethod"] = provider.merge_method(cfg)
     return note
 
 
@@ -1183,7 +1186,7 @@ def post_merge_text(beam_path: Path, beam: dict, ticket: dict, cfg: dict, mode: 
         (
             f"beam: status {ticket.get('status')} sha {sha} "
             f"mergedAt {pr.get('mergedAt') or 'unknown'} via {pr.get('via') or mode} "
-            f"method {pr.get('mergeMethod') or 'squash'} "
+            f"method {pr.get('mergeMethod') or cfg.get('mergeMethod') or 'merge'} "
             f"approvedBy {pr.get('approvedBy') or 'unknown'} "
             f"proceededBy {pr.get('proceededBy') or 'unknown'}."
         ),
