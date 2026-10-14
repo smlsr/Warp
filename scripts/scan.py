@@ -636,6 +636,8 @@ def write_status(beam_path: Path) -> None:
     beam = load_json(beam_path)
     beam["metrics"] = metrics(beam)
     done, left, working = [], [], []
+    import bugbot as bugbot_mod
+
     for t in sorted(beam["tickets"].values(), key=lambda x: x["id"]):
         pr = t.get("pr") or {}
         row = {
@@ -645,7 +647,8 @@ def write_status(beam_path: Path) -> None:
             "size": t.get("size"),
             "autoMerge": bool(t.get("autoMerge")),
             "pr": pr.get("url"),
-            "bugbot": pr.get("bugbot"),
+            # running(4m) while Cursor Bugbot's check runs on the head; pass(6m) or fail(6m) once it ends.
+            "bugbot": bugbot_mod.activity(pr) or pr.get("bugbot"),
             "ci": pr.get("ci"),
             "bugbotFixed": pr.get("bugbotFixed") or 0,
             "sha": pr.get("sha"),

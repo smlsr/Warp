@@ -21,6 +21,7 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Jira not updated (no connector, no matching transition, or a failure). `jira_sync.py record` writes `.warp/outbox.md` and `.warp/notify-post.json`. Post that payload. Do not treat it as optional.
 - A ticket ran local-only, or was merged locally: post the message `scripts/provider.py note` wrote. Nothing was pushed. When the note says the branch was pushed ("Pull request not opened"), only the pull request is missing and the parent opens it.
 - PR opened: id and url.
+- Bugbot started and finished: the `herald:` lines after `bugbot: running` (`<id> Cursor Bugbot is reviewing PR #<n>`) and `bugbot: done` (`… finished PR #<n>: no issues` or `<n> finding(s). Back to fix.`), each with how long it took. Post each once. The `bugbot: running … so far` lines in between are not posted.
 - Bugbot pass or fail: id and one line of evidence.
 - Awaiting approval: id, url, Bugbot clean, `warp:proceed <id>`. Manual tickets reach this only after Bugbot and CI.
 - Merged: id, sha, and Jira status. Manual merges move to Done too, unless `jiraDoneOnManualMerge` is false. `proceed.py` writes `.warp/notify-post.json` for the reply. Post it, including the merge sha and the Jira status.

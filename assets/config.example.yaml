@@ -247,6 +247,9 @@ bugbotTrigger: auto
 #            2 per commit; after that Warp asks for a review by hand.
 bugbotStartMinutes: 10
 # Minutes to wait for Bugbot to start after a request or a `bugbot run` comment.
+bugbotPollSeconds: 120
+# While Cursor Bugbot checks a head (or was asked to), the parent looks again this often
+# instead of every pollSeconds, so `bugbot: done` shows soon after Bugbot ends.
 maxFixAttempts: 5
 stuckAfterMinutes: 90
 # Minutes with no progress before supervise marks that state stalled.

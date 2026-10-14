@@ -2071,6 +2071,13 @@ def parent_wait(
             stamp = beam_mod.parse_ts(mark.get("startedAt"))
             since = stamp.timestamp() if stamp is not None else began
         poll = max(int(beam_mod.config_int(data, path, "pollSeconds", 300)), 0)
+        if limit is None or limit < 0:
+            import bugbot as bugbot_mod
+
+            if bugbot_mod.waiting_on(data, now_s):
+                # Cursor Bugbot is checking a head (or was asked to): look again sooner, so its result shows
+                # within bugbotPollSeconds and not up to pollSeconds later.
+                poll = min(poll, max(int(beam_mod.config_int(data, path, bugbot_mod.POLL_KEY, bugbot_mod.DEFAULT_POLL_SECONDS)), 30))
         cap = poll if limit is None or limit < 0 else int(limit)
         cap = max(0, min(cap, 3600))
         changed = _changed_ticket(path, since)
@@ -2165,6 +2172,15 @@ def parent_exit(
         out = verdict(_load(path))
         if out:
             return lines + out
+        try:
+            import bugbot as bugbot_mod
+
+            waiting = bugbot_mod.waiting_summary(_load(path))
+        except Exception:
+            waiting = ""
+        if waiting:
+            # The run is waiting on Cursor Bugbot, not stalled.
+            lines.append(waiting)
         lines.append("run: next is pass %d" % _pass_number(path))
     lines.append("parent: stay")
     return lines

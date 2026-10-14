@@ -583,17 +583,25 @@ def _row(ticket: dict, now: str) -> dict:
         "age": _age_label(_minutes_between(since, now)),
         "last": last,
         "pr": _pr(ticket).get("url") or "none",
-        "bugbot": _bugbot_label(ticket),
+        "bugbot": _bugbot_shown(ticket, now),
         "ci": _ci_label(ticket),
         "ac": _ac_label(ticket),
         "stalled": "yes" if ticket.get("stalled") or watch.get("stalled") else "no",
         "retries": _retries(ticket),
         "alarm": alarm,
-        "next": next_action(ticket),
+        "next": next_action(ticket, now),
     }
 
 
-def next_action(ticket: dict) -> str:
+def _bugbot_shown(ticket: dict, now=None) -> str:
+    """The bugbot= column: `running(4m)` while Cursor Bugbot's check runs on the head, `pass(6m)` or `fail(6m)` with
+    how long it took once it ends, else the plain label."""
+    import bugbot
+
+    return bugbot.activity(_pr(ticket), now) or _bugbot_label(ticket)
+
+
+def next_action(ticket: dict, now=None) -> str:
     """What Warp will do for this ticket on the next fixer or pipeline pass."""
     if ticket.get("status") == "parked":
         return "parked: %s" % (ticket.get("parkReason") or ticket.get("alarm") or "parked")
@@ -618,7 +626,12 @@ def next_action(ticket: dict) -> str:
     if ticket.get("stalled") and phase in _SHUTTLE_PHASES:
         return "restart the step"
     if phase in _REVIEW_PHASES and _bugbot_label(ticket) not in {"pass", "fail"}:
-        return "wait for Bugbot"
+        import bugbot
+
+        shown = bugbot.activity(_pr(ticket), now)
+        if shown.startswith("running("):
+            return "wait for Bugbot (running %s)" % shown[len("running("):-1]
+        return "wait for Bugbot (not started)" if _pr(ticket).get("url") else "wait for Bugbot"
     if _ci_label(ticket) == "pending":
         return "wait for CI"
     if phase == "ready":

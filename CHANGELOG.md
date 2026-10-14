@@ -2,7 +2,16 @@
 
 ## 1.6.18
 
-- Docs only: README, LIFECYCLE, COMMANDS, STATE, GUIDE, MERGE-POLICY, the warp, warp-init and warp-allow-notify skills, the start and resume commands, the Shuttle rule, and the `--with-git` help now cover everything from 1.6.12 through 1.6.17:
+- New: Bugbot's progress is shown. Shuttles show up as background agents and Cursor Bugbot does not, so a run waiting on it looked stalled (WE-01 on PR #24). Each pass now prints, per ticket:
+  - `bugbot: not started <id> on <sha> (asked <m> ago)` until its check shows up;
+  - `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)` when it starts, then `bugbot: running <id> on <sha>, <m> so far`;
+  - `bugbot: done <id> pass on <sha> (took <m>)` or `bugbot: done <id> <n> finding(s) on <sha> (took <m>): …` when it ends.
+  - Slack and Teams get one Herald line at the start and one at the end (not the lines in between). A result older than 30 minutes when first seen, as on a resume, is shown and not posted.
+  - `parent-exit --wait` ends with `bugbot: waiting on Cursor Bugbot: WE-01 running 4m, …`, and while anything waits on Bugbot it returns every `bugbotPollSeconds` (120) instead of `pollSeconds` (300).
+  - `/warp-status`, `status.json`, `STATUS.md` and the status post show `bugbot=running(4m)`, `pass(6m)` or `fail(7m)`, and `next=wait for Bugbot (running 4m)` or `(not started)`.
+  - The late check on a merged pull request prints the same lines with `after the merge`.
+  - The record is `pr.bugbotRun`; the start time is read from Bugbot's check (`startedAt`).
+- Docs: README, LIFECYCLE, COMMANDS, STATE, GUIDE, MERGE-POLICY, the warp, warp-init and warp-allow-notify skills, the start and resume commands, the Shuttle rule, and the `--with-git` help now cover everything from 1.6.12 through 1.6.17:
   - Bugbot: its `neutral` check is a finding, the Shuttle trigger still waits for Bugbot's result, and late findings become follow-up tickets.
   - Merges: the merge check before a merge, and a merge recorded only when the provider shows it.
   - Fix Shuttles: the fix prompt's `FIX` lines, a fix that pushed nothing, and `git stash` forbidden.

@@ -324,6 +324,11 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `run: reopened for Bugbot follow-ups` | `supervise` | a finished run has follow-up tickets again; its end-of-run teardown runs once more when they settle |
 | `bugbot: late <id> <url> <n> finding(s) after the merge. Follow-up ticket <id>-BB<n> queued.` | `supervise` | Cursor Bugbot found issues on a merged pull request. The follow-up runs like any ticket and asks for no Jira move |
 | `bugbot: wait <id> (the Shuttle's review passed; waiting for Cursor Bugbot on <sha>)` | `supervise` | with `bugbotTrigger: shuttle`, the merge still waits for Cursor Bugbot's own result where Bugbot runs |
+| `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)` + `herald: <id> Cursor Bugbot is reviewing PR #<n> (<sha>).` | `supervise` | Cursor Bugbot's check started on that head. Post the Herald line. Nothing else to do |
+| `bugbot: running <id> on <sha>, <m> so far` | `supervise` | Bugbot is still checking. The run is waiting on it, not stalled. No post |
+| `bugbot: done <id> pass on <sha> (took <m>)` / `bugbot: done <id> <n> finding(s) on <sha> (took <m>): …` + one `herald:` line | `supervise` | Bugbot's check ended. A finding goes to a fix in the same pass. A result older than 30 minutes when first seen (a resume) is shown and not posted |
+| `bugbot: not started <id> on <sha> (asked <m> ago)` | `supervise` | Bugbot was asked about that head and its check has not shown up. After `bugbotStartMinutes` Warp asks it with a `bugbot run` comment |
+| `bugbot: waiting on Cursor Bugbot: <id> running <m>, <id> not started <m>` | `parent-exit --wait` | what the run is waiting on. While it prints, the wait returns after `bugbotPollSeconds` (120) instead of `pollSeconds` |
 | `bugbot: review for <id> kept for <sha>; the head Warp has is <sha>. …` | `supervise` (ticket folder) | a Shuttle reviewed the commit it just pushed; the review applies when the pull request shows that commit |
 | `fix: <id> came back with no new commit; Cursor Bugbot's finding on <sha> still stands: …` | `supervise` | the fix pushed nothing. It is counted and fixed again with the finding |
 | `shuttle: not launched <id>. Launch it now …` | `supervise` | the `start` or `resume` line below it was printed before and never launched |

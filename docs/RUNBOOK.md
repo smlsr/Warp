@@ -444,6 +444,16 @@ The scan printed `schedule: <program> build-schedule/2, gate order strict — ga
 
 `/warp-dashboard` runs `dashboard.py write --beam .warp/beam.json`. It prints `dashboard: .warp/dashboard.html tickets=<n> files=<n>` and `open: file://...`. The page has the beam, each ticket's `state.json`, and the other runs' published beams inside it. Once the file exists, every status write rewrites it. Press Reload in the page to see the new state. The file is local: state commits leave it out. Delete it to stop the rewrites. `refuse: no beam at <path>. Run /warp-scan first, or pass --empty to write the page without data.` means there is no run yet. `--empty --out <path>` writes a page with no data, and File > Open reads the files by hand. See the [README](../README.md#dashboard).
 
+## Is the run stalled, or waiting on Bugbot?
+
+Shuttles show up as background agents, and Cursor Bugbot does not: it runs on GitHub. Since 1.6.18 every pass says what Bugbot is doing on each ticket's head:
+
+- `bugbot: not started <id> on <sha> (asked <m> ago)`: asked, no check yet. After `bugbotStartMinutes` (10) Warp comments `bugbot run` (see the next section).
+- `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)`, then `bugbot: running <id> on <sha>, <m> so far` on each pass: it is checking. Bugbot usually takes 3 to 10 minutes.
+- `bugbot: done <id> pass on <sha> (took <m>)`, or `bugbot: done <id> <n> finding(s) … (took <m>): <path:line title (severity)>; …`: it ended. A finding starts a fix Shuttle in the same pass.
+
+Slack or Teams gets one Herald line when the check starts and one when it ends, in verbose mode. The lines in between are not posted. `parent-exit --wait` ends with `bugbot: waiting on Cursor Bugbot: WE-01 running 4m, WE-03 not started 2m` while anything waits on it, and returns every `bugbotPollSeconds` (120) instead of `pollSeconds`, so the result shows soon after Bugbot ends. `/warp-status` and the status post show `bugbot=running(4m)`, and `next=wait for Bugbot (running 4m)` or `(not started)`. A merged ticket's late check prints the same lines with `after the merge`.
+
 ## Bugbot never starts
 
 `bugbot: request` only records that a review was asked for. When Bugbot is on for the repo it starts by itself, and its `Cursor Bugbot` check shows up on the pull request. If it does not show up within `bugbotStartMinutes` (default 10), Warp:
