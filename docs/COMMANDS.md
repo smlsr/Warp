@@ -320,7 +320,8 @@ python3 <plugin>/scripts/jira_sync.py external-id --ticket WV-01 --key WAR-1 --y
 | `--apply` | Store one exact or prefix match on the beam and in `.warp/jira-map.json` (source `summary`). |
 | `--yes` | Also store one fuzzy proposal. Confirms an External ID write. |
 | `--all` | Report tickets that already have a key. Do not replace them. |
-| `--chars N` | Prefix length, and how much of the plan summary an External ID hit must find in the Jira summary. Default 60. |
+| `--chars N` | Prefix length, and how much of the plan summary an External ID hit (or `--text-only`) must find in the Jira summary. Default 60. |
+| `--text-only` | A Jira summary that contains the plan summary's first 60 characters (`--chars`) anywhere is a match on its own, whatever the issue's External ID says (an External ID that is another tool's id, not the plan id). Text is compared normalized (case, punctuation, spaces). Two issues with the text are ambiguous and nothing is stored. Confirmed as `text`, high, and stored with `--apply`. `jiraMatchOnText: true` makes it the default, and the scan's lookup then stores it too. |
 | `--min-score N` | Fuzzy threshold. Default 0.9. |
 | `--include-done` | Match Done and closed issues. |
 | `--id ID` | One plan id. |

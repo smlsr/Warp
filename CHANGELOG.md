@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.24
+
+- New: `jiraMatchOnText` (default `false`) and `jira_match.py --text-only`. When the Jira issues' External ID holds another tool's id instead of the plan id, the 1.6.23 rule (External ID plus the title) cannot match. With the switch on, a Jira summary that contains the plan summary's first 60 characters (`--chars`) anywhere is a match on its own, whatever the External ID says. The scan's lookup stores it as a hit (`summary`, high) instead of a proposal, `/warp-jira-match` confirms it as `text` and stores it with `--apply`, and `jira_sync.py map --match` proposes it. Two issues that contain the text are ambiguous and nothing is stored. Off, nothing changes.
+
 ## 1.6.23
 
 - Fix: tickets whose Jira title starts with the plan id did not match the schedule. `WE-01 Editor scaffold on WarpView's modules, and the read-only audit` was not an exact summary match for `Editor scaffold on WarpView's modules, and the read-only audit`, and the 60-character prefix rule compares the start of both titles, so the scan's summary matching missed even though the issue's External ID was `WE-01`. Now an issue whose External ID is the plan id, and whose summary contains the plan summary's first 60 characters (`--chars`) anywhere, is a match: `external`, high confidence, as good as exact, stored with source `external`. Both checks are needed: the id alone with a different title, or the title alone with another ticket's External ID, is not an `external` match. Text is compared normalized (case, punctuation and spaces). It applies to `/warp-jira-match` (`jira_match.py`), `jira_sync.py map --match`, and the summary step of the lookup (`jira_lookup.py`), where it is a proposal like any summary match.

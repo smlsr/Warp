@@ -1725,6 +1725,7 @@ def default_config() -> dict:
         "jiraDoneOnManualMerge": True,
         "jiraMcp": "atlassian",
         "jiraSite": "",
+        "jiraMatchOnText": False,
         "bugbotRequired": True,
         "bugbotManual": True,
         "bugbotTrigger": "auto",
