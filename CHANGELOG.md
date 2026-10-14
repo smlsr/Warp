@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.25
+
+- New: `docs/config.html`, every config key on one page: its default, the values it takes (the default highlighted), and what it does, in eight groups (run and state, agents and models, merging, Cursor Bugbot, stalls and repair, Slack, Teams and the listener, Jira, git provider). It has a filter box and section links, follows the system light or dark setting, and works offline and on a phone. `scripts/config_doc.py` builds it from the key table in `docs/CONFIG.md`; `--check` fails when the page is out of date, a key has no group, or a table row is malformed, and the tests run it. README, CONFIG.md, COMMANDS.md, and CONTRIBUTING.md link to it.
+- Fixed: the `bugbotTrigger` row in `docs/CONFIG.md` and the message-header row in `docs/LIFECYCLE.md` had a bare `|` inside code, which split the row into extra columns on GitHub. Both are escaped.
+- Docs: GUIDE.md's summary-matching step covers `jiraMatchOnText` and `--text-only` (1.6.24).
+
 ## 1.6.24
 
 - New: `jiraMatchOnText` (default `false`) and `jira_match.py --text-only`. When the Jira issues' External ID holds another tool's id instead of the plan id, the 1.6.23 rule (External ID plus the title) cannot match. With the switch on, a Jira summary that contains the plan summary's first 60 characters (`--chars`) anywhere is a match on its own, whatever the External ID says. The scan's lookup stores it as a hit (`summary`, high) instead of a proposal, `/warp-jira-match` confirms it as `text` and stores it with `--apply`, and `jira_sync.py map --match` proposes it. Two issues that contain the text are ambiguous and nothing is stored. Off, nothing changes.

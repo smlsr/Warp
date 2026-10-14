@@ -13,7 +13,7 @@ There is no per-person cap. There are two caps. `maxAgents` (default 18) is how 
 3. `/warp-scan` (or `/warp-scan <folder>`). `jiraProject` is filled when one project is clear from the plan, branches, recent commits, or Jira. A Jira JSON import uses `externalId` as the plan id (`h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels such as `size:S`). That value is not the issue key. Keys already on the plan, in an export `key`, or in `.warp/jira-map.json` are stored. If Jira is connected, the rest are resolved in order: `jiraExternalIdField`, then a `warp:<id>` label, then a remote link. The summary looks like `12 tickets: 9 keyed, 3 need mapping`. `/warp-jira-match` is the summary step. `/warp-jira-map` is only for ids that stay unmapped or ambiguous. Then `/warp-start`.
 4. `/warp-status` reads the board. `/warp-jira-check` explains a Jira status that did not move. `/warp-jira-view WAR-1` prints one issue. `/warp-version` compares the installed copy with this plugin.
 
-The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md). The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). Several runs in one repo (`/warp-init <name>`) are in [docs/RUNS.md](docs/RUNS.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
+The command table is below. Flags are in [docs/COMMANDS.md](docs/COMMANDS.md). Every config key is in [docs/CONFIG.md](docs/CONFIG.md), and [docs/config.html](docs/config.html) is the same keys as one chart: each key's default, the values it takes, and what it does, grouped and searchable. The Jira path from import to merge is in [docs/GUIDE.md](docs/GUIDE.md). When a transition fails, start with [docs/RUNBOOK.md](docs/RUNBOOK.md). How agents start, end, and are torn down is in [docs/LIFECYCLE.md](docs/LIFECYCLE.md). Several runs in one repo (`/warp-init <name>`) are in [docs/RUNS.md](docs/RUNS.md). What changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -670,6 +670,8 @@ Set `teamsChannel` and `slackChannel` in `.warp/config.yaml`. If a connector is 
 ## Configuration
 
 One file, `.warp/config.yaml`. Change it, then `/warp-resume`, so the next tick re-reads it and the repo gets the new copy.
+
+For the whole set at a glance, open [docs/config.html](docs/config.html) in a browser. It lists all the keys in eight groups (run and state, agents and models, merging, Cursor Bugbot, stalls and repair, Slack, Teams and the listener, Jira, git provider), with the default highlighted among the values each key takes, and a filter box. It works offline. The full text of each key is in [docs/CONFIG.md](docs/CONFIG.md); the table below covers the keys you are most likely to change.
 
 ### Where the config is stored
 

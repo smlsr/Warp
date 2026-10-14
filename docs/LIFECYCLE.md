@@ -95,7 +95,7 @@ The instance is shown wherever you would look for it:
 | `/warp-version` | the same line, and `this machine: <machine id> host=<host>` for the machine the command ran on |
 | `agents.py list` | the same line first |
 | `.warp/STATUS.md`, `.warp/status.json` | `Instance warp:a1b2c3 ...`, and an `instance` object |
-| Every Slack and Teams message | the header: `Warp | <repo> / <project> | run <name> | warp:a1b2c3`. `| run <name>` appears only on a named run |
+| Every Slack and Teams message | the header: `Warp \| <repo> / <project> \| run <name> \| warp:a1b2c3`. `\| run <name>` appears only on a named run |
 | The status post | a fact, `Instance: warp:a1b2c3 on <host>` |
 
 The tag is how this run's agents are told apart from every other agent, including another Warp run's. A dry run lists them with their status, which is how you see one that is still running:

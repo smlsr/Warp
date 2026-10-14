@@ -645,6 +645,13 @@ python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --
 python3 .cursor/plugins/warp/scripts/agents.py ?
 ```
 
+```bash
+python3 scripts/config_doc.py
+python3 scripts/config_doc.py --check
+```
+
+`config_doc.py` rebuilds `docs/config.html`, the chart of every config key, from the key table in `docs/CONFIG.md` and prints `config-doc: wrote docs/config.html (<n> keys)`. `--check` writes nothing, prints `config-doc: docs/config.html is current`, and exits 1 when the page is out of date (`config-doc: docs/config.html is out of date. Run python3 scripts/config_doc.py`). Both exit 1 when a key in the table has no group on the page (`config-doc: keys with no section in scripts/config_doc.py: <keys>`); add it to a group in `SECTIONS`. A table row that does not split into three cells, usually a bare `|` inside a code span, fails the same way with its line number (`config-doc: docs/CONFIG.md rows that do not have three cells …`); write it as `\|`. The tests run the check, so run the script after you change `CONFIG.md` or bump the version.
+
 `VERSION` is the source of truth. The manifest must match, and `CHANGELOG.md` must have a `## <version>` heading. Every pull request bumps the patch. `bump_version.py` updates all three and inserts a stub (`--note` sets the bullet). CI fails when the pull request version is not newer than `main`.
 
 ## Beam
