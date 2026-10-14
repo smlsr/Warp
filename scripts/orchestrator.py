@@ -1459,11 +1459,23 @@ def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional
         "SUBAGENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
-        "locks: %s" % _joined(ticket.get("locks")),
+        "locks: %s" % locks_text(ticket),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
     ] + step_lines(ticket)
+
+
+def locks_text(ticket: dict) -> str:
+    """The prompt's locks line, with the lockfiles a locked manifest covers."""
+    import alarm_repair
+
+    locks = [str(lock) for lock in ticket.get("locks") or [] if str(lock).strip()]
+    text = _joined(locks)
+    implied = alarm_repair.implied_locks(locks)
+    if implied:
+        text += " (and the lockfiles of those manifests: %s)" % ", ".join(implied)
+    return text
 
 
 def step_lines(ticket: dict) -> list:
@@ -1588,7 +1600,7 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
         "IMPLEMENT %s" % tid,
         "ticket: %s" % tid,
         "jira: %s" % (ticket.get("jiraKey") or ""),
-        "locks: %s" % _joined(ticket.get("locks")),
+        "locks: %s" % locks_text(ticket),
         "acceptance: %s" % acceptance_text(ticket),
         "branch: %s" % branch,
         "model: %s" % model_for(ticket, config)[0],
@@ -2305,7 +2317,7 @@ def dispatch_actions(beam: dict, ready_rows: list, cap: Optional[int] = None) ->
                     "SUBAGENT %s" % ticket.get("id"),
                     "ticket: %s" % ticket.get("id"),
                     "jira: %s" % (ticket.get("jiraKey") or ""),
-                    "locks: %s" % _joined(ticket.get("locks")),
+                    "locks: %s" % locks_text(ticket),
                     "acceptance: %s" % acceptance_text(ticket),
                     "branch: %s" % action["branch"],
                     SUBAGENT_INSTRUCTION,

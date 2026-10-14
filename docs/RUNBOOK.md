@@ -480,6 +480,8 @@ A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelin
 
 The Shuttle's `.warp/tickets/<id>/state.json` used to keep `alarm: lock-escape` and the escaped paths after later states, so every newer state raised the alarm again, even after the repair had widened the locks. A later state now clears those fields, a leftover field is not read as a new lock-escape, and paths already inside the ticket's locks never raise it. `/warp-resume` clears one that is already on a ticket (`heal: <id> lock-escape cleared, ...`).
 
+A lockfile beside a locked manifest is covered by that lock and is never an escape. That covers `package.json` and its npm, yarn, pnpm or bun lockfile, `go.mod` and `go.sum`, `Cargo.toml` and `Cargo.lock`, `pyproject.toml` and its poetry, uv or pdm lockfile, `Pipfile`, `Gemfile`, and `composer.json`. The Shuttle prompt's `locks:` line names those lockfiles.
+
 ## How the parent knows a Shuttle came back
 
 A Shuttle's return is read from its ticket folder, the one channel that works on a cloud runner too. The step's Shuttle (implement, fix, restart, repair, review) writes `done` as its last state. A check result (`check-green`, `check-red`) from the same agent after it started counts as well, and for a review Shuttle so does the review it recorded. Supervise prints `shuttle: returned <id> step=<step> (<state>)`, frees the slot, and moves the ticket on.

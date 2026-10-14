@@ -11,6 +11,7 @@
   - Passes: numbered, and launch lines nobody launched are printed again.
   - The recorded pull request times and Spent, and the `CURSOR_API_KEY` rule.
   - The new beam fields, config rows and output lines.
+- Fix: a lockfile beside a locked manifest counted as outside the ticket's locks. WE-01 locked `app/package.json`, `npm install` wrote `app/package-lock.json`, and the parent had to check it by hand. A locked `package.json` now covers its `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` and `bun.lockb`. The same goes for `go.mod` → `go.sum`, `Cargo.toml` → `Cargo.lock`, `pyproject.toml` → `poetry.lock`, `uv.lock` and `pdm.lock`, `Pipfile` → `Pipfile.lock`, `Gemfile` → `Gemfile.lock`, and `composer.json` → `composer.lock`. The Shuttle prompt's `locks:` line names them, and the lock-escape check counts them as covered.
 - Docs: "A stale heartbeat does not start another listener" was untrue after 1.6.13 and is gone from 17 places. So is "the merge queue rebases and runs `checkCommand`", which no code did. `--with-git` is documented as allowing `merge_pull_request` and `create_pull_request` too.
 
 ## 1.6.17

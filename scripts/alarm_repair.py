@@ -164,10 +164,40 @@ def _escaped(ticket: dict) -> list:
     return normalize_paths(ticket.get("escaped"))
 
 
+# A package manager rewrites the lockfile beside a manifest whenever the manifest's dependencies change.
+LOCKFILE_OF = {
+    "package.json": ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"),
+    "go.mod": ("go.sum",),
+    "Cargo.toml": ("Cargo.lock",),
+    "pyproject.toml": ("poetry.lock", "uv.lock", "pdm.lock"),
+    "Pipfile": ("Pipfile.lock",),
+    "Gemfile": ("Gemfile.lock",),
+    "composer.json": ("composer.lock",),
+}
+
+
+def implied_locks(locks: list) -> list:
+    """Lockfiles covered by a locked manifest: `app/package.json` covers `app/package-lock.json`.
+
+    Before 1.6.18 WE-01 locked package.json, npm install wrote package-lock.json, and the lockfile counted as
+    outside the ticket's locks.
+    """
+    out = []
+    for lock in locks or []:
+        if not isinstance(lock, str) or lock.endswith("/"):
+            continue
+        folder, _, name = lock.strip().rpartition("/")
+        for companion in LOCKFILE_OF.get(name, ()):
+            path = "%s/%s" % (folder, companion) if folder else companion
+            if path not in locks and path not in out:
+                out.append(path)
+    return out
+
+
 def _already_locked(locks: list, path: str) -> bool:
-    """True when path is already that lock or sits inside it."""
+    """True when path is already that lock or sits inside it, or is the lockfile of a locked manifest."""
     path = path.rstrip("/")
-    for lock in locks:
+    for lock in list(locks) + implied_locks(list(locks)):
         if not isinstance(lock, str) or not lock.strip():
             continue
         have = lock.strip().rstrip("/")
