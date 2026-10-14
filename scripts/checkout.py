@@ -471,11 +471,17 @@ def _note_live(data: dict, ticket: dict) -> None:
     pipeline.mark_shuttle(ticket, step, data)
     # When this Shuttle really started. Its folder lines before this are an earlier Shuttle's.
     ticket["shuttle"]["startedAt"] = beam_mod.utcnow()
+    ticket["shuttle"].pop("launching", None)
     repair = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else None
     if repair is not None and repair.get("state") == "working" and not repair.get("launchedAt"):
         repair["launchedAt"] = beam_mod.utcnow()
-    if not ticket.get("workerStartedAt"):
-        ticket["workerStartedAt"] = beam_mod.utcnow()
+    # This Shuttle's own start. A start or a heartbeat left by the Shuttle before it made a new launch
+    # look dead at once, and the watchdog replaced it while it was working.
+    now_s = beam_mod.utcnow()
+    ticket["workerStartedAt"] = now_s
+    seen = beam_mod.parse_ts(ticket.get("lastSeenAt"))
+    if seen is not None and seen < beam_mod.parse_ts(now_s):
+        ticket.pop("lastSeenAt", None)
 
 
 def _occupied(ticket: dict) -> bool:

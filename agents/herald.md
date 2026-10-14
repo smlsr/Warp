@@ -19,7 +19,7 @@ Read `messenger` (`slack`, `teams`, or `both`) and `notify` (`verbose` or `quiet
 - Start, pause, resume, stop, with the reason.
 - Each claim: id, size, auto or review, locks.
 - Jira not updated (no connector, no matching transition, or a failure). `jira_sync.py record` writes `.warp/outbox.md` and `.warp/notify-post.json`. Post that payload. Do not treat it as optional.
-- A ticket ran local-only, or was merged locally: post the message `scripts/provider.py note` wrote. Nothing was pushed.
+- A ticket ran local-only, or was merged locally: post the message `scripts/provider.py note` wrote. Nothing was pushed. When the note says the branch was pushed ("Pull request not opened"), only the pull request is missing and the parent opens it.
 - PR opened: id and url.
 - Bugbot pass or fail: id and one line of evidence.
 - Awaiting approval: id, url, Bugbot clean, `warp:proceed <id>`. Manual tickets reach this only after Bugbot and CI.

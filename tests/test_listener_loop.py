@@ -175,19 +175,47 @@ class ListenerLoopTests(unittest.TestCase):
         self.assertEqual(self.beam()["listener"]["generation"], 2)
         self.assertEqual(self.beam()["listener"]["holder"], "listener")
 
-    def test_a_stale_heartbeat_does_not_start_another_listener(self):
+    def test_a_listener_that_keeps_polling_is_never_replaced(self):
         orchestrator.supervise_listener(self.beam_path, now=NOW)
+        # It polls and waits every minute or two (each call stamps listener.lastSeenAt).
+        data = self.beam()
+        data["listener"]["lastSeenAt"] = plus(NOW, 14)
+        self.write(data)
         self.assertEqual(
             orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 16)),
             ["listener: hold reason=live holder=listener generation=1"],
         )
         self.assertEqual(self.beam()["listener"]["generation"], 1)
-        journal = self.tmp / ".warp" / "journal.jsonl"
-        if journal.is_file():
-            self.assertNotIn("listener-poll-lost", journal.read_text())
         rows = self.listener_rows()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["polls"], 1)
+
+    def test_a_listener_cut_off_hands_back_its_slot(self):
+        # Cursor stopped it (its poll-and-wait calls looked like a loop). It never polls again and
+        # cannot write its return stamp. Before 1.6.13 its lease read live for listenerMaxMinutes.
+        orchestrator.supervise_listener(self.beam_path, now=NOW)
+        lines = orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 16))
+        self.assertEqual(lines, [
+            "listener: lost holder=listener generation=1 (no poll or wait for 16m). Its slot is free.",
+            "listener: poll",
+        ])
+        self.assertEqual(self.beam()["listener"]["generation"], 2)
+        rows = self.listener_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["polls"], 2)
+
+    def test_returned_is_accepted_for_a_silent_holder(self):
+        orchestrator.supervise_listener(self.beam_path, now=NOW)
+        lease = self.beam()["listener"]["generation"]
+        # While it is polling, its own return is refused: the script decides when it ends.
+        inbound.poll_lines(self.beam_path, lease=lease, holder="listener", now=plus(NOW, 1))
+        self.assertTrue(inbound.mark_returned(self.beam_path, "stopped", lease=lease, holder="listener",
+                                              now=plus(NOW, 2)).startswith("listener: not returned"))
+        # Silent past listenerSilentMinutes: the release goes through and frees the slot.
+        line = inbound.mark_returned(self.beam_path, "stopped", lease=lease, holder="listener", now=plus(NOW, 9))
+        self.assertEqual(line, "listener: returned lost (no poll or wait for 8m; the slot is free)")
+        self.assertEqual(self.beam()["listener"]["holder"], "")
+        self.assertTrue(inbound.return_ready(self.beam()))
 
     def test_listener_intervals_default_when_unset(self):
         data = self.beam()

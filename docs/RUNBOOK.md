@@ -515,3 +515,24 @@ When the merge cannot run here (gh missing, a read-only token, branch protection
 
 Before 1.6.12 a pass with no merge result from the provider recorded the merge without one, cleared the gate, and asked for the Jira Done move while the pull request stayed open. `/warp-resume` now checks every ticket recorded merged that has a pull request and no confirmed merge: an open pull request goes back to ready (`heal: <id> was recorded merged, but <url> is open on the provider. Back to ready to merge; the next pass merges it.`) and its gate is pending again.
 
+## A Shuttle that could not open its pull request
+
+A Shuttle on a cloud VM can be refused when it opens the pull request (a 403) after it pushed its branch. When it comes back with no pull request, the supervise pass prints `pr: open <id> <branch>` and, in the same pass, opens it: it looks for a pull request already open for the branch, checks the branch is on origin, then runs `gh pr create` (`pr: opened <id> <url>`). Only a branch that is not on origin goes back to the Shuttle as a fix. When gh cannot open it here, `pr: MUST DO <id>` names the GitHub MCP `create_pull_request` tool and the `orchestrator.py opened --id <id> --pr <url>` command that records it; the ticket waits and is not relaunched. `/warp-allow-notify --with-git` allows `create_pull_request`. Recording a pull request with `orchestrator.py opened` also clears a step that was marked and never launched, so a ticket a 1.6.12 pass sent to fix for a missing pull request goes on to review; do not launch that fix.
+
+A Shuttle that asks `mcp_allow.py` about `create_pull_request` gets `allow` whenever the list allows any of Warp's GitHub tools on that server, also a list written before 1.6.12. After a push, a refused pull request is not local-only: the Shuttle writes `done`, and `provider.py note` (if it runs) says the branch was pushed.
+
+## Jira moves when a pass starts a ticket
+
+A ticket started by a supervise pass gets its move to In Progress and its claim comment as `jira: MUST DO` lines right after its `start` line, once per ticket (`jira.startedAt` records it). Before 1.6.13 only `beam.py set --status claimed` asked for that move, so tickets the pass started stayed To Do.
+
+## A Shuttle replaced while it was working
+
+A Shuttle is alive while it writes to its ticket folder (any line, not only `heartbeat`) or changes its worktree (a file, a stage, a commit). The watchdog calls it dead only when none of those happened for `staleMinutes` (default 15) since it started. `checkout.py launch` starts that clock, so a heartbeat left by the Shuttle before it does not count either way. A Shuttle on its own VM has no worktree on this disk: its heartbeat lines are the only signal. A replacement always gets a new id (`shuttle-<id>-r<n>`); an id that ended is never used again.
+
+## A gate flagged stuck
+
+`sweep: finding <gate> gate stuck` means a pending gate has a member in alarm or parked, or nothing in the run moved since the last sweep (no Shuttle out, no ticket in flight, no merge). A pending gate while its members, or an earlier block's, are being worked is not stuck. The second sweep in a row escalates once (`sweep: escalate`). A red gate is always a finding: fix the base or the check.
+
+## The listener stopped and supervise keeps holding
+
+Cursor can stop the listener because its poll-and-wait calls look like a loop. It cannot write its return stamp after that. Once it has not polled or waited for `listenerSilentMinutes` (default 5, never under three `listenerSlowSeconds` waits plus a minute), the next `supervise` prints `listener: lost holder=<id> generation=<n> (no poll or wait for <m>m). Its slot is free.` and then `listener: poll`: start the one listener it names. `inbound.py returned` is accepted for a lost holder as well. A listener that is still polling or waiting keeps its slot.

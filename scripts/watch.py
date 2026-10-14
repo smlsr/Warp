@@ -357,6 +357,8 @@ def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
     alarm = str(ticket.get("alarm") or "")
     stalled = bool(ticket.get("stalled"))
     pr = _pr(ticket)
+    if pr.get("openRequested") and not pr.get("url"):
+        return ""  # the parent is opening its pull request; nothing to fix or ask Bugbot about yet
     phase = _state_of(ticket)
     if shuttle.get("pending") and ticket.get("status") != "alarm":
         silent = stalled and (shuttle.get("step") == "repair" or phase in _SHUTTLE_PHASES or alarm in {"worker-died", "stuck"})

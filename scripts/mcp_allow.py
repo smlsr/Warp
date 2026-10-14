@@ -7,8 +7,11 @@ pair is on the same list /warp-allow-notify writes. ask means do not call it.
 
 This does not approve the call in Cursor, and it does not approve shell
 commands. It never allows an arbitrary tool. A missing hook is ask, not allow,
-unless the pair is one Warp already allowlists (Slack, Teams, Jira, optional
-GitHub add_issue_comment, and notifyAllow). server:* is honored only when
+unless the pair is one Warp already allowlists (Slack, Teams, Jira, the optional
+GitHub tools, and notifyAllow). A stored list that allows one of Warp's GitHub
+tools on a server allows all of them there (add_issue_comment,
+merge_pull_request, create_pull_request): a list written before a release added
+one is not a reason to refuse it. server:* is honored only when
 that pair is already in warp-allow.json because someone passed
 --allow-server-tools. The fallback list used when no pairs file exists does
 not include server:*.
@@ -83,6 +86,29 @@ def builtin_pairs(root: Path, home: Path) -> list:
     )
 
 
+def with_github_tools(pairs: list) -> list:
+    """A server allowed one of Warp's GitHub tools is allowed all of them.
+
+    /warp-allow-notify --with-git writes every tool in mcp_tools.GITHUB_TOOLS. A list written before
+    merge_pull_request and create_pull_request were added has only add_issue_comment, and a Shuttle that
+    asked about create_pull_request got `ask` and could not open its pull request.
+    """
+    import mcp_tools
+
+    names = {tool.casefold() for tool in mcp_tools.GITHUB_TOOLS}
+    out = list(pairs)
+    seen = {(server.casefold(), tool.casefold()) for server, tool in pairs}
+    for server, tool in pairs:
+        if tool.casefold() not in names:
+            continue
+        for extra in mcp_tools.GITHUB_TOOLS:
+            key = (server.casefold(), extra.casefold())
+            if key not in seen:
+                seen.add(key)
+                out.append((server, extra))
+    return out
+
+
 def judge(server: str, tool: str, pairs: list) -> str:
     if not server or not tool or "*" in server or "*" in tool:
         return "ask"
@@ -96,7 +122,7 @@ def decide(server: str, tool: str, root: Path, home: Path) -> str:
     pairs = stored_pairs(root, home)
     if pairs is None:
         pairs = builtin_pairs(root, home)
-    return judge(server, tool, pairs)
+    return judge(server, tool, with_github_tools(pairs))
 
 
 def main(argv: Optional[list] = None) -> int:

@@ -309,6 +309,10 @@ listenerSlowSeconds: 60
 listenerOrphanMinutes: 5
 # A listener.parentSeenAt older than this makes the listener exit orphaned.
 # The parent writes that stamp. A stale stamp does not start a replacement.
+listenerSilentMinutes: 5
+# A listener that has not polled or waited for this long is gone (Cursor can
+# stop it as a loop). supervise prints `listener: lost` and starts a new one in
+# the same pass. Never under three listenerSlowSeconds waits plus a minute.
 listenerMaxMinutes: 60
 # Rotate a generation after this many minutes, or listenerMaxReads,
 # whichever comes first. The parent starts the next one from the return stamp.

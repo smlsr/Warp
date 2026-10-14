@@ -117,7 +117,7 @@ class MergeTest(Repo):
             agents.halted_meanwhile = saved_halt
         self.assertEqual(live.calls, [])
         self.assertIn("pass: aborted. The run was paused during this pass.", lines)
-        self.assertNotIn("_liveMerge", self.load())
+        self.assertNotIn("_live", self.load())
 
     def test_the_provider_file_still_decides_in_tests(self):
         lines = orchestrator.supervise(self.beam_path, now="2026-10-13T22:00:00Z", provider={"WV-01": dict(OPEN["WV-01"], merge="merged")})

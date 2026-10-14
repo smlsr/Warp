@@ -241,6 +241,43 @@ def _base_ci(data: dict, now: str, pending: dict, findings: list, actions: list,
     lines.append("sweep: action base ci")
 
 
+_HELD = {"alarm", "parked"}
+_IDLE = {"queued", "blocked", "merged", "done", "skipped", "alarm", "parked"}
+
+
+def _gate_blocked(data: dict, gate: dict) -> bool:
+    """A member that cannot finish on its own: in alarm or parked."""
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    for tid in gate.get("members") or []:
+        ticket = tickets.get(tid)
+        if isinstance(ticket, dict) and ticket.get("status") in _HELD:
+            return True
+    return False
+
+
+def _run_moving(data: dict, since: Optional[str], now: str) -> bool:
+    """Something in the run is being worked: a Shuttle out, a ticket in flight, or progress since the last sweep."""
+    import beam as beam_mod
+
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    since_dt = beam_mod.parse_ts(since) if since else None
+    for ticket in tickets.values():
+        if not isinstance(ticket, dict):
+            continue
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        if shuttle.get("pending") and not shuttle.get("returned"):
+            return True
+        status = ticket.get("status")
+        if status and status not in _IDLE:
+            return True
+        watch = ticket.get("watch") if isinstance(ticket.get("watch"), dict) else {}
+        progressed = beam_mod.parse_ts(watch.get("progressAt"))
+        if since_dt is not None and progressed is not None and progressed > since_dt and status not in {"alarm", "parked", "queued", "blocked"}:
+            # A merge since the last sweep is progress. A queued ticket's clock is reset while it waits, so it is not.
+            return True
+    return False
+
+
 def _gates(data: dict, now: str, findings: list, actions: list, escalated: list, lines: list) -> None:
     import beam as beam_mod
 
@@ -254,10 +291,16 @@ def _gates(data: dict, now: str, findings: list, actions: list, escalated: list,
             actions.append({"kind": "gate", "id": gate.get("key")})
             lines.append("sweep: action %s gate" % gate.get("key"))
     stuck = []
+    moving = _run_moving(data, previous.get("at"), now)
     for gate in data.get("gates") or []:
         if not isinstance(gate, dict) or gate.get("status") not in {"pending", "red"}:
             continue
         key = str(gate.get("key") or "")
+        if gate.get("status") == "pending" and moving and not _gate_blocked(data, gate):
+            # A pending gate is the normal state while its tickets (or an earlier block's) are worked.
+            # It is stuck only when nothing in the run moved since the last sweep, or a member cannot
+            # finish without someone (alarm, parked).
+            continue
         findings.append({"kind": "gate", "id": key, "detail": "stuck"})
         stuck.append(key)
         if key in seen:

@@ -438,6 +438,10 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     rollup = provider_rollup(ticket)
     check = _for_head(pr, "check", "checkSha")
     ci = _for_head(pr, "ci", "ciSha")
+    if rollup == "pending" and _only_bugbot_pending(pr, ci):
+        # The only check still running is Cursor's Bugbot, and a review is already recorded for this
+        # head (a review Shuttle, or by hand). The rest of the rollup decides; Bugbot is read below.
+        rollup = ci if ci in {"green", "absent"} else "absent"
     if rollup == "red" or check == "red" or ci == "red":
         return False
     if rollup == "green" or check == "green":
@@ -454,6 +458,16 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     if not bugbot_applies(ticket, config):
         return True
     return _for_head(pr, "bugbot", "bugbotSha") == "pass"
+
+
+def _only_bugbot_pending(pr: dict, ci: str) -> bool:
+    """A pending rollup that is only the Bugbot check, on a head with a recorded review."""
+    head = str(pr.get("headSha") or "")
+    if not head or str(pr.get("bugbotRecordedSha") or "") != head:
+        return False
+    if str(pr.get("ciSha") or "") not in {"", head}:
+        return False
+    return ci in {"green", "absent"}
 
 
 def bugbot_where() -> str:
@@ -627,7 +641,7 @@ RETIRED_KEYS = {
     "maxFixWorkers": "a fix is an agent like any other and counts against maxAgents",
     "listenerRestartNote": "one background listener is replaced only from its return stamp",
     "maxListenerRestartsPerHour": "one background listener is replaced only from its return stamp",
-    "listenerStaleMinutes": "a stale listener heartbeat does not start another listener. The return stamp does",
+    "listenerStaleMinutes": "the return stamp starts the next listener; a holder that stops polling for listenerSilentMinutes hands back its slot",
 }
 
 
@@ -1679,7 +1693,7 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     path = Path(beam_path)
     started = beam_mod.coerce_now(now)[1]
     lines = supervise_listener(path, returned=returned, now=now)
-    if lines == ["listener: poll"]:
+    if lines and lines[-1] == "listener: poll":
         lines.extend(listener_prompt(path))
     if not path.is_file():
         return lines
@@ -1704,9 +1718,9 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         lines.append("runs: other runs not read (%s)" % exc)
     if live:
         # Merges in this pass go through the provider and are confirmed; see pipeline.request_merge.
-        data["_liveMerge"] = True
+        data["_live"] = True
     lines.extend(pipeline.advance(data, provider=provider, beam_path=path, now=now))
-    data.pop("_liveMerge", None)
+    data.pop("_live", None)
     import agents as agents_mod
 
     disk = agents_mod.halted_meanwhile(data, path)
@@ -1714,7 +1728,7 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         # A pause or a stop landed while this pass was working. Keep it. End
         # anything this pass recorded, and tell the parent to start nothing.
         state = agents_mod.halt_state(disk)
-        disk.pop("_liveMerge", None)
+        disk.pop("_live", None)
         agents_mod.halt_local(disk, beam_path=path, reason=state, now=now)
         _save(path, disk)
         return [
@@ -1731,6 +1745,8 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
         lines.extend(bugbot.post_pending(data, path, lines, now=now))
         # Merge what this pass asked to merge, through the provider, and confirm it.
         lines.extend(pipeline.run_merges(data, path, lines))
+        # Open the pull request for a Shuttle that pushed but could not (a 403 on its VM).
+        lines.extend(pipeline.run_pr_opens(data, path, lines))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
@@ -1898,6 +1914,15 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         inbound.close_for_new_parent(data, beam_path, now_s)
         raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
         holder = ""
+    lost = []
+    silent = inbound.holder_silent(data, beam_path, now_dt) if holder else None
+    if silent is not None:
+        # The holder stopped polling and waiting (Cursor cut it off as a loop, or it crashed). It cannot
+        # write its return stamp, so the slot is handed back here and a new listener starts in this pass.
+        inbound.stamp_return(data, beam_path, "lost", now_s, holder=holder)
+        lost.append("listener: lost holder=%s generation=%s (no poll or wait for %dm). Its slot is free."
+                    % (holder, inbound.generation_of(data), silent))
+        holder = ""
     if holder:
         started = beam_mod.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt"))
         age = None if started is None else (now_dt - started).total_seconds()
@@ -1912,7 +1937,7 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
-    return ["listener: poll"]
+    return lost + ["listener: poll"]
 
 
 def parent_wait(
@@ -2376,6 +2401,17 @@ def main(argv: Optional[list] = None) -> int:
         note_pr_opened(ticket, args.pr, stamp)
         if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
             ticket["status"] = "review"
+        pr = ticket.setdefault("pr", {})
+        pr.pop("openRequested", None)
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+        if shuttle and shuttle.get("pending") and not shuttle.get("startedAt"):
+            # A step that was only marked (a fix "for no pull request", never launched). The pull
+            # request it was for now exists: nothing is out, and the ticket goes on to review.
+            shuttle["pending"] = False
+            shuttle.pop("launching", None)
+            ticket["phase"] = "pr-open"
+            ticket["needsReplacement"] = False
+            print("%s: the %s step that was never launched is cleared" % (args.id, shuttle.get("step") or "pending"))
         _save(path, data)
         print("%s pr opened %s" % (args.id, args.pr))
         print("slot: held until rollup green")

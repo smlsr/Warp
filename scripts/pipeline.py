@@ -51,6 +51,8 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle.pop("returned", None)
     shuttle.pop("returnedAt", None)
     shuttle.pop("startedAt", None)
+    # Marked, not launched yet: the previous Shuttle's heartbeat does not make this one busy.
+    shuttle["launching"] = True
     if isinstance(ticket.get("pr"), dict):
         # A return belongs to one Shuttle. The next one starts out.
         ticket["pr"].pop("shuttleReturned", None)
@@ -417,8 +419,10 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     head_now = new_sha or str(pr.get("headSha") or "")
     by_hand = bool(head_now) and str(pr.get("bugbotRecordedSha") or "") == head_now
     for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
-        if key == "bugbot" and by_hand and not str(snap.get(key) or "").strip():
-            # A Bugbot review recorded by hand for this head. No Bugbot check is not a reset.
+        if key == "bugbot" and by_hand and str(snap.get(key) or "").strip().casefold() in {"", "pending"}:
+            # A review recorded for this head (by a Shuttle or by hand). No Bugbot check, or Cursor's own
+            # Bugbot check still running on the pull request, is not a reset: the recorded result stands.
+            # A finished Bugbot check (pass or fail) for the head still counts.
             continue
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
@@ -981,6 +985,9 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     import agents
 
     pr = ticket.setdefault("pr", {})
+    if not pr.get("url"):
+        lines.append("bugbot: wait %s (no pull request yet)" % ticket.get("id"))
+        return
     cycle = int(pr.get("reviewCycle") or 0)
     rollup = str(pr.get("rollup") or "").strip().casefold()
     if not agents.allow_bugbot(ticket):
@@ -1001,6 +1008,27 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None) -> N
     _queue_in_review(data, ticket, lines)
 
 
+def _step_out(data: dict, ticket: dict, step: str, counted_on_head: bool) -> str:
+    """This step is already out on this head: `hold` (launched, not back, not dead) or `relaunch` (never launched).
+
+    Empty means it is not out, and a new Shuttle is counted. A review or verify Shuttle is counted once,
+    when it is first marked. Before 1.6.13 every pass that did not see it running counted it again,
+    so one review Shuttle that was still working reached 2/2 and the ticket fell back to a person.
+    """
+    import agents
+
+    shuttle = _shuttle(ticket)
+    if not counted_on_head or not shuttle.get("pending") or shuttle.get("step") != step or shuttle.get("returned"):
+        return ""
+    if _returned(ticket, None):
+        return ""
+    if shuttle.get("launching") and not shuttle.get("startedAt"):
+        return "relaunch"
+    if agents.confirmed_dead(ticket, data):
+        return ""
+    return "hold"
+
+
 def start_review(data: dict, ticket: dict, lines: list) -> None:
     """bugbotTrigger: shuttle. The work is done and no review is recorded for the head: one review Shuttle."""
     import agents
@@ -1011,6 +1039,16 @@ def start_review(data: dict, ticket: dict, lines: list) -> None:
         lines.append("shuttle: hold %s" % tid)
         return
     pr = ticket.setdefault("pr", {})
+    out = _step_out(data, ticket, "review", str(pr.get("bugbotReviewSha") or "") == bugbot._head(pr))
+    if out == "hold":
+        lines.append("shuttle: hold %s" % tid)
+        return
+    if out == "relaunch":
+        # Marked in an earlier pass and never launched: the same review Shuttle, not a second one.
+        count = bugbot.review_shuttles_on_head(pr)
+        lines.extend(_start_lines(data, ticket, "review", bugbot.review_detail(ticket, data)))
+        lines.append("bugbot: review-shuttle %s %d/%d" % (tid, count, bugbot.MAX_REVIEW_SHUTTLES))
+        return
     if bugbot.review_shuttles_on_head(pr) >= bugbot.MAX_REVIEW_SHUTTLES:
         # Two review Shuttles came back with nothing recorded for this head. Ask a person.
         bugbot.ask_manual(data, ticket, lines)
@@ -1046,6 +1084,16 @@ def start_verify(data: dict, ticket: dict, lines: list) -> None:
         lines.append("shuttle: hold %s" % tid)
         return
     pr = ticket.setdefault("pr", {})
+    out = _step_out(data, ticket, "verify", str(pr.get("acVerifySha") or "") == str(pr.get("headSha") or ""))
+    if out == "hold":
+        lines.append("shuttle: hold %s" % tid)
+        return
+    if out == "relaunch":
+        count = acceptance.verify_shuttles_on_head(pr)
+        root = data.get("_repoRoot") or "<parent checkout>"
+        lines.extend(_start_lines(data, ticket, "verify", acceptance.verify_detail(ticket, orchestrator.scripts_dir(), root)))
+        lines.append("acceptance: verify-shuttle %s %d/%d missing %s" % (tid, count, acceptance.MAX_VERIFY_SHUTTLES, ", ".join(acceptance.missing(ticket))))
+        return
     if acceptance.verify_shuttles_on_head(pr) >= acceptance.MAX_VERIFY_SHUTTLES:
         acceptance.ask_by_hand(ticket, lines, str(_beam_path(data) or ".warp/beam.json"))
         lines.append("review: wait %s" % tid)
@@ -1226,6 +1274,11 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
         return "continue"
     if phase in {"implementing", "pr-open"} or not phase:
         if not pr.get("url"):
+            if data.get("_live") and ticket.get("branch"):
+                # The Shuttle may have pushed and been refused the pull request (a 403 on its VM).
+                # The parent opens it; only a branch that is not on origin goes back to the Shuttle.
+                request_pr_open(ticket, lines)
+                return "stop"
             begin_fix(data, ticket, red_reasons(ticket, data.get("config") or {}) or ["no pull request"], lines)
             return "stop"
         _phase(ticket, "pr-open", lines)
@@ -1278,6 +1331,12 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         _defer_fix(data, ticket)
         return
     if phase == "pr-open":
+        if not (ticket.get("pr") or {}).get("url") and (ticket.get("pr") or {}).get("openRequested"):
+            if data.get("_live"):
+                request_pr_open(ticket, lines)
+            else:
+                lines.append("pr: wait %s (no pull request yet)" % ticket.get("id"))
+            return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
             _request_bugbot(ticket, lines, data)
             return
@@ -1415,7 +1474,22 @@ def _refill(data: dict, lines: list) -> None:
         ticket["status"] = "coding"
         _phase(ticket, "implementing", lines)
         mark_shuttle(ticket, "implement", data)
-        lines.extend(_start_lines(data, ticket, "implement"))
+        started = _start_lines(data, ticket, "implement")
+        lines.extend(started)
+        if started and started[0].startswith("start "):
+            _queue_claim(data, ticket, lines)
+
+
+def _queue_claim(data: dict, ticket: dict, lines: list) -> None:
+    """The Jira move to In Progress for a ticket this pass started (once per ticket)."""
+    path = _beam_path(data)
+    if not path:
+        return
+    import jira_sync
+
+    text = jira_sync.queue_claim(Path(path), data, ticket)
+    if text:
+        lines.extend(text.splitlines())
 
 
 def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
@@ -1438,7 +1512,7 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         return
     _ensure_records(ticket)
     snap = (provider or {}).get(tid) or {}
-    if data.get("_liveMerge") and "merge" not in snap:
+    if data.get("_live") and "merge" not in snap:
         # A live pass. Merged means the provider says merged, never "nothing said otherwise".
         request_merge(data, ticket, snap, lines)
         return
@@ -1462,6 +1536,62 @@ def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
         lines.append("not merged")
         return
     finish_merge(data, ticket, lines)
+
+
+def request_pr_open(ticket: dict, lines: list) -> None:
+    ticket.setdefault("pr", {})["openRequested"] = True
+    ticket["phase"] = "pr-open"
+    lines.append("pr: open %s %s" % (ticket.get("id"), ticket.get("branch") or ""))
+
+
+_PR_LINE = re.compile(r"^pr: open (\S+) (\S+)")
+
+
+def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
+    """Open the pull request for each `pr: open` this pass printed (gh), or say how to."""
+    import beam as beam_mod
+    import provider as provider_mod
+
+    out = []
+    root = Path(beam_path).resolve().parent.parent
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    cfg = dict(data.get("config") or {})
+    try:
+        base = str(cfg.get("baseBranch") or provider_mod.resolve(root, cfg).get("baseBranch") or "main")
+    except Exception:
+        base = str(cfg.get("baseBranch") or "main")
+    for line in list(lines):
+        match = _PR_LINE.match(line)
+        if not match or match.group(1) not in tickets:
+            continue
+        tid, branch = match.group(1), match.group(2)
+        ticket = tickets[tid]
+        key = ticket.get("jiraKey") or ""
+        title = "[%s] %s" % (tid, ticket.get("summary") or tid)
+        body = "Warp ticket %s%s.\n\nOpened by the Warp parent: the Shuttle pushed `%s` but could not open the pull request.\n\nAcceptance:\n%s" % (
+            tid, " (%s)" % key if key else "", branch,
+            "\n".join("- %s: %s" % pair for pair in __import__("acceptance").items(ticket)) or "- (none listed)")
+        outcome, detail = (opener or provider_mod.open_pr)(root, branch, base, title, body)
+        if outcome in {"opened", "found"}:
+            orchestrator.note_pr_opened(ticket, detail, beam_mod.utcnow())
+            ticket["pr"].pop("openRequested", None)
+            if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
+                ticket["status"] = "review"
+            ticket["phase"] = "pr-open"
+            out.append("pr: %s %s %s (%s)" % ("opened" if outcome == "opened" else "found", tid, detail,
+                                             "the Shuttle pushed but could not open it" if outcome == "opened" else "already open"))
+            continue
+        if outcome == "missing":
+            ticket["pr"].pop("openRequested", None)
+            begin_fix(data, ticket, ["the Shuttle returned without a pull request and %s; push it and open the pull request" % detail], out)
+            continue
+        scripts = orchestrator.scripts_dir()
+        out.append(
+            "pr: MUST DO %s: open a pull request from %s into %s with the GitHub MCP create_pull_request tool (title %r), "
+            "then record it: python3 %s/orchestrator.py opened --beam %s --id %s --pr <url>. (%s)"
+            % (tid, branch, base, title, scripts, Path(beam_path).resolve(), tid, detail)
+        )
+    return out
 
 
 def request_merge(data: dict, ticket: dict, snap: dict, lines: list) -> None:
@@ -1640,4 +1770,4 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         data.pop("_fixDefer", None)
         if owned_root:
             data.pop("_repoRoot", None)
-        data.pop("_liveMerge", None)
+        data.pop("_live", None)

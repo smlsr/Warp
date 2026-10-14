@@ -1026,6 +1026,18 @@ def _write_todo(beam_path: Path, tickets: list[dict]) -> None:
     path.write_text(json.dumps({"generatedAt": now(), "tickets": tickets}, indent=2) + "\n")
 
 
+def _merge_todo(beam_path: Path, payload: dict) -> None:
+    """Add one ticket's moves to the to-do without dropping the others queued in the same pass."""
+    path = beam_path.parent / TODO_NAME
+    try:
+        current = json.loads(path.read_text()).get("tickets") or []
+    except (OSError, ValueError, AttributeError):
+        current = []
+    tid = str(payload.get("id") or payload.get("ticket") or "")
+    kept = [row for row in current if isinstance(row, dict) and str(row.get("id") or row.get("ticket") or "") != tid]
+    _write_todo(beam_path, kept + [payload])
+
+
 def render(ticket: dict, actions: list[dict], cfg: dict) -> str:
     if not actions:
         return ""
@@ -2930,9 +2942,50 @@ def queue_in_review(beam_path: Path, beam: dict, ticket: dict) -> str:
         ]
         if not actions:
             return ""
-        _write_todo(beam_path, [_todo_payload(ticket, actions, cfg, mode)])
+        _merge_todo(beam_path, _todo_payload(ticket, actions, cfg, mode))
         _journal(beam_path, {"type": "jira-intent", "id": ticket.get("id"), "actions": ["in-review"]})
         return render(ticket, actions, cfg)
+    except Exception as e:
+        return f"jira: skipped ({e})"
+
+
+def queue_claim(beam_path: Path, beam: dict, ticket: dict) -> str:
+    """MUST DO text for a ticket a pass just started: the move to In Progress and the claim comment.
+
+    `beam.py set --status claimed` does this through on_set. A supervise pass starts a ticket
+    without that command, so the move was never asked for and the issue stayed To Do. Empty when
+    the move is off or the issue already moved for this ticket (`jira.startedAt`).
+    """
+    try:
+        if (ticket.get("jira") or {}).get("startedAt"):
+            return ""
+        cfg = settings(beam_path, beam)
+        if not cfg.get("jiraTransition", True):
+            return ""
+        prefixes = prefixes_from(cfg)
+        if not jira_key(ticket, prefixes):
+            return prepare_resolve(beam_path, only_ids=[str(ticket.get("id") or "")])
+        pr = ticket.get("pr") or {}
+        before = {
+            "status": "queued",
+            "pr_url": pr.get("url"),
+            "bugbot": pr.get("bugbot"),
+            "bugbotRequested": bool(pr.get("bugbotRequested")),
+            "ci": pr.get("ci"),
+            "alarm": ticket.get("alarm"),
+        }
+        claimed = dict(ticket, status="claimed")
+        mode = _mode(beam_path)
+        actions = [
+            action
+            for action in actions_for(claimed, before, cfg, mode, _root(beam_path))
+            if (action.get("plan") or {}).get("event", action.get("event")) == "claim"
+        ]
+        if not actions:
+            return ""
+        _merge_todo(beam_path, _todo_payload(claimed, actions, cfg, mode))
+        _journal(beam_path, {"type": "jira-intent", "id": ticket.get("id"), "actions": ["claim"]})
+        return render(claimed, actions, cfg)
     except Exception as e:
         return f"jira: skipped ({e})"
 

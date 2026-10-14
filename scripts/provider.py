@@ -170,28 +170,73 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def note(root: Path, beam_path: Optional[Path], tid: Optional[str], reason: str, what: str = "local-only") -> str:
-    """Outbox line, journal entry, and a Herald message that a ticket ran local-only."""
+def _note_branch(beam_path: Optional[Path], tid: Optional[str]) -> str:
+    if not tid or not beam_path or not Path(beam_path).is_file():
+        return ""
+    try:
+        data = json.loads(Path(beam_path).read_text())
+    except (OSError, ValueError):
+        return ""
+    ticket = (data.get("tickets") or {}).get(tid) if isinstance(data, dict) else None
+    return str((ticket or {}).get("branch") or "") if isinstance(ticket, dict) else ""
+
+
+def branch_on_origin(root: Path, branch: str, runner=None) -> Optional[bool]:
+    """True when origin has the branch, False when it does not, None when origin cannot be asked."""
+    if not branch:
+        return None
+    run = runner or (lambda cmd: _run(cmd, root, timeout=20))
+    try:
+        found = run(["git", "ls-remote", "--heads", "origin", branch])
+    except Exception:
+        return None
+    if found.returncode != 0:
+        return None
+    return bool((found.stdout or "").strip())
+
+
+def note(root: Path, beam_path: Optional[Path], tid: Optional[str], reason: str, what: str = "local-only",
+         branch: Optional[str] = None, pushed: Optional[bool] = None, runner=None) -> str:
+    """Outbox line, journal entry, and a Herald message that a ticket ran local-only.
+
+    A branch that is on origin was pushed. Then the note says so: only the pull request is missing, and the
+    parent opens it (`pr: open`). Before 1.6.13 it said "Nothing was pushed" for a pushed branch.
+    """
     root = root.resolve()
-    text = f"{tid or 'Warp'} ran {what}: {reason}. Nothing was pushed and no pull request was opened."
+    branch = branch or _note_branch(beam_path, tid)
+    if pushed is None:
+        pushed = bool(branch_on_origin(root, branch, runner=runner)) if branch else False
+    if pushed:
+        kind = "pr-not-opened"
+        title = "Pull request not opened"
+        text = (f"{tid or 'Warp'} pushed {branch} but could not open its pull request: {reason}. "
+                "The branch is on origin. The parent opens the pull request on its next pass.")
+        footer = ("Nothing to change in config. If `pr: MUST DO` follows, open it with the GitHub MCP "
+                  "create_pull_request tool and record it with orchestrator.py opened.")
+    else:
+        kind = "local-only"
+        title = "Local-only mode"
+        text = f"{tid or 'Warp'} ran {what}: {reason}. Nothing was pushed and no pull request was opened."
+        footer = "Set pushMerge: true and connect a git provider to push and open pull requests."
     outbox = root / ".warp" / "outbox.md"
     outbox.parent.mkdir(parents=True, exist_ok=True)
     with outbox.open("a") as f:
         f.write(f"\n## {_now()}\n\n{text}\n")
-    if beam_path and beam_path.is_file():
-        with (beam_path.parent / "journal.jsonl").open("a") as f:
-            f.write(json.dumps({"ts": _now(), "type": "local-only", "id": tid, "reason": reason}) + "\n")
+    if beam_path and Path(beam_path).is_file():
+        row = {"ts": _now(), "type": kind, "id": tid, "reason": reason}
+        if branch:
+            row["branch"] = branch
+            row["pushed"] = bool(pushed)
+        with (Path(beam_path).parent / "journal.jsonl").open("a") as f:
+            f.write(json.dumps(row) + "\n")
     try:
         import notify
 
-        msg = fmt.message(
-            root,
-            "Local-only mode",
-            intro=text,
-            facts=[("Ticket", tid)] if tid else [],
-            footer="Set pushMerge: true and connect a git provider to push and open pull requests.",
-        )
-        notify.report(notify.build("local-only", root, msg=msg))
+        facts = [("Ticket", tid)] if tid else []
+        if pushed and branch:
+            facts.append(("Branch", branch))
+        msg = fmt.message(root, title, intro=text, facts=facts, footer=footer)
+        notify.report(notify.build(kind, root, msg=msg))
     except Exception as e:
         print(f"herald: not posted ({e})")
     return text
@@ -692,6 +737,33 @@ def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tupl
     return "merged", sha or "merged"
 
 
+def open_pr(root: Path, branch: str, base: str, title: str, body: str, runner=None) -> tuple[str, str]:
+    """A pull request for a Shuttle's pushed branch: (found|opened|missing|failed, url or reason).
+
+    found: one is already open for the branch. missing: the branch is not on origin.
+    """
+    run = runner or (lambda cmd: _run(cmd, root, timeout=60))
+    if not shutil.which("gh") and runner is None:
+        return "failed", "gh is not installed"
+    listed = run(["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--limit", "1"])
+    if listed.returncode == 0:
+        try:
+            rows = json.loads(listed.stdout or "[]")
+        except json.JSONDecodeError:
+            rows = []
+        if rows and isinstance(rows[0], dict) and rows[0].get("url"):
+            return "found", str(rows[0]["url"])
+    remote = run(["git", "ls-remote", "--heads", "origin", branch])
+    if remote.returncode == 0 and not (remote.stdout or "").strip():
+        return "missing", "branch %s is not on origin" % branch
+    made = run(["gh", "pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body])
+    text = ((made.stdout or "") + "\n" + (made.stderr or "")).strip()
+    if made.returncode != 0:
+        return "failed", (text.splitlines() or ["gh pr create failed"])[-1]
+    urls = re.findall(r"https://\S+/pull/\d+", text)
+    return ("opened", urls[-1]) if urls else ("failed", "no pull request url in the gh output")
+
+
 def merge_queue_on(cfg: dict, detected: Optional[bool]) -> bool:
     raw = (cfg or {}).get("mergeQueue")
     if isinstance(raw, bool):
@@ -840,6 +912,7 @@ def main() -> None:
     pn.add_argument("--beam", default=".warp/beam.json")
     pn.add_argument("--id")
     pn.add_argument("--reason", required=True)
+    pn.add_argument("--branch", help="the ticket's branch (default: from the beam); checked on origin")
     pq = sub.add_parser("merge-pr")
     pq.add_argument("--root", default=".")
     pq.add_argument("--beam", default=".warp/beam.json")
@@ -902,7 +975,7 @@ def main() -> None:
                 print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")
                 sys.exit(1)
         elif args.cmd == "note":
-            print(note(root, Path(args.beam), args.id, args.reason))
+            print(note(root, Path(args.beam), args.id, args.reason, branch=args.branch))
         elif args.cmd == "rollup":
             checks = None
             if args.checks:

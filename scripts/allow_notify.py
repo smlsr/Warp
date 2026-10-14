@@ -853,7 +853,7 @@ def remind(scope: Scope, with_git: bool) -> None:
     print()
     print(surfaces(scope))
     if with_git:
-        print("Git: GitHub add_issue_comment and merge_pull_request. Warp does not name Bitbucket tools; add server:tool under notifyAllow for those.")
+        print("Git: GitHub add_issue_comment, merge_pull_request, and create_pull_request. Warp does not name Bitbucket tools; add server:tool under notifyAllow for those.")
     print("If the Run prompt names a different tool, add server:tool to notifyAllow in .warp/config.yaml and run this again.")
 
 

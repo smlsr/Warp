@@ -285,6 +285,10 @@ def shuttle_busy(data: dict, ticket: dict, now=None, beam_path: Optional[Path] =
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     if not shuttle.get("pending"):
         return False
+    if shuttle.get("launching"):
+        # Marked for this launch and not launched yet. The heartbeat and start on the ticket belong
+        # to the Shuttle before it; counting them held the launch and nothing ever started.
+        return False
     return bool(ticket.get("lastSeenAt") or ticket.get("workerStartedAt"))
 
 
@@ -701,7 +705,10 @@ def note_checkout(data: dict, ticket: dict, beam_path: Optional[Path] = None, no
     _now_dt, now_s = beam_mod.coerce_now(now)
     if not live:
         agent = str(ticket.get("agent") or "").strip() or ("subagent:%s" % tid)
-        if _halted_id(doc, agent):
+        ended = any(isinstance(row, dict) and row.get("id") == agent and row.get("state") not in _LIVE for row in _rows(doc))
+        if _halted_id(doc, agent) or ended:
+            # A finished Shuttle's id is never reused, also when the parent launches by hand
+            # (checkout.py launch with no `start` line): two rows under one id made the new one look dead.
             ticket["agent"] = agent
             agent = _new_id(ticket, doc)
         ticket["agent"] = agent
