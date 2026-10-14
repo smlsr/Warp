@@ -720,7 +720,7 @@ def _member_check_red(ticket) -> bool:
             continue
         if not orchestrator.is_make_ci(item.get("name") or item.get("context")):
             continue
-        if orchestrator.conclusion_kind(item.get("conclusion") or item.get("state")) == "red":
+        if orchestrator.check_kind(item.get("name") or item.get("context"), item.get("conclusion") or item.get("state")) == "red":
             return True
     return False
 
@@ -1746,11 +1746,11 @@ def default_config() -> dict:
         "repairSweepMinutes": 15,
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "listenerFastSeconds": 15,
-        "listenerSlowSeconds": 60,
+        "listenerSlowSeconds": 120,
         "listenerOrphanMinutes": 5,
         "listenerSilentMinutes": 5,
         "listenerMaxMinutes": 60,
-        "listenerMaxReads": 60,
+        "listenerMaxReads": 4,
         "listenerModel": "",
         "maxRecoveries": DEFAULT_MAX_RECOVERIES,
         "maxSpawnsPerTicket": 8,

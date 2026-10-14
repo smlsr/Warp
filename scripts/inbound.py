@@ -60,13 +60,26 @@ LISTENER_FILE = "listener.json"
 NEEDS_ID = {"proceed", "retry"}
 ADDRESSABLE = {"pause", "resume", "stop", "start", "status"}
 STATE_VERBS = {"pause", "resume", "stop", "start"}
-EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost")
+EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost", "cut-off")
 KEEP_CYCLING = "listen: keep cycling. Run poll again now with the same lease and holder. Do not return."
+
+
+def keep_cycling(data: dict, beam_path, now_s: str) -> str:
+    """KEEP_CYCLING with this cycle's number and time, so no two waits print the same text.
+
+    Cursor stops an agent whose tool calls repeat the same output (it took the listener's
+    poll-read-wait cycle for a loop after nine polls). A generation rotates after listenerMaxReads
+    reads, before that, and each line names its cycle.
+    """
+    raw = _raw(data)
+    clock = str(now_s or "")[11:19] or "now"
+    return "listen: cycle %d of %d ended at %sZ. Run poll again now with the same lease and holder. Do not return." % (
+        _int_field(raw, "reads"), max_reads(data, beam_path), clock)
 DEFAULT_FAST_SECONDS = 15
-DEFAULT_SLOW_SECONDS = 60
+DEFAULT_SLOW_SECONDS = 120
 DEFAULT_ORPHAN_MINUTES = 5
 DEFAULT_MAX_MINUTES = 60
-DEFAULT_MAX_READS = 60
+DEFAULT_MAX_READS = 4
 
 
 def _root(beam_path: Path) -> Path:
@@ -351,8 +364,8 @@ def max_minutes(data: dict, beam_path: Path) -> int:
 
 def silent_minutes(data: dict, beam_path: Path) -> int:
     """A holder with no poll and no wait for this long is gone. `listenerSilentMinutes`; default 5,
-    and never under three slow waits plus a minute. (listenerStaleMinutes is retired and stays ignored.)"""
-    floor = (3 * slow_seconds(data, beam_path)) // 60 + 1
+    and never under one slow wait plus three minutes. (listenerStaleMinutes is retired and stays ignored.)"""
+    floor = -(-slow_seconds(data, beam_path) // 60) + 3
     return max(floor, _cfg_int(data, beam_path, "listenerSilentMinutes", 5))
 
 
@@ -747,6 +760,8 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
             return_reason="",
         )
         since = str(raw.get("cursor") or "")
+        lines.append("listen: cycle %d of %d at %sZ (generation %s)" % (
+            _int_field(raw, "reads"), max_reads(data, beam_path), now_s[11:19], generation_of(data)))
         for kind, channel in channels(beam_path):
             lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
         return lines
@@ -834,7 +849,11 @@ def wait_for(
             return found
         waited = float(tick()) - began
         if waited >= limit:
-            return ["listen: wait", KEEP_CYCLING]
+            def closing() -> str:
+                data = beam.load_json(beam_path)
+                return keep_cycling(data, beam_path, _moment(moment if clock is not None else now)[1])
+
+            return ["listen: wait", _locked(beam_path, closing)]
         nap(max(0.0, min(float(step), limit - waited)))
 
 
@@ -922,6 +941,12 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
             stamp_return(data, beam_path, "lost", now_s, holder=str(_raw(data).get("holder") or "") or holder)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
             return "listener: returned lost (no poll or wait for %dm; the slot is free)" % silent
+        if reason == "cut-off" and lease_matches(data, lease, holder):
+            # The holder has to stop before the script says so: Cursor flagged its cycle as repetitive,
+            # or its turn is ending. Refusing left a live lease no one held (leases 17, 23, 24).
+            stamp_return(data, beam_path, "cut-off", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            return "listener: returned cut-off. The slot is free; the parent starts the next listener on its next pass."
         if lease is not None or holder not in (None, ""):
             if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
                 return "listener: return refused"

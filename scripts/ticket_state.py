@@ -635,12 +635,13 @@ def _apply_provider(beam_path: Path, data: dict, ticket: dict, checks: list, now
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or item.get("context") or "").strip()
-        kind = orchestrator.conclusion_kind(item.get("conclusion") or item.get("state"))
+        kind = orchestrator.check_kind(name, item.get("conclusion") or item.get("state"))
         log = str(item.get("log") or item.get("output") or "").strip()
         if not name or kind not in {"red", "green"}:
             continue
         _store_check_row(pr, name, kind, log or ("%s %s" % (name, kind)))
         if "bugbot" in name.casefold():
+            data["bugbotSeen"] = True
             pr["bugbot"] = "fail" if kind == "red" else "pass"
             changed = True
         if orchestrator.is_make_ci(name):

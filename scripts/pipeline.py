@@ -418,12 +418,19 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
         pr["opened"] = True
     head_now = new_sha or str(pr.get("headSha") or "")
     by_hand = bool(head_now) and str(pr.get("bugbotRecordedSha") or "") == head_now
+    by_shuttle = by_hand and str(pr.get("bugbotSource") or "") == "shuttle"
     for key, sha_field in (("rollup", "rollupSha"), ("bugbot", "bugbotSha"), ("ci", "ciSha"), ("check", "checkSha")):
-        if key == "bugbot" and by_hand and str(snap.get(key) or "").strip().casefold() in {"", "pending"}:
-            # A review recorded for this head (by a Shuttle or by hand). No Bugbot check, or Cursor's own
-            # Bugbot check still running on the pull request, is not a reset: the recorded result stands.
-            # A finished Bugbot check (pass or fail) for the head still counts.
+        value = str(snap.get(key) or "").strip().casefold() if key == "bugbot" else ""
+        if key == "bugbot" and by_hand and not by_shuttle and value in {"", "pending"}:
+            # A review a person recorded for this head stands until a Bugbot check finishes.
             continue
+        if key == "bugbot" and by_shuttle and (value == "" or (value == "pending" and pr.get("bugbot") == "fail")):
+            # No Bugbot check yet: the Shuttle's result is kept (and _hold_for_bugbot decides whether to wait).
+            # A Shuttle's fail stands while Bugbot runs. Otherwise Cursor Bugbot's own result counts.
+            continue
+        if key == "bugbot" and value in {"pass", "fail"}:
+            pr["bugbotSource"] = "provider"
+            pr["bugbotProviderSha"] = new_sha or head_now
         if key in snap and snap[key] is not None:
             pr[key] = snap[key]
             if new_sha:
@@ -1107,6 +1114,27 @@ def start_verify(data: dict, ticket: dict, lines: list) -> None:
     lines.append("acceptance: verify-shuttle %s %d/%d missing %s" % (tid, count, acceptance.MAX_VERIFY_SHUTTLES, ", ".join(acceptance.missing(ticket))))
 
 
+def _hold_for_bugbot(data: dict, ticket: dict, snap: Optional[dict]) -> None:
+    """A Shuttle's review pass does not merge on its own where Cursor Bugbot runs.
+
+    Bugbot ran on this repo (a Bugbot check was seen in this run) and has no result for this head yet:
+    the Shuttle's pass is kept on pr.shuttleReview and pr.bugbot is cleared, so the ticket waits for
+    Bugbot, asks it with a comment after bugbotStartMinutes, and a finding goes to a fix step.
+    Before 1.6.14 a ticket merged on the Shuttle's review alone and Bugbot's findings came after the merge.
+    """
+    if isinstance(snap, dict) and str(snap.get("bugbot") or "").strip():
+        data["bugbotSeen"] = True
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    if not data.get("bugbotSeen") or str(pr.get("bugbotSource") or "") != "shuttle":
+        return
+    if str(pr.get("bugbot") or "").casefold() != "pass" or not bugbot_state(ticket):
+        return
+    head = str(pr.get("headSha") or "")
+    if head and str(pr.get("bugbotProviderSha") or "") == head:
+        return
+    pr["bugbot"] = ""
+
+
 def _review_only_left(data: dict, ticket: dict) -> bool:
     """bugbotTrigger: shuttle, the pull request is open, the work came back, and only the review is missing."""
     import bugbot
@@ -1115,6 +1143,8 @@ def _review_only_left(data: dict, ticket: dict) -> bool:
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     if bugbot.trigger(data) != "shuttle" or not pr.get("url"):
         return False
+    if bugbot.shuttle_reviewed(pr):
+        return False  # reviewed already; what is left is Cursor Bugbot's own result
     if not (pr.get("agentFinished") or pr.get("opened")):
         return False
     if not orchestrator.bugbot_applies(ticket, cfg) or bugbot_finished(ticket, cfg):
@@ -1373,6 +1403,12 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
                     # Record the request (and the Jira In Review move) for this head first.
                     _request_bugbot(ticket, lines, data)
                     return
+                if bugbot.shuttle_reviewed(pr_now):
+                    # The Shuttle passed. Cursor Bugbot must report on this head before the merge.
+                    if bugbot.check_silence(data, ticket, lines, now=now):
+                        return
+                    lines.append("bugbot: wait %s (the Shuttle's review passed; waiting for Cursor Bugbot on %s)" % (ticket.get("id"), head[:12]))
+                    return
                 start_review(data, ticket, lines)
                 return
             # Requested and never started: comment `bugbot run`, switching the trigger when it was auto.
@@ -1419,6 +1455,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     _apply_snapshot(ticket, snap, now=now, cfg=data.get("config") or {})
     if confirm_merge(data, ticket, snap, lines):
         return
+    _hold_for_bugbot(data, ticket, snap)
     import agents
 
     agents.finish_bugbot(data, ticket, now=now, beam_path=_beam_path(data))
@@ -1687,7 +1724,17 @@ def run_merges(data: dict, beam_path, lines: list, merger=None) -> list:
 def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str = "") -> None:
     """The pull request is merged on the provider (or locally in local mode). Record it and say so."""
     tid = ticket.get("id")
+    pr = ticket.setdefault("pr", {})
+    if ticket.get("status") == "merged" and pr.get("mergeAnnounced"):
+        # Already recorded and announced. Saying it again asked for the same Jira Done move twice (WV-10).
+        if sha and not pr.get("sha"):
+            pr["sha"] = sha
+        return
     ticket["status"] = "merged"
+    pr["mergeAnnounced"] = True
+    import beam as beam_mod
+
+    pr.setdefault("mergedAt", beam_mod.utcnow())
     if sha:
         ticket.setdefault("pr", {})["sha"] = sha
     if how:
@@ -1703,12 +1750,120 @@ def finish_merge(data: dict, ticket: dict, lines: list, sha: str = "", how: str 
     lines.append("phase: %s merged" % tid)
     lines.append("merge: %s merged" % tid)
     lines.append("herald: %s merged." % tid)
-    if key:
+    done_at = (ticket.get("jira") or {}).get("doneAt") if isinstance(ticket.get("jira"), dict) else None
+    if ticket.get("followUpOf"):
+        lines.append("jira: %s fixes Bugbot findings on %s after its merge. No Jira move." % (tid, ticket.get("followUpOf")))
+    elif done_at:
+        lines.append("jira: %s already Done (recorded %s). Nothing to move." % (tid, done_at))
+    elif key:
         lines.append("jira: MUST DO %s (%s) transition to Done." % (tid, key))
     else:
         lines.append("jira: MUST DO %s transition to Done." % tid)
     lines.append("slack: %s merged %s" % (tid, url))
     lines.append("beam: push")
+
+
+LATE_WINDOW_MINUTES = 60
+
+
+def late_findings(data: dict, beam_path, lines: list, fetch=None, now=None) -> list:
+    """Cursor Bugbot findings that arrived after a merge become a follow-up fix ticket.
+
+    Each merged ticket is checked until Bugbot has reported on its merged head: a pass settles it, a
+    finding queues `<id>-BB<n>` with the findings as its acceptance criteria and the same locks, and no
+    Bugbot check within LATE_WINDOW_MINUTES of the merge settles it as none. Before 1.6.14 a finding on a
+    merged pull request (PR #12, #13) was never acted on.
+    """
+    import beam as beam_mod
+    import provider as provider_mod
+
+    out = []
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    cfg = data.get("config") or {}
+    root = Path(beam_path).resolve().parent.parent
+    fetch = fetch or (lambda url: provider_mod.fetch_pr_state(root, url))
+    now_dt, now_s = beam_mod.coerce_now(now)
+    for tid in sorted(tickets):
+        ticket = tickets[tid]
+        if not isinstance(ticket, dict) or ticket.get("status") != "merged":
+            continue
+        pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+        if not pr.get("url") or pr.get("lateBugbot") or not orchestrator.bugbot_applies(ticket, cfg):
+            continue
+        head = str(pr.get("headSha") or "")
+        if str(pr.get("bugbotSource") or "") == "provider" and pr.get("bugbot") == "pass" and head and pr.get("bugbotProviderSha") == head:
+            pr["lateBugbot"] = "pass"
+            continue
+        try:
+            snap = fetch(pr["url"]) or {}
+        except Exception:
+            snap = {}
+        result = str(snap.get("bugbot") or "").strip().casefold()
+        if result == "pass":
+            pr["lateBugbot"] = "pass"
+        elif result == "fail":
+            findings = coerce_findings(snap.get("findings")) or ["Cursor Bugbot found issues on %s" % pr["url"]]
+            new_id = _follow_up(data, ticket, findings, now_s)
+            pr["lateBugbot"] = "followup"
+            pr["lateFindings"] = findings
+            pr["followUp"] = new_id
+            out.append("bugbot: late %s %s %d finding(s) after the merge. Follow-up ticket %s queued." % (tid, pr["url"], len(findings), new_id))
+            out.append("herald: %s Bugbot found %d issue(s) after the merge; %s fixes them." % (tid, len(findings), new_id))
+        else:
+            since = beam_mod.parse_ts(pr.get("mergedAt") or pr.get("lateSince"))
+            if since is None and not result:
+                pr["lateBugbot"] = "none"  # merged before 1.6.14 and Bugbot never ran on it
+            elif since is None:
+                pr["lateSince"] = now_s
+            elif (now_dt - since).total_seconds() / 60.0 >= LATE_WINDOW_MINUTES and not result:
+                pr["lateBugbot"] = "none"
+    return out
+
+
+def _follow_up(data: dict, ticket: dict, findings: list, now_s: str) -> str:
+    """Queue a fix ticket for findings on a merged pull request. Returns its id."""
+    tickets = data.setdefault("tickets", {})
+    tid = str(ticket.get("id") or "T")
+    n = 1
+    while "%s-BB%d" % (tid, n) in tickets:
+        n += 1
+    new_id = "%s-BB%d" % (tid, n)
+    locks = list(ticket.get("locks") or [])
+    for finding in findings:
+        path = finding.split(" ", 1)[0].split(":", 1)[0]
+        if "/" in path and path not in locks and not any(path.startswith(lock.rstrip("/") + "/") for lock in locks if lock.endswith("/")):
+            locks.append(path)
+    url = (ticket.get("pr") or {}).get("url") or ""
+    acs = [{"id": "AC-%d" % (i + 1), "kind": "fix", "text": "Bugbot finding fixed: %s" % finding} for i, finding in enumerate(findings)]
+    acs.append({"id": "AC-%d" % (len(acs) + 1), "kind": "fix", "text": "Cursor Bugbot passes on this pull request with no findings"})
+    tickets[new_id] = {
+        "id": new_id,
+        "status": "queued",
+        "summary": "Fix Cursor Bugbot findings on %s (%s, merged)" % (url, tid),
+        "size": "S",
+        "hours": 1,
+        "module": ticket.get("module"),
+        "repo": ticket.get("repo"),
+        "lane": ticket.get("lane"),
+        "locks": locks,
+        "deps": [],
+        "gate": None,
+        "autoMerge": bool(ticket.get("autoMerge", True)),
+        "acs": acs,
+        "plan": {"body": "Bugbot reviewed %s after it merged and found:\n%s\nFix each on a new branch from the base branch. "
+                          "Do not change what the finding does not need." % (url, "\n".join("- " + f for f in findings))},
+        "followUpOf": tid,
+        "jiraKey": None,
+        "jiraKeySource": "manual",
+        "jiraMapping": "follow-up",
+        "jira": {"startedAt": now_s, "inReviewAt": now_s, "status": None, "lastCommentAt": None},
+        "pr": {},
+        "attempts": 0,
+        "alarm": None,
+        "priority": "high",
+        "updatedAt": now_s,
+    }
+    return new_id
 
 
 def _run_repairs(data: dict, beam_path: Optional[Path], lines: list, now) -> None:

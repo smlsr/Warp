@@ -249,7 +249,10 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
         return False
     mode = trigger(data)
     if mode == "shuttle":
-        return False  # pipeline starts a review Shuttle; nothing to post
+        if not shuttle_reviewed(pr):
+            return False  # pipeline starts a review Shuttle; nothing to post
+        # The Shuttle reviewed this head and Cursor Bugbot has not started on it: ask Bugbot with a comment.
+        mode = "comment"
     if mode == "manual":
         # Nothing to wait for: a person records the result. Ask once per head.
         before = len(lines)
@@ -340,8 +343,19 @@ def record_result(ticket: dict, result: str, findings: Optional[list] = None, ev
         "bugbotRecordedSha": head,
         "bugbotRecordedAt": now_s,
     }
+    if source == "shuttle":
+        # The Shuttle's own review comes first. It does not stand in for Cursor Bugbot when Bugbot runs
+        # on this repo: the merge still waits for Bugbot's result on the head (see pipeline._hold_for_bugbot).
+        fields["shuttleReview"] = result
+        fields["shuttleReviewSha"] = head
     pr.update(fields)
     return fields
+
+
+def shuttle_reviewed(pr: dict) -> bool:
+    """A review Shuttle recorded a result for the current head."""
+    head = _head(pr)
+    return bool(head) and str(pr.get("shuttleReviewSha") or "") == head
 
 
 def recorded_for_head(pr: dict, head: str) -> bool:
