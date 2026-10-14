@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.20
+
+- New: `mergeMethod` picks how a pull request is merged: `squash` (the default, as before), `merge` (a merge commit, so the branch shows joining the base in a git graph) or `rebase`. It goes to `gh pr merge --<method>`, the merge queue, and the `merge: MUST DO` line for the GitHub MCP. A local merge (`provider.py merge-local`) makes a squash or a merge commit; `rebase` is squashed there, so a branch a Shuttle may still use is never rewritten. `pr.mergeMethod` records the method used.
+- New: `deleteBranchOnMerge` (default `false`) deletes a merged ticket's branch on origin, and its local branch when no worktree holds it, once the merge is confirmed: `merge: branch deleted <id> <branch>`, or `merge: branch not deleted <id> <branch>: <why>`. Never the base branch. A branch already gone counts as deleted. `pr.branchDeleted` records it.
+- New: the run state is published to the base branch right after a merge (`state: published (merged WE-01)`) and when `checkout.py launch` creates a ticket's branch (`state: published (started WE-02 on warp/edit/WE-02-WAR-64)`), so main shows a ticket in progress as soon as it starts and merged as soon as it merges. Before this the run state on main was pushed only on start, stop and checkpoints, and after a merge it waited for the parent's `beam: push`, which the edit run's parent skipped: WE-01 and WE-03 were merged on GitHub while the published state still showed them in review and queued. `publishOnChange: false` leaves it to the parent. `state: not published (...)` names why it failed; the pass goes on.
+
 ## 1.6.19
 
 - Fix: the status digest counted every open ticket as stalled. It summed the `stalled` column, which is `yes` or `no`, and both count as true, so the edit run's digest said `stalls=14` with 13 tickets queued behind G0 and WE-01 waiting on Bugbot. It now counts a ticket that is stalled and not already an alarm, the same rule as the `stalls:` line in `/warp-status`. `statusDigest` records the ids (`alarms`, `stalls`).

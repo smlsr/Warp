@@ -320,8 +320,54 @@ def _stage_live(root: Path, payload: dict) -> None:
         _run(["git", "add", "--", rel], root)
 
 
-def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool, str]:
-    """Squash-merge `branch` into `base`. Leaves the repo as it found it on failure.
+MERGE_METHODS = ("squash", "merge", "rebase")
+
+
+def merge_method(cfg: Optional[dict]) -> str:
+    """`mergeMethod` from the config: squash (default), merge, or rebase. Anything else is squash."""
+    value = str((cfg or {}).get("mergeMethod") or "").strip().lower()
+    return value if value in MERGE_METHODS else "squash"
+
+
+def _truthy(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def delete_on_merge(cfg: Optional[dict]) -> bool:
+    """`deleteBranchOnMerge` from the config. Off by default: a merged ticket keeps its branch."""
+    return _truthy((cfg or {}).get("deleteBranchOnMerge", False))
+
+
+def delete_merged_branch(root: Path, branch: str, base: str = "", runner=None) -> tuple[bool, str]:
+    """Delete a merged ticket's branch on origin, and its local branch when no worktree holds it.
+
+    Never the base branch. A branch that is already gone on origin counts as deleted.
+    """
+    run = runner or (lambda cmd: _run(cmd, root))
+    branch = str(branch or "").strip()
+    if not branch or branch in {base, "main", "master", "HEAD"}:
+        return False, "no ticket branch to delete"
+    notes = []
+    remote_ok = True
+    if fmt.git(Path(root), "remote"):
+        gone = run(["git", "push", "origin", "--delete", branch])
+        text = ((gone.stderr or "") + (gone.stdout or "")).strip()
+        if gone.returncode != 0 and "remote ref does not exist" not in text:
+            remote_ok = False
+            notes.append("origin: " + (text.splitlines()[-1] if text else "push --delete failed"))
+    local = run(["git", "branch", "-D", branch])
+    if local.returncode != 0:
+        text = ((local.stderr or "") + (local.stdout or "")).strip()
+        if "not found" not in text:
+            # Usually a worktree still has it checked out; the worktree cleanup removes both.
+            notes.append("local: " + (text.splitlines()[-1] if text else "branch -D failed"))
+    return remote_ok, "; ".join(notes)
+
+
+def merge_local(root: Path, branch: str, base: str, message: str, method: str = "squash") -> tuple[bool, str]:
+    """Merge `branch` into `base` here: squash (default) or a merge commit. Leaves the repo as it found it on failure.
+
+    `rebase` is merged as a squash locally: rebasing the ticket branch would rewrite a branch a Shuttle may still use.
 
     The ticket branch's beam is dropped. The parent's live beam, journal, and
     board are what land on the base. Secrets are stripped. config.yaml is not
@@ -342,7 +388,10 @@ def merge_local(root: Path, branch: str, base: str, message: str) -> tuple[bool,
     if _run(["git", "checkout", "-q", base], root).returncode != 0:
         return False, f"could not check out {base}"
     try:
-        r = _run(["git", "merge", "--squash", branch], root)
+        if method == "merge":
+            r = _run(["git", "merge", "--no-ff", "--no-commit", branch], root)
+        else:
+            r = _run(["git", "merge", "--squash", branch], root)
         if r.returncode != 0:
             _run(["git", "reset", "--merge"], root)
             return False, "merge conflict; nothing was merged. Resolve on the ticket branch and retry"
@@ -813,16 +862,17 @@ def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tupl
     resolved = resolve(root, cfg)
     provider = resolved.get("provider")
     detected = detect_merge_queue(root, cfg) if provider == "github" else None
+    flag = "--" + merge_method(cfg)
     if merge_queue_on(cfg, detected):
         if provider == "github" and shutil.which("gh"):
-            queued = _run(["gh", "pr", "merge", str(number), "--auto", "--squash"], root)
+            queued = _run(["gh", "pr", "merge", str(number), "--auto", flag], root)
             detail = (queued.stdout or queued.stderr or "enqueued").strip()
         else:
             detail = "merge queue is on; the pull request was not merged from this agent"
         return "enqueue", detail
     if provider != "github" or not shutil.which("gh"):
         return "rejected", "no merge command for this provider; not marked merged"
-    merged = _run(["gh", "pr", "merge", str(number), "--squash"], root)
+    merged = _run(["gh", "pr", "merge", str(number), flag], root)
     text = ((merged.stderr or "") + "\n" + (merged.stdout or "")).strip()
     if merged.returncode != 0 or protection_rejects(text):
         return "rejected", text or "merge rejected"
@@ -1164,7 +1214,21 @@ def main() -> None:
                 print(f"{args.id}: refusing merge: {block}")
                 print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")
                 sys.exit(1)
-            ok, detail = merge_local(root, args.branch, base, msg)
+            local_cfg = {}
+            try:
+                import prompt_gate
+
+                local_cfg = dict(json.loads(beam_path.read_text()).get("config") or {})
+                local_cfg.update(prompt_gate.effective_config(json.loads(beam_path.read_text()), root))
+            except Exception:
+                pass
+            method = merge_method(local_cfg)
+            if method == "rebase":
+                print("merge-local: mergeMethod rebase is merged as a squash locally")
+            ok, detail = merge_local(root, args.branch, base, msg, method=method)
+            if ok and delete_on_merge(local_cfg):
+                gone, why = delete_merged_branch(root, args.branch, base)
+                print(f"branch deleted {args.branch}" + (f" ({why})" if why else "") if gone else f"branch not deleted {args.branch}: {why}")
             if ok:
                 print(f"merged {args.branch} into {base} locally ({detail}). Not pushed.")
                 note(root, beam_path, args.id, f"merged {args.branch} into {base} locally ({detail})", what="a local merge")

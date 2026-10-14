@@ -1856,6 +1856,8 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
         lines.extend(pipeline.run_merges(data, path, lines))
         # Open the pull request for a Shuttle that pushed but could not (a 403 on its VM).
         lines.extend(pipeline.run_pr_opens(data, path, lines))
+    # A merged ticket's branch is deleted when deleteBranchOnMerge is on (off by default).
+    lines.extend(pipeline.after_merges(data, path, lines))
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
@@ -1863,7 +1865,54 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
     import blocks
 
     lines.extend(blocks.check(path))
+    if live:
+        # Publish the run state now when a ticket merged, so main shows it
+        # (before 1.6.20 that was left to the parent's `beam: push`, which it skipped).
+        lines.extend(publish_on_change(path, lines))
     return lines
+
+
+def publish_on_change(path: Path, lines: list, why: str = "") -> list:
+    """Commit and push the run state when this pass merged a ticket, or for `why`. Never raises.
+
+    supervise calls it after a merge, and `checkout.py launch` when it creates a ticket's branch, so main shows
+    a ticket in progress as soon as it starts and merged as soon as it merges. `publishOnChange: false` turns it
+    off. The output is returned as lines, after `state: published (<why>)`.
+    """
+    import io
+    from contextlib import redirect_stdout
+
+    if not why:
+        merged = [m.group(1) for m in (re.match(r"^merge: (\S+) merged$", line) for line in lines) if m]
+        why = ("merged " + ", ".join(merged)) if merged else ""
+    if not why:
+        return []
+    import os
+
+    if os.environ.get("WARP_PUBLISH", "").strip().lower() in {"0", "false", "no", "off"}:
+        return []  # tests whose origin is a real repository
+    try:
+        data = _load(path)
+        cfg = dict(data.get("config") or {})
+        try:
+            import prompt_gate
+
+            cfg.update(prompt_gate.effective_config(data, runs.repo_root(path)))
+        except Exception:
+            pass
+        if str(cfg.get("publishOnChange", True)).strip().lower() in {"false", "0", "no", "off"}:
+            return []
+        import state_commit
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = state_commit.publish_base(runs.repo_root(path), str(Path(path).resolve()), force=True)
+        out = ["state: %s (%s)" % ("published" if code == 0 else "not published", why)]
+        out.extend("state: %s" % text[len("state: "):] if text.startswith("state: ") else "state: " + text
+                   for text in buf.getvalue().splitlines() if text.strip())
+        return out
+    except Exception as exc:
+        return ["state: not published (%s): %s" % (why, exc)]
 
 
 def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None) -> list:

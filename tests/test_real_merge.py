@@ -39,8 +39,13 @@ class Live:
         self.snaps, self.outcome, self.calls = snaps, outcome, []
 
     def __enter__(self):
+        import os
+
         import ticket_state
 
+        # The origin here is the real WarpDemo: never publish the run state to it.
+        self.publish = os.environ.get("WARP_PUBLISH")
+        os.environ["WARP_PUBLISH"] = "0"
         self.saved = (pipeline.live_provider, provider.merge_connected, ticket_state._default_checks)
         pipeline.live_provider = lambda data, path: self.snaps
         provider.merge_connected = lambda root, number, cfg=None: (self.calls.append(number), self.outcome)[1]
@@ -48,9 +53,15 @@ class Live:
         return self
 
     def __exit__(self, *exc):
+        import os
+
         import ticket_state
 
         pipeline.live_provider, provider.merge_connected, ticket_state._default_checks = self.saved
+        if self.publish is None:
+            os.environ.pop("WARP_PUBLISH", None)
+        else:
+            os.environ["WARP_PUBLISH"] = self.publish
 
 
 class MergeTest(Repo):

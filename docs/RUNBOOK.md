@@ -452,6 +452,10 @@ Before 1.6.18 a supervise pass only printed its `herald:` lines (`WE-01 done`, `
 
 A bare `warp:pause`, `warp:resume`, `warp:stop` or `warp:start` is ambiguous only when another open run is published in the repo. Before 1.6.18 a finished run counted too: with the view run done (20 of 20 merged), `warp:stop` in the edit run's channel was refused, the listener handed back its slot, the parent started the next listener, and the run went on, so it looked like it stopped and started again. A finished run (every ticket merged, parked or skipped, or its end-of-run teardown ran) no longer counts. With two open runs, name the run: `warp:stop edit`. After a stop, every `supervise` prints `run: stopped at <time>. Start nothing ...`, and `parent-exit` prints `parent: exit`.
 
+## Merged tickets don't look merged
+
+Pull requests are squash-merged by default (`mergeMethod: squash`). GitHub folds the branch's commits into one new commit on main, so in a git graph the ticket branch dead-ends and never joins main. The work is on main as that one `[<id>] …` commit: PR #24's head `8a69213` became `5796d14` on main. Set `mergeMethod: merge` for merge commits that join the branch, and `deleteBranchOnMerge: true` to remove merged branches. If the board, status files or viewer still show a merged ticket in review, the run state on main is behind: since 1.6.20 supervise publishes it right after each merge (`state: published (merged <id>)`). `state: not published (...)` says why it didn't; `publishOnChange: false` turns this off.
+
 ## Is the run stalled, or waiting on Bugbot?
 
 Shuttles show up as background agents, and Cursor Bugbot does not: it runs on GitHub. Since 1.6.18 every pass says what Bugbot is doing on each ticket's head:

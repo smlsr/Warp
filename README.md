@@ -394,6 +394,8 @@ A `check-red` line is a failed check (`make ci`, Bugbot, or both). The ticket is
 
 Those directories can merge to main. They do not overlap. The beam file does not. A squash merge keeps `.warp/tickets/<id>/` and leaves the base beam in place.
 
+Pull requests are squash-merged by default, so in a git graph a ticket's branch ends instead of joining main: its work is the one `[<id>] …` commit on main. `mergeMethod: merge` makes merge commits that join, and `rebase` replays the commits. `deleteBranchOnMerge: true` deletes each merged ticket's branch. The run state on main is published right after each merge and when a ticket's branch is created (`publishOnChange`, on by default), so main shows tickets in progress and merged as it happens.
+
 ## Alarms
 
 The parent tick repairs `lock-escape` and no other alarm, one ticket at a time. It checks while the run is running, on the cadence of `alarmRepairMinutes` (default 15). Pause and stop do not repair. Plugin hooks do not run on cloud runners. The tick calls `scripts/alarm_repair.py next` and starts one subagent in that ticket's worktree. The listener Subagent does not. A second call in the same moment does not start a second repair.
