@@ -321,6 +321,11 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `listen: wait` + `listen: cycle <n> of <max> ended at <time>Z. Run poll again …` | `inbound.py wait` | the sleep is over. Poll again now with the same lease. Do not return |
 | `run: pass <n> at <time>Z` | `supervise` | the pass number. A number that skips means an output was lost |
 | `run: next is pass <n>` | `parent-exit --wait` | the number the next `supervise` prints |
+| `run: stopped at <time>. Start nothing …` / `run: paused …` | `supervise` | the run is stopped or paused: no Shuttle, no listener, no resume. Run `parent-exit` and end the turn |
+| `herald: post .warp/notify-pass.json to <channel> …` + `herald: then run: … notify.py posted --root .` | `supervise` (last lines) | this pass's `herald:` lines as one payload. Post it, then mark it posted. Unmarked lines are carried into the next pass's payload |
+| `herald: <id> claimed: <summary> (size, auto-merge or approval; locks …)` | `supervise` | the first start of a ticket |
+| `herald: <id> pull request opened: <url>` | `supervise` | once per pull request, however it was opened |
+| `herald: <id> is ready and waits for approval … Reply warp:proceed <id> …` | `supervise` | with `approve: wait <id>` |
 | `run: reopened for Bugbot follow-ups` | `supervise` | a finished run has follow-up tickets again; its end-of-run teardown runs once more when they settle |
 | `bugbot: late <id> <url> <n> finding(s) after the merge. Follow-up ticket <id>-BB<n> queued.` | `supervise` | Cursor Bugbot found issues on a merged pull request. The follow-up runs like any ticket and asks for no Jira move |
 | `bugbot: wait <id> (the Shuttle's review passed; waiting for Cursor Bugbot on <sha>)` | `supervise` | with `bugbotTrigger: shuttle`, the merge still waits for Cursor Bugbot's own result where Bugbot runs |

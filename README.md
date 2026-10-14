@@ -224,6 +224,7 @@ Links point at branch main; they work once it is pushed. Warp v<version>. Next: 
 - `/warp-status-post` uses the same header.
 - It follows `messenger` and `notify`. `notify: quiet` skips the init and scan messages. Each message goes to `slackChannel` and `teamsChannel` for the messenger you chose.
 - Fail-soft: with no channel set, or no connected server, the text is saved to `.warp/outbox.md`, the command says so, and it still succeeds. The payload is in `.warp/notify-post.json`.
+- During a run, each `supervise` pass writes its news (claims, code done, pull requests, Bugbot started and finished, fixes, approval waits, merges) to `.warp/notify-pass.json` as one "Run update" and tells the parent to post it and then run `notify.py posted`. Lines not marked posted go into the next pass's update.
 
 ## Allow notify
 

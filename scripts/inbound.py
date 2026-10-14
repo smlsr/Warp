@@ -1346,6 +1346,11 @@ def _decide(beam_path: Path, text: str) -> dict:
     except Exception:
         known = set()
     others = known - {local}
+    try:
+        # Finished runs are not what a bare `warp:stop` means.
+        live_others = runs.open_names(root) - {local}
+    except Exception:
+        live_others = others
     if parsed.get("ok") and parsed.get("verb") in ADDRESSABLE:
         addressed = address_of(parsed, local, known)
         if addressed:
@@ -1353,10 +1358,10 @@ def _decide(beam_path: Path, text: str) -> dict:
                 return {"ignored": True, "code": 0, "ack": None, "action": "none", "why": "addressed to %s" % addressed}
             parsed["rest"] = parsed.get("addr_rest") or ""
             parsed["command"] = "warp:%s %s" % (parsed["verb"], addressed)
-        elif parsed["verb"] in STATE_VERBS and others:
-            if local != min(known | {local}):
+        elif parsed["verb"] in STATE_VERBS and live_others:
+            if local != min(live_others | {local}):
                 return {"ignored": True, "code": 0, "ack": None, "action": "none", "why": "not named"}
-            names = ", ".join(sorted(known | ({local} if local else set())))
+            names = ", ".join(sorted(live_others | ({local} if local else set())))
             decision = {
                 "ack": "Received warp:%s. This repo has more than one run (%s). Name the run: warp:%s <run>. Nothing was changed."
                 % (parsed["verb"], names, parsed["verb"]),

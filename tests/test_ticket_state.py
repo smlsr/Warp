@@ -258,7 +258,7 @@ class RemoteDirectoryTests(GitBeam):
             },
         )
         lines = beam.watchdog(self.beam_path, now=NOW)
-        self.assertIn("herald: T-1 lock-escape", lines)
+        self.assertIn("herald: T-1: touched files outside its locks; Warp is repairing it.", lines)
         self.assertNotIn("shuttle: replace", "\n".join(lines))
         saved = self.load()["tickets"]["T-1"]
         self.assertEqual(saved["status"], "alarm")
@@ -273,7 +273,7 @@ class RemoteDirectoryTests(GitBeam):
         self.assertIn("docs/note.md", widened)
         again = beam.watchdog(self.beam_path, now=NOW)
         self.assertNotIn("shuttle: replace", "\n".join(again))
-        self.assertNotIn("herald: T-1 lock-escape", again)
+        self.assertNotIn("herald: T-1: touched files outside its locks; Warp is repairing it.", again)
 
     def test_check_red_from_the_log_sends_the_ticket_back(self):
         row = self.ticket(status="review", workerStartedAt=FRESH, claimedAt=FRESH)
@@ -306,7 +306,7 @@ class RemoteDirectoryTests(GitBeam):
             },
         )
         lines = ticket_state.observe(self.beam_path, now=NOW)
-        self.assertIn("herald: T-1 check-red", lines)
+        self.assertIn("herald: T-1: checks are red.", lines)
         self.assertTrue(any(line.startswith("send-back T-1 fix") for line in lines), lines)
         saved = self.load()["tickets"]["T-1"]
         self.assertEqual(saved["status"], "fix")
@@ -314,7 +314,7 @@ class RemoteDirectoryTests(GitBeam):
         self.assertEqual(saved["pr"]["check"], "red")
         self.assertEqual(saved["pr"]["checkLog"], "boom")
         again = ticket_state.observe(self.beam_path, now=NOW)
-        self.assertNotIn("herald: T-1 check-red", again)
+        self.assertNotIn("herald: T-1: checks are red.", again)
         self.assertFalse(any(line.startswith("send-back") for line in again))
         self.assertEqual(self.load()["tickets"]["T-1"]["attempts"], 1)
         saved = self.load()
@@ -382,7 +382,7 @@ class RemoteDirectoryTests(GitBeam):
             reader=reader,
             provider_checks=provider_checks,
         )
-        self.assertIn("herald: T-1 check-red", lines)
+        self.assertIn("herald: T-1: checks are red.", lines)
         self.assertTrue(any(line.startswith("send-back T-1 fix") for line in lines), lines)
         saved = self.load()["tickets"]["T-1"]
         self.assertEqual(saved["status"], "fix")
@@ -434,10 +434,10 @@ class RemoteDirectoryTests(GitBeam):
             },
         )
         lines = ticket_state.observe(self.beam_path, now=NOW)
-        self.assertIn("herald: T-1 planning", lines)
-        self.assertIn("herald: T-1 coding", lines)
-        self.assertNotIn("herald: T-2 coding", lines)
-        self.assertNotIn("herald: T-2 done", lines)
+        self.assertIn("herald: T-1: the Shuttle is planning.", lines)
+        self.assertIn("herald: T-1: the Shuttle is coding.", lines)
+        self.assertNotIn("herald: T-2: the Shuttle is coding.", lines)
+        self.assertNotIn("herald: T-2: code complete; the Shuttle finished and returned.", lines)
         saved = self.load()["tickets"]
         self.assertEqual(saved["T-1"]["status"], "coding")
         self.assertEqual(saved["T-2"]["status"], "queued")

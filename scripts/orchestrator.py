@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -1759,6 +1760,18 @@ def parent_may_exit(beam: dict) -> bool:
 
 
 def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
+    """One parent pass, then its `herald:` lines written as one Slack and Teams payload to post."""
+    lines = _supervise_pass(beam_path, returned=returned, now=now, provider=provider)
+    path = Path(beam_path)
+    if path.is_file() and lines and not lines[0].startswith("pass: aborted"):
+        import notify
+
+        match = re.match(r"run: pass (\d+) ", lines[0])
+        lines.extend(notify.pass_post(path.resolve().parent.parent, lines, int(match.group(1)) if match else None))
+    return lines
+
+
+def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
     """One parent pass: the listener, then the ticket pipeline.
 
     The listener decision stays first. The pipeline adopts open pull requests,
@@ -1795,6 +1808,15 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
             lines.append("observe: ticket folders not read (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
+        state = str(data.get("runState") or "")
+        if state in {"stopped", "paused"} or data.get("paused"):
+            state = state if state in {"stopped", "paused"} else "paused"
+            run = str(data.get("run") or "")
+            lines.append("run: %s%s%s. Start nothing: no Shuttle, no listener, no resume. Run parent-exit and end the turn; "
+                         "only /warp-resume or warp:resume%s starts it again." % (
+                             state, " at %s" % data["stoppedAt"] if state == "stopped" and data.get("stoppedAt") else "",
+                             " (%s)" % (data.get("pauseReason") or data.get("stopReason")) if (data.get("pauseReason") or data.get("stopReason")) else "",
+                             " " + run if run else ""))
         return lines
     live = provider is None
     if live:

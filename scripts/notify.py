@@ -14,6 +14,13 @@ channel names are lowercase) and noted.
                                  counts as they are now (run it after resolving keys)
   notify.py outbox --root .      append that payload's plain text to
                                  .warp/outbox.md (connector missing or erroring)
+  notify.py outbox --pass --root .   the same for the supervise pass payload
+  notify.py posted --root .      the parent posted the pass payload: stamp it, so the next pass
+                                 does not carry its lines over
+
+Each `orchestrator.py supervise` pass with `herald:` lines writes them as one `pass` payload
+(title "Run update") to .warp/notify-pass.json, so it never overwrites a start or scan
+message in notify-post.json. A pass payload nobody marked posted is carried into the next one.
 
 action in the payload:
   post    at least one target channel is configured; Herald posts it
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import herald_fmt as fmt  # noqa: E402
 
 PAYLOAD = "notify-post.json"
+# A supervise pass writes its own file, so it never overwrites a start or scan message not posted yet.
+PASS_PAYLOAD = "notify-pass.json"
 OUTBOX = "outbox.md"
 MAX_LINKS = 12
 
@@ -191,7 +201,7 @@ def outbox(root: Path, text: str) -> Path:
     return path
 
 
-def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict] = None) -> dict:
+def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict] = None, extra: Optional[dict] = None) -> dict:
     """Write the payload and return it. Never raises. `msg` is a prebuilt herald_fmt message."""
     root = root.resolve()
     payload = {"kind": kind, "text": "", "action": "skip", "targets": [], "notes": []}
@@ -209,7 +219,8 @@ def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict
         payload["header"] = fmt.header(root, cfg)
         tg, notes = targets(cfg)
         payload["targets"], payload["notes"] = tg, notes
-        if cfg["notify"] == "quiet":
+        payload.update(extra or {})
+        if cfg["notify"] == "quiet" and kind != PASS_KIND:
             payload["action"] = "skip"
             payload["notes"] = ["notify is quiet; init and scan messages are not posted"]
         elif tg:
@@ -219,7 +230,7 @@ def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict
             path = outbox(root, payload["text"])
             payload["notes"].append(f"no channel configured; message saved to {path.relative_to(root)}")
         payload["createdAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        out = root / ".warp" / PAYLOAD
+        out = root / ".warp" / (PASS_PAYLOAD if kind == PASS_KIND else PAYLOAD)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, indent=2) + "\n")
     except Exception as e:  # fail-soft: a notification problem must not break init or scan
@@ -228,19 +239,94 @@ def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict
     return payload
 
 
-def report(payload: dict) -> None:
-    """Print what Herald should do. Safe to call from any command."""
+def report_lines(payload: dict) -> list:
+    """What Herald should do, as lines."""
     act = payload["action"]
+    out = []
     if act == "post":
         where = ", ".join(f"{t['messenger']} {t['channel']}" for t in payload["targets"])
-        print(f"herald: post .warp/{PAYLOAD} to {where} through the connected MCP server (slack view to Slack, teams view to Teams).")
-        print(f"herald: if the connector is missing or errors, run: python3 {Path(__file__).resolve()} outbox --root .")
-        for n in payload["notes"]:
-            print(f"herald: note: {n}")
+        passed = payload.get("kind") == PASS_KIND
+        name = PASS_PAYLOAD if passed else PAYLOAD
+        out.append(f"herald: post .warp/{name} to {where} through the connected MCP server (slack view to Slack, teams view to Teams).")
+        if passed:
+            out.append(f"herald: then run: python3 {Path(__file__).resolve()} posted --root .")
+        out.append(f"herald: if the connector is missing or errors, run: python3 {Path(__file__).resolve()} outbox --root .{' --pass' if passed else ''}")
+        out.extend(f"herald: note: {n}" for n in payload["notes"])
     else:
-        print(f"herald: not posted ({act}).")
-        for n in payload["notes"]:
-            print(f"herald: {n}")
+        out.append(f"herald: not posted ({act}).")
+        out.extend(f"herald: {n}" for n in payload["notes"])
+    return out
+
+
+def report(payload: dict) -> None:
+    """Print what Herald should do. Safe to call from any command."""
+    for line in report_lines(payload):
+        print(line)
+
+
+PASS_KIND = "pass"
+MAX_PASS_LINES = 30
+# The instruction lines this module prints are not news to post.
+_OWN = ("post .warp/", "then run:", "if the connector", "note:", "not posted", "saved to", "nothing to save", "failed softly")
+# notify: quiet posts only these from a pass: alarms, parks, approval waits, red results, and work done by hand.
+_QUIET = re.compile(r"worker died|parked|alarm|could not merge|approval|given up|gave up|by hand|stopped|findings? after the merge|red\b", re.I)
+
+
+def news(lines: list) -> list:
+    """The `herald:` lines of a pass, without the posting instructions."""
+    out = []
+    for line in lines:
+        if not str(line).startswith("herald: "):
+            continue
+        text = str(line)[len("herald: "):].strip()
+        if text and not text.startswith(_OWN) and text not in out:
+            out.append(text)
+    return out
+
+
+def pass_post(root: Path, lines: list, number: Optional[int] = None) -> list:
+    """Write a pass's `herald:` lines as one payload and return the lines that tell the parent to post it.
+
+    Before 1.6.18 supervise only printed its `herald:` lines and the parent was trusted to post each one. In the
+    edit run it posted the start message (a payload) and none of WE-01's claim, code done, pull request or Bugbot
+    lines. A payload no one marked posted (`notify.py posted`) is carried into the next pass's payload.
+    """
+    try:
+        root = Path(root).resolve()
+        new = news(lines)
+        if not new:
+            return []
+        path = root / ".warp" / PASS_PAYLOAD
+        carried = []
+        try:
+            prior = json.loads(path.read_text()) if path.is_file() else {}
+        except (OSError, ValueError):
+            prior = {}
+        if prior.get("kind") == PASS_KIND and prior.get("action") == "post" and not prior.get("postedAt"):
+            carried = [text for text in prior.get("lines") or [] if text not in new]
+        items = (carried + new)[-MAX_PASS_LINES:]
+        cfg = fmt.read_config(root)
+        if cfg["notify"] == "quiet":
+            items = [text for text in items if _QUIET.search(text)]
+            if not items:
+                return []
+        title = "Run update" + (f" (pass {number})" if number else "")
+        msg = fmt.message(root, title, bullets=items)
+        payload = build(PASS_KIND, root, msg=msg, extra={"lines": items, "pass": number})
+        return report_lines(payload)
+    except Exception as e:  # a post problem never breaks a pass
+        return [f"herald: not posted ({e})"]
+
+
+def mark_posted(root: Path) -> str:
+    path = Path(root).resolve() / ".warp" / PASS_PAYLOAD
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return "herald: nothing to mark; no %s" % PASS_PAYLOAD
+    payload["postedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return "herald: marked posted (%s)" % (payload.get("kind") or "payload")
 
 
 def main() -> None:
@@ -255,17 +341,21 @@ def main() -> None:
         "notify: quiet skips init and scan. ?, help, -h, and --help print this text. Quote ? if the shell expands it.\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("kind", choices=["init", "scan", "outbox"])
+    p.add_argument("kind", choices=["init", "scan", "outbox", "posted"])
     p.add_argument("--root", default=".")
+    p.add_argument("--pass", dest="pass_payload", action="store_true", help="outbox: the supervise pass payload (.warp/notify-pass.json)")
     p.add_argument("--beam", help=argparse.SUPPRESS)
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
     root = Path(args.root).resolve()
+    if args.kind == "posted":
+        print(mark_posted(root))
+        return
     if args.kind == "outbox":
-        f = root / ".warp" / PAYLOAD
+        f = root / ".warp" / (PASS_PAYLOAD if args.pass_payload else PAYLOAD)
         if not f.is_file():
-            print("herald: nothing to save; no notify-post.json")
+            print("herald: nothing to save; no %s" % f.name)
             return
         text = json.loads(f.read_text()).get("text", "")
         print(f"herald: saved to {outbox(root, text).relative_to(root)}")

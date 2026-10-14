@@ -444,6 +444,14 @@ The scan printed `schedule: <program> build-schedule/2, gate order strict — ga
 
 `/warp-dashboard` runs `dashboard.py write --beam .warp/beam.json`. It prints `dashboard: .warp/dashboard.html tickets=<n> files=<n>` and `open: file://...`. The page has the beam, each ticket's `state.json`, and the other runs' published beams inside it. Once the file exists, every status write rewrites it. Press Reload in the page to see the new state. The file is local: state commits leave it out. Delete it to stop the rewrites. `refuse: no beam at <path>. Run /warp-scan first, or pass --empty to write the page without data.` means there is no run yet. `--empty --out <path>` writes a page with no data, and File > Open reads the files by hand. See the [README](../README.md#dashboard).
 
+## Slack or Teams got the start message and nothing for the tickets
+
+Before 1.6.18 a supervise pass only printed its `herald:` lines (`WE-01 done`, `WE-01 review`), and posting each one was left to the parent, which did not. The start message was posted because it came as a payload file. Now every pass writes its `herald:` lines into `.warp/notify-pass.json` (a `pass` payload, "Run update (pass <n>)") and ends with `herald: post .warp/notify-pass.json to <channel> ...` and `herald: then run: ... notify.py posted --root .`. The lines are sentences: `WE-01 claimed: ...`, `WE-01: code complete; the Shuttle finished and returned.`, `WE-01 pull request opened: <url>`, `WE-01 Cursor Bugbot is reviewing PR #24`, `WE-01 Cursor Bugbot finished PR #24: 3 finding(s) (took 7m). Back to fix.`, `WE-02 is ready and waits for approval`, `WE-01 merged.`. Lines nobody marked posted are carried into the next pass's payload, so nothing is lost when a pass is skipped. With `notify: quiet` the payload keeps only alarms, parks, approval waits, red results and work needed by hand.
+
+## warp:stop said "This repo has more than one run"
+
+A bare `warp:pause`, `warp:resume`, `warp:stop` or `warp:start` is ambiguous only when another open run is published in the repo. Before 1.6.18 a finished run counted too: with the view run done (20 of 20 merged), `warp:stop` in the edit run's channel was refused, the listener handed back its slot, the parent started the next listener, and the run went on, so it looked like it stopped and started again. A finished run (every ticket merged, parked or skipped, or its end-of-run teardown ran) no longer counts. With two open runs, name the run: `warp:stop edit`. After a stop, every `supervise` prints `run: stopped at <time>. Start nothing ...`, and `parent-exit` prints `parent: exit`.
+
 ## Is the run stalled, or waiting on Bugbot?
 
 Shuttles show up as background agents, and Cursor Bugbot does not: it runs on GitHub. Since 1.6.18 every pass says what Bugbot is doing on each ticket's head:

@@ -941,7 +941,10 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     elif lines and (lines[0].startswith("start ") or lines[0].startswith("resume ")):
         # Printed again on each pass until checkout.py launch records the start (see _advance_one).
         _shuttle(ticket)["launchLines"] = [line for line in lines if not line.startswith("herald:")]
+        first = not ticket.get("claimedAt")
         note_claim(ticket)
+        if first and step == "implement" and not replacing and not detail and lines[0].startswith("start "):
+            lines.append(claim_herald(ticket))
     if detail:
         # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
         _shuttle(ticket)["detail"] = detail
@@ -1194,6 +1197,37 @@ def note_times(ticket: dict, snap: Optional[dict], now=None) -> None:
             and str(pr.get("reviewedSha") or "") != head:
         pr["reviewedAt"] = snap["bugbotAt"]
         pr["reviewedSha"] = head
+
+
+def claim_herald(ticket: dict) -> str:
+    """`herald: <id> claimed: <summary> (size, auto-merge or approval, locks). A Shuttle is coding it on <branch>.`"""
+    locks = [str(lock) for lock in ticket.get("locks") or []]
+    shown = ", ".join(locks[:4]) + (" and %d more" % (len(locks) - 4) if len(locks) > 4 else "")
+    how = "auto-merge" if ticket.get("autoMerge") else "merges on approval"
+    summary = str(ticket.get("summary") or "").strip()
+    return "herald: %s claimed%s (size %s, %s%s). A Shuttle is coding it%s." % (
+        ticket.get("id"), (": " + summary) if summary else "", ticket.get("size") or "?", how,
+        ("; locks " + shown) if shown else "", (" on " + str(ticket["branch"])) if ticket.get("branch") else "")
+
+
+def note_pr_announced(ticket: dict, lines: list, now=None) -> None:
+    """One Herald line when a ticket's pull request first shows up, however it was opened.
+
+    A pull request opened more than bugbot.ANNOUNCE_MINUTES before Warp first sees it (a resume) is noted, not posted.
+    """
+    import beam as beam_mod
+    import bugbot
+
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
+    url = str((pr or {}).get("url") or "")
+    if not url or pr.get("heraldUrl") == url:
+        return
+    pr["heraldUrl"] = url
+    now_dt = beam_mod.coerce_now(now)[0]
+    age = bugbot._age_minutes(pr.get("openedAt"), now_dt)
+    if age is not None and age > bugbot.ANNOUNCE_MINUTES:
+        return
+    lines.append("herald: %s pull request opened: %s" % (ticket.get("id"), url))
 
 
 def note_claim(ticket: dict, now=None) -> None:
@@ -1588,6 +1622,8 @@ def _hold_or_queue(ticket: dict, lines: list) -> None:
     ticket["phase"] = "ready"
     if not already:
         lines.append("approve: wait %s" % ticket.get("id"))
+        lines.append("herald: %s is ready and waits for approval%s. Reply warp:proceed %s to merge it." % (
+            ticket.get("id"), (": " + str(pr["url"])) if pr.get("url") else "", ticket.get("id")))
 
 
 def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list, now=None) -> None:
@@ -1604,6 +1640,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     note_times(ticket, snap, now=now)
     import bugbot as bugbot_progress
 
+    note_pr_announced(ticket, lines, now=now)
     lines.extend(bugbot_progress.progress(ticket, snap, now=now))
     if confirm_merge(data, ticket, snap, lines):
         return
