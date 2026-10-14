@@ -559,15 +559,35 @@ def _digest(data: dict, lines: list, now: str) -> None:
     slot["at"] = now
     rows = [_row(ticket, now) for ticket in _open_tickets(data)]
     counts = _counts(rows)
-    alarms = sum(1 for row in rows if row["alarm"] not in {"", "none"})
-    stalls = sum(1 for row in rows if row["stalled"])
+    alarmed = [row["id"] for row in rows if row["alarm"] not in {"", "none"}]
+    # The same rule as the `stalls:` line in /warp-status: stalled, and not already counted as an alarm.
+    # Before 1.6.19 this summed row["stalled"], which is "yes" or "no", both true, so every open
+    # ticket counted (stalls=14 with 13 queued and 1 waiting on Bugbot).
+    stalled = [row["id"] for row in rows if row["stalled"] == "yes" and row["alarm"] in {"", "none"}]
     import beam as beam_mod
 
-    bits = ["alarms=%d" % alarms, "stalls=%d" % stalls, "open=%d" % len(rows), beam_mod.in_progress_label(data)]
+    bits = ["alarms=%d" % len(alarmed), "stalls=%d" % len(stalled), "open=%d" % len(rows), beam_mod.in_progress_label(data)]
     bits.extend("%s=%d" % (key, counts[key]) for key in sorted(counts))
     text = " ".join(bits)
+    slot["alarms"] = alarmed
+    slot["stalls"] = stalled
     lines.append("digest: %s" % text)
     lines.append("slack: digest %s" % text)
+    lines.append("herald: %s" % digest_sentence(rows, counts, alarmed, stalled, beam_mod.in_progress_label(data)))
+
+
+def digest_sentence(rows: list, counts: dict, alarmed: list, stalled: list, progress: str) -> str:
+    """`Status: 14 open (13 queued, 1 reviewing), in progress 1/20. No alarms. Nothing stalled.` with the ids when there are any."""
+    states = ", ".join("%d %s" % (counts[key], key) for key in sorted(counts, key=lambda k: (-counts[k], k)))
+    parts = ["Status: %d open%s, %s." % (len(rows), (" (%s)" % states) if states else "", progress)]
+    parts.append(("Alarms: %s." % ", ".join(alarmed)) if alarmed else "No alarms.")
+    if stalled:
+        reasons = {row["id"]: row for row in rows}
+        shown = ["%s (%s, %s)" % (tid, reasons[tid]["state"], reasons[tid]["age"]) for tid in stalled[:8]]
+        parts.append("Stalled: %s%s." % (", ".join(shown), " and %d more" % (len(stalled) - 8) if len(stalled) > 8 else ""))
+    else:
+        parts.append("Nothing stalled.")
+    return " ".join(parts)
 
 
 def _row(ticket: dict, now: str) -> dict:
