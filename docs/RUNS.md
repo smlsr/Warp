@@ -43,7 +43,7 @@ Warp reads origin first.
   next: /warp-start
   ```
 
-  Then it restores the run's `beam.json`, `journal.jsonl`, `scan.json`, `stats.json`, and ticket folders into `.warp/`, and overlays the saved config. Machine keys (`runner`, `launch`, `worktreeRoot`, `stateDir`, `subagentVm`, `memoryCheck`, `cloudSnapshot`) stay as they are on this machine. Secrets and webhooks are never in the saved config. Then `/warp-start` carries on where the run stopped. This is how a new agent picks up after a lost one.
+  Then it restores the run's `beam.json`, `journal.jsonl`, `scan.json`, `stats.json`, and ticket folders into `.warp/`, and overlays the saved config. Machine keys (`runner`, `launch`, `worktreeRoot`, `stateDir`, `subagentVm`, `memoryCheck`, `cloudSnapshot`, `siblingRoot`) stay as they are on this machine. Secrets and webhooks are never in the saved config. Then `/warp-start` carries on where the run stopped. This is how a new agent picks up after a lost one.
 - If the run was `running` and its last checkpoint is 30 minutes old or less, init warns that another agent may still be running it. Starting a second parent on one run makes the earlier parent end its turn (`parent: exit superseded`).
 - With no name, `/warp-init` prints this checkout's run, or lists the runs on origin and asks which one.
 
@@ -105,23 +105,77 @@ startAfter: core:G2        # in admin's .warp/config.yaml
 
 Write the dependency as `<run>:<id>`: `deps: ["core:P-014"]` in `schedule.json`, or `core:P-014` in the deps cell of a table or an `after` list. The ticket waits until core's P-014 is merged in core's published beam. The parent reads the other runs' published beams every few minutes, and at start, and keeps what it needs under `external` on its own beam. `/warp-scan` warns when the run is not published yet, or does not have that ticket. `/warp-scan --skip-owned` leaves out the tickets another run owns and rewrites the tickets that depended on them to `core:A-1`.
 
-### Runs in other repos
+### Several repos, one run (multi-repo)
 
-A build-schedule/2 schedule.json can cover several repos (HOS-Admin: `HumanifyOS` and `HumanifyOS-UI`). Each repo gets its own run, and each run scans the same file:
+A build-schedule/2 schedule.json can cover several repos: 380 tickets in `HumanifyOS` and 20 in `HumanifyOS-UI`, with dependencies both ways. Since 1.6.26 one run works them all, in one agent window. Run `/warp-scan` in the repo with the most tickets. That repo is the parent: the beam, journal, board, and published state live there. Each other repo is a sibling, worked from a clone next to the parent:
+
+```
+~/src/HumanifyOS/       parent checkout: .warp/ (all the state), .warp/worktrees/<id> (every ticket's worktree)
+~/src/HumanifyOS-UI/    sibling clone: the UI tickets' branches, pull requests, and merges
+```
+
+`/warp-scan` prints the split and writes it to `.warp/config.yaml`:
+
+```
+repos: multi-repo run: HumanifyOS is the parent (380 tickets, holds the state); HumanifyOS-UI (20 tickets) from sibling clones
+deps: 41 dependencies cross repos; they stay plain ids and unblock in the same pass
+config: multiRepo: true
+config: siblingRepos: {HumanifyOS-UI: https://github.com/acme/HumanifyOS-UI.git}
+repos: sibling HumanifyOS-UI: clone /Users/me/src/HumanifyOS-UI, origin acme/humanifyos-ui, base main
+```
+
+What happens to a sibling ticket (AU-07 in HumanifyOS-UI):
+
+- **Worktree.** `checkout.py launch` adds a worktree of the HumanifyOS-UI clone at the parent's `.warp/worktrees/AU-07` (gitignored there), on a branch of HumanifyOS-UI. The Shuttle's prompt names the repo, the clone, and the base the pull request goes to. The worktree sits inside the parent checkout, so the agent window can open it.
+- **Pull request, Bugbot, checks.** The pull request is opened in HumanifyOS-UI against its base. Bugbot and CI are read from that pull request.
+- **Checks.** `checkCommand` is the parent's. A sibling ticket is gated by Bugbot and CI as configured, not by `pr.check`, and its merge check runs `mergeCheck: auto` (the test script of each package its locks touch) on the head in a throwaway worktree of the sibling clone.
+- **Merge.** `gh pr merge <url>` from the sibling clone, never by number from the parent (#24 in HumanifyOS is a different pull request). Warp refuses a pull request whose repo is not the clone's origin. `stateInMerge` applies to parent merges; a sibling merge is followed by a normal publish of the state to the parent (`publishOnChange`). A local-only merge (`provider.py merge-local --root <sibling clone>`) carries no Warp state into the sibling.
+- **Branch delete, merge times, Jira.** In the sibling repo, as for any ticket. Jira is unchanged.
+- **Locks.** Per repo: `src/app` in the parent and `src/app` in HumanifyOS-UI never collide; two HumanifyOS-UI tickets on `src/app` still wait for each other. `paths` limits parent tickets only.
+- **The parent never gets sibling files.** It only gets `.warp/` state. The verify step treats any change in the sibling clone outside a worktree as a lock escape.
+
+Board lines and claims name the repo: `**AU-07** [HumanifyOS-UI] coding …`, `AU-07 claimed: … (size M, auto-merge; repo HumanifyOS-UI; locks …)`.
+
+**The start check.** With `multiRepo: true`, `/warp-start` and `/warp-resume` check everything a sibling needs before anything starts, and refuse with the reason (`refuse: multi-repo run not started: <reason>`):
+
+| Check | Refusal |
+|---|---|
+| This checkout is the parent (`repo:` in the config, else origin's name) | `this checkout is HumanifyOS-UI, but the parent repo is HumanifyOS …` |
+| `multiRepo` is still true while the run has sibling tickets | `multiRepo is false in .warp/config.yaml, but this run has 20 tickets in sibling repos (…)` |
+| Tickets start as worktrees here | `launch: agent …` or `subagentVm: true … needs subagentVm: false` |
+| Every ticket's repo is the parent or a sibling | `tickets name a repo that is not the parent or a sibling: …` |
+| The sibling has a URL | `HumanifyOS-UI: no URL. Set siblingRepos …` |
+| The clone is there | cloned from the URL when missing (`repos: cloned HumanifyOS-UI into …`); a folder that is not a clone refuses |
+| Its origin is that repo | `the clone at … has origin …, not …` |
+| Its base branch fetches | `cannot fetch main from …: <git error>` |
+| No local changes in the clone | `the clone at … has local changes (…). Commit or stash them` |
+| gh can see it (connected mode, GitHub) | `gh cannot see acme/humanifyos-ui (…)` |
+
+A Slack `warp:start` or `warp:resume` runs the same check (without cloning). `python3 scripts/multirepo.py check` runs it without starting (it does not clone), and `multirepo.py show` lists the repos.
+
+**Scanning in the wrong checkout.** `/warp-scan` in HumanifyOS-UI refuses: `repos: the parent repo is HumanifyOS (most tickets: HumanifyOS 380, HumanifyOS-UI 20), and this checkout is HumanifyOS-UI. … Run /warp-scan in a HumanifyOS checkout`. A checkout that is none of the schedule's repos keeps every ticket, as before, with a warning.
+
+**Moving from two runs to one.** Stop both runs (`warp:stop` to each), then `/warp-scan` in the parent. `repoRuns` and `externalRepos` are ignored in a multi-repo run; remove them when you like. The scan keeps what the old runs finished: every merged, done, or skipped ticket in the parent's own beam and in each published beam on the sibling's base branch (`.warp/runs/<run>/beam.json`) keeps its status, pull request, branch, Jira link, and times (`repos: kept 212 finished tickets from earlier runs (this checkout, HumanifyOS-UI:.warp/runs/admin-ui/beam.json)`). Tickets that were in flight start queued and reuse their branch and pull request when they launch; the scan lists them. The schedule and Jira are not changed. The old sibling run's folder in HumanifyOS-UI is no longer read; delete it when you like.
+
+### Runs in other repos (splitRepos)
+
+`splitRepos: true` keeps the older mode: each repo gets its own run, and each run scans the same file:
 
 ```yaml
 # HumanifyOS checkout
 run: admin
+splitRepos: true
 repoRuns: {HumanifyOS-UI: admin-ui}
 externalRepos: {admin-ui: https://github.com/acme/HumanifyOS-UI.git}
 
 # HumanifyOS-UI checkout
 run: admin-ui
+splitRepos: true
 repoRuns: {HumanifyOS: admin}
 externalRepos: {admin: https://github.com/acme/HumanifyOS.git}
 ```
 
-`/warp-scan` keeps the tickets whose `repo` is this checkout (`repo:` in the config, else origin's name) and prints `repo: HumanifyOS — 72 of 120 tickets` and `deps: blockers in another repo become run:id`. A blocker in the other repo becomes `admin-ui:AU-07` and waits exactly like a ticket in another run of this repo, except the parent fetches the other repo's base branch to read its published beam. Locks written `HumanifyOS/src/...` lose the prefix. Both runs must be named. `python3 scripts/buildsched.py show plan/schedule.json --repo HumanifyOS` shows the split without scanning.
+`/warp-scan` keeps the tickets whose `repo` is this checkout (`repo:` in the config, else origin's name) and prints `repo: HumanifyOS — 72 of 120 tickets` and `deps: blockers in another repo become run:id`. A blocker in the other repo becomes `admin-ui:AU-07` and waits exactly like a ticket in another run of this repo, except the parent fetches the other repo's base branch to read its published beam. Locks written `HumanifyOS/src/...` lose the prefix. Both runs must be named. `python3 scripts/buildsched.py show plan/schedule.json --repo HumanifyOS` shows the split without scanning; without `--repo` it names the parent a multi-repo run would use.
 
 ### Paths and locks
 

@@ -11,4 +11,6 @@ python3 scripts/check_version.py
 
 `--minor` and `--major` are there when a patch bump is the wrong one. Replace the changelog stub with what changed. `python3 scripts/bump_version.py ?` prints the options. The next patch after 1.3.19 is 1.3.20.
 
+`docs/config.html` is generated from the key table in `docs/CONFIG.md` and shows the version. After a bump or a config change, run `python3 scripts/config_doc.py`; the tests fail while the page is out of date.
+
 Pull requests run `scripts/check_version.py --against origin/main`. A version that is not newer than `main` fails the check. An equal version passes when the working tree already matches `main`, so a check that starts after the merge is not a failure.

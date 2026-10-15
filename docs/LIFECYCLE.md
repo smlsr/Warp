@@ -95,7 +95,7 @@ The instance is shown wherever you would look for it:
 | `/warp-version` | the same line, and `this machine: <machine id> host=<host>` for the machine the command ran on |
 | `agents.py list` | the same line first |
 | `.warp/STATUS.md`, `.warp/status.json` | `Instance warp:a1b2c3 ...`, and an `instance` object |
-| Every Slack and Teams message | the header: `Warp | <repo> / <project> | run <name> | warp:a1b2c3`. `| run <name>` appears only on a named run |
+| Every Slack and Teams message | the header: `Warp \| <repo> / <project> \| run <name> \| warp:a1b2c3`. `\| run <name>` appears only on a named run |
 | The status post | a fact, `Instance: warp:a1b2c3 on <host>` |
 
 The tag is how this run's agents are told apart from every other agent, including another Warp run's. A dry run lists them with their status, which is how you see one that is still running:
@@ -325,6 +325,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `run: pass <n> at <time>Z` | `supervise` | the pass number. A number that skips means an output was lost |
 | `run: next is pass <n>` | `parent-exit --wait` | the number the next `supervise` prints |
 | `state: published (merged <id>)` / `state: published (started <id> on <branch>)` | `supervise`, `checkout.py launch` (with `pushStateNew: true`) | the run state is on the base branch. Nothing to push. `state: not published (…)` says why; push it with `session_note.py` or the next checkpoint |
+| `repos: multi-repo run. <parent> is the parent …` + `repos: <sibling> (<n> tickets) at <clone>, origin <repo>, base <branch>: ok` | `/warp-start`, `/warp-resume`, `multirepo.py check` | every sibling clone is ready. `refuse: multi-repo run not started: <reason>` stops the start; fix that and start again |
 | `merge: branch deleted <id> <branch>` / `merge: branch not deleted <id> <branch>: <why>` | `supervise` | `deleteBranchOnMerge` is on and the merged ticket's branch was deleted, or why not |
 | `merge: <id> merged on the provider (a merge commit with the run state, <sha>, confirmed MERGED)` | `supervise` | Warp pushed one merge commit with the run state and GitHub shows the pull request merged (`stateInMerge`) |
 | `merge: <id> pushed <sha> to the base branch with the run state. …` | `supervise` | the merge commit is on the base; the next pass records it merged when GitHub shows it. Nothing to do |

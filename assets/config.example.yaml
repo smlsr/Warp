@@ -45,7 +45,21 @@ baseFixOwner: ""
 # repoRuns names the Warp run that works each other repo (default: the repo
 # name in lowercase), so a blocker there becomes <run>:<id>. externalRepos says
 # where that run's repo is (git URL or local path, #branch optional), so the
-# parent can read its published beam.
+# parent can read its published beam. These apply with splitRepos: true.
+multiRepo: false
+# Written by /warp-scan. true: the schedule's tickets span several repos and this
+# one run works them all from this checkout, the repo with the most tickets, which
+# holds the state. The other repos' tickets are worked in sibling clones (see
+# siblingRoot and siblingRepos). /warp-start checks the clones before it starts.
+splitRepos: false
+# true keeps the older mode for a schedule that spans several repos: one run per
+# repo, with repo, repoRuns, and externalRepos above.
+siblingRoot: ".."
+# Where a multi-repo run's sibling clones are, relative to this checkout:
+# ../HumanifyOS-UI. /warp-start clones a missing one there.
+# siblingRepos: {HumanifyOS-UI: https://github.com/acme/HumanifyOS-UI.git}
+# Written by /warp-scan for a multi-repo run: each sibling repo and its git URL,
+# with #branch when its base branch is not main.
 
 # --- Shuttle models. Uncomment a line to use it; the slug must match the Cursor model picker. ---
 # model: claude-sonnet-5-5-high   # the default, as before

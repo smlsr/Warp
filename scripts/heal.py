@@ -280,6 +280,8 @@ def fill_merge_times(beam_path: Path) -> list:
     """Each merged ticket with no pr.mergedAt gets its merge commit's time from git. No provider call. Never raises."""
     try:
         beam_path = Path(beam_path)
+        import multirepo
+
         data = beam_mod.load_json(beam_path)
         root = _repo_root(beam_path)
         filled = []
@@ -289,7 +291,7 @@ def fill_merge_times(beam_path: Path) -> list:
             pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else None
             if pr is None or pr.get("mergedAt"):
                 continue
-            when = _merge_commit_time(root, pr)
+            when = _merge_commit_time(multirepo.root_for(data, ticket, root), pr)
             if when:
                 pr["mergedAt"] = when
                 filled.append(tid)

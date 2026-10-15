@@ -212,6 +212,8 @@ def _holder(data: dict, ticket: dict, paths: list) -> Optional[str]:
     Queued, alarmed, and finished tickets do not hold a lock. ACTIVE is the
     same set beam.held_locks uses.
     """
+    import multirepo
+
     wanted = list(paths)
     if not wanted:
         return None
@@ -220,7 +222,7 @@ def _holder(data: dict, ticket: dict, paths: list) -> Optional[str]:
             continue
         if other.get("status") not in beam.ACTIVE:
             continue
-        if beam.lock_overlap(wanted, list(other.get("locks") or [])):
+        if beam.lock_overlap(multirepo.scoped_locks(data, ticket, wanted), multirepo.scoped_locks(data, other, list(other.get("locks") or []))):
             return str(other.get("id"))
     return None
 

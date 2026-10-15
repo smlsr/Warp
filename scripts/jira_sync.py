@@ -3342,7 +3342,9 @@ def _lookup_rows(beam_path: Path, beam: dict, cfg: dict, ids: list) -> tuple:
         if not isinstance(ticket, dict):
             continue
         branch = orchestrator.branch_name(ticket, cfg)
-        found = provider.lookup_pr(root, branch)
+        import multirepo
+
+        found = provider.lookup_pr(multirepo.root_for(beam, ticket, root), branch)
         if not found:
             continue
         row = dict(found)

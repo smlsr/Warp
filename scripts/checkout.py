@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import multirepo  # noqa: E402
 import orchestrator  # noqa: E402
 import runs  # noqa: E402
 import state_commit  # noqa: E402
@@ -361,14 +362,17 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
         return 2
     for line in agents.note_checkout(data, ticket, beam_path=path):
         print(line)
-    if not _is_git(root):
-        sys.exit("refuse: %s is not a git checkout" % root)
+    # A sibling ticket (multi-repo) is a worktree of the sibling clone, kept under this checkout's .warp/worktrees.
+    repo = multirepo.root_for(data, ticket, root)
+    if not _is_git(repo):
+        sys.exit("refuse: %s is not a git checkout" % repo)
     base_name = _base_name(data.get("config") or {}, base)
-    start = fetch_base(root, base_name)
-    had_branch = _local_branch(root, branch) or bool(_remote_branch(root, branch))
+    base_name = multirepo.base_for(data, ticket, base_name)
+    start = fetch_base(repo, base_name)
+    had_branch = _local_branch(repo, branch) or bool(_remote_branch(repo, branch))
     wt = worktree_path(root, data.get("config") or {}, ticket_id)
-    listed = wt.exists() and _worktree_listed(root, wt)
-    kind = ensure_worktree(root, wt, branch, start)
+    listed = wt.exists() and _worktree_listed(repo, wt)
+    kind = ensure_worktree(repo, wt, branch, start)
     rel = worktree_rel(ticket_id, data.get("config") or {})
     ticket["branch"] = branch
     ticket["worktree"] = rel
@@ -393,8 +397,15 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
             for line in orchestrator.publish_on_change(path, [], why="started %s on %s" % (ticket_id, branch)):
                 print(line)
     print("base: %s" % start)
+    sibling = multirepo.ticket_repo(data, ticket)
+    if sibling:
+        print("repo: %s (sibling clone %s)" % (sibling, repo))
     cfg = _model_config(root, data)
     prompt = orchestrator.subagent_prompt(ticket, cfg, branch, str(wt), str(root), instance=instance)
+    extra = multirepo.prompt_lines(data, ticket, root)
+    if extra:
+        head, _sep, rest = prompt.partition("\nagent: ")
+        prompt = "\n".join([head] + extra) + ("\nagent: " + rest if _sep else "")
     print("for the parent: %s" % orchestrator.SUBAGENT_INSTRUCTION)
     print(orchestrator.name_line(orchestrator.agent_name(ticket, instance)))
     print(orchestrator.model_line(ticket, cfg))
@@ -537,6 +548,11 @@ def bind_agent(beam: dict, tid: str, agent: str) -> str:
 
 
 def add_worktree(root: Path, beam: dict, tid: str, base: str) -> str:
+    """The worktree for one ticket: a worktree of its repo (the sibling clone in a multi-repo run) under this checkout."""
+    return _add_worktree(root, multirepo.root_for(beam, (beam.get("tickets") or {}).get(tid), root), beam, tid, base)
+
+
+def _add_worktree(root: Path, repo: Path, beam: dict, tid: str, base: str) -> str:
     cfg = beam.get("config") or {}
     ticket = _ticket(beam, tid)
     if ticket.get("agent") and _occupied(ticket) and ticket.get("checkout") == "cloud-vm":
@@ -547,13 +563,15 @@ def add_worktree(root: Path, beam: dict, tid: str, base: str) -> str:
         sys.exit("refuse: " + reason)
     branch = orchestrator.branch_name(ticket, cfg)
     path = Path(rel).resolve() if Path(rel).is_absolute() else (root / rel).resolve()
-    if path.exists() and _worktree_listed(root, path):
+    if path.exists() and _worktree_listed(repo, path):
         ticket["worktree"] = rel
         ticket["branch"] = branch
         ticket["checkout"] = "worktree"
         return rel
     start = base or str(cfg.get("baseBranch") or "HEAD")
-    ensure_worktree(root, path, branch, start)
+    if multirepo.is_sibling(beam, ticket):
+        start = fetch_base(repo, multirepo.base_for(beam, ticket, "main"))
+    ensure_worktree(repo, path, branch, start)
     ticket["worktree"] = rel
     ticket["branch"] = branch
     ticket["checkout"] = "worktree"
@@ -573,8 +591,9 @@ def remove_worktree(root: Path, beam: dict, tid: str) -> str:
     if not rel:
         return ""
     path = Path(rel) if Path(rel).is_absolute() else (root / rel)
-    if path.exists() or _worktree_listed(root, path.resolve() if path.exists() else path):
-        removed = _git(root, "worktree", "remove", "--force", str(path))
+    repo = multirepo.root_for(beam, ticket, root)
+    if path.exists() or _worktree_listed(repo, path.resolve() if path.exists() else path):
+        removed = _git(repo, "worktree", "remove", "--force", str(path))
         if removed.returncode != 0 and path.exists():
             sys.exit("git worktree remove failed: %s" % (removed.stderr.strip() or removed.stdout.strip()))
     ticket["worktree"] = None
@@ -591,8 +610,11 @@ def drop_worktree(root: Path, beam: dict, tid: str) -> str:
     if tid not in (beam.get("tickets") or {}):
         prune_worktrees(root)
         return ""
+    repo = multirepo.root_for(beam, (beam.get("tickets") or {}).get(tid), root)
     rel = remove_worktree(root, beam, tid)
     prune_worktrees(root)
+    if repo != Path(root).resolve():
+        prune_worktrees(repo)
     if rel:
         print("removed %s" % rel)
     print("pruned worktrees")
@@ -690,13 +712,22 @@ def verify_ticket(root: Path, beam_path: Path, data: dict, tid: str) -> int:
         if norm == rel_text or norm.startswith(rel_text + "/"):
             continue
         escaped.append(norm)
+    # A sibling ticket (multi-repo): its branch is in the sibling clone, and that clone stays clean too.
+    repo = multirepo.root_for(data, ticket, root)
+    sibling = multirepo.ticket_repo(data, ticket)
+    if sibling:
+        for name in _status_paths(repo):
+            norm = name.replace("\\", "/")
+            if norm == ".warp" or norm.startswith(".warp/"):
+                continue
+            escaped.append("%s:%s" % (sibling, norm))
     branch = str(ticket.get("branch") or orchestrator.branch_name(ticket, cfg))
-    base_name = _base_name(cfg, "")
-    base_ref = _resolve_ref(root, "origin/%s" % base_name) or _resolve_ref(root, base_name) or "HEAD"
+    base_name = multirepo.base_for(data, ticket, _base_name(cfg, ""))
+    base_ref = _resolve_ref(repo, "origin/%s" % base_name) or _resolve_ref(repo, base_name) or "HEAD"
     locks = orchestrator.lock_paths(ticket)
     extra = orchestrator.append_only_paths(cfg)
-    if _ref_exists(root, branch) or _ref_exists(root, "refs/heads/%s" % branch):
-        for name in _diff_names(root, base_ref, branch):
+    if _ref_exists(repo, branch) or _ref_exists(repo, "refs/heads/%s" % branch):
+        for name in _diff_names(repo, base_ref, branch):
             if not orchestrator.path_inside_locks(name, locks, extra):
                 if name not in escaped:
                     escaped.append(name)
@@ -904,6 +935,14 @@ def main(argv: Optional[list] = None) -> int:
     ticket = _ticket(data, args.id)
     base = getattr(args, "base", "") or str(cfg.get("baseBranch") or "HEAD")
     branch = orchestrator.branch_name(ticket, cfg)
+    if args.cmd == "add" and multirepo.is_sibling(data, ticket):
+        print("refuse: %s is a %s ticket; add commits the beam to a branch of this repo. Use launch." % (args.id, multirepo.ticket_repo(data, ticket)))
+        return 2
+    if args.cmd == "launch" and multirepo.is_sibling(data, ticket) and (
+            orchestrator.launch_mode(cfg) == "agent" or not orchestrator.shared_machine(cfg, data)):
+        print("refuse: %s is a %s ticket. A multi-repo run starts sibling tickets as worktrees on this machine "
+              "(launch: worktree, subagentVm: false); do not start the subagent" % (args.id, multirepo.ticket_repo(data, ticket)))
+        return 2
     if args.cmd == "launch":
         if orchestrator.launch_mode(cfg) == "agent":
             return _launch_agent(root, path, data, ticket, branch, base, args.id)

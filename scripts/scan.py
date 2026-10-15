@@ -951,6 +951,13 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     if missing:
         print("refuse: %s" % missing)
         return 2
+    import multirepo
+
+    repo_lines = multirepo.start_refusal(beam_path, prompt_gate.effective_config(load_json(beam_path), root))
+    for line in repo_lines:
+        print(line)
+    if any(line.startswith("refuse: ") for line in repo_lines):
+        return 2
     import blocks
 
     wait_text = runs.read_key(runs.config_path(root).read_text() if runs.config_path(root).is_file() else "", "startAfter") or ""
@@ -1320,6 +1327,10 @@ def main() -> None:
 
             local = prompt_gate.yaml_scalars((warp / "config.yaml").read_text()) if (warp / "config.yaml").is_file() else {}
             _repo, repo_lines = buildsched.pick_repo(graph, root, local)
+            if graph.get("repoRefusal"):
+                for line in repo_lines:
+                    print(line)
+                sys.exit(2)
             sched_meta = graph.get("schedule") or {}
             own = sched_meta.get("gateOrder") or "deps"
             cfg_order = str(local.get("gateOrder") or "").strip().lower()
@@ -1340,6 +1351,26 @@ def main() -> None:
         cfg["model"] = args.model
         if run:
             cfg["run"] = run
+        multi = None
+        if isinstance(graph.get("repos"), dict):
+            import multirepo
+            import prompt_gate as gate_cfg
+
+            local_cfg = gate_cfg.yaml_scalars((warp / "config.yaml").read_text()) if (warp / "config.yaml").is_file() else {}
+            multi = multirepo.describe(root, local_cfg, graph["repos"]["home"], graph["repos"]["counts"])
+            for line in multirepo.write_config(root, multirepo.config_lines(multi)):
+                print(line)
+            for name, row in multi["siblings"].items():
+                print("repos: sibling %s: clone %s, origin %s, base %s%s" % (
+                    name, (root / row["path"]).resolve(), multirepo.slug(row["url"]) or "(unknown: set siblingRepos)", row["base"],
+                    "" if ((root / row["path"]).resolve() / ".git").exists() else " (not cloned yet; /warp-start clones it)"))
+            cfg["multiRepo"] = True
+        elif graph.get("format") == "build-schedule/2" or (warp / "config.yaml").is_file():
+            import multirepo
+
+            for line in multirepo.write_config(root, {"multiRepo": "false"}):
+                print(line)
+            cfg["multiRepo"] = False
         cfg["autoMergeSizes"] = resolve_auto_merge_sizes(cfg, warp / "config.yaml")
         if (warp / "config.yaml").is_file():
             import orchestrator
@@ -1374,6 +1405,13 @@ def main() -> None:
                 previous = {}
         beam = ingest(sched_path, Path(graph["source"]), out_path, cfg, previous=previous)
         beam["runState"] = "stopped"
+        if multi is not None:
+            import multirepo
+
+            beam["repos"] = multi
+            for line in multirepo.carry(beam, previous, root):
+                print(line)
+            multirepo.mark_roles(beam)
         if run:
             beam["run"] = run
         beam["source"]["format"] = graph.get("format")
