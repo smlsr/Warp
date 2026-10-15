@@ -281,7 +281,7 @@ def red_reasons(ticket: dict, config: Optional[dict]) -> list:
         reasons.append("ci red")
     if orchestrator.provider_rollup(ticket) == "red":
         reasons.append("rollup red")
-    if orchestrator.check_command(config):
+    if orchestrator.check_command(config) and ticket.get("repoRole") != "sibling":
         if orchestrator._for_head(pr, "check", "checkSha") in _RED_WORD:
             reasons.append("check red")
     for name, value in ac_map(ticket).items():
@@ -865,8 +865,10 @@ def live_provider(data: dict, beam_path) -> dict:
     """Pull request state from GitHub when supervise was started without --provider."""
     import provider as provider_mod
 
+    import multirepo
+
     root = Path(beam_path).resolve().parent.parent
-    has_ci = provider_mod.repo_has_ci(root)
+    ci_of = {}
     found = {}
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
     for ticket in tickets.values():
@@ -877,9 +879,12 @@ def live_provider(data: dict, beam_path) -> dict:
         url = (ticket.get("pr") or {}).get("url") if isinstance(ticket.get("pr"), dict) else ""
         if not url:
             continue
-        snap = provider_mod.fetch_pr_state(root, url)
+        repo = multirepo.root_for(data, ticket, root)
+        snap = provider_mod.fetch_pr_state(repo, url)
         if snap:
-            snap["ciConfigured"] = has_ci
+            if repo not in ci_of:
+                ci_of[repo] = provider_mod.repo_has_ci(repo)
+            snap["ciConfigured"] = ci_of[repo]
             found[ticket.get("id")] = snap
     return found
 
@@ -944,7 +949,7 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
         first = not ticket.get("claimedAt")
         note_claim(ticket)
         if first and step == "implement" and not replacing and not detail and lines[0].startswith("start "):
-            lines.append(claim_herald(ticket))
+            lines.append(claim_herald(ticket, __import__("multirepo").ticket_repo(data, ticket)))
     if detail:
         # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
         _shuttle(ticket)["detail"] = detail
@@ -1199,14 +1204,16 @@ def note_times(ticket: dict, snap: Optional[dict], now=None) -> None:
         pr["reviewedSha"] = head
 
 
-def claim_herald(ticket: dict) -> str:
-    """`herald: <id> claimed: <summary> (size, auto-merge or approval, locks). A Shuttle is coding it on <branch>.`"""
+def claim_herald(ticket: dict, repo: str = "") -> str:
+    """`herald: <id> claimed: <summary> (size, auto-merge or approval, locks). A Shuttle is coding it on <branch>.`
+
+    A sibling ticket in a multi-repo run names its repo: `(size S, auto-merge; repo HumanifyOS-UI; locks …)`."""
     locks = [str(lock) for lock in ticket.get("locks") or []]
     shown = ", ".join(locks[:4]) + (" and %d more" % (len(locks) - 4) if len(locks) > 4 else "")
     how = "auto-merge" if ticket.get("autoMerge") else "merges on approval"
     summary = str(ticket.get("summary") or "").strip()
     return "herald: %s claimed%s (size %s, %s%s). A Shuttle is coding it%s." % (
-        ticket.get("id"), (": " + summary) if summary else "", ticket.get("size") or "?", how,
+        ticket.get("id"), (": " + summary) if summary else "", ticket.get("size") or "?", how + ("; repo " + repo if repo else ""),
         ("; locks " + shown) if shown else "", (" on " + str(ticket["branch"])) if ticket.get("branch") else "")
 
 
@@ -1782,6 +1789,7 @@ _PR_LINE = re.compile(r"^pr: open (\S+) (\S+)")
 def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
     """Open the pull request for each `pr: open` this pass printed (gh), or say how to."""
     import beam as beam_mod
+    import multirepo
     import provider as provider_mod
 
     out = []
@@ -1798,12 +1806,14 @@ def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
             continue
         tid, branch = match.group(1), match.group(2)
         ticket = tickets[tid]
+        repo = multirepo.root_for(data, ticket, root)
+        ticket_base = multirepo.base_for(data, ticket, base)
         key = ticket.get("jiraKey") or ""
         title = "[%s] %s" % (tid, ticket.get("summary") or tid)
         body = "Warp ticket %s%s.\n\nOpened by the Warp parent: the Shuttle pushed `%s` but could not open the pull request.\n\nAcceptance:\n%s" % (
             tid, " (%s)" % key if key else "", branch,
             "\n".join("- %s: %s" % pair for pair in __import__("acceptance").items(ticket)) or "- (none listed)")
-        outcome, detail = (opener or provider_mod.open_pr)(root, branch, base, title, body)
+        outcome, detail = (opener or provider_mod.open_pr)(repo, branch, ticket_base, title, body)
         if outcome in {"opened", "found"}:
             orchestrator.note_pr_opened(ticket, detail, beam_mod.utcnow())
             ticket["pr"].pop("openRequested", None)
@@ -1819,9 +1829,10 @@ def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
             continue
         scripts = orchestrator.scripts_dir()
         out.append(
-            "pr: MUST DO %s: open a pull request from %s into %s with the GitHub MCP create_pull_request tool (title %r), "
+            "pr: MUST DO %s: open a pull request from %s into %s%s with the GitHub MCP create_pull_request tool (title %r), "
             "then record it: python3 %s/orchestrator.py opened --beam %s --id %s --pr <url>. (%s)"
-            % (tid, branch, base, title, scripts, Path(beam_path).resolve(), tid, detail)
+            % (tid, branch, ticket_base, (" in %s" % (multirepo.slug(multirepo.url_for(data, ticket)) or multirepo.ticket_repo(data, ticket)))
+               if multirepo.is_sibling(data, ticket) else "", title, scripts, Path(beam_path).resolve(), tid, detail)
         )
     return out
 
@@ -1869,6 +1880,7 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
     that cannot run here prints a MUST DO line and leaves the ticket merging: the next pass marks
     it merged only when the provider shows the pull request merged.
     """
+    import multirepo
     import provider as provider_mod
 
     out = []
@@ -1881,11 +1893,15 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
         cfg.update(prompt_gate.effective_config(data, root))
     except Exception:
         pass
-    mode = ""
-    try:
-        mode = str(provider_mod.resolve(root, cfg).get("mode") or "")
-    except Exception:
-        mode = ""
+    modes = {}
+
+    def mode_of(repo: Path) -> str:
+        if repo not in modes:
+            try:
+                modes[repo] = str(provider_mod.resolve(repo, cfg).get("mode") or "")
+            except Exception:
+                modes[repo] = ""
+        return modes[repo]
     for line in list(lines):
         match = _MERGE_LINE.match(line)
         if not match or match.group(1) not in tickets:
@@ -1893,7 +1909,14 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
         tid, url = match.group(1), match.group(2)
         ticket = tickets[tid]
         scripts = orchestrator.scripts_dir()
-        verdict, check_detail = (checker or provider_mod.pre_merge_check)(root, ticket, cfg)
+        # A sibling ticket (multi-repo) is checked and merged in its own repo; checkCommand is the parent's.
+        repo = multirepo.root_for(data, ticket, root)
+        sibling = multirepo.ticket_repo(data, ticket)
+        ticket_cfg = dict(cfg)
+        if sibling:
+            ticket_cfg.pop("checkCommand", None)
+        mode = mode_of(repo)
+        verdict, check_detail = (checker or provider_mod.pre_merge_check)(repo, ticket, ticket_cfg)
         if verdict == "red":
             # The tests fail on this head: not merged. The fix Shuttle gets the failing output.
             first = check_detail.splitlines()[0] if check_detail else "the merge check"
@@ -1907,11 +1930,21 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             out.append("merge: check skipped %s: %s" % (tid, check_detail))
         if mode == "local" or not url:
             out.append("merge: MUST DO %s: local mode, no pull request to merge. Run python3 %s/provider.py merge-local "
-                       "--root %s --beam %s --id %s --branch %s" % (tid, scripts, root, Path(beam_path).resolve(), tid, ticket.get("branch") or ""))
+                       "--root %s --beam %s --id %s --branch %s%s" % (tid, scripts, repo, Path(beam_path).resolve(), tid, ticket.get("branch") or "",
+                                                                       " --base %s" % multirepo.base_for(data, ticket, "main") if sibling else ""))
+            continue
+        # Never merge a pull request from a clone of another repo: `gh pr merge <n>` there is a different pull request.
+        wrong = provider_mod.pr_repo_mismatch(repo, url)
+        if wrong:
+            ticket.setdefault("pr", {})["mergeError"] = wrong
+            out.append("merge: not merged %s: %s" % (tid, wrong))
             continue
         number = str(url).rstrip("/").split("/")[-1]
         method = provider_mod.merge_method(cfg)
-        if merger is None:
+        if sibling:
+            # gh merges by URL in the sibling clone, never by number in the parent: #24 there is a different pull request.
+            number = str(url)
+        if merger is None and not sibling:
             # One merge commit that also carries the run state, pushed by Warp (mergeMethod merge, stateInMerge).
             outcome, detail = provider_mod.merge_with_state(root, Path(beam_path), data, ticket, number, cfg)
             if outcome == "merged":
@@ -1925,7 +1958,7 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
                            "shows the pull request merged." % (tid, detail[:12]))
                 continue
             out.append("merge: %s through the provider (%s)" % (tid, detail))
-        outcome, detail = (merger or provider_mod.merge_connected)(root, number, cfg)
+        outcome, detail = (merger or provider_mod.merge_connected)(repo, number, cfg)
         if outcome == "merged":
             ticket.setdefault("pr", {})["mergeMethod"] = method
             finish_merge(data, ticket, out, sha=detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else "",
@@ -1940,7 +1973,7 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
         out.append(
             "merge: MUST DO %s: merge %s (%s) with the GitHub MCP merge tool (merge_pull_request, merge_method %s) or `gh pr merge %s --%s`, "
             "then let the next pass confirm it. Warp marks it merged only when the provider shows the pull request merged. "
-            "Do not mark it merged by hand. If the tool is not allowed, add it with /warp-allow-notify --with-git." % (tid, url, method, method, number, method)
+            "Do not mark it merged by hand. If the tool is not allowed, add it with /warp-allow-notify --with-git." % (tid, url, method, method, url if sibling else number, method)
         )
         out.append("herald: %s is ready to merge, but Warp could not merge it here: %s" % (tid, (detail or "rejected").splitlines()[0]))
     return out
@@ -1954,6 +1987,7 @@ def after_merges(data: dict, beam_path, lines: list, deleter=None) -> list:
 
     Off by default. Runs after the merge is confirmed on the provider (or made locally), never before.
     """
+    import multirepo
     import provider as provider_mod
 
     root = Path(beam_path).resolve().parent.parent
@@ -1978,7 +2012,8 @@ def after_merges(data: dict, beam_path, lines: list, deleter=None) -> list:
         branch = str(ticket.get("branch") or pr.get("branch") or "")
         if not branch or pr.get("branchDeleted"):
             continue
-        gone, why = (deleter or provider_mod.delete_merged_branch)(root, branch, base)
+        gone, why = (deleter or provider_mod.delete_merged_branch)(multirepo.root_for(data, ticket, root), branch,
+                                                                   multirepo.base_for(data, ticket, base))
         if gone:
             pr["branchDeleted"] = True
             out.append("merge: branch deleted %s %s%s" % (ticket.get("id"), branch, (" (%s)" % why) if why else ""))

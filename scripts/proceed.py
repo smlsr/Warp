@@ -200,7 +200,12 @@ def describe(beam_path: Path, token: str, by: Optional[str]) -> tuple[int, str]:
         pr["approvedAt"] = jira_sync.now()
     beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
     beam.journal(beam_path, {"type": "proceed", "id": tid, "by": who, "matched": how})
-    mode = _mode(root)
+    import multirepo
+
+    # A sibling ticket (multi-repo) merges in its own repo, by URL.
+    repo = multirepo.root_for(data, ticket, root)
+    sibling = multirepo.ticket_repo(data, ticket)
+    mode = _mode(repo)
     target = cfg.get("jiraDoneStatus") or "Done"
     branch = ticket.get("branch") or "<branch>"
     beam_py = Path(beam.__file__).resolve()
@@ -219,11 +224,13 @@ def describe(beam_path: Path, token: str, by: Optional[str]) -> tuple[int, str]:
             "which prints the post-merge MUST DO:"
         )
         lines.append(
-            f"python3 {provider_py} merge-local --root {root} --beam {beam_path} --id {tid} --branch {branch}"
+            f"python3 {provider_py} merge-local --root {repo} --beam {beam_path} --id {tid} --branch {branch}"
+            + (f" --base {multirepo.base_for(data, ticket, 'main')}" if sibling else "")
         )
     else:
+        where = (f" {pr.get('url')}" if pr.get("url") else "") + (f" in {sibling} (from {repo}, never by number from this checkout)" if sibling else "")
         lines.append(
-            f"proceed: connected mode. Merge the pull request (merge_method {method}), then run this in the same turn. "
+            f"proceed: connected mode. Merge the pull request{where} (merge_method {method}), then run this in the same turn. "
             "Do not stop after the GitHub or Bitbucket merge:"
         )
         lines.append(

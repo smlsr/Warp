@@ -673,7 +673,7 @@ def _apply_provider(beam_path: Path, data: dict, ticket: dict, checks: list, now
         pr["rollup"] = rollup
         changed = True
     if rollup == "red" and not red_name:
-        command = orchestrator.resolve_check_command(data.get("config") or {}, _yaml(beam_path))
+        command = "" if ticket.get("repoRole") == "sibling" else orchestrator.resolve_check_command(data.get("config") or {}, _yaml(beam_path))
         if orchestrator.is_make_ci(command) or orchestrator.is_make_ci(pr.get("checkName")):
             red_name = "make ci"
             red_log = red_log or "make ci red"

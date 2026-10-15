@@ -66,6 +66,7 @@ MACHINE_KEYS = (
     "subagentVm",
     "memoryCheck",
     "cloudSnapshot",
+    "siblingRoot",
 )
 # Files a run publishes, beside tickets/.
 STATE_FILES = (

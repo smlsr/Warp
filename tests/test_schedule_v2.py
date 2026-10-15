@@ -84,7 +84,7 @@ class ParseTest(unittest.TestCase):
 class RepoTest(unittest.TestCase):
     def test_pick_repo_keeps_one_and_rewires(self):
         g = scan.from_schedule(FIX, Path(tempfile.mkdtemp()))
-        got, lines = buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "Core", "repoRuns": "{Core-UI: admin-ui}"})
+        got, lines = buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "Core", "repoRuns": "{Core-UI: admin-ui}", "splitRepos": "true"})
         self.assertEqual(got, "Core")
         ids = [t["id"] for t in g["tickets"]]
         self.assertNotIn("AU-01", ids)
@@ -97,10 +97,10 @@ class RepoTest(unittest.TestCase):
 
     def test_default_run_name_and_unknown_checkout(self):
         g = scan.from_schedule(FIX, Path(tempfile.mkdtemp()))
-        buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "core"})
+        buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "core", "splitRepos": "true"})
         self.assertEqual(next(t for t in g["tickets"] if t["id"] == "AD-04")["after"], ["core-ui:AU-01"])
         g = scan.from_schedule(FIX, Path(tempfile.mkdtemp()))
-        got, lines = buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "Elsewhere"})
+        got, lines = buildsched.pick_repo(g, Path(tempfile.mkdtemp()), {"repo": "Elsewhere", "splitRepos": "true"})
         self.assertIsNone(got)
         self.assertEqual(len(g["tickets"]), 6)
         self.assertIn("set `repo: <name>`", lines[1])
@@ -111,7 +111,7 @@ class RepoTest(unittest.TestCase):
         (root / "PLAN/plan").mkdir(parents=True)
         shutil.copy(FIX, root / "PLAN/plan/schedule.json")
         (root / ".warp").mkdir()
-        (root / ".warp/config.yaml").write_text("run: admin\nrepoRuns: {Core-UI: admin-ui}\n")
+        (root / ".warp/config.yaml").write_text("run: admin\nsplitRepos: true\nrepoRuns: {Core-UI: admin-ui}\n")
         git(root, "add", "-A")
         git(root, "commit", "-qm", "init")
         out = subprocess.run([sys.executable, str(ROOT / "scripts/scan.py"), "scan", "--folder", "PLAN", "--out", ".warp/beam.json"], cwd=root, capture_output=True, text=True)

@@ -369,7 +369,8 @@ def delete_merged_branch(root: Path, branch: str, base: str = "", runner=None) -
     return remote_ok, "; ".join(notes)
 
 
-def merge_local(root: Path, branch: str, base: str, message: str, method: str = DEFAULT_MERGE_METHOD) -> tuple[bool, str]:
+def merge_local(root: Path, branch: str, base: str, message: str, method: str = DEFAULT_MERGE_METHOD,
+                stage_state: bool = True) -> tuple[bool, str]:
     """Merge `branch` into `base` here: a merge commit (default) or a squash. Leaves the repo as it found it on failure.
 
     `rebase` gets a merge commit locally: rebasing the ticket branch would rewrite a branch a Shuttle may still use.
@@ -385,8 +386,9 @@ def merge_local(root: Path, branch: str, base: str, message: str, method: str = 
         return False, f"base branch {base} does not exist"
     if branch == base:
         return False, "branch and base are the same"
-    live = _live_payload(root)
-    blocked = _clean_state_edits(root)
+    # A sibling repo's merge (multi-repo, stage_state false) carries no Warp state: that lives in the parent.
+    live = _live_payload(root) if stage_state else {}
+    blocked = _clean_state_edits(root) if stage_state else None
     if blocked:
         return False, blocked
     original = fmt.git(root, "symbolic-ref", "--short", "-q", "HEAD") or fmt.git(root, "rev-parse", "HEAD")
@@ -403,8 +405,9 @@ def merge_local(root: Path, branch: str, base: str, message: str, method: str = 
         # The ticket branch carries a launch snapshot of the beam so the Agent
         # can read its claim. That file is stale. Do not take it onto the base.
         # The parent's live beam is staged instead. .warp/tickets/<id>/ stays.
-        drop_ticket_beam(root)
-        _stage_live(root, live)
+        if stage_state:
+            drop_ticket_beam(root)
+            _stage_live(root, live)
         if not fmt.git(root, "diff", "--cached", "--name-only"):
             if method != "squash":
                 _run(["git", "merge", "--abort"], root)
@@ -980,6 +983,18 @@ def merge_with_state(root: Path, beam_path: Path, data: dict, ticket: dict, numb
     return "pushed", sha
 
 
+def pr_repo_mismatch(root: Path, url: str) -> str:
+    """Why this pull request must not be merged from this clone, or "" when its repo is the clone's origin."""
+    match = re.search(r"github\.com/([^/\s]+)/([^/\s]+)/pull/\d+", str(url or ""))
+    if not match:
+        return "" if str(url or "").strip() else "no pull request URL"
+    origin = github_slug(fmt.git(Path(root), "remote", "get-url", "origin") or "")
+    want = "%s/%s" % (match.group(1), match.group(2))
+    if origin and origin.casefold() != want.casefold():
+        return "the pull request is in %s, but the clone at %s is %s" % (want, root, origin)
+    return ""
+
+
 def _pr_state(root: Path, number: str) -> str:
     viewed = _run(["gh", "pr", "view", str(number), "--json", "state"], root)
     try:
@@ -1357,17 +1372,20 @@ def main() -> None:
             method = merge_method(local_cfg)
             if method == "rebase":
                 print("merge-local: mergeMethod rebase is merged with a merge commit locally")
-            ok, detail = merge_local(root, args.branch, base, msg, method=method)
+            # In a multi-repo run --root is the sibling clone; the state stays in the parent that holds the beam.
+            state_root = beam_path.resolve().parent.parent if beam_path.resolve().parent.name == ".warp" else root
+            ok, detail = merge_local(root, args.branch, base, msg, method=method, stage_state=state_root.resolve() == root.resolve())
             if ok and delete_on_merge(local_cfg):
                 gone, why = delete_merged_branch(root, args.branch, base)
                 print(f"branch deleted {args.branch}" + (f" ({why})" if why else "") if gone else f"branch not deleted {args.branch}: {why}")
             if ok:
                 print(f"merged {args.branch} into {base} locally ({detail}). Not pushed.")
-                note(root, beam_path, args.id, f"merged {args.branch} into {base} locally ({detail})", what="a local merge")
+                note(state_root, beam_path, args.id, f"merged {args.branch} into {base} locally ({detail})", what="a local merge",
+                     branch=args.branch, pushed=bool(branch_on_origin(root, args.branch)))
                 _mark_merged(beam_path, args.id, detail)
                 import state_commit
 
-                state_commit.publish_base(root, str(beam_path))
+                state_commit.publish_base(state_root, str(beam_path))
             else:
                 print(f"local merge failed: {detail}")
                 print("Leave the ticket where it is (awaiting_approval or review) and tell the user. Nothing was changed.")

@@ -1314,6 +1314,15 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
                 # session here would supersede it and leave the run with no parent.
                 return "action: %s\nrun: already running. Nothing changed." % action
         if action in {"resume", "start"}:
+            import multirepo
+            import prompt_gate
+
+            # The same multi-repo check /warp-start runs. A miss leaves the run as it is.
+            root = Path(beam_path).resolve().parent.parent
+            repo_lines = multirepo.start_refusal(Path(beam_path), prompt_gate.effective_config(beam.load_json(Path(beam_path)), root), clone=False)
+            refused = [line for line in repo_lines if line.startswith("refuse: ")]
+            if refused:
+                return "action: none\n" + "\n".join(repo_lines) + "\nherald: warp:%s refused. %s" % (action, refused[0][len("refuse: "):])
             held = beam.load_json(Path(beam_path))
             ok, range_lines = blocks.apply(held, decision.get("range") or "")
             if not ok:

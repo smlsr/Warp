@@ -26,8 +26,10 @@ One file per program: `schema: "build-schedule/2"`, a `model` (slots, merge rule
 `model.gate_order: "strict"` keeps Warp's own rule instead: gate blocks run in order and a pending
 blocking gate holds the tickets that need its members. Config `gateOrder` overrides both.
 
-Several repos: a run works in one repo. When `repos` lists more than one and this checkout is one
-of them (config `repo`, else the origin's name), scan keeps that repo's tickets. A blocker in
+Several repos: one run works them all (multi-repo, scripts/multirepo.py). The repo with the most
+tickets is the parent and holds the state; this checkout has to be it. Scan writes multiRepo,
+repo, and siblingRepos to .warp/config.yaml. `splitRepos: true` keeps the older mode, a run per
+repo: scan keeps this checkout's tickets (config `repo`, else the origin's name), and a blocker in
 another repo becomes `<run>:<id>`, where the run is `repoRuns[<repo>]` (config), else the repo name
 in lower case. Warp reads that run's published beam from the other repo when `externalRepos`
 names it (config: run → git URL or local path).
@@ -208,18 +210,21 @@ def pick_repo(graph: dict, root: Path, cfg: dict) -> tuple:
     if len(set(repos) | set(ticket_repos)) < 2:
         return (ticket_repos[0] if ticket_repos else (repos[0] if repos else None)), []
     every = sorted(set(repos) | set(ticket_repos))
-    wanted = str(cfg.get("repo") or "").strip()
-    if not wanted:
-        try:
-            import herald_fmt
+    here = ""
+    try:
+        import herald_fmt
 
-            wanted = herald_fmt.repo_name(root)
-        except Exception:
-            wanted = root.name
+        here = herald_fmt.repo_name(root)
+    except Exception:
+        here = root.name
+    if all((root / r).is_dir() for r in every):
+        return None, [f"repos: {', '.join(every)} are folders of this checkout; all tickets kept, locks keep their repo prefix"]
+    split = str(cfg.get("splitRepos") or "").strip().casefold() in {"true", "yes", "on", "1"}
+    wanted = str(cfg.get("repo") or "").strip() or here
+    if not split and any(r.casefold() == wanted.casefold() for r in every):
+        return multi_repo(graph, root, cfg, repos, next(r for r in every if r.casefold() == wanted.casefold()))
     match = next((r for r in every if r.casefold() == wanted.casefold()), None)
     if match is None:
-        if all((root / r).is_dir() for r in every):
-            return None, [f"repos: {', '.join(every)} are folders of this checkout; all tickets kept, locks keep their repo prefix"]
         return None, [
             f"repos: the schedule spans {', '.join(every)} and this checkout is {wanted!r}. All tickets kept.",
             "repos: set `repo: <name>` in .warp/config.yaml to run one repo's tickets here.",
@@ -263,6 +268,39 @@ def pick_repo(graph: dict, root: Path, cfg: dict) -> tuple:
     return match, lines
 
 
+def multi_repo(graph: dict, root: Path, cfg: dict, repos: list, here: str) -> tuple:
+    """One run for every repo. The repo with the most tickets is the parent and holds the state.
+
+    Tickets with no repo belong to the parent. Dependencies stay plain ids. The checkout has to be
+    the parent: (None, lines) with `graph["repoRefusal"]` set when it is not.
+    """
+    import multirepo
+
+    by = multirepo.counts(graph["tickets"])
+    parent = multirepo.choose_parent(by, repos)
+    for t in graph["tickets"]:
+        if not t.get("repo"):
+            t["repo"] = parent
+            by[parent] = by.get(parent, 0) + 1
+    shown = ", ".join("%s %d" % (r, n) for r, n in sorted(by.items(), key=lambda kv: (-kv[1], kv[0].casefold())))
+    if here.casefold() != parent.casefold():
+        graph["repoRefusal"] = (
+            "repos: the parent repo is %s (most tickets: %s), and this checkout is %s. The parent holds the run's state "
+            "and works the other repos from sibling clones. Run /warp-scan in a %s checkout, or set splitRepos: true to "
+            "keep one run per repo." % (parent, shown, here, parent))
+        return None, [graph["repoRefusal"]]
+    graph.setdefault("schedule", {})["repo"] = parent
+    graph["repos"] = {"home": parent, "counts": by}
+    ids = {t["id"]: t.get("repo") for t in graph["tickets"]}
+    cross = sum(1 for t in graph["tickets"] for d in list(t.get("after") or []) + list(t.get("deps") or [])
+                if d in ids and (ids[d] or "").casefold() != (t.get("repo") or "").casefold())
+    lines = ["repos: multi-repo run: %s is the parent (%d tickets, holds the state); %s from sibling clones"
+             % (parent, by[parent], ", ".join("%s (%d tickets)" % (r, n) for r, n in sorted(by.items()) if r.casefold() != parent.casefold()))]
+    if cross:
+        lines.append("deps: %d dependencies cross repos; they stay plain ids and unblock in the same pass" % cross)
+    return parent, lines
+
+
 def summary(path: Path, repo: str = "") -> list:
     data = json.loads(Path(path).read_text())
     if not is_v2(data):
@@ -274,6 +312,11 @@ def summary(path: Path, repo: str = "") -> list:
         by.setdefault(t.get("repo") or "-", []).append(t["id"])
     for r, ids in sorted(by.items()):
         lines.append(f"repo: {r} {len(ids)} tickets")
+    named = {r: len(ids) for r, ids in by.items() if r != "-"}
+    if len(named) > 1:
+        import multirepo
+
+        lines.append("parent: %s (most tickets; a multi-repo run holds its state there)" % multirepo.choose_parent(named, list(data.get("repos") or [])))
     ids = {t["id"]: t for t in g["tickets"]}
     cross = [(t["id"], d) for t in g["tickets"] for d in t["after"] if d in ids and ids[d].get("repo") != t.get("repo")]
     if cross:
@@ -294,6 +337,7 @@ def summary(path: Path, repo: str = "") -> list:
             except Exception:
                 cfg = {}
         cfg["repo"] = repo
+        cfg["splitRepos"] = "true"
         _, more = pick_repo(graph, Path("."), cfg)
         lines += more
     return lines

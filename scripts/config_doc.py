@@ -7,6 +7,8 @@ Change a key there, then run this script.
 
   python3 scripts/config_doc.py            write docs/config.html
   python3 scripts/config_doc.py --check    exit 1 when docs/config.html is not current
+
+?, help, -h, and --help print this text.
 """
 
 from __future__ import annotations
@@ -23,8 +25,8 @@ TARGET = ROOT / "docs" / "config.html"
 
 # The order of the sections on the page, and the keys in each. A key not listed here fails --check.
 SECTIONS = [
-    ("Run and state", "Where the run keeps its state, which part of the repo it covers, and how it is published.", [
-        "stateDir", "run", "scanFolder", "gateOrder", "startAfter", "paths", "repo", "repoRuns", "externalRepos",
+    ("Run and state", "Where the run keeps its state, which repos and paths it covers, and how it is published.", [
+        "stateDir", "run", "scanFolder", "gateOrder", "startAfter", "paths", "repo", "multiRepo", "splitRepos", "siblingRoot", "siblingRepos", "repoRuns", "externalRepos",
         "baseFixOwner", "checkpointMinutes", "reportOnComplete", "reportPath"]),
     ("Agents and models", "How many Shuttles run, where they run, and which model each one uses.", [
         "runner", "launch", "worktreeRoot", "subagentVm", "memoryCheck", "cloudSnapshot", "maxAgents", "maxInProgress",
@@ -70,7 +72,7 @@ ENUMS = {
     "autoMergeSizes": ["S", "M", "L", "XL"],  # several at once; the defaults are S and M
 }
 LISTS = {"appendOnlyPaths", "paths", "jiraKeyPrefixes", "mergeWindows", "notifyAllow", "startAfter"}
-MAPS = {"repoRuns", "externalRepos", "jiraKeyMap"}
+MAPS = {"siblingRepos", "repoRuns", "externalRepos", "jiraKeyMap"}
 MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "listenerModel"}
 
 
@@ -126,7 +128,7 @@ def values(key: str, default_cell: str) -> tuple[str, list[str]]:
     if raw in {"true", "false"}:
         return "switch", ["true", "false"]
     if key in MAPS:
-        return "map", ["{plan or run: value}"]
+        return "map", ["{repo: git url}" if key == "siblingRepos" else "{plan or run: value}"]
     if key in LISTS:
         return "list", ["comma-separated"]
     if key in MODELS:
@@ -340,7 +342,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Build docs/config.html from docs/CONFIG.md",
                                      epilog=__doc__.split("\n\n", 1)[1], formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="exit 1 when docs/config.html is not current")
-    args = parser.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import usage
+
+    args = parser.parse_args(usage.normalize_argv(argv))
     broken = malformed(SOURCE.read_text())
     if broken:
         print("config-doc: docs/CONFIG.md rows that do not have three cells (escape a | inside code as \\|): line %s"

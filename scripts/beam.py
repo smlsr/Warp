@@ -478,10 +478,12 @@ def lock_overlap(a: list[str], b: list[str]) -> bool:
 
 def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
     """Locks held by in-flight tickets. A parked ticket is not in this list."""
+    import multirepo
+
     held = []
     for t in beam["tickets"].values():
         if t["status"] in ACTIVE:
-            held.append((t["id"], orchestrator.lock_paths(t)))
+            held.append((t["id"], multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))))
     return held
 
 
@@ -932,6 +934,8 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     if agent_slots == 0:
         _sync_launch_hold(beam, False, progress_count, progress_cap)
         return []
+    import multirepo
+
     anc_cache: dict = {}
     held = held_locks(beam)
     base_red = not orchestrator.base_is_green(beam)
@@ -949,12 +953,12 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
         unmet = [d for d in orchestrator.blockers(t) if not orchestrator.merged_on_base(runs.external_status(beam, d))]
         if unmet:
             continue
-        if scope_paths and runs.outside_paths(scope_paths, orchestrator.lock_paths(t)):
+        if scope_paths and not multirepo.is_sibling(beam, t) and runs.outside_paths(scope_paths, orchestrator.lock_paths(t)):
             continue
         gb = gate_blocks(beam, t["id"], anc_cache)
         if gb:
             continue
-        paths = orchestrator.lock_paths(t)
+        paths = multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))
         conflict = None
         for oid, locks in held:
             if lock_overlap(paths, locks):
@@ -968,8 +972,8 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     for t in candidates:
         if len(chosen) >= agent_slots:
             break
-        paths = orchestrator.lock_paths(t)
-        if any(lock_overlap(paths, orchestrator.lock_paths(c)) for c in chosen):
+        paths = multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))
+        if any(lock_overlap(paths, multirepo.scoped_locks(beam, c, orchestrator.lock_paths(c))) for c in chosen):
             continue
         chosen.append(t)
     suppressed = len(chosen) > progress_room
@@ -1286,6 +1290,8 @@ def render_board(beam: dict) -> str:
             bug = t["pr"].get("bugbot") or "none"
             ci = t["pr"].get("ci") or "none"
             lines.append(f"- **{t['id']}** ({t['size']}) bugbot={bug} ci={ci} {t['pr'].get('url') or 'no PR'} — {t['summary']}")
+    import multirepo
+
     active = [t for t in beam["tickets"].values() if t["status"] in ACTIVE]
     lines += ["", "## In flight", ""]
     if not active:
@@ -1296,7 +1302,8 @@ def render_board(beam: dict) -> str:
             preview = ", ".join(shown[:2])
             if len(shown) > 2:
                 preview = "%s, …" % preview
-            lines.append(f"- **{t['id']}** {t['status']} agent={t.get('agent')} locks={preview}")
+            where = multirepo.repo_tag(beam, t)
+            lines.append(f"- **{t['id']}**{where} {t['status']} agent={t.get('agent')} locks={preview}")
     merged_rows = [t for t in beam["tickets"].values() if t["status"] in {"merged", "done"}]
     lines += ["", "## Merged", ""]
     if not merged_rows:
@@ -1682,10 +1689,12 @@ def cmd_check(beam: dict) -> int:
     for i in ids:
         if color.get(i) != 2:
             dfs(i)
+    import multirepo
+
     active = [t for t in beam["tickets"].values() if t["status"] in ACTIVE]
     for i, a in enumerate(active):
         for b in active[i + 1 :]:
-            if lock_overlap(a["locks"], b["locks"]):
+            if lock_overlap(multirepo.scoped_locks(beam, a, a["locks"]), multirepo.scoped_locks(beam, b, b["locks"])):
                 errors.append(f"lock overlap {a['id']} vs {b['id']}")
     if errors:
         print("\n".join(errors))
@@ -1705,6 +1714,9 @@ def default_config() -> dict:
         "runner": "cloud",
         "launch": "worktree",
         "worktreeRoot": ".warp/worktrees",
+        "multiRepo": False,
+        "splitRepos": False,
+        "siblingRoot": "..",
         "subagentVm": False,
         "memoryCheck": False,
         "cloudSnapshot": "",

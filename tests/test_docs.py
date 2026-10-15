@@ -500,6 +500,7 @@ class ScriptHelpTests(unittest.TestCase):
             "beam.py": ("--via", "maxAgents", "ingest", "heartbeat", "watchdog", "worker-died", "staleMinutes"),
             "orchestrator.py": ("checkCommand", "appendOnlyPaths", "--facts", "send-back", "parked", "--output"),
             "checkout.py": ("--beam", "--id", "--root", "--agent", "implement", "new Agent"),
+            "multirepo.py": ("check", "show", "--beam", "siblingRoot", "splitRepos"),
             "prompt_gate.py": ("--beam", "--force", "--cursor-home", "transitionJiraIssue", "slack_send_message"),
             "state_commit.py": ("--root", "--beam", "--base", "config.yaml"),
             "upgrade.py": ("--root", "--source", "Warp v", "reload Cursor"),
@@ -605,6 +606,8 @@ class ScriptHelpTests(unittest.TestCase):
             "buildsched.py",
             "jira_pull.py",
             "heal.py",
+            "multirepo.py",
+            "config_doc.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

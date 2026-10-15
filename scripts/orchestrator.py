@@ -287,7 +287,7 @@ def send_back_red_checks(data: dict, yaml_text: str = "", only_id: Optional[str]
         ticket = tickets[tid]
         if not isinstance(ticket, dict):
             continue
-        result = make_ci_result(ticket, command)
+        result = make_ci_result(ticket, "" if ticket.get("repoRole") == "sibling" else command)
         if not result or not result.get("kind"):
             continue
         status = ticket.get("status")
@@ -455,7 +455,7 @@ def checks_green(ticket: dict, config: Optional[dict]) -> bool:
     no_ci = bool(pr.get("ciNone"))
     if rollup == "absent" and not no_ci:
         return False
-    if check_command(config):
+    if check_command(config) and ticket.get("repoRole") != "sibling":
         return check == "green"
     if ci != "green" and not no_ci:
         return False
@@ -2712,7 +2712,10 @@ def main(argv: Optional[list] = None) -> int:
         from datetime import datetime, timezone
 
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        note_pr_opened(ticket, args.pr, stamp)
+        import multirepo
+
+        # A sibling ticket's bare number is that repo's pull request; store the URL so nothing reads it as ours.
+        note_pr_opened(ticket, multirepo.pr_url(data, ticket, args.pr), stamp)
         if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
             ticket["status"] = "review"
         pr = ticket.setdefault("pr", {})
