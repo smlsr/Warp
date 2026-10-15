@@ -912,12 +912,69 @@ def apply_ownership(root: Path, run: str, graph: dict, skip: bool) -> int:
     return 0
 
 
-def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
-    import beamlock
+class _Tee:
+    """Print as usual and keep a copy, so start, resume, pause, and stop can post what they printed."""
 
+    def __init__(self, out):
+        self.out = out
+        self.parts: list = []
+
+    def write(self, text):
+        self.parts.append(text)
+        return self.out.write(text)
+
+    def flush(self):
+        self.out.flush()
+
+    def lines(self) -> list:
+        return "".join(self.parts).splitlines()
+
+
+def _prior(beam_path: Path) -> dict:
+    try:
+        doc = load_json(Path(beam_path))
+    except Exception:
+        return {}
+    return {k: doc.get(k) for k in ("runState", "paused", "pauseReason")}
+
+
+def _post(beam_path: Path, lines: list) -> None:
+    """Post a command's `herald:` lines as one Slack and Teams payload, and say how."""
+    try:
+        import notify
+
+        for line in notify.pass_post(runs.repo_root(beam_path), lines):
+            print(line)
+    except Exception as e:
+        print("herald: not posted (%s)" % e)
+
+
+def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False,
+       verb: str = "start") -> int:
+    import contextlib
+
+    import beamlock
+    import news
+    import orchestrator
+
+    prior = _prior(beam_path)
+    tee = _Tee(sys.stdout)
     # Start and resume decide what starts: one at a time with a supervise pass, Slack commands, and launches.
     with beamlock.run_lock(Path(beam_path)):
-        return _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now)
+        with contextlib.redirect_stdout(tee):
+            code = _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now)
+        printed = tee.lines()
+        if code == 0 and Path(beam_path).is_file():
+            alarms = orchestrator.announce_alarms(Path(beam_path), printed)
+            for line in alarms:
+                print(line)
+            head = news.run_line(load_json(Path(beam_path)), verb, prior, printed)
+            _post(beam_path, ["herald: " + head] + printed + alarms)
+        elif Path(beam_path).is_file():
+            refused = news.refused_line(verb, printed)
+            if refused:
+                _post(beam_path, ["herald: " + refused])
+    return code
 
 
 def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
@@ -1531,13 +1588,19 @@ def main() -> None:
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
     elif args.cmd in {"start", "resume"}:
-        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "", takeover=bool(getattr(args, "takeover", False)), gates=(getattr(args, "gates", "") or getattr(args, "gates_arg", "") or ""), now=bool(getattr(args, "now", False)))
+        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "", takeover=bool(getattr(args, "takeover", False)), gates=(getattr(args, "gates", "") or getattr(args, "gates_arg", "") or ""), now=bool(getattr(args, "now", False)), verb=args.cmd)
         if code != 0:
             sys.exit(code)
-    elif args.cmd == "pause":
-        set_run(Path(args.beam), "paused", args.reason)
-    elif args.cmd == "stop":
-        set_run(Path(args.beam), "stopped", args.reason or "stop")
+    elif args.cmd in {"pause", "stop"}:
+        import contextlib
+
+        import news
+
+        state = "paused" if args.cmd == "pause" else "stopped"
+        tee = _Tee(sys.stdout)
+        with contextlib.redirect_stdout(tee):
+            set_run(Path(args.beam), state, args.reason if args.cmd == "pause" else (args.reason or "stop"))
+        _post(Path(args.beam), ["herald: " + news.halt_line(state, args.reason or "", tee.lines())] + tee.lines())
 
 
 if __name__ == "__main__":

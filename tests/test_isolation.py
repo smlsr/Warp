@@ -481,7 +481,7 @@ class VmLaunchTests(GitRepo):
 
     def test_local_runner_overrides_cloud_only_settings(self):
         note = "note: runner local overrides cloud-only settings: subagentVm, launch"
-        effective = "effective: runner=local subagentVm=false memoryCheck=false maxAgents=18 maxInProgress=20 launch=worktree"
+        effective = "effective: runner=local subagentVm=false memoryCheck=false maxAgents=18 maxInProgress=54 launch=worktree"
         cfg = {"runner": "local", "subagentVm": True, "launch": "agent"}
         self.assertEqual(orchestrator.override_note(cfg), note)
         self.assertEqual(orchestrator.effective_text(cfg), effective)
@@ -509,7 +509,7 @@ class VmLaunchTests(GitRepo):
         self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
         self.assertEqual(started.stdout.count(note), 1)
         # This beam sets maxAgents to 4. The line shows both caps.
-        effective = effective.replace("maxAgents=18", "maxAgents=4")
+        effective = effective.replace("maxAgents=18", "maxAgents=4").replace("maxInProgress=54", "maxInProgress=20")  # auto: 3 x 4, at least 20
         self.assertIn(effective, started.stdout)
         self.assertNotIn("no cloud environment", started.stdout)
         shown = run("version.py", "--root", str(self.repo), cwd=self.repo)

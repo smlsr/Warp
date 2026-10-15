@@ -230,7 +230,7 @@ class HaltTests(Base):
         self.assertIn("start T-1", text)
         self.assertIn("resume after halt", text)
         self.assertNotIn("died", text)
-        self.assertNotIn("herald:", text)
+        self.assertIn("herald: T-1: a new Shuttle picks it up after the pause (implement)", text)  # announced, not as a death
         self.assertEqual(row["recoveries"], 5, "a halt is not counted as a recovery")
         self.assertNotEqual(row["status"], "alarm", "the recovery cap does not park a halted ticket")
         self.assertNotIn("haltResume", row)
@@ -265,7 +265,8 @@ class HaltTests(Base):
         text = "\n".join(out)
         self.assertIn("fix: T-1 resume after halt", text)
         self.assertIn("fix: T-2 resume after halt", text)
-        self.assertNotIn("herald:", text)
+        self.assertNotIn("died", text)  # a halt is not a death; the restart is still announced
+        self.assertIn("herald: T-1: a new Shuttle picks it up after the pause (restart)", text)
         for tid in ("T-1", "T-2"):
             self.assertFalse(after["tickets"][tid].get("recoveries"), tid)
 

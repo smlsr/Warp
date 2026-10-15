@@ -269,7 +269,7 @@ MAX_PASS_LINES = 30
 # The instruction lines this module prints are not news to post.
 _OWN = ("post .warp/", "then run:", "if the connector", "note:", "not posted", "saved to", "nothing to save", "failed softly")
 # notify: quiet posts only these from a pass: alarms, parks, approval waits, red results, and work done by hand.
-_QUIET = re.compile(r"worker died|parked|alarm|could not merge|approval|given up|gave up|by hand|stopped|findings? after the merge|red\b", re.I)
+_QUIET = re.compile(r"^Run |worker died|parked|alarm|could not merge|approval|given up|gave up|by hand|stopped|findings? after the merge|red\b", re.I)
 
 
 def news(lines: list) -> list:

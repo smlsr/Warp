@@ -543,10 +543,11 @@ def ticket_in_progress(ticket: dict) -> bool:
 
 
 def max_in_progress(cfg: Optional[dict]) -> int:
-    """How many started tickets may be open. Default 20. Negative falls back."""
-    default = int(default_config()["maxInProgress"])
+    """How many started tickets may be open. `auto` (the default since 1.7.1): 3 x maxAgents, at least 20, so
+    tickets waiting on review or CI (which use no Shuttle) do not keep the slots empty. Negative falls back."""
+    default = max(20, 3 * configured_cap(cfg or {}))
     raw = (cfg or {}).get("maxInProgress")
-    if raw is None or str(raw).strip() == "":
+    if raw is None or str(raw).strip().casefold() in {"", "auto"}:
         return default
     try:
         number = int(raw)
@@ -933,6 +934,82 @@ def gate_blocks(beam: dict, tid: str, anc_cache: dict) -> Optional[str]:
     return None
 
 
+def startable(beam: dict, why: Optional[dict] = None) -> list:
+    """Queued tickets nothing holds back: their block, dependencies, paths, gate, and locks all allow a start.
+
+    `why`, when given, counts what holds back the others: `block`, `deps`, `paths`, `gate`, `locks`.
+    """
+    import blocks
+    import multirepo
+
+    anc_cache: dict = {}
+    held = held_locks(beam) + runs.external_locks(beam)
+    block_plan = blocks.plan(beam)
+    scope_paths = runs.parse_paths(beam.get("paths"))
+    out = []
+
+    def hold(reason: str) -> None:
+        if why is not None:
+            why[reason] = why.get(reason, 0) + 1
+
+    for t in beam["tickets"].values():
+        if t["status"] not in {"queued", "blocked"}:
+            continue
+        if blocks.hold_reason(block_plan, t["id"]):
+            hold("block")
+            continue
+        unmet = [d for d in orchestrator.blockers(t) if not orchestrator.merged_on_base(runs.external_status(beam, d))]
+        if unmet:
+            hold("deps")
+            continue
+        if scope_paths and not multirepo.is_sibling(beam, t) and runs.outside_paths(scope_paths, orchestrator.lock_paths(t)):
+            hold("paths")
+            continue
+        if gate_blocks(beam, t["id"], anc_cache):
+            hold("gate")
+            continue
+        paths = multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))
+        if any(lock_overlap(paths, locks) for _oid, locks in held):
+            hold("locks")
+            continue
+        out.append(t)
+    return out
+
+
+def capacity(beam: dict) -> dict:
+    """Why Shuttle slots are idle: {out, cap, free, startable, why, open, waiting, progressCap, limiter, line}."""
+    cfg = beam.get("config") or {}
+    cap = configured_cap(cfg)
+    free = shuttle_room(beam)
+    out = running_shuttle_count(beam)
+    why: dict = {}
+    can = startable(beam, why)
+    open_count = in_progress_count(beam)
+    progress_cap = max_in_progress(cfg)
+    waiting = sum(1 for t in beam["tickets"].values() if ticket_in_progress(t) and not orchestrator.shuttle_is_live(t, beam)
+                  and t.get("status") in {"review", "bugbot_running", "awaiting_approval", "merging"})
+    head = "capacity: %d/%d Shuttles out, %d free" % (out, cap, free)
+    limiter = ""
+    if free <= 0:
+        line = head + "; every slot is working"
+    elif can and open_count >= progress_cap:
+        limiter = "maxInProgress"
+        suggest = max(progress_cap + free, 3 * cap)
+        line = head + ("; %d tickets could start, but maxInProgress %d/%d holds them (%d of the open tickets wait on review, "
+                       "CI, or approval and use no Shuttle). Raise maxInProgress in .warp/config.yaml (%d, or auto = 3 x maxAgents)"
+                       % (len(can), open_count, progress_cap, waiting, suggest))
+    elif can:
+        line = head + "; %d tickets can start now" % len(can)
+    else:
+        named = {"deps": "on dependencies", "gate": "on a gate", "locks": "on locks another ticket holds",
+                 "block": "in a later block", "paths": "outside this run's paths"}
+        parts = ["%d %s" % (why[k], named[k]) for k in ("deps", "gate", "locks", "block", "paths") if why.get(k)]
+        limiter = "none-ready" if parts else ""
+        line = head + ("; nothing can start: " + ", ".join(parts) if parts else "; no queued tickets left")
+    return {"out": out, "cap": cap, "free": free, "startable": len(can), "why": why, "open": open_count,
+            "waiting": waiting, "progressCap": progress_cap, "limiter": limiter, "line": line}
+
+
 def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     """Tickets that may start now.
 
@@ -965,37 +1042,8 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
         return []
     import multirepo
 
-    anc_cache: dict = {}
-    held = held_locks(beam)
     base_red = not orchestrator.base_is_green(beam)
-    import blocks
-
-    block_plan = blocks.plan(beam)
-    scope_paths = runs.parse_paths(beam.get("paths"))
-    held = held + runs.external_locks(beam)
-    candidates = []
-    for t in beam["tickets"].values():
-        if t["status"] not in {"queued", "blocked"}:
-            continue
-        if blocks.hold_reason(block_plan, t["id"]):
-            continue
-        unmet = [d for d in orchestrator.blockers(t) if not orchestrator.merged_on_base(runs.external_status(beam, d))]
-        if unmet:
-            continue
-        if scope_paths and not multirepo.is_sibling(beam, t) and runs.outside_paths(scope_paths, orchestrator.lock_paths(t)):
-            continue
-        gb = gate_blocks(beam, t["id"], anc_cache)
-        if gb:
-            continue
-        paths = multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))
-        conflict = None
-        for oid, locks in held:
-            if lock_overlap(paths, locks):
-                conflict = oid
-                break
-        if conflict:
-            continue
-        candidates.append(t)
+    candidates = startable(beam)
     candidates.sort(key=lambda t: orchestrator.sort_key(t, base_red=base_red))
     chosen = []
     for t in candidates:
@@ -1741,7 +1789,7 @@ def default_config() -> dict:
     return {
         "model": "claude-sonnet-5-5-high",
         "maxAgents": 18,
-        "maxInProgress": 20,
+        "maxInProgress": "auto",
         "autoMergeSizes": list(DEFAULT_AUTO_MERGE_SIZES),
         "messenger": "both",
         "notify": "verbose",
@@ -1812,7 +1860,7 @@ def default_config() -> dict:
         "maxAlarmRepairs": 5,
         "respectMergeWindows": False,
         "mergeWindows": ["08:30", "13:00", "17:00"],
-        "pollSeconds": 300,
+        "pollSeconds": 120,
         "reportOnComplete": True,
         "reportPath": ".warp/warp-complete.html",
         "checkCommand": "",

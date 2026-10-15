@@ -1786,9 +1786,35 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     if path.is_file() and lines and not lines[0].startswith("pass: aborted"):
         import notify
 
+        lines.extend(announce_alarms(path, lines))
         match = re.match(r"run: pass (\d+) ", lines[0])
         lines.extend(notify.pass_post(path.resolve().parent.parent, lines, int(match.group(1)) if match else None))
     return lines
+
+
+def announce_alarms(beam_path: Path, lines: Optional[list] = None) -> list:
+    """`herald:` lines for each alarm raised or cleared, and each review-cycle step reached, since the last ones
+    announced (news.alarm_news, news.stage_news). `lines` is what this pass already says, so nothing is said twice."""
+    import beam as beam_mod
+    import news
+
+    try:
+        data = beam_mod.load_json(Path(beam_path))
+        before = json.dumps(data, sort_keys=True)
+        out = news.alarm_news(data)
+        out += news.stage_news(data, list(lines or []) + out)
+        if lines is not None:
+            import nextwork
+
+            # Why slots are idle, and what the next pass could do at once: parent-exit --wait wakes on anything new.
+            out += nextwork.capacity_news(data)
+            # What the next pass can do, whether this one moved anything, and a stall when nothing runs.
+            out += nextwork.note_pass(data, list(lines) + out)
+        if json.dumps(data, sort_keys=True) != before:
+            beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
+        return out
+    except Exception as exc:  # news never breaks a pass
+        return ["herald: not checked for alarms (%s)" % exc]
 
 
 def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
@@ -1826,6 +1852,14 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
             lines.extend(line for line in ticket_state.observe(path, now=now) if not line.startswith("observe: skipped"))
         except Exception as exc:
             lines.append("observe: ticket folders not read (%s)" % exc)
+        # Then the beam against the workers: a Shuttle whose Agent ended without writing done is handled in this
+        # pass, a returned repair is settled, a settled ticket frees its slot and locks (reconcile.py).
+        try:
+            import reconcile
+
+            lines.extend(reconcile.run_on_disk(path, now=now))
+        except Exception as exc:
+            lines.append("reconcile: skipped (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
         state = str(data.get("runState") or "")
@@ -2181,9 +2215,9 @@ def parent_wait(
 ) -> str:
     """Block until the next pass has something to do. The one wait in a run.
 
-    Returns `ticket <id>` when a ticket folder changed, `command` when the
-    inbound queue changed, `return` when the listener wrote its return
-    stamp, `halt` when the run was paused, stopped, or finished, and
+    Returns `ticket <id>` when a ticket folder changed, `work <kind>:<id>` when the next pass can act on
+    something the last pass did not have (nextwork.py), `command` when the inbound queue changed, `return`
+    when the listener wrote its return stamp, `halt` when the run was paused, stopped, or finished, and
     `timeout` after pollSeconds. Each step writes `listener.parentSeenAt`.
     """
     import time
@@ -2196,6 +2230,9 @@ def parent_wait(
     path = Path(beam_path)
     began = tick()
     since = None
+    checks = 0
+    review_at = began
+    review_every = None
     while True:
         now_dt = datetime.fromtimestamp(tick(), tz=timezone.utc)
         now_s = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2215,7 +2252,7 @@ def parent_wait(
             mark = data.get("pass") if isinstance(data.get("pass"), dict) else {}
             stamp = beam_mod.parse_ts(mark.get("startedAt"))
             since = stamp.timestamp() if stamp is not None else began
-        poll = max(int(beam_mod.config_int(data, path, "pollSeconds", 300)), 0)
+        poll = max(int(beam_mod.config_int(data, path, "pollSeconds", 120)), 0)
         if limit is None or limit < 0:
             import bugbot as bugbot_mod
 
@@ -2223,11 +2260,36 @@ def parent_wait(
                 # Cursor Bugbot is checking a head (or was asked to): look again sooner, so its result shows
                 # within bugbotPollSeconds and not up to pollSeconds later.
                 poll = min(poll, max(int(beam_mod.config_int(data, path, bugbot_mod.POLL_KEY, bugbot_mod.DEFAULT_POLL_SECONDS)), 30))
+        if review_every is None:
+            review_every = max(int(beam_mod.config_int(data, path, "reviewPollSeconds", 60)), 0)
+            review_every = max(review_every, 30) if review_every else 0
         cap = poll if limit is None or limit < 0 else int(limit)
         cap = max(0, min(cap, 3600))
         changed = _changed_ticket(path, since)
         if changed:
             return "ticket %s" % changed
+        checks += 1
+        if checks % 3 == 1:
+            import nextwork
+
+            if checks == 1:
+                # The last pass moved something and more of the same is ready (the next merge, another return).
+                more = nextwork.continue_now(data, now_s)
+                if more:
+                    return "work %s" % more
+            # Something the next pass can act on at once that the last pass did not have: run it now.
+            work = nextwork.new_since_pass(data, now_s)
+            if work:
+                return "work %s" % work
+        if review_every and tick() - review_at >= review_every:
+            review_at = tick()
+            import nextwork
+
+            # A pull request the run waits on changed on GitHub (green, Bugbot done, a conflict, merged elsewhere):
+            # the next pass merges it, sends it to fix, or starts its next step now.
+            moved = nextwork.review_changed(data, path)
+            if moved:
+                return "work %s" % moved
         if inbound.pending_is_newer(path, since):
             return "command"
         if inbound.return_is_newer(data, since):
