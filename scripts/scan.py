@@ -934,6 +934,11 @@ def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = 
     import state_commit
 
     root = runs.repo_root(beam_path)
+    import fresh_start
+
+    # Leftovers from a killed process: Warp's orphaned .tmp files, and git lock files no git process holds.
+    for line in fresh_start.clean(root, fresh_start.sibling_paths(beam_path)):
+        print(line)
     refusal, notes = runs.owner_blocker(root, run or runs.current(root), takeover=takeover)
     if refusal:
         print(refusal)

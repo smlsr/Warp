@@ -202,6 +202,16 @@ python3 <plugin>/scripts/multirepo.py ?
 
 In the run, a sibling ticket's `checkout.py launch` prints `repo: <sibling> (sibling clone <path>)` after `base:`, and its prompt adds a `repo:` line and the rule to commit, push, and open the pull request in the sibling. `launch` refuses a sibling ticket when tickets start as cloud agents or VMs (`refuse: AU-07 is a HumanifyOS-UI ticket. A multi-repo run starts sibling tickets as worktrees on this machine …`), and `add` refuses it outright. A merge from the wrong clone is refused: `merge: not merged AU-07: the pull request is in acme/HumanifyOS, but the clone at <path> is acme/HumanifyOS-UI`. `provider.py merge-local --root <sibling clone> --beam <parent beam>` merges in the sibling and publishes the state to the parent.
 
+### Leftovers at start
+
+```bash
+python3 <plugin>/scripts/fresh_start.py --root .
+python3 <plugin>/scripts/fresh_start.py --root . --dry-run
+python3 <plugin>/scripts/fresh_start.py ?
+```
+
+`/warp-start` and `/warp-resume` run this first. It removes Warp's temporary files (`.warp/**/*.tmp`, never under `.warp/worktrees/`) older than 10 minutes: `start: removed 2 leftover .tmp files in .warp (older than 10m)`. It removes a git lock file (`index.lock`, `HEAD.lock`, `config.lock`, `packed-refs.lock`, `refs/**/*.lock`, `objects/maintenance.lock`, `worktrees/*/index.lock`) in this checkout and each sibling clone when it is older than 10 minutes and no git process is running: `start: removed stale Core/.git/index.lock (30m old, no git running)`. A lock it cannot delete is moved to `<git dir>/_delete/`. A younger lock, or one while git runs, is named and left: `start: Core/.git/index.lock is 30m old, but a git process is running. Left in place; remove it once git is done.` Warp's own lock files (`.warp/.listener.lock`, `.beam.lock`, …) are kernel locks released when their process dies, so they are never removed. `--dry-run` lists without removing; with nothing to clean it prints `start: nothing to clean`.
+
 Other `scan.py` subcommands: `export` (`--beam`, `--out`), `import` (`--plan`, `--beam`, `--keep-status`), `status` (`--beam`), `bundle` (`--beam`, `--out` default `.warp/warp-review.zip`), `start`, `stop`, `pause`, `resume` (`--beam`, `--reason`). `start` and `resume` also take a range, `--gates`, `--force`, `--takeover`, `--now`, and `--run`.
 
 ## /warp-uninstall

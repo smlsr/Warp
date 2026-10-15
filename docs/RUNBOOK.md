@@ -311,9 +311,13 @@ Runs in one repo also get names: `/warp-init core`, `/warp-init admin`, `/warp-i
 
 Pause, stop, and `/warp-cleanup` touch only agents in their own registry or carrying their own tag. Another run's agents are not matched, and neither is any other agent in the repo, whatever words are in its name. To act on another run's leftovers on purpose, name its tag: `/warp-list --tag <instance>`, then `/warp-cleanup --tag <instance>`. Nothing checks whether that run is still going.
 
+## `fatal: Unable to create '.git/index.lock': File exists`
+
+A git command was killed while it held the lock, so git refuses every later command, including Warp's state publish. `/warp-start` and `/warp-resume` remove such a lock when it is older than 10 minutes and no git process is running (`start: removed stale <repo>/.git/index.lock …`). If it says `Left in place`, wait for the running git to finish, or remove the file yourself once nothing uses that repo. `python3 scripts/fresh_start.py --root . --dry-run` lists what it would remove.
+
 ## A status, heartbeat, or review went missing from the beam
 
-Before 1.7.0 a supervise pass could save over what a Shuttle saved while the pass ran (a `beam.py set`, a heartbeat, a recorded review), and the parent sometimes saw the older value, or a `.tmp` file next to `beam.json`. Now saves merge (`beam: merged <n> saves by other processes …` in the pass output). Leftover `beam.json.*.tmp` files from an old crash can be deleted. `python3 scripts/beamlock.py status` shows the revision. If a field is still wrong, run `/warp-resume`: the next pass rereads the ticket folders and the provider and sets it again. STATE.md "Concurrent saves" has the rules.
+Before 1.7.0 a supervise pass could save over what a Shuttle saved while the pass ran (a `beam.py set`, a heartbeat, a recorded review), and the parent sometimes saw the older value, or a `.tmp` file next to `beam.json`. Now saves merge (`beam: merged <n> saves by other processes …` in the pass output). Leftover `beam.json.*.tmp` files from an old crash are removed by the next `/warp-start` or `/warp-resume` once they are 10 minutes old. `python3 scripts/beamlock.py status` shows the revision. If a field is still wrong, run `/warp-resume`: the next pass rereads the ticket folders and the provider and sets it again. STATE.md "Concurrent saves" has the rules.
 
 ## Lock-escape repair
 
