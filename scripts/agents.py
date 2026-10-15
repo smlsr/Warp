@@ -169,7 +169,7 @@ def save_file(beam_path: Optional[Path], doc: dict) -> None:
         return
     path = registry_path(Path(beam_path))
     path.parent.mkdir(parents=True, exist_ok=True)
-    beam_mod.atomic_write(path, json.dumps(doc, indent=2) + "\n")
+    beam_mod.atomic_write(path, json.dumps(doc, indent=2) + "\n", data=doc)
 
 
 def _signature(beam_path: Path) -> list:
@@ -2789,7 +2789,7 @@ def _spawn_marks(beam_path: Path, update: Optional[Callable] = None) -> dict:
                 except (OSError, ValueError):
                     marks = {}
             if update is not None and update(marks):
-                beam_mod.atomic_write(path, json.dumps(marks, indent=2) + "\n")
+                beam_mod.atomic_write(path, json.dumps(marks, indent=2) + "\n", data=marks)
             return marks
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -3155,7 +3155,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.cmd == "stop":
         for line in halt_local(data, beam_path=path, reason="stopped"):
             print(line)
-        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
         return 0
     for line in cleanup(
         data,

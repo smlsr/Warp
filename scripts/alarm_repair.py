@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Queue the next lock-escape repair. One at a time. Idempotent.
+"""Start lock-escape repairs. On the pass that sees the alarm, in parallel, never two on one file. Idempotent.
 
 The parent tick calls this while the run is running. The listener Subagent
 does not. Plugin hooks do not run on cloud runners. Pause and stop do not
@@ -11,20 +11,24 @@ Only alarm reason lock-escape is repaired. Other reasons stay alarmed.
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01 --error "boom"
 
-`alarm-repair: start` is followed by `alarm-repair: launch <id>`: run
-checkout.py launch for that ticket and start one Shuttle with its prompt.
-`--returned <id>` before any repair Shuttle was launched prints
-`alarm-repair: not launched <id>` and does not use an attempt.
+Every lock-escape ticket that can start prints `alarm-repair: start <id>` and
+`alarm-repair: launch <id>`: run checkout.py launch for each and start one
+Shuttle per ticket with its prompt. `--returned <id>` before that ticket's
+repair Shuttle was launched prints `alarm-repair: not launched <id>` and does
+not use an attempt.
 
-A second call while a repair Shuttle is still working prints
-alarm-repair: working and does not start another. A failure records the
-attempt, leaves the alarm, and starts the next lock-escape ticket in that
-same call. The same ticket is not started again until the next pass.
+Decided one ticket at a time, in plan order, under the beam lock; run in
+parallel. A started repair is `claimed` with its widened locks before the next
+ticket is looked at, so two escapes into the same file never both start: the
+second prints `alarm-repair: locked <id> by <first>` and starts when the first
+finishes. A ticket that waits does not hold back the ones after it. Each start
+takes a Shuttle slot (`alarm-repair: queued <id>` when maxAgents is full).
 
-The repair widens that ticket's locks to the paths that escaped. Those
-paths are stored on the alarm (`escaped`). A path an in-flight ticket
-holds is not taken: the repair waits, then widens and starts. A queued
-ticket's overlapping lock can be widened.
+The repair widens that ticket's locks to the paths that escaped. Those paths
+are stored on the alarm (`escaped`). A path an in-flight ticket holds is not
+taken: the repair waits, then widens and starts. A queued ticket's
+overlapping lock can be widened. A failure leaves the alarm and records the
+attempt; the ticket tries again alarmRepairMinutes after the failure.
 """
 
 from __future__ import annotations
@@ -68,11 +72,12 @@ examples:
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --returned WV-01 --error "boom"
   python3 scripts/alarm_repair.py next --beam .warp/beam.json --now 2026-10-06T12:00:00Z
 
-Subcommand: next. One repair Shuttle at a time, for lock-escape only.
-alarmRepairMinutes (default 15) is how often the parent's pass opens a repair.
+Subcommand: next. Every lock-escape ticket that can start, in parallel, never two on one file.
+alarmRepairMinutes (default 15) is the wait before a failed repair tries again,
+and how often the send-back and gate housekeeping below runs.
 maxAlarmRepairs (default 5) is the cap per ticket. A second tick is idempotent.
 Paused and stopped runs print alarm-repair: skipped and change nothing.
-When that pass opens and the ready set is empty, pending gates are
+When that housekeeping runs and the ready set is empty, pending gates are
 recomputed, including a stale red gate the beam can disprove. A gate turns
 green when every member is merged or done, or when every ticket is. Herald
 prints "<gate> pending cleared. Members merged. Tick ran." and the dispatch
@@ -104,9 +109,6 @@ def _repair_state(data: dict) -> dict:
     if not isinstance(raw, dict):
         raw = {}
         data["alarmRepair"] = raw
-    tried = raw.get("tried")
-    if not isinstance(tried, list):
-        raw["tried"] = []
     return raw
 
 
@@ -206,7 +208,7 @@ def _already_locked(locks: list, path: str) -> bool:
     return False
 
 
-def _holder(data: dict, ticket: dict, paths: list) -> Optional[str]:
+def _holder(data: dict, ticket: dict, paths: list, now=None) -> Optional[str]:
     """In-flight ticket whose locks overlap a path this repair would take.
 
     Queued, alarmed, and finished tickets do not hold a lock. ACTIVE is the
@@ -217,13 +219,20 @@ def _holder(data: dict, ticket: dict, paths: list) -> Optional[str]:
     wanted = list(paths)
     if not wanted:
         return None
+    mine = multirepo.scoped_locks(data, ticket, wanted)
     for other in (data.get("tickets") or {}).values():
         if not isinstance(other, dict) or other.get("id") == ticket.get("id"):
             continue
-        if other.get("status") not in beam.ACTIVE:
+        if not beam.holds_now(other, data, now=now):
             continue
-        if beam.lock_overlap(multirepo.scoped_locks(data, ticket, wanted), multirepo.scoped_locks(data, other, list(other.get("locks") or []))):
+        if beam.lock_overlap(mine, multirepo.scoped_locks(data, other, list(other.get("locks") or []))):
             return str(other.get("id"))
+    if not multirepo.is_sibling(data, ticket):
+        import runs
+
+        for label, locks in runs.external_locks(data):
+            if beam.lock_overlap(mine, locks):
+                return str(label)
     return None
 
 
@@ -363,11 +372,10 @@ def _start(data: dict, ticket: dict, now_s: str, beam_path: Path, lines: list) -
     info.pop("launchedAt", None)
     ticket["updatedAt"] = now_s
     repair = _repair_state(data)
-    repair["active"] = ticket.get("id")
-    repair["naming"] = None
-    tried = repair["tried"]
-    if ticket.get("id") not in tried:
-        tried.append(ticket.get("id"))
+    active = _active(repair)
+    if ticket.get("id") not in active:
+        active.append(ticket.get("id"))
+    _drop(_naming(repair), ticket.get("id"))
     _append_status(beam_path, ticket, now_s, prev)
     beam.append_ticket_event(
         beam_path,
@@ -427,96 +435,105 @@ def worker_seen(ticket: dict) -> bool:
     return ticket.get("status") != "claimed" or ticket.get("alarm") != REASON
 
 
-def _consider(data: dict, cap: int, lines: list) -> Optional[dict]:
-    """First lock-escape ticket this pass can start, or None.
+def _active(repair: dict) -> list:
+    """Tickets with a repair Shuttle out. Before 1.7.0 this was one id; a string is read as a list of one."""
+    raw = repair.get("active")
+    ids = [raw] if isinstance(raw, str) and raw else [x for x in (raw or []) if isinstance(x, str) and x]
+    repair["active"] = ids
+    return ids
 
-    Capped tickets are skipped. The first eligible ticket that still needs
-    path names, or whose escaped paths are held in flight, waits. A later
-    ticket is not started ahead of it. Queued holders do not block.
+
+def _naming(repair: dict) -> list:
+    raw = repair.get("naming")
+    ids = [raw] if isinstance(raw, str) and raw else [x for x in (raw or []) if isinstance(x, str) and x]
+    repair["naming"] = ids
+    return ids
+
+
+def _drop(ids: list, tid: str) -> None:
+    while tid in ids:
+        ids.remove(tid)
+
+
+def _backoff(ticket: dict, now_dt, minutes: int) -> Optional[str]:
+    """When a failed repair may try again: alarmRepairMinutes after the failure. None when it may now."""
+    info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+    if info.get("state") != "failed" or not info.get("failedAt"):
+        return None
+    failed = beam.parse_ts(info["failedAt"])
+    if failed is None:
+        return None
+    left = minutes - (now_dt - failed).total_seconds() / 60.0
+    return None if left <= 0 else info["failedAt"]
+
+
+def _room(data: dict) -> int:
+    try:
+        return int(beam.shuttle_room(data))
+    except Exception:
+        return 1
+
+
+def start_ready(data: dict, beam_path: Path, now_dt, now_s: str, cap: int, minutes: int, lines: list) -> list:
+    """Start every lock-escape repair that can start now. Returns the ids started.
+
+    Decided one ticket at a time, in plan order, inside the beam lock; run in parallel. A started repair
+    is `claimed` with its widened locks before the next ticket is looked at, so two escapes that need
+    the same file never both start: the second sees the first as the holder and waits. A ticket that
+    waits does not hold back the ones after it. Each start takes a Shuttle slot (maxAgents).
     """
     repair = _repair_state(data)
-    tried = set(repair.get("tried") or [])
+    active = _active(repair)
+    naming = _naming(repair)
+    budget = _room(data)
+    started = []
     for ticket in _plan_order(data):
         tid = ticket.get("id")
-        if tid in tried:
+        if tid in active or tid in naming:
+            continue
+        if orchestrator.shuttle_still_out(ticket, data, now=now_s):
+            # The escape was seen while its own Shuttle still works. Relaunching now would put two Shuttles on it.
+            lines.append("alarm-repair: shuttle-out %s (repaired when its Shuttle returns)" % tid)
             continue
         if _at_cap(ticket, cap):
             _herald_give_up(ticket, lines)
             continue
+        since = _backoff(ticket, now_dt, minutes)
+        if since:
+            lines.append("alarm-repair: retry %s after %d minutes (failed %s)" % (tid, minutes, since))
+            continue
         paths = _escaped(ticket)
-        # Existing locks plus the paths we would add. An in-flight holder blocks
-        # the widen. A queued ticket does not.
+        if not paths:
+            naming.append(tid)
+            lines.append("alarm-repair: name %s" % tid)
+            continue
+        # Existing locks plus the paths we would add. An in-flight holder (including a repair started a
+        # moment ago in this loop) blocks the widen. A queued or alarmed ticket does not.
         wanted = normalize_paths(list(ticket.get("locks") or []) + paths)
-        busy = _holder(data, ticket, wanted)
+        busy = _holder(data, ticket, wanted, now=now_s)
         if busy:
             lines.append("alarm-repair: locked %s by %s" % (tid, busy))
-            return None
-        if not paths:
-            repair["naming"] = tid
-            lines.append("alarm-repair: name %s" % tid)
-            return None
-        return ticket
-    return None
+            continue
+        if min(budget, _room(data) + len(started)) - len(started) <= 0:
+            lines.append("alarm-repair: queued %s (no free Shuttle slot; maxAgents)" % tid)
+            continue
+        _start(data, ticket, now_s, beam_path, lines)
+        started.append(tid)
+    return started
 
 
-def _close_pass(repair: dict, now_s: str) -> None:
-    repair["active"] = None
-    repair["passOpen"] = False
-    repair["checkedAt"] = now_s
-
-
-def _open_pass(repair: dict, now_s: str) -> None:
-    repair["tried"] = []
-    repair["passOpen"] = True
-    repair["passStartedAt"] = now_s
-    repair["checkedAt"] = now_s
-    repair["active"] = None
-    repair["naming"] = None
-
-
-def _interval_elapsed(repair: dict, now_dt, minutes: int) -> bool:
-    if repair.get("passOpen"):
-        return True
-    stamp = repair.get("checkedAt")
-    if not stamp:
-        return True
-    seen = beam.parse_ts(stamp)
-    if seen is None:
-        return True
-    return (now_dt - seen).total_seconds() / 60.0 >= minutes
-
-
-def _finish_pass_or_start(data: dict, beam_path: Path, now_s: str, cap: int, lines: list) -> None:
+def _settle(data: dict, beam_path: Path, tid: str, now_s: str, cap: int, returned: Optional[str], error: Optional[str], lines: list) -> bool:
+    """Settle one active repair. True when the beam changed; a still-working Shuttle changes nothing."""
     repair = _repair_state(data)
-    nxt = _consider(data, cap, lines)
-    if nxt is None:
-        waiting = any(
-            line.startswith("alarm-repair: locked ") or line.startswith("alarm-repair: name ") for line in lines
-        )
-        if not waiting:
-            _close_pass(repair, now_s)
-            lines.append("alarm-repair: idle")
-        return
-    _start(data, nxt, now_s, beam_path, lines)
-
-
-def _settle_active(data: dict, beam_path: Path, now_s: str, cap: int, returned: Optional[str], error: Optional[str], lines: list) -> bool:
-    """Settle the active repair.
-
-    Returns True when the beam changed. A still-working shuttle returns False
-    so a second tick does not rewrite the beam or start another repair.
-    """
-    repair = _repair_state(data)
-    tid = repair.get("active")
+    active = _active(repair)
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    if not tid or tid not in tickets:
-        repair["active"] = None
+    if tid not in tickets:
+        _drop(active, tid)
         return True
     ticket = tickets[tid]
     mine = returned == tid
     if mine and not worker_seen(ticket):
         # Nothing ran. Counting this would spend an attempt on a Shuttle that never started.
-        info = _info(ticket)
         lines.append(
             "alarm-repair: not launched %s. No repair Shuttle ran for attempt %d, so it is not counted."
             % (tid, _attempts(ticket))
@@ -533,92 +550,49 @@ def _settle_active(data: dict, beam_path: Path, now_s: str, cap: int, returned: 
         lines.append("alarm-repair: waiting %s" % tid)
         return False
     prev = ticket.get("status")
+    _drop(active, tid)
     if outcome == "failed":
         _record_failure(ticket, now_s, error if mine else None, cap, lines)
         _append_status(beam_path, ticket, now_s, prev)
         info = _info(ticket)
-        beam.append_ticket_event(
-            beam_path,
-            ticket,
-            {
-                "at": now_s,
-                "type": "alarm-repair",
-                "value": "failed",
-                "attempts": _attempts(ticket),
-                "error": info.get("error"),
-            },
-        )
-        beam.journal(
-            beam_path,
-            {
-                "type": "alarm-repair",
-                "action": "failed",
-                "id": tid,
-                "attempts": _attempts(ticket),
-                "error": info.get("error"),
-            },
-        )
-        repair["active"] = None
-        if tid not in repair["tried"]:
-            repair["tried"].append(tid)
-        # Start the next in this same call. Do not wait for the interval
-        # and do not retry this ticket in this pass.
-        before = len(lines)
-        nxt = _consider(data, cap, lines)
-        if nxt is not None:
-            lines.append("herald: %s lock-escape repair failed. Taking %s." % (tid, nxt.get("id")))
+        beam.append_ticket_event(beam_path, ticket, {"at": now_s, "type": "alarm-repair", "value": "failed",
+                                                     "attempts": _attempts(ticket), "error": info.get("error")})
+        beam.journal(beam_path, {"type": "alarm-repair", "action": "failed", "id": tid, "attempts": _attempts(ticket),
+                                 "error": info.get("error")})
         if _attempts(ticket) >= cap:
             _herald_give_up(ticket, lines)
-        if nxt is not None:
-            _start(data, nxt, now_s, beam_path, lines)
-        elif not any(
-            line.startswith("alarm-repair: locked ") or line.startswith("alarm-repair: name ") for line in lines[before:]
-        ):
-            _close_pass(repair, now_s)
-            lines.append("alarm-repair: idle")
+        else:
+            lines.append("herald: %s lock-escape repair failed (attempt %d of %d). It tries again in alarmRepairMinutes."
+                         % (tid, _attempts(ticket), cap))
         return True
     info = _info(ticket)
     info["state"] = "passed"
     info["passedAt"] = now_s
     ticket["updatedAt"] = now_s
-    beam.append_ticket_event(
-        beam_path,
-        ticket,
-        {"at": now_s, "type": "alarm-repair", "value": "passed", "attempts": _attempts(ticket)},
-    )
+    beam.append_ticket_event(beam_path, ticket, {"at": now_s, "type": "alarm-repair", "value": "passed", "attempts": _attempts(ticket)})
     beam.journal(beam_path, {"type": "alarm-repair", "action": "passed", "id": tid, "attempts": _attempts(ticket)})
     lines.append("alarm-repair: passed %s" % tid)
-    repair["active"] = None
-    if tid not in repair["tried"]:
-        repair["tried"].append(tid)
-    _finish_pass_or_start(data, beam_path, now_s, cap, lines)
     return True
 
 
-def _resolve_naming(data: dict, beam_path: Path, now_s: str, cap: int, lines: list) -> bool:
-    """The naming Shuttle returned. Widen and start, wait, or leave this ticket for the pass."""
+def _resolve_naming(data: dict, tid: str, lines: list) -> bool:
+    """The naming Shuttle returned. With paths, the ticket starts this call (start_ready); without, it waits."""
     repair = _repair_state(data)
-    tid = repair.get("naming")
-    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    repair["naming"] = None
-    ticket = tickets.get(tid) if tid else None
-    if not isinstance(ticket, dict):
-        return True
-    paths = _escaped(ticket)
-    wanted = normalize_paths(list(ticket.get("locks") or []) + paths)
-    busy = _holder(data, ticket, wanted) if paths else None
-    if not paths:
-        if tid not in repair["tried"]:
-            repair["tried"].append(tid)
+    _drop(_naming(repair), tid)
+    ticket = (data.get("tickets") or {}).get(tid)
+    if isinstance(ticket, dict) and not _escaped(ticket):
         lines.append("alarm-repair: unnamed %s" % tid)
-        _finish_pass_or_start(data, beam_path, now_s, cap, lines)
-        return True
-    if busy:
-        repair["passOpen"] = True
-        lines.append("alarm-repair: locked %s by %s" % (tid, busy))
-        return True
-    _start(data, ticket, now_s, beam_path, lines)
     return True
+
+
+def _interval_elapsed(repair: dict, now_dt, minutes: int) -> bool:
+    stamp = repair.get("checkedAt")
+    if not stamp:
+        return True
+    seen = beam.parse_ts(stamp)
+    if seen is None:
+        return True
+    return (now_dt - seen).total_seconds() / 60.0 >= minutes
 
 
 def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Optional[str] = None) -> list:
@@ -637,39 +611,36 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
     if cap < 0:
         cap = DEFAULT_MAX_ALARM_REPAIRS
     repair = _repair_state(data)
+    repair.pop("tried", None)
+    repair.pop("passOpen", None)
+    repair.pop("passStartedAt", None)
     lines: list = []
     flipped_gates: list = []
     sent: list = []
-    if repair.get("active"):
-        changed = _settle_active(data, beam_path, now_s, cap, returned, error, lines)
-    elif repair.get("naming"):
-        if returned == repair.get("naming"):
-            changed = _resolve_naming(data, beam_path, now_s, cap, lines)
+    changed = False
+    # 1. Settle every repair Shuttle that is out.
+    for tid in list(_active(repair)):
+        changed = _settle(data, beam_path, tid, now_s, cap, returned, error, lines) or changed
+    # 2. A naming Shuttle that returned.
+    for tid in list(_naming(repair)):
+        if returned == tid:
+            changed = _resolve_naming(data, tid, lines) or changed
         else:
-            lines.append("alarm-repair: naming %s" % repair.get("naming"))
-            changed = False
-    elif repair.get("passOpen"):
-        # The pass is already open (the next ticket was lock-busy).
-        # Do not clear `tried` and do not wait out the interval.
-        _finish_pass_or_start(data, beam_path, now_s, cap, lines)
-        changed = any(
-            line.startswith("alarm-repair: start ")
-            or line.startswith("alarm-repair: idle")
-            or line.startswith("alarm-repair: gave-up ")
-            or line.startswith("alarm-repair: name ")
-            or line.startswith("herald: ")
-            for line in lines
-        )
-    elif not _interval_elapsed(repair, now_dt, minutes):
-        lines.append("alarm-repair: wait")
-        changed = False
-    else:
-        _open_pass(repair, now_s)
-        # Snapshot before repair mutates the beam. The idle case Shawn hit
-        # is an empty ready set: nothing in flight, nothing waiting, no
-        # alarms, and pending gates whose members are already merged.
-        ready_empty = not beam.ready(data)
-        _finish_pass_or_start(data, beam_path, now_s, cap, lines)
+            lines.append("alarm-repair: naming %s" % tid)
+    # The housekeeping that rides on this tick (send-back, stale gates) keeps its interval.
+    housekeeping = _interval_elapsed(repair, now_dt, minutes)
+    ready_empty = housekeeping and not beam.ready(data)
+    # 3. Start every lock-escape repair that can start now: no interval, no one-at-a-time.
+    before = len(lines)
+    started = start_ready(data, beam_path, now_dt, now_s, cap, minutes, lines)
+    if started or any(line.startswith(("alarm-repair: name ", "alarm-repair: gave-up ", "herald: ")) for line in lines[before:]):
+        changed = True
+    if not _active(repair) and not _naming(repair) and not any(
+            line.startswith(("alarm-repair: locked ", "alarm-repair: retry ", "alarm-repair: queued ")) for line in lines):
+        # Nothing to repair. `wait` means the send-back and gate housekeeping is not due yet.
+        lines.append("alarm-repair: idle" if housekeeping else "alarm-repair: wait")
+    if housekeeping:
+        repair["checkedAt"] = now_s
         yaml_text = ""
         cfg_path = beam.config_yaml_path(beam_path)
         if cfg_path.is_file():
@@ -687,38 +658,19 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
         changed = True
     if changed:
         data["metrics"] = beam.metrics(data)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         for action in sent:
-            beam.journal(
-                beam_path,
-                {
-                    "type": "send-back",
-                    "id": action.get("id"),
-                    "outcome": action.get("outcome"),
-                    "check": "make ci",
-                },
-            )
+            beam.journal(beam_path, {"type": "send-back", "id": action.get("id"), "outcome": action.get("outcome"), "check": "make ci"})
         if flipped_gates:
             for gate in flipped_gates:
-                beam.journal(
-                    beam_path,
-                    {
-                        "type": "gate",
-                        "key": gate.get("key"),
-                        "status": "green",
-                        "evidence": gate.get("evidence"),
-                    },
-                )
+                beam.journal(beam_path, {"type": "gate", "key": gate.get("key"), "status": "green", "evidence": gate.get("evidence")})
             try:
                 beam.write_board_files(beam_path, data)
             except Exception as exc:
                 print("board: not rewritten (%s)" % exc)
-        herald = [line[len("herald: ") :] for line in lines if line.startswith("herald: ")]
+        herald = [line[len("herald: "):] for line in lines if line.startswith("herald: ")]
         if herald:
-            beam.atomic_write(
-                beam_path.parent / RECORD_NAME,
-                json.dumps({"at": now_s, "lines": herald}, indent=2) + "\n",
-            )
+            beam.atomic_write(beam_path.parent / RECORD_NAME, json.dumps({"at": now_s, "lines": herald}, indent=2) + "\n")
     return lines
 
 
@@ -746,14 +698,14 @@ def store_paths(beam_path: Path, tid: str, paths: list, now=None) -> list:
             ticket["escaped"] = cleaned
             ticket["updatedAt"] = now_s
             beam.journal(beam_path, {"type": "alarm-repair", "action": "paths", "id": tid, "escaped": cleaned})
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["alarm-repair: paths %s %s" % (tid, ",".join(cleaned))]
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def next_repair(beam_path: Path, now=None, returned: Optional[str] = None, error: Optional[str] = None) -> list:
-    """Claim or advance one lock-escape repair. Safe to call twice."""
+    """Settle repairs that are out and start every one that can start. Safe to call twice."""
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return ["alarm-repair: no beam at %s" % beam_path]
@@ -774,7 +726,7 @@ def main(argv: Optional[list] = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    cmd = sub.add_parser("next", help="claim or advance the one lock-escape repair")
+    cmd = sub.add_parser("next", help="settle and start lock-escape repairs")
     cmd.add_argument("--beam", default=".warp/beam.json")
     cmd.add_argument("--now", help="timestamp for tests, YYYY-MM-DDTHH:MM:SSZ")
     cmd.add_argument("--returned", help="repair Shuttle for this ticket id has returned")
@@ -787,6 +739,15 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import beamlock
+
+    # Run by hand or by the parent between passes: wait for a supervise pass that is running, so its save
+    # does not overwrite this one and its repair decisions see this one.
+    with beamlock.run_lock(Path(args.beam)):
+        return _main(args)
+
+
+def _main(args) -> int:
     if args.cmd == "paths":
         lines = store_paths(Path(args.beam), args.id, args.path, now=args.now)
         for line in lines:

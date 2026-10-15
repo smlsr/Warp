@@ -124,8 +124,11 @@ def prepare(warp: Path) -> list:
     written = []
     beam = warp / "beam.json"
     if beam.is_file():
-        data = sanitize(json.loads(beam.read_text()))
-        beam.write_text(json.dumps(data, indent=2) + "\n")
+        import beam as beam_mod
+        import beamlock
+
+        # In one step under the beam lock, so a Shuttle's save in the middle is not lost.
+        beamlock.update(beam, sanitize, beam_mod._replace)
         written.append(beam)
     journal = warp / "journal.jsonl"
     if journal.is_file():
@@ -183,6 +186,10 @@ def state_payload(warp: Path, run: str = "", now: Optional[str] = None, extras: 
     if beam.is_file():
         live = json.loads(beam.read_text())
         data = sanitize(live)
+        if isinstance(data, dict):
+            # The save revision is this machine's; the published copy changes only when the state does.
+            data.pop("_rev", None)
+            data.pop("_revKey", None)
         if run and isinstance(data, dict):
             data["run"] = run
             if now:
@@ -789,7 +796,10 @@ def load_main_beam(beam_path: Path, replace: bool = False) -> list:
             lines.append("beam: kept local")
             return lines
     beam_path.parent.mkdir(parents=True, exist_ok=True)
-    beam_path.write_text(json.dumps(remote, indent=2) + "\n")
+    import beam as beam_mod
+    import beamlock
+
+    beamlock.replace_whole(beam_path, remote, beam_mod._replace)
     lines.append("beam: loaded from %s" % ref)
     return lines
 

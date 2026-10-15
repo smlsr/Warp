@@ -817,11 +817,15 @@ def unfinished_line(data: dict) -> str:
 
     found = unfinished(data)
     total = sum(len(ids) for ids in found.values())
+    escapes = sorted(str(t.get("id")) for t in (data.get("tickets") or {}).values()
+                     if isinstance(t, dict) and t.get("status") == "alarm" and t.get("alarm") == "lock-escape")
+    first = ("Lock-escape alarms first (locks widened, relaunched): %s. " % ", ".join(escapes)) if escapes else ""
     if not total:
-        return "unfinished: none. New tickets start from the ready queue."
+        return "unfinished: none. New tickets start from the ready queue." if not escapes else (
+            "unfinished: %d lock-escape alarms. %sNew tickets start after." % (len(escapes), first))
     cfg = data.get("config") or {}
-    return (
-        "unfinished: %d open. %d need a fix, %d need a Shuttle, %d have a Shuttle out, %d wait on review or checks. "
+    return ("unfinished: " + first if first else "") + (
+        ("" if first else "unfinished: ") + "%d open. %d need a fix, %d need a Shuttle, %d have a Shuttle out, %d wait on review or checks. "
         "These start first, up to maxAgents %d. New tickets start after, while fewer than maxInProgress %d are open."
         % (
             total,
@@ -838,8 +842,9 @@ def unfinished_line(data: dict) -> str:
 def cold_start(beam_path) -> list:
     """Start or resume. Unfinished work first, then the ready queue.
 
-    The order is fixed: open pull requests that need a fix, then tickets
-    whose Shuttle was halted or died, then new tickets. All three draw on
+    The order is fixed: lock-escape alarms (widened and relaunched by alarm_repair, before anything else can
+    take their files or slots), then open pull requests that need a fix, then tickets whose Shuttle was
+    halted or died, then new tickets. All three draw on
     one cap, maxAgents, so a new ticket starts only in a slot unfinished
     work did not need. A Shuttle already out keeps its slot. maxInProgress
     holds only the new tickets.
@@ -853,11 +858,17 @@ def cold_start(beam_path) -> list:
     if (data.get("runState") or "running") in {"paused", "stopped"} or data.get("paused"):
         return []
     lines: list = []
+    if any(isinstance(t, dict) and t.get("status") == "alarm" and t.get("alarm") == "lock-escape"
+           for t in (data.get("tickets") or {}).values()):
+        import alarm_repair
+
+        lines.extend(line for line in alarm_repair.next_repair(path) if not line.startswith(("alarm-repair: idle", "alarm-repair: wait")))
+        data = beam_mod.load_json(path)
     dispatch_fix_workers(data, lines, scan=True)
     dispatch_replacements(data, lines)
     _refill(data, lines)
     if lines:
-        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
     return lines
 
 
@@ -1320,6 +1331,14 @@ def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str
     if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
         lines.append("shuttle: hold %s" % ticket.get("id"))
         return
+    if ticket.get("status") == "alarm":
+        # An alarm holds no locks, so another ticket (a lock-escape repair, say) may have taken them meanwhile.
+        import alarm_repair
+
+        holder = alarm_repair._holder(data, ticket, orchestrator.lock_paths(ticket))
+        if holder:
+            lines.append("shuttle: hold %s (its locks are held by %s)" % (ticket.get("id"), holder))
+            return
     replacing = agents.confirmed_dead(ticket, data) and not bool(agents.can_resume(data, ticket, beam_path=_beam_path(data)))
     ticket["alarm"] = None
     ticket["status"] = "recovering"
@@ -2248,7 +2267,7 @@ def _run_repairs(data: dict, beam_path: Optional[Path], lines: list, now) -> Non
     import beam as beam_mod
 
     path = Path(beam_path)
-    beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
     lines.extend(alarm_repair.next_repair(path, now=now))
     if path.is_file():
         loaded = beam_mod.load_json(path)

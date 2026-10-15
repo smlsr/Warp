@@ -497,7 +497,7 @@ def persist(beam_path: Path, tid: str, fields: dict, drop: tuple = ()) -> None:
             pr.update(fields)
             for key in drop:
                 pr.pop(key, None)
-            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 

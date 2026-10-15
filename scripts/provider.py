@@ -866,7 +866,7 @@ def fetch_rollup(root: Path, pr: str, provider: Optional[str]) -> str:
     return str(state.get("rollup") or "pending")
 
 
-_STATE_IGNORE = ("worktrees", "previous-*", "*.lock", ".*.lock", "outbox.md", "notify-*.json", "dashboard.html")
+_STATE_IGNORE = ("worktrees", ".beam-revs", "previous-*", "*.lock", ".*.lock", "outbox.md", "notify-*.json", "dashboard.html")
 
 
 def _merged_state_payload(root: Path, beam_path: Path, data: dict, tid: str, method: str, now_s: str) -> dict:
@@ -892,7 +892,7 @@ def _merged_state_payload(root: Path, beam_path: Path, data: dict, tid: str, met
             pr["mergedAt"] = pr.get("mergedAt") or now_s
             pr["mergeMethod"] = method
             pr["stateInMerge"] = True
-        beam_mod.atomic_write(copy / "beam.json", json.dumps(doc, indent=2) + "\n")
+        beam_mod.atomic_write(copy / "beam.json", json.dumps(doc, indent=2) + "\n", data=doc)
         try:
             beam_mod.write_board_files(copy / "beam.json", doc)
             import io
@@ -1424,7 +1424,7 @@ def main() -> None:
                     except OSError:
                         yaml_text = ""
                 sent = orchestrator.send_back_red_checks(data, yaml_text, only_id=args.id)
-                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
                 print("%s rollup %s" % (args.id, result))
                 for line in orchestrator.format_send_back(sent, data):
                     print(line)
@@ -1449,7 +1449,7 @@ def main() -> None:
                 orchestrator.apply_reported_merge(ticket, outcome, sha=None)
                 import beam as beam_mod
 
-                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
                 print("%s %s" % (args.id, outcome))
                 print("not merged")
                 print(detail)

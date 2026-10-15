@@ -333,10 +333,11 @@ maxSpawnsPerHour: 40
 # Past this cap no ticket starts a new agent until an hour has passed.
 # Default 40.
 alarmRepairMinutes: 15
-# How often the parent pass looks for lock-escape alarms and starts one
-# repair. Only while the run is running. Pause and stop do not repair.
-# A repair already in flight is checked on each pass. /warp-init
-# appends this key when the file does not have it yet.
+# Minutes a failed lock-escape repair waits before it tries again. A new
+# escape is repaired on the pass that sees it, in parallel with the others;
+# two that need the same file never both start. Only while the run is
+# running. Pause and stop do not repair. /warp-init appends this key when
+# the file does not have it yet.
 maxAlarmRepairs: 5
 # Repair attempts for one lock-escape ticket. Past this cap the alarm stays
 # and later passes skip it. The repair widens that ticket's locks to the

@@ -9,6 +9,8 @@
 .warp/notify-post.json
 .warp/notify-pass.json
 .warp/events.jsonl
+.warp/.*.lock
+.warp/.beam-revs/
 .warp/dashboard.html
 .warp/secrets.yaml
 .warp/*.token

@@ -1025,7 +1025,7 @@ def observe_locked(
             changed = True
     if changed:
         data["metrics"] = beam.metrics(data)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         for line in lines:
             if line.startswith("herald: "):
                 beam.journal(beam_path, {"type": "remote", "line": line[len("herald: ") :]})
@@ -1170,7 +1170,7 @@ def append_status(
         line["sha"] = body["review"]["sha"]
         line["findings"] = body["review"]["findings"]
         line["source"] = body["review"]["source"]
-    beam.atomic_write(folder / "state.json", json.dumps(body, indent=2) + "\n")
+    beam.atomic_write(folder / "state.json", json.dumps(body, indent=2) + "\n", data=body)
     with log_path.open("a") as handle:
         handle.write(json.dumps(line, separators=(",", ":")) + "\n")
     print("ticket: %s" % tid)

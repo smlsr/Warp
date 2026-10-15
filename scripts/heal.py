@@ -93,10 +93,9 @@ def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=
     info.update({"state": "cleared", "clearedAt": now_s, "gaveUp": False})
     ticket["alarmRepair"] = info
     repair = data.get("alarmRepair") if isinstance(data.get("alarmRepair"), dict) else {}
-    if repair.get("active") == tid:
-        repair["active"] = None
-    if repair.get("naming") == tid:
-        repair["naming"] = None
+    if repair:
+        alarm_repair._drop(alarm_repair._active(repair), tid)
+        alarm_repair._drop(alarm_repair._naming(repair), tid)
     added = " Added %s to its locks." % ", ".join(widened) if widened else ""
     if ticket.get("status") != "alarm" and orchestrator.shuttle_is_live(ticket, data, now=now):
         # A Shuttle is still out on it. Only the alarm goes; the Shuttle's return moves it on.
@@ -177,7 +176,7 @@ def check_merged(beam_path: Path, fetch=None) -> list:
                 lines.append("heal: gate %s is pending again: %s is not merged." % (gate.get("key"), ", ".join(sorted(set(gate.get("members") or []) & set(reopened)))))
     if changed:
         data["metrics"] = beam_mod.metrics(data)
-        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         if reopened:
             beam_mod.journal(beam_path, {"type": "heal", "unmerged": reopened})
     return lines
@@ -272,7 +271,7 @@ def backfill_times(beam_path: Path, fetch=None) -> list:
         filled.append(tid)
     pipeline.note_spent(data, beam_path)
     data["metrics"] = beam_mod.metrics(data)
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return ["times: filled in %s from the pull requests" % ", ".join(sorted(set(filled)))] if filled else []
 
 
@@ -296,7 +295,7 @@ def fill_merge_times(beam_path: Path) -> list:
                 pr["mergedAt"] = when
                 filled.append(tid)
         if filled:
-            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["times: merged time filled in for %s from the merge commits" % ", ".join(sorted(filled))]
         return []
     except Exception as exc:
@@ -336,7 +335,7 @@ def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
             retry.append(tid)
     if any(action != "retry" for _tid, action, _d in rows):
         data["metrics"] = beam_mod.metrics(data)
-        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     for tid in retry:
         text = inbound._requeue(beam_path, tid, by="resume")
         lines.append("heal: " + text.splitlines()[0])

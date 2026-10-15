@@ -67,10 +67,23 @@ def utcnow() -> str:
 
 def load_json(path: Path) -> dict:
     with path.open() as f:
-        return json.load(f)
+        doc = json.load(f)
+    import beamlock
+
+    beamlock.note_read(path, doc)
+    return doc
 
 
-def atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str, data: Optional[dict] = None) -> None:
+    """Write a file whole. The live beam is saved under the beam lock and merged with what another
+    process saved since this one read it (beamlock.py), so concurrent writers do not lose updates.
+    Pass the dict as `data` and it is brought up to the saved version in place."""
+    import beamlock
+
+    beamlock.write(Path(path), text, _replace, data=data)
+
+
+def _replace(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
@@ -424,7 +437,7 @@ def ingest(schedule_path: Path, plan_path: Optional[Path], out: Path, config: di
         "metrics": {},
     }
     beam["metrics"] = metrics(beam)
-    atomic_write(out, json.dumps(beam, indent=2) + "\n")
+    atomic_write(out, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(out, {"type": "ingest", "tickets": len(tickets), "gates": len(gates)})
     return beam
 
@@ -463,8 +476,13 @@ def lock_overlap(a: list[str], b: list[str]) -> bool:
     """Same path, or one path is a parent folder of the other.
 
     The lists are the tickets' full lock lists. A shortened board line is not
-    an input to this check.
+    an input to this check. A locked manifest also covers its lockfile
+    (`app/package.json` covers `app/package-lock.json`): npm rewrites it.
     """
+    import alarm_repair
+
+    a = list(a) + alarm_repair.implied_locks(list(a))
+    b = list(b) + alarm_repair.implied_locks(list(b))
     sa = {orchestrator._norm(x) for x in a if orchestrator._norm(x)}
     sb = {orchestrator._norm(y) for y in b if orchestrator._norm(y)}
     if sa & sb:
@@ -482,9 +500,19 @@ def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
 
     held = []
     for t in beam["tickets"].values():
-        if t["status"] in ACTIVE:
+        if holds_now(t, beam):
             held.append((t["id"], multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))))
     return held
+
+
+def holds_now(ticket: dict, beam: dict, now=None) -> bool:
+    """Its locks are taken: an active ticket, or an alarmed one whose own Shuttle is still working
+    (an escape seen on the pull request while the Shuttle runs). An alarm with no Shuttle out holds nothing."""
+    if not isinstance(ticket, dict):
+        return False
+    if ticket.get("status") in ACTIVE:
+        return True
+    return ticket.get("status") == "alarm" and orchestrator.shuttle_still_out(ticket, beam, now=now)
 
 
 _IN_PROGRESS_PHASES = {"implementing", "pr-open", "reviewing", "fixing", "ready", "merging"}
@@ -585,7 +613,8 @@ def holding_launches_label(beam: dict, count: Optional[int] = None, cap: Optiona
 def running_shuttle_count(beam: dict) -> int:
     """Live Shuttles. A waiting review and a dead claim do not count."""
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and orchestrator.shuttle_is_live(ticket, beam))
+    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and (
+        orchestrator.shuttle_is_live(ticket, beam) or orchestrator.repair_awaiting_launch(ticket)))
 
 
 def _local_shuttle_count(beam: dict) -> int:
@@ -850,7 +879,7 @@ def refresh_pending_gates(beam_path: Path, now=None, run_dispatch: bool = False)
             if flipped:
                 lines.extend(gate_flip_lines(flipped, data, run_dispatch))
             data["metrics"] = metrics(data)
-            atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             for action in sent:
                 journal(
                     beam_path,
@@ -1153,13 +1182,18 @@ def cmd_set(beam_path: Path, args: argparse.Namespace) -> None:
     _record_set_events(beam_path, beam, t, before, args)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    wanted = t.get("status")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(
         beam_path,
         {"type": "set", "id": args.id, "from": prev, "to": t["status"], "agent": t.get("agent")},
     )
     extra = f" ({note})" if note else ""
     print(f"{args.id} {prev} -> {t['status']}{extra}")
+    if args.status and t.get("status") != wanted:
+        # Another process changed this ticket's status at the same moment, and its status ranked higher.
+        print(f"set: {args.id} is {t.get('status')}, not {wanted}: another process changed it at the same time. "
+              "Read the beam again before the next step.")
     for line in orchestrator.format_send_back(sent, beam):
         print(line)
     if t["status"] in {"merged", "done"} and prev not in {"merged", "done"}:
@@ -1193,7 +1227,7 @@ def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
     t["minutes"] = int(t.get("minutes") or 0) + int(args.minutes or 0)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(beam_path, {"type": "spend", "id": args.id, "tokens": args.tokens, "minutes": args.minutes})
     print(f"{args.id} tokens={t['tokens']} minutes={t['minutes']}")
 
@@ -1210,7 +1244,7 @@ def cmd_usage(beam_path: Path, args: argparse.Namespace) -> None:
     append_ticket_event(beam_path, t, recorded)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(beam_path, {"type": "usage", "id": args.id, **{k: recorded[k] for k in recorded if k not in {"type", "at"}}})
     print(f"{args.id} usage recorded")
     if beam.get("runComplete"):
@@ -1233,7 +1267,7 @@ def cmd_gate(beam_path: Path, args: argparse.Namespace) -> None:
     g["evidence"] = args.evidence
     g["greenAt"] = utcnow() if args.status == "green" else None
     beam["metrics"] = metrics(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(beam_path, {"type": "gate", "key": args.key, "status": args.status})
     print(f"{args.key} -> {args.status}")
 
@@ -1616,7 +1650,7 @@ def _watchdog_locked(beam_path: Path, now) -> list:
     if listener_changed or shuttles_changed:
         if shuttles_changed:
             data["metrics"] = metrics(data)
-        atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         for event in events:
             journal(beam_path, event)
         herald = [line[len("herald: ") :] for line in lines if line.startswith("herald: ")]
@@ -1652,7 +1686,7 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
     if not ticket.get("workerStartedAt"):
         ticket["workerStartedAt"] = ticket.get("claimedAt") or stamp
     beam["metrics"] = metrics(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     print(f"{args.id} heartbeat {agent}")
     try:
         import agents

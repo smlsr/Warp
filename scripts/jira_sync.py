@@ -753,9 +753,9 @@ def _load(beam_path: Path) -> dict:
 
 
 def _save(beam_path: Path, beam: dict) -> None:
-    tmp = beam_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(beam, indent=2) + "\n")
-    tmp.replace(beam_path)
+    import beam as beam_mod
+
+    beam_mod.atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
 
 
 def _journal(beam_path: Path, entry: dict) -> None:
@@ -1327,7 +1327,7 @@ def _refresh_views(beam_path: Path) -> None:
 
     data = beam_mod.load_json(beam_path)
     data["metrics"] = beam_mod.metrics(data)
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     beam_mod.refresh_outputs(beam_path, data)
 
 

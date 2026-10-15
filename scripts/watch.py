@@ -470,13 +470,20 @@ def _run_action(data: dict, ticket: dict, action: str, lines: list, beam_path: O
 
             import beam as beam_mod
 
-            beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n")
+            beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
             lines.extend(alarm_repair.next_repair(Path(beam_path), now=now))
             if Path(beam_path).is_file():
+                # A pass can start several repairs, not only this one: take every ticket it changed.
                 loaded = beam_mod.load_json(Path(beam_path))
-                fresh = (loaded.get("tickets") or {}).get(tid)
-                if isinstance(fresh, dict):
-                    data.setdefault("tickets", {})[tid] = fresh
+                if isinstance(loaded.get("tickets"), dict):
+                    # In place: the fixer loop holds these ticket objects, so a later restart must land in `data`.
+                    tickets = data.setdefault("tickets", {})
+                    for key, row in loaded["tickets"].items():
+                        if isinstance(tickets.get(key), dict) and isinstance(row, dict):
+                            tickets[key].clear()
+                            tickets[key].update(row)
+                        else:
+                            tickets[key] = row
                 if isinstance(loaded.get("alarmRepair"), dict):
                     data["alarmRepair"] = loaded["alarmRepair"]
         return
