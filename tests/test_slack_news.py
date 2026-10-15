@@ -55,6 +55,52 @@ class AlarmNewsTest(unittest.TestCase):
         self.assertEqual(news.alarm_news(data), ["herald: C is in alarm: stuck. Its Shuttle stopped reporting: the provider said no."])
 
 
+class StageNewsTest(unittest.TestCase):
+    def test_a_ticket_through_its_review_cycle(self):
+        cfg = {"bugbotRequired": True, "mergeMethod": "merge"}
+        t = row("WE-01", status="coding", phase="implementing", pr={})
+        data = {"config": cfg, "tickets": {"WE-01": t}}
+        said = []
+
+        def step(**kw):
+            for key, value in kw.items():
+                if key == "pr":
+                    t["pr"].update(value)
+                else:
+                    t[key] = value
+            got = news.stage_news(data, [])
+            said.extend(got)
+            return got
+
+        self.assertEqual(step(), [])  # coding: the claim and start lines say it
+        self.assertEqual(step(status="review", phase="pr-open"), ["herald: WE-01: code is done; waiting for its pull request."])
+        url = "https://github.com/acme/app/pull/24"
+        self.assertEqual(step(pr={"url": url, "headSha": "a" * 40, "bugbotRequestedAt": "2026-10-15T14:02:00Z"}, phase="reviewing"),
+                         ["herald: WE-01: in review on PR #24; waiting for Cursor Bugbot to start (asked 14:02Z)."])
+        self.assertEqual(step(), [])  # once
+        self.assertEqual(step(pr={"bugbotRun": {"sha": "a" * 40, "startedAt": "2026-10-15T14:05:00Z"}}), [])  # Bugbot's own line
+        self.assertEqual(step(pr={"bugbotRun": {"sha": "a" * 40, "startedAt": "x", "doneAt": "y", "result": "fail"}}), [])
+        self.assertEqual(step(status="fix", phase="fixing", shuttle={"detail": "bugbot: app/x.ts:12 null check (high)"}),
+                         ["herald: WE-01: back to fix: bugbot: app/x.ts:12 null check (high)."])
+        # The fix is pushed: a new head, a new cycle.
+        self.assertEqual(step(status="review", phase="reviewing", pr={"headSha": "b" * 40, "bugbotRequestedAt": None}),
+                         ["herald: WE-01: in review on PR #24; waiting for Cursor Bugbot to start."])
+        self.assertEqual(step(pr={"bugbotRun": {"sha": "b" * 40, "startedAt": "x", "doneAt": "y", "result": "pass"}, "ci": "pending"}),
+                         ["herald: WE-01: Bugbot passed on PR #24; waiting on CI."])
+        self.assertEqual(step(pr={"ci": "green"}),
+                         ["herald: WE-01: Bugbot passed and CI is green on PR #24; waiting on its acceptance checks."])
+        self.assertEqual(step(phase="ready"), ["herald: WE-01: all checks are green on PR #24; it is next in the merge queue."])
+        self.assertEqual(step(status="merging", phase="merging"), ["herald: WE-01: merging PR #24 (merge)."])
+        self.assertEqual(step(status="merged", phase=None), [])  # "WE-01 merged."
+
+    def test_a_ticket_with_its_own_line_this_pass_is_not_said_twice(self):
+        t = row("WE-02", status="fix", phase="fixing", shuttle={"detail": "ci red"})
+        data = {"config": {}, "tickets": {"WE-02": t}}
+        self.assertEqual(news.stage_news(data, ["herald: WE-02: a fix Shuttle is starting (on warp/WE-02): ci red."]), [])
+        self.assertEqual(t["stageAnnounced"], "fix@")  # recorded, so the next pass does not say it either
+        self.assertEqual(news.stage_news(data, []), [])
+
+
 class StartNewsTest(unittest.TestCase):
     def test_every_shuttle_start_is_announced_once(self):
         data = {"config": {"maxAgents": 4, "runner": "local"}, "runState": "running", "tickets": {}}

@@ -1786,23 +1786,26 @@ def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provide
     if path.is_file() and lines and not lines[0].startswith("pass: aborted"):
         import notify
 
-        lines.extend(announce_alarms(path))
+        lines.extend(announce_alarms(path, lines))
         match = re.match(r"run: pass (\d+) ", lines[0])
         lines.extend(notify.pass_post(path.resolve().parent.parent, lines, int(match.group(1)) if match else None))
     return lines
 
 
-def announce_alarms(beam_path: Path) -> list:
-    """`herald:` lines for each alarm raised or cleared since the last one announced (news.alarm_news)."""
+def announce_alarms(beam_path: Path, lines: Optional[list] = None) -> list:
+    """`herald:` lines for each alarm raised or cleared, and each review-cycle step reached, since the last ones
+    announced (news.alarm_news, news.stage_news). `lines` is what this pass already says, so nothing is said twice."""
     import beam as beam_mod
     import news
 
     try:
         data = beam_mod.load_json(Path(beam_path))
-        lines = news.alarm_news(data)
-        if lines:
+        before = json.dumps(data, sort_keys=True)
+        out = news.alarm_news(data)
+        out += news.stage_news(data, list(lines or []) + out)
+        if json.dumps(data, sort_keys=True) != before:
             beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
-        return lines
+        return out
     except Exception as exc:  # news never breaks a pass
         return ["herald: not checked for alarms (%s)" % exc]
 

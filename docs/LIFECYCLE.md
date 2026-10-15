@@ -387,6 +387,7 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `start: removed stale <repo>/.git/index.lock (…)` / `start: removed <n> leftover .tmp files in .warp …` / `start: … Left in place` | start, resume | leftovers from a killed process were cleaned; a lock left in place is named |
 | `herald: Run resumed …` / `herald: Run paused …` / `herald: Run not started: …` | start, resume, pause, stop | posted with `.warp/notify-pass.json`, like a pass |
 | `herald: <id>: a fix Shuttle is starting …` (review, restart, replacement, after the pause, repair) | `supervise`, start, resume | once per Shuttle start; the first start of a ticket is its `claimed` line |
+| `herald: <id>: in review on PR #<n>; waiting for Cursor Bugbot to start …` / `…: Bugbot passed on PR #<n>; waiting on CI.` / `…: back to fix: <why>.` / `…: all checks are green …` / `…: merging PR #<n> (<method>).` | `supervise`, start, resume | once per review-cycle step and head commit (`stageAnnounced`); a ticket that already has its own line in the pass gets no second one |
 | `herald: <id> is in alarm: <code>. <why>.` / `herald: <id> is out of alarm (<code>): <what now>.` | `supervise`, start, resume | once per change, whatever raised or cleared it (`alarmAnnounced` on the ticket) |
 | `unfinished: <n> open. ...` | start, resume | the work that starts first; `unfinished: Lock-escape alarms first …` names the repairs that start before it |
 | `config: <key>: <value> is retired and ignored.` | start, resume, version | a retired key is still in `.warp/config.yaml` |

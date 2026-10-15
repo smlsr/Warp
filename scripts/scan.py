@@ -965,7 +965,7 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
             code = _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now)
         printed = tee.lines()
         if code == 0 and Path(beam_path).is_file():
-            alarms = orchestrator.announce_alarms(Path(beam_path))
+            alarms = orchestrator.announce_alarms(Path(beam_path), printed)
             for line in alarms:
                 print(line)
             head = news.run_line(load_json(Path(beam_path)), verb, prior, printed)

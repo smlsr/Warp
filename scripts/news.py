@@ -203,3 +203,89 @@ def halt_line(state: str, reason: str, lines: list) -> str:
     head = "Run %s%s." % (state, (" (%s)" % reason) if reason and reason not in {"stop", state} else "")
     tail = " %s agent%s ended." % (agents, "" if agents == "1" else "s") if agents else ""
     return head + tail + " Branches, worktrees, and pull requests stay. /warp-resume or warp:resume continues."
+
+
+# ---- review cycle ------------------------------------------------------------------------------------------
+
+
+def _pr_label(pr: dict) -> str:
+    import re
+
+    match = re.search(r"/pull/(\d+)", str(pr.get("url") or ""))
+    return ("PR #%s" % match.group(1)) if match else "its pull request"
+
+
+def stage(data: dict, ticket: dict) -> tuple:
+    """(key, text) for where a ticket is in its review cycle; text None when another line already says it.
+
+    The key carries the head commit, so a new push starts the cycle again.
+    """
+    import orchestrator
+
+    status = str(ticket.get("status") or "")
+    phase = str(ticket.get("phase") or "")
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    head = str(pr.get("headSha") or "")[:12]
+    tid = ticket.get("id")
+    label = _pr_label(pr)
+    cfg = data.get("config") or {}
+    if status in {"merged", "done", "skipped", "parked", "alarm", "queued", "blocked", "awaiting_approval"}:
+        return status, None  # merged, parked, approval, and alarm lines say these
+    if status == "merging" or phase == "merging":
+        return "merging@" + head, "%s: merging %s (%s)." % (tid, label, pr.get("mergeMethod") or cfg.get("mergeMethod") or "merge")
+    if phase == "ready":
+        return "ready@" + head, "%s: all checks are green on %s; it is next in the merge queue." % (tid, label)
+    if status == "fix" or phase == "fixing":
+        import pipeline
+
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        why = str(shuttle.get("detail") or "").strip() or "; ".join(pipeline.red_reasons(ticket, cfg)[:3])
+        return "fix@" + head, "%s: back to fix%s." % (tid, (": " + _short(why, 160)) if why else "")
+    if status in {"review", "bugbot_running"} or phase in {"pr-open", "reviewing"}:
+        if not pr.get("url"):
+            return "pr-wait", "%s: code is done; waiting for its pull request." % tid
+        run = pr.get("bugbotRun") if isinstance(pr.get("bugbotRun"), dict) else {}
+        on_head = not head or str(run.get("sha") or "")[:12] == head
+        if orchestrator.bugbot_applies(ticket, cfg):
+            if on_head and run.get("startedAt") and not run.get("doneAt"):
+                return "bugbot-running@" + head, None  # "Cursor Bugbot is reviewing …"
+            if on_head and run.get("doneAt"):
+                if str(run.get("result") or "") != "pass":
+                    return "bugbot-findings@" + head, None  # "… finding(s). Back to fix."
+                ci = str(pr.get("ci") or "").casefold()
+                if ci in {"green", "success", "pass"} or pr.get("ciNone"):
+                    return "checks@" + head, "%s: Bugbot passed and CI is green on %s; waiting on its acceptance checks." % (tid, label)
+                return "ci-wait@" + head, "%s: Bugbot passed on %s; waiting on CI." % (tid, label)
+            asked = " (asked %sZ)" % str(pr.get("bugbotRequestedAt"))[11:16] if pr.get("bugbotRequestedAt") else ""
+            return "bugbot-wait@" + head, "%s: in review on %s; waiting for Cursor Bugbot to start%s." % (tid, label, asked)
+        return "ci-wait@" + head, "%s: in review on %s; waiting on CI." % (tid, label)
+    if status in {"claimed", "planning", "coding", "recovering"}:
+        return "coding", None  # the claim and Shuttle start lines say it
+    return status, None
+
+
+def stage_news(data: dict, lines: list) -> list:
+    """One `herald:` line per review-cycle step a ticket reached since the last one announced (`stageAnnounced`).
+
+    A ticket that already has its own line in this pass (`herald: WE-01 …`) gets no second one.
+    """
+    out = []
+    said = set()
+    for line in lines or []:
+        text = str(line)
+        if text.startswith("herald: "):
+            word = text[len("herald: "):].split(" ", 1)[0].rstrip(":")
+            said.add(word)
+    for tid, ticket in (data.get("tickets") or {}).items():
+        if not isinstance(ticket, dict):
+            continue
+        try:
+            key, text = stage(data, ticket)
+        except Exception:
+            continue
+        if key == ticket.get("stageAnnounced"):
+            continue
+        ticket["stageAnnounced"] = key
+        if text and str(ticket.get("id") or tid) not in said:
+            out.append("herald: " + text)
+    return out
