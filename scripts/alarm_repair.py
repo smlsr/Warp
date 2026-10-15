@@ -756,6 +756,11 @@ def _main(args) -> int:
             return 1
         return 0
     lines = next_repair(Path(args.beam), now=args.now, returned=args.returned, error=args.error)
+    if any(line.startswith("herald: ") for line in lines):
+        # Run between passes (a repair Shuttle returned): its news is posted now, not lost.
+        import notify
+
+        lines = lines + notify.pass_post(Path(args.beam).resolve().parent.parent, lines)
     for line in lines:
         print(line)
     if lines and lines[0].startswith("alarm-repair: no beam"):

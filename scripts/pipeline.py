@@ -48,6 +48,7 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle["pending"] = True
     shuttle["step"] = step
     shuttle["hadPr"] = bool((ticket.get("pr") or {}).get("url"))
+    shuttle.pop("announced", None)  # a new Shuttle: its start is news again
     shuttle.pop("returned", None)
     shuttle.pop("returnedAt", None)
     shuttle.pop("startedAt", None)
@@ -959,8 +960,17 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
         _shuttle(ticket)["launchLines"] = [line for line in lines if not line.startswith("herald:")]
         first = not ticket.get("claimedAt")
         note_claim(ticket)
+        shuttle = _shuttle(ticket)
         if first and step == "implement" and not replacing and not detail and lines[0].startswith("start "):
             lines.append(claim_herald(ticket, __import__("multirepo").ticket_repo(data, ticket)))
+            shuttle["announced"] = True
+        elif not shuttle.get("announced"):
+            # Every Shuttle start is news, once: a fix, a review, a restart, a replacement, a resume after a halt.
+            import news
+
+            lines.append("herald: " + news.start_text(data, ticket, step, detail, replacing=replacing,
+                                                      resumed=lines[0].startswith("resume ")))
+            shuttle["announced"] = True
     if detail:
         # checkout.py launch puts this in the Shuttle's prompt (orchestrator.step_lines).
         _shuttle(ticket)["detail"] = detail

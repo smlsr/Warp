@@ -180,6 +180,21 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 
 Warp has no webhook and no token. Messages go out through the Slack and Teams servers connected in Cursor Settings, posted by the Herald agent in your chat. A script cannot send them on its own, so nothing arrives unless those servers are connected, a channel exists and is set, and the agent session that ran the command is the one that posts. Warp does not create channels.
 
+What is posted, as one "Run update" per pass (`notify: verbose`; `notify: quiet` keeps the lines marked *):
+
+| Event | Example line |
+|---|---|
+| Run started, resumed, or picked up* | `Run resumed (was paused: lunch). 212 of 400 merged, 14 open, 6 Shuttles out, in alarm: WE-12. Starting now: WE-07 (lock-escape repair), WE-09, WE-15.` |
+| Start or resume refused* | `Run not resumed: multi-repo run not started: …` |
+| Run paused or stopped* | `Run paused (dinner). 6 agents ended. Branches, worktrees, and pull requests stay. /warp-resume or warp:resume continues.` |
+| A ticket claimed | `WE-15 claimed: Editor toolbar (size S, auto-merge; locks …). A Shuttle is coding it on warp/WE-15-WAR-77.` |
+| Every other Shuttle start | `WE-09: a fix Shuttle is starting (on warp/WE-09-WAR-71, model claude-sonnet-5-5-high): bugbot: app/x.ts:12 null check (high).` Also review, restart, a replacement for one that died, a pick-up after a pause, and a lock-escape repair. |
+| Into alarm, with why* | `WE-07 is in alarm: lock-escape. It edited files outside its locks: app/x.ts, app/y.ts.` |
+| Out of alarm, with why* | `WE-07 is out of alarm (lock-escape): its locks were widened to app/x.ts, app/y.ts and a repair Shuttle is on it.` |
+| Work and review | code complete, pull request opened, Bugbot reviewing and finished, acceptance, approval waits*, merged, parked*, gate flips, the status digest |
+
+Start, resume, pause, and stop write the same payload a pass does (`herald: post .warp/notify-pass.json to slack <channel>`), and `alarm_repair.py next` run between passes posts its own news. A line nobody marked posted (`notify.py posted`) is carried into the next payload, so nothing is dropped when a post is missed. Before 1.7.0 start and resume printed their news but never posted it, and only a ticket's first Shuttle was announced.
+
 The channel is shared across repos, so every message opens with a header that names its source:
 
 ```text
