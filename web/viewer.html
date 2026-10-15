@@ -1,0 +1,3509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warp run dashboard</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1680px; margin: 0 auto; padding: 0 20px; }
+.hidden { display: none !important; }
+
+/* top bar */
+.top { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 14px; min-height: 58px; flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: -.01em; white-space: nowrap; }
+.brand small { font-weight: 500; color: var(--muted); font-size: 13px; }
+.meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex: 1; min-width: 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.chip b { font-weight: 600; color: var(--ink); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-todo); flex: none; }
+.dot.running { background: var(--c-done); box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-done) 60%, transparent); animation: pulse 2s infinite; }
+.dot.paused { background: var(--c-qa); }
+.dot.plan { background: var(--brand2); }
+.dot.stopped { background: var(--c-todo); }
+.dot.done { background: var(--brand2); }
+@keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+
+/* buttons and menu */
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); background: var(--panel); border-radius: 8px; font-size: 13px; font-weight: 500; }
+.btn:hover { border-color: var(--brand2); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.btn.icon { width: 32px; padding: 0; justify-content: center; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.btn svg { width: 16px; height: 16px; }
+.menu { position: relative; }
+.menu-list { position: absolute; right: 0; top: 38px; min-width: 250px; background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 6px; display: none; z-index: 40; }
+.menu.open .menu-list { display: block; }
+.menu-list button, .menu-list label { display: flex; width: 100%; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: none; border-radius: 6px; text-align: left; font-size: 13px; cursor: pointer; }
+.menu-list button:hover, .menu-list label:hover { background: var(--panel2); }
+.menu-list kbd { margin-left: auto; color: var(--muted); font-size: 11px; font-family: inherit; }
+.menu-list hr { border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
+
+/* headline and tabs */
+.headline { padding: 18px 0 6px; }
+.headline h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.headline .sub { color: var(--muted); margin-top: 3px; font-size: 13px; }
+.headline .chain { color: var(--muted); margin-top: 3px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabs { display: flex; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
+.tab { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 12px; font-size: 13px; }
+.tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+/* metric cards */
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 12px; box-shadow: var(--shadow); min-width: 0; }
+.card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; gap: 8px; }
+.card h3 span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.big { font-size: 30px; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+.big small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+.stack { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--panel2); border: 1px solid var(--line); }
+.stack i { display: block; height: 100%; }
+.rows { margin-top: 10px; display: grid; gap: 4px; font-size: 13px; }
+.rows div { display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.rows .sw { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.rows .v { margin-left: auto; font-weight: 600; }
+.rows .p { color: var(--muted); width: 42px; text-align: right; }
+.foot { margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.foot b { color: var(--ink2); font-weight: 600; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 0 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line2); background: var(--panel); font-size: 13px; }
+.fchip .sw { width: 11px; height: 11px; border-radius: 3px; }
+.fchip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fchip.off { opacity: .42; }
+.fchip.off .sw { background: transparent !important; outline: 1.5px solid var(--muted); }
+.search { position: relative; flex: 1 1 220px; max-width: 340px; }
+.search input { width: 100%; height: 32px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); padding: 0 10px 0 30px; }
+.search svg { position: absolute; left: 9px; top: 8px; width: 16px; height: 16px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { border: 0; background: none; height: 30px; padding: 0 11px; font-size: 13px; }
+.seg button.on { background: var(--panel2); font-weight: 600; box-shadow: inset 0 -2px 0 var(--brand2); }
+.ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ctl select { height: 30px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); padding: 0 6px; }
+.ctl input[type=range] { width: 110px; accent-color: var(--brand); }
+
+/* panels and utilization */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; }
+.panel-h { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.panel-h h2 { margin: 0; font-size: 15px; }
+.panel-h .muted { color: var(--muted); font-size: 12px; }
+.clock { margin-left: auto; }
+.util > summary { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.util > summary::-webkit-details-marker { display: none; }
+.util > summary .muted { color: var(--muted); font-weight: 500; }
+.util-b { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; padding: 4px 14px 14px; }
+.meter { display: grid; gap: 10px; align-content: start; font-size: 13px; }
+.meter .row { display: grid; grid-template-columns: 170px 1fr 96px; gap: 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.meter .bar0 { height: 8px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; }
+.meter .bar0 i { display: block; height: 100%; background: var(--brand2); }
+.meter .bar0 i.over { background: var(--c-qa); }
+.meter .v { text-align: right; font-weight: 600; }
+table.mini { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+table.mini th, table.mini td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+table.mini th:first-child, table.mini td:first-child { text-align: left; }
+table.mini th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.assume { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.assume summary { cursor: pointer; color: var(--ink2); }
+.assume ul { margin: 6px 0 0; padding-left: 18px; }
+.pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--panel2); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pill.green { background: color-mix(in srgb, var(--c-done) 18%, transparent); color: var(--c-done); }
+.pill.red { background: color-mix(in srgb, var(--c-err) 18%, transparent); color: var(--c-err); }
+.tlnote { color: var(--muted); font-size: 12px; }
+
+/* overlays: scrim, drawer shell, drop, toasts, tooltip */
+.scrim { position: fixed; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 50; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 51; transform: translateX(100%); transition: transform .18s ease; display: flex; flex-direction: column; }
+body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+body.drawer-open .drawer { transform: none; }
+.drop { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--brand) 22%, transparent); backdrop-filter: blur(2px); }
+.drop div { background: var(--panel); border: 2px dashed var(--brand); border-radius: 16px; padding: 30px 40px; font-size: 18px; font-weight: 600; }
+body.dragging .drop { display: flex; }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 70; display: grid; gap: 8px; }
+.toast { background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; font-size: 13px; box-shadow: var(--shadow-tip); max-width: 420px; }
+.toast.err { background: var(--c-err); color: var(--on-err); }
+.tip { position: fixed; z-index: 45; pointer-events: none; background: var(--ink); color: var(--bg); border-radius: 8px; padding: 8px 10px; font-size: 12px; max-width: 320px; box-shadow: var(--shadow-tip); display: none; }
+.tip b { font-size: 13px; }
+.tip .m { opacity: .75; }
+
+/* empty state */
+.empty { margin: 40px auto; max-width: 720px; text-align: center; padding: 48px 28px; border: 2px dashed var(--line2); border-radius: 16px; background: var(--panel); }
+.empty h2 { margin: 12px 0 6px; font-size: 20px; }
+.empty p { color: var(--muted); margin: 6px 0; }
+.empty .row { display: flex; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+.empty code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+.foot-note { color: var(--muted); font-size: 12px; padding: 4px 0 30px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+@media (max-width: 1100px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .util-b { grid-template-columns: 1fr; } .meter .row { grid-template-columns: 120px 1fr 80px; } }
+
+/* phone */
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  .metrics { grid-template-columns: 1fr; }
+  .actions .lbl { display: none; }
+  .lane-h .stack { display: none; }
+  .tl-lab { width: 54px; }
+  .top { position: static; }
+  .top .wrap { gap: 8px; }
+  .brand { order: 1; }
+  .actions { order: 2; }
+  .meta { order: 3; flex-basis: 100%; }
+  .hide-sm { display: none; }
+  .headline .chain { max-width: 100%; }
+  .search { max-width: none; flex-basis: 100%; }
+  .controls { min-width: 0; }
+  .empty { margin: 24px auto; padding: 32px 18px; }
+}
+
+/* print */
+@media print {
+  @page { size: landscape; margin: 10mm; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { background: var(--bg); font-size: 12px; }
+  .util > summary, .clock, .top .actions, .controls .search, .controls .ctl, .controls .seg, .tabs, .drawer, .scrim, .toasts, .drop, .tip { display: none !important; }
+  .top { position: static; backdrop-filter: none; }
+  .wrap { max-width: none; padding: 0; }
+  .card, .panel { box-shadow: none; break-inside: avoid; }
+  .tl-scroll { overflow: visible; max-height: none; }
+  .tl-head, .tl-lab { position: static; }
+  .lane { break-inside: auto; }
+  .lane.closed .lane-b { display: grid; }
+  .tcard { break-inside: avoid; }
+  .bar:hover { box-shadow: none; }
+}
+
+:root {
+  --bg: #f4f6f7;
+  --panel: #ffffff;
+  --panel2: #eef2f3;
+  --ink: #0e1719;
+  --ink2: #2b3a3e;
+  --muted: #5d6d72;
+  --line: #dbe2e4;
+  --line2: #c6d0d3;
+  --brand: #0b6e6e;
+  --brand2: #43b3ad;
+  --focus: #43b3ad;
+  --c-done: #1f9d55;
+  --c-err: #d64545;
+  --c-prog: #2f6fde;
+  --c-rev: #8b5cf6;
+  --c-qa: #d99a00;
+  --c-todo: #8c99a5;
+  --tint: 16%;
+  --tint-todo: 10%;
+  --on-brand: #ffffff;
+  --on-err: #ffffff;
+  --shadow: 0 1px 2px rgba(14, 23, 25, .06), 0 2px 8px rgba(14, 23, 25, .05);
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, .18);
+  --shadow-tip: 0 8px 24px rgba(0, 0, 0, .25);
+  --scrim: rgba(5, 10, 12, .35);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1214;
+    --panel: #111b1e;
+    --panel2: #162327;
+    --ink: #e7eff0;
+    --ink2: #c8d5d8;
+    --muted: #8fa3a8;
+    --line: #22343a;
+    --line2: #2c434a;
+    --brand: #43b3ad;
+    --brand2: #6fd0ca;
+    --c-done: #34c172;
+    --c-err: #f06363;
+    --c-prog: #5b8ff0;
+    --c-rev: #a587ff;
+    --c-qa: #f0b429;
+    --c-todo: #73828d;
+    --tint: 24%;
+    --tint-todo: 16%;
+    --on-brand: #071012;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b1214;
+  --panel: #111b1e;
+  --panel2: #162327;
+  --ink: #e7eff0;
+  --ink2: #c8d5d8;
+  --muted: #8fa3a8;
+  --line: #22343a;
+  --line2: #2c434a;
+  --brand: #43b3ad;
+  --brand2: #6fd0ca;
+  --c-done: #34c172;
+  --c-err: #f06363;
+  --c-prog: #5b8ff0;
+  --c-rev: #a587ff;
+  --c-qa: #f0b429;
+  --c-todo: #73828d;
+  --tint: 24%;
+  --tint-todo: 16%;
+  --on-brand: #071012;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  color-scheme: dark;
+}
+
+@media print {
+  :root:root:root,
+  :root:root[data-theme="dark"],
+  :root:root[data-theme="light"] {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --panel2: #f1f4f5;
+    --ink: #0e1719;
+    --ink2: #2b3a3e;
+    --muted: #5d6d72;
+    --line: #dbe2e4;
+    --line2: #c6d0d3;
+    --brand: #0b6e6e;
+    --brand2: #43b3ad;
+    --c-done: #1f9d55;
+    --c-err: #d64545;
+    --c-prog: #2f6fde;
+    --c-rev: #8b5cf6;
+    --c-qa: #d99a00;
+    --c-todo: #8c99a5;
+    --tint: 18%;
+    --tint-todo: 10%;
+    --on-brand: #ffffff;
+    --shadow: none;
+    color-scheme: light;
+  }
+}
+
+/* board */
+.lane { margin-bottom: 14px; }
+.lane-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
+.lane-h .chev { transition: transform .15s; color: var(--muted); flex: none; }
+.lane.closed .chev { transform: rotate(-90deg); }
+.lane.closed .lane-b { display: none; }
+.lane-h h2 { margin: 0; font-size: 15px; }
+.lane-h .gname { color: var(--muted); font-weight: 500; }
+.lane-h .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+.lane-h .stat { margin-left: auto; display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lane-h .stack { width: 140px; }
+.lane-b { padding: 0 14px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 10px; }
+.tcard { position: relative; border-radius: 9px; padding: 9px 11px 9px 14px; background: color-mix(in srgb, var(--c) calc(var(--tint) * .7), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 35%, var(--line)); cursor: pointer; min-width: 0; }
+.tcard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 9px 0 0 9px; background: var(--c); }
+.tcard.crit { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.tcard .l1 { display: flex; gap: 6px; align-items: center; }
+.tcard .id { font-weight: 700; }
+.tcard .badge { font-size: 10.5px; font-weight: 600; border: 1px solid var(--line2); border-radius: 5px; padding: 0 5px; color: var(--ink2); background: var(--panel); }
+.tcard .st { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--c); white-space: nowrap; }
+.tcard .tt { margin: 4px 0 6px; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 35px; }
+.tcard .tt .none { color: var(--muted); }
+.tcard .l3 { display: flex; gap: 10px; font-size: 12px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+.tcard .l3 a { font-weight: 600; }
+.tcard .alarm { margin-top: 6px; font-size: 12px; color: var(--c-err); font-weight: 600; overflow-wrap: anywhere; }
+.empty-lane { color: var(--muted); font-size: 13px; padding: 4px 0 6px; }
+
+.fchip { cursor: pointer; user-select: none; }
+.fchip:hover { background: var(--panel2); }
+.fchip.off .n { text-decoration: line-through; }
+.seg button { cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--panel2); font-weight: 600; }
+.search input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ctl select, .ctl input[type=range] { cursor: pointer; }
+.menu-list [role="menuitem"]:focus-visible, .menu-list label:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
+@media (max-width: 640px) {
+  .search { flex-basis: 100%; max-width: none; }
+  .controls .legend { flex-basis: 100%; }
+}
+
+.drawer-h { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); position: relative; }
+.drawer-h::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--c); }
+.drawer-h .id { font-size: 18px; font-weight: 700; }
+.drawer-h .tt { margin-top: 2px; font-size: 14px; color: var(--ink2); }
+.drawer-h .x { position: absolute; right: 12px; top: 12px; }
+.drawer-b { padding: 12px 18px 24px; overflow: auto; }
+.kv { display: grid; grid-template-columns: 128px 1fr; gap: 6px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.drawer h4 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.dv-raw { color: var(--muted); }
+.dv-alarm { color: var(--c-err); }
+.dv-checks { margin: 0; padding-left: 18px; font-size: 13px; }
+.ev { font-size: 12px; display: grid; grid-template-columns: 112px 1fr; gap: 3px 10px; }
+.ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.tag { font-size: 11.5px; padding: 1px 7px; border-radius: 5px; background: var(--panel2); border: 1px solid var(--line); }
+
+/* header: meta chips, tabs and the plugin actions row (SPEC §10.1-§10.4) */
+.meta .dot.done { background: var(--brand); }
+.tab { cursor: pointer; }
+.tab:not(.on):hover { border-color: var(--line2); }
+#actionsBar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; padding-bottom: 8px; }
+.hdr-act { display: inline-flex; align-items: center; gap: 6px; }
+
+@media (max-width: 640px) {
+  #actionsBar { justify-content: flex-start; }
+}
+
+@media print {
+  #actionsBar { display: none; }
+}
+
+/* swimlane */
+.tl-scroll { overflow: auto; max-height: calc(100vh - 150px); position: relative; }
+.tl { position: relative; min-width: 100%; }
+.tl-row { display: flex; height: var(--rowh, 46px); border-bottom: 1px solid var(--line); }
+.tl-row:nth-child(even) .tl-track { background: color-mix(in srgb, var(--panel2) 45%, transparent); }
+.tl-lab { position: sticky; left: 0; z-index: 4; width: 76px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; font-size: 12px; color: var(--muted); background: var(--panel); border-right: 1px solid var(--line); }
+.tl-track { position: relative; flex: none; }
+.tl-head { position: sticky; top: 0; z-index: 6; background: var(--panel); }
+.tl-head .tl-row { height: 26px; }
+.tl-head .tl-row.gates { height: 38px; }
+.tl-axis span { position: absolute; top: 6px; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tl-axis span::before { content: ""; position: absolute; left: 50%; top: -6px; height: 4px; border-left: 1px solid var(--line2); }
+.gl { position: absolute; bottom: 3px; transform: translateX(-100%); padding-right: 4px; font-size: 11px; font-weight: 700; white-space: nowrap; color: var(--ink2); line-height: 1.15; text-align: right; }
+.gl.red { color: var(--c-err); }
+.gl.green { color: var(--c-done); }
+.gl small { display: block; font-weight: 500; color: var(--muted); }
+.gline { position: absolute; top: 0; bottom: 0; border-left: 1.5px solid var(--ink2); opacity: .55; z-index: 3; pointer-events: none; }
+.gline.red { border-left: 3px solid var(--c-err); opacity: .9; }
+.gline.green { border-left-color: var(--c-done); }
+.grid-v { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); opacity: .7; pointer-events: none; }
+.nowline { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--c-prog); z-index: 3; pointer-events: none; }
+.bar { position: absolute; top: 4px; bottom: 4px; border-radius: 5px; overflow: hidden; cursor: pointer; padding: 3px 7px 0 9px; font-size: 11px; line-height: 1.3;
+  background: color-mix(in srgb, var(--c) var(--tint), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 45%, var(--panel)); transition: opacity .15s, transform .1s; }
+.bar::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c); }
+.bar.c-todo { background: color-mix(in srgb, var(--c) var(--tint-todo), var(--panel)); }
+.bar.crit { border: 2px solid var(--ink); }
+.bar:hover { z-index: 5; box-shadow: var(--shadow-pop); }
+.bar .l1 { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; }
+.bar .id { font-weight: 700; color: var(--ink); }
+.bar .sz { margin-left: auto; color: var(--muted); font-size: 10px; }
+.bar .tt { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; }
+.bar.tiny { padding: 3px 2px 0 6px; }
+.bar.tiny .sz, .bar.tiny .tt, .bar.tiny .flag { display: none; }
+.bar.tiny .id { font-size: 9px; }
+.bar.dim { opacity: .14; }
+.bar.hit { outline: 2px solid var(--focus); outline-offset: 1px; z-index: 6; }
+.bar .flag { position: absolute; right: 3px; bottom: 2px; font-size: 10px; }
+.tl-foot { padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
+.tl-overlay { pointer-events: none; }
+.tl-overlay > * { pointer-events: auto; }
+
+@media (max-width: 640px) {
+  .tl-lab { width: 54px; }
+}
+
+@media print {
+  .tl-scroll { overflow: visible; max-height: none; }
+  .tl-head, .tl-lab { position: static; }
+  .bar:hover { box-shadow: none; }
+}
+
+.tbl-wrap { overflow: auto; max-height: calc(100vh - 150px); }
+table.grid { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+table.grid th, table.grid td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.grid th { position: sticky; top: 0; background: var(--panel); z-index: 2; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+table.grid th[aria-sort="ascending"]::after { content: " ▲"; }
+table.grid th[aria-sort="descending"]::after { content: " ▼"; }
+table.grid tr.trow { cursor: pointer; }
+table.grid tr.trow:hover td { background: var(--panel2); }
+table.grid tr.dim { display: none; }
+table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.chipst { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--c); }
+.chipst::before { content: ""; width: 9px; height: 9px; border-radius: 3px; background: var(--c); }
+
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="#0E1719"/><path d="M14 12v40M24 12v40M40 12v40M50 12v40" stroke="#43B3AD" stroke-width="3"/><path d="M14 20h36M14 32h36M14 44h36" stroke="#F7FAFA" stroke-width="2.4" opacity=".85"/><circle cx="32" cy="32" r="4" fill="#0B6E6E"/></svg>
+      Warp <small>Run dashboard</small>
+    </div>
+    <div class="meta" id="meta"></div>
+    <div class="actions">
+      <div class="menu" id="fileMenu">
+        <button class="btn primary" id="fileBtn" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span class="lbl">File</span>
+        </button>
+        <div class="menu-list" role="menu">
+          <button data-act="open-files" role="menuitem">Open status files… <kbd>O</kbd></button>
+          <button data-act="open-folder" role="menuitem">Open .warp folder… <kbd>⇧O</kbd></button>
+          <hr>
+          <button data-act="reload" role="menuitem">Reload <kbd>R</kbd></button>
+          <label><input type="checkbox" id="autoRefresh"> Auto-reload every 30s</label>
+          <hr>
+          <button data-act="print" role="menuitem">Print… <kbd>P</kbd></button>
+          <button data-act="clear" role="menuitem">Close all files</button>
+        </div>
+      </div>
+      <button class="btn icon" id="reloadBtn" title="Reload (R)" aria-label="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+      <button class="btn icon" id="themeBtn" title="Light or dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <button class="btn icon" id="printBtn" title="Print (P)" aria-label="Print"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg></button>
+    </div>
+  </div>
+  <div class="wrap hidden" id="actionsBar"></div>
+</header>
+
+<div class="wrap">
+  <section id="emptyState" class="empty"></section>
+
+  <div id="app" class="hidden">
+    <section class="headline">
+      <h1 id="title">Warp run</h1>
+      <div class="sub" id="subline"></div>
+      <div class="chain" id="chainline"></div>
+      <div class="tabs" id="tabs"></div>
+    </section>
+    <section class="metrics" id="metrics"></section>
+    <details class="panel util" id="util"></details>
+    <section class="controls">
+      <div class="legend" id="legend"></div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Search tickets, Jira keys, modules  /" autocomplete="off">
+      </div>
+      <div class="seg" id="viewSeg"><button data-view="timeline" class="on">Swimlane</button><button data-view="board">Board</button><button data-view="table">Table</button></div>
+      <label class="ctl" id="groupCtl">Lanes
+        <select id="groupBy"><option value="block">Gate block</option><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option><option value="repo">Repo</option><option value="size">Size</option></select>
+      </label>
+      <label class="ctl" id="colorCtl">Color
+        <select id="colorBy"><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option></select>
+      </label>
+      <label class="ctl" id="zoomCtl">Zoom <input id="zoom" type="range" min="0" max="100" value="0"></label>
+    </section>
+    <main id="view"></main>
+    <div class="foot-note"><span id="sources"></span><span id="generated"></span></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+<div class="drop"><div>Drop beam.json, status.json, state.json, or a .warp folder</div></div>
+<div class="tip" id="tip"></div>
+<div class="toasts" id="toasts"></div>
+<input type="file" id="fileInput" accept=".json,application/json" multiple class="hidden" hidden>
+<input type="file" id="dirInput" webkitdirectory directory multiple class="hidden" hidden>
+
+<script id="warp-data" type="application/json">null</script>
+<script>
+(() => {
+  // src/core/util.mjs
+  var esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  var num = (v) => {
+    const n = typeof v === "string" ? parseFloat(v) : v;
+    return typeof n === "number" && isFinite(n) ? n : null;
+  };
+  var fmtH = (h, dp) => h == null ? "\u2014" : (Math.abs(h) >= 100 ? Math.round(h).toLocaleString() : (+h.toFixed(dp == null ? 1 : dp)).toLocaleString()) + "h";
+  var fmtN = (n) => n == null ? "\u2014" : Math.round(n).toLocaleString();
+  var pct = (a, b) => b > 0 && a != null ? Math.round(100 * a / b) + "%" : "";
+  var parseTime = (s) => {
+    if (!s) return null;
+    const t = Date.parse(s);
+    return isNaN(t) ? null : t;
+  };
+  function ago(ms2, now = Date.now()) {
+    if (ms2 == null) return "\u2014";
+    const d = (now - ms2) / 1e3;
+    if (d < 45) return "just now";
+    if (d < 3600) return Math.round(d / 60) + "m ago";
+    if (d < 86400) return Math.round(d / 3600) + "h ago";
+    return Math.round(d / 86400) + "d ago";
+  }
+  var stamp = (ms2) => ms2 == null ? "\u2014" : new Date(ms2).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  function natKey(id) {
+    return String(id).split(/(\d+)/).map((p, i) => i % 2 ? p.padStart(8, "0") : p.toLowerCase()).join("");
+  }
+  var natCmp = (a, b) => {
+    const x = natKey(a);
+    const y = natKey(b);
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
+  function hashHue(s) {
+    let h = 0;
+    for (const c of String(s)) h = h * 31 + c.charCodeAt(0) >>> 0;
+    return h % 360;
+  }
+
+  // src/core/status.mjs
+  var table = (o) => Object.freeze(Object.assign(/* @__PURE__ */ Object.create(null), o));
+  var has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var CATS = Object.freeze([
+    Object.freeze({ key: "done", label: "Completed" }),
+    Object.freeze({ key: "err", label: "Errored / Parked" }),
+    Object.freeze({ key: "prog", label: "In Progress" }),
+    Object.freeze({ key: "rev", label: "In Review" }),
+    Object.freeze({ key: "qa", label: "QA Ready" }),
+    Object.freeze({ key: "todo", label: "To Do" })
+  ]);
+  var STATUS_CAT = table({
+    queued: "todo",
+    claimed: "prog",
+    recovering: "prog",
+    planning: "prog",
+    coding: "prog",
+    fix: "prog",
+    review: "rev",
+    bugbot_running: "rev",
+    merging: "rev",
+    awaiting_approval: "qa",
+    merged: "done",
+    done: "done",
+    skipped: "done",
+    blocked: "err",
+    alarm: "err",
+    parked: "err"
+  });
+  var STATUS_ALIAS = table({
+    in_progress: "coding",
+    inprogress: "coding",
+    in_review: "review",
+    qa_ready: "awaiting_approval",
+    qa: "awaiting_approval",
+    to_do: "queued",
+    todo: "queued",
+    ready: "queued",
+    completed: "done",
+    complete: "done",
+    errored: "alarm",
+    error: "alarm",
+    failed: "alarm",
+    bugbot: "bugbot_running"
+  });
+  var STATE_STATUS = table({
+    started: "claimed",
+    planning: "planning",
+    coding: "coding",
+    review: "review",
+    bugbot: "bugbot_running",
+    fix: "fix",
+    "pr-opened": "review",
+    "check-red": "fix",
+    "check-green": "review",
+    "lock-escape": "alarm",
+    alarm: "alarm",
+    failed: "alarm"
+  });
+  var TERMINAL = /* @__PURE__ */ new Set(["merged", "done", "skipped"]);
+  var ACTIVE = /* @__PURE__ */ new Set([
+    "claimed",
+    "recovering",
+    "planning",
+    "coding",
+    "review",
+    "bugbot_running",
+    "fix",
+    "awaiting_approval",
+    "merging"
+  ]);
+  function normStatus(raw) {
+    if (raw == null || raw === "") return "queued";
+    const s = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (s === "") return "queued";
+    if (has(STATUS_CAT, s)) return s;
+    return has(STATUS_ALIAS, s) ? STATUS_ALIAS[s] : s;
+  }
+  function catOf(status) {
+    return has(STATUS_CAT, status) ? STATUS_CAT[status] : "todo";
+  }
+  function bucketOf(cat) {
+    return cat === "rev" || cat === "qa" ? "prog" : cat;
+  }
+  function catColor(cat) {
+    return `var(--c-${cat})`;
+  }
+  function statusText(status) {
+    return String(status == null ? "" : status).replace(/_/g, " ");
+  }
+
+  // src/load/parse/parse.mjs
+  var SIZE_HOURS = Object.freeze({ S: 4, M: 7, L: 11, XL: 16 });
+  var DEFAULT_APPROVAL = 0.5;
+  var DEFAULT_CAP = 18;
+  var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var isObj = (v) => v != null && typeof v === "object" && !Array.isArray(v);
+  var list = (v) => Array.isArray(v) ? v : v == null ? [] : [v];
+  var strs = (v) => list(v).map(String);
+  var sizeOf = (raw) => {
+    const m = /^(XL|S|M|L)\b/i.exec(String(raw == null ? "" : raw).trim());
+    return m ? m[1].toUpperCase() : null;
+  };
+  var dirOf = (p) => {
+    const s = String(p == null ? "" : p);
+    const i = s.lastIndexOf("/");
+    return i < 0 ? "" : s.slice(0, i);
+  };
+  function runDirOf(p) {
+    const d = dirOf(p);
+    const i = d.lastIndexOf("/tickets/");
+    if (i >= 0) return d.slice(0, i);
+    if (d.endsWith("/tickets") || d === "tickets") return dirOf(d);
+    return d;
+  }
+  function isScheduleV2(data) {
+    if (!Array.isArray(data.tickets)) return false;
+    if (data.schema === "build-schedule/2") return true;
+    const first = isObj(data.tickets[0]) ? data.tickets[0] : {};
+    return "h" in first && "after" in first && "slot" in first && Array.isArray(data.critical_chain);
+  }
+  function classify(data) {
+    if (!isObj(data)) return null;
+    if (isScheduleV2(data)) return "schedule";
+    const hasTickets = data.tickets != null && typeof data.tickets === "object";
+    if (hasTickets && (data.gates || data.program || data.runState || data.config || data.instance)) return "beam";
+    if (Array.isArray(data.done) || Array.isArray(data.working) || Array.isArray(data.left)) return "status";
+    if (typeof data.state === "string" && data.id && !data.tickets) return "ticket";
+    if (hasTickets) return "beam";
+    return null;
+  }
+  function ticketRow(raw, id) {
+    const t = isObj(raw) ? raw : {};
+    const pr = isObj(t.pr) ? t.pr : t.pr ? { url: t.pr } : {};
+    const jira = isObj(t.jira) ? t.jira : {};
+    const usage = isObj(t.usage) ? t.usage : {};
+    const status = normStatus(t.status);
+    const size = sizeOf(t.size);
+    const ownHours = num(t.hours);
+    const fromTicket = ownHours != null && ownHours > 0;
+    return {
+      id: String(t.id || id),
+      title: t.summary || t.title || "",
+      size,
+      status,
+      cat: catOf(status),
+      hours: fromTicket ? ownHours : SIZE_HOURS[size || "M"],
+      hoursFrom: fromTicket ? "ticket" : size ? "size " + size : "default M",
+      autoMerge: t.autoMerge === true ? true : t.autoMerge === false ? false : size ? size === "S" || size === "M" : true,
+      deps: [].concat(list(t.deps), list(t.after)).map(String),
+      locks: strs(t.locks),
+      gate: t.gate || null,
+      module: t.module || null,
+      layer: t.layer || null,
+      critical: !!t.critical,
+      starred: !!t.starred,
+      rank: num(t.rank),
+      priority: t.priority || null,
+      pr: {
+        url: pr.url || null,
+        ci: pr.ci || null,
+        bugbot: pr.bugbot || null,
+        sha: pr.sha || null,
+        via: pr.via || null,
+        openedAt: pr.openedAt || null,
+        reviewedAt: pr.reviewedAt || null,
+        approvedAt: pr.approvedAt || null,
+        mergedAt: pr.mergedAt || null
+      },
+      jiraKey: t.jiraKey || jira.key || null,
+      jiraStatus: jira.status || null,
+      jiraDone: !!(jira.doneAt || t.jiraDone),
+      jiraCommentAt: jira.lastCommentAt || null,
+      alarm: t.alarm || null,
+      agent: t.agent || null,
+      attempts: num(t.attempts) || 0,
+      recoveries: num(t.recoveries) || 0,
+      minutes: num(t.minutes) || 0,
+      tokens: num(t.tokens) || 0,
+      cost: num(usage.cost),
+      claimedAt: t.claimedAt || null,
+      updatedAt: t.updatedAt || null,
+      events: Array.isArray(t.events) ? t.events : [],
+      stateNote: null,
+      lane: t.lane || null,
+      repo: t.repo || null,
+      wave: num(t.wave),
+      priorityGate: t.priorityGate || t.priority_gate || null,
+      checks: list(t.checks).filter((c) => c != null).map((c) => isObj(c) ? { name: c.name || "", check: c.check || "" } : { name: "", check: String(c) }),
+      planned: isObj(t.planned) ? { ...t.planned } : null
+    };
+  }
+  var checkText = (c) => typeof c === "string" ? c : isObj(c) ? c.check || c.name || "" : "";
+  function gateRow(g, extra2) {
+    return {
+      key: String(g.key),
+      name: g.name || "",
+      status: g.status || "pending",
+      blocking: g.blocking !== false,
+      members: strs(g.members),
+      greenAt: parseTime(g.greenAt),
+      evidence: g.evidence || null,
+      checks: list(g.checks).map(checkText),
+      ifRed: g.ifRed || g.if_red || null,
+      scope: g.scope || null,
+      onGreen: g.onGreen || g.on_green || null,
+      priority: !!g.priority,
+      starts: strs(g.starts),
+      at: num(g.at),
+      hold: g.hold || null,
+      otherMembers: strs(g.otherMembers),
+      ...extra2
+    };
+  }
+  var gatesOf = (v) => list(v).filter(isObj);
+  function runFromBeam(doc, path, modified) {
+    const b = doc;
+    const cfg = isObj(b.config) ? b.config : {};
+    const program = isObj(b.program) ? b.program : {};
+    const raw = Array.isArray(b.tickets) ? b.tickets.filter(isObj) : Object.entries(isObj(b.tickets) ? b.tickets : {}).filter(([, v]) => isObj(v)).map(([k, v]) => ({ id: k, ...v }));
+    const tickets = raw.map((t) => ticketRow(t, t.id));
+    const inst = isObj(b.instance) ? b.instance : b.instance ? { id: b.instance } : {};
+    const est = isObj(program.estimate) ? program.estimate : isObj(b.estimate) ? b.estimate : null;
+    const times = tickets.map((t) => parseTime(t.updatedAt)).filter(Boolean);
+    const updated = Math.max(parseTime(b.checkpointAt) || 0, parseTime(b.exportedAt) || 0, ...times, 0) || modified || null;
+    return {
+      kind: "beam",
+      export: b.kind === "warp-plan",
+      exportedAt: parseTime(b.exportedAt),
+      path,
+      dir: dirOf(path),
+      name: b.run || null,
+      instance: inst.id || null,
+      host: inst.host || null,
+      runState: b.runState || null,
+      paused: !!b.paused,
+      pauseReason: b.pauseReason || null,
+      range: b.range || null,
+      owner: b.owner || null,
+      gateOrder: b.gateOrder || cfg.gateOrder || program.gateOrder || "strict",
+      startAfter: cfg.startAfter || null,
+      schedule: isObj(program.schedule) ? program.schedule : null,
+      gates: gatesOf(b.gates).map((g) => gateRow(g)),
+      tickets,
+      critical: strs(program.criticalPath || b.criticalPath),
+      estimate: est,
+      metrics: b.metrics || null,
+      cap: num(cfg.maxAgents) || DEFAULT_CAP,
+      jiraSite: cfg.jiraSite || "",
+      project: cfg.projectName || cfg.jiraProject || null,
+      runStartedAt: parseTime(b.runStartedAt),
+      runEndedAt: parseTime(b.runEndedAt),
+      updated,
+      repo: null
+    };
+  }
+  function runFromSchedule(doc, path, modified) {
+    const d = doc;
+    const model = isObj(d.model) ? d.model : {};
+    const n = isObj(d.numbers) ? d.numbers : {};
+    const repos = list(d.repos).map(String);
+    const strict = String(model.gate_order || "").toLowerCase() === "strict";
+    const tickets = list(d.tickets).filter(isObj).map(
+      (t) => ticketRow(
+        {
+          ...t,
+          hours: t.h != null ? t.h : t.hours,
+          deps: [],
+          after: t.after || [],
+          gate: t.gate || null,
+          status: t.status || "queued",
+          priorityGate: t.priority_gate || null,
+          planned: { slot: t.slot, start: t.start, merge: t.merge, ready: t.ready, latest_start: t.latest_start }
+        },
+        t.id
+      )
+    );
+    return {
+      kind: "schedule",
+      export: false,
+      exportedAt: null,
+      path,
+      dir: dirOf(path),
+      name: d.program || null,
+      instance: null,
+      host: null,
+      runState: "plan",
+      paused: false,
+      pauseReason: null,
+      range: null,
+      owner: null,
+      gateOrder: strict ? "strict" : "deps",
+      startAfter: null,
+      schedule: {
+        program: d.program,
+        repos,
+        lanes: list(d.lanes),
+        finishHours: num(n.finish_h),
+        agentHours: num(n.agent_hours),
+        priority: model.priority || null,
+        rebuilt: d.rebuilt || null
+      },
+      gates: gatesOf(d.gates).map((g) => gateRow(g, { status: "pending", greenAt: null, evidence: null, hold: strict ? "green" : "red", otherMembers: [] })),
+      tickets,
+      critical: strs(d.critical_chain),
+      estimate: {
+        elapsedHours: num(n.finish_h),
+        agentHours: num(n.agent_hours),
+        approvalHours: DEFAULT_APPROVAL,
+        assumptions: [model.clock, model.merge, model.priority].filter(Boolean)
+      },
+      metrics: null,
+      cap: num(model.slots) || DEFAULT_CAP,
+      jiraSite: "",
+      project: d.program || null,
+      runStartedAt: null,
+      runEndedAt: null,
+      updated: parseTime(d.rebuilt) || modified || null,
+      repo: repos.join(" + ") || null
+    };
+  }
+  function runFromStatus(doc, path, modified) {
+    const s = doc;
+    const rows = [].concat(list(s.done), list(s.working), list(s.left)).filter(isObj);
+    const inst = isObj(s.instance) ? s.instance : s.instance ? { id: s.instance } : {};
+    return {
+      kind: "status",
+      export: false,
+      exportedAt: null,
+      path,
+      dir: dirOf(path),
+      name: s.run || null,
+      instance: inst.id || null,
+      host: inst.host || null,
+      runState: s.runState || null,
+      paused: !!s.paused,
+      pauseReason: null,
+      range: null,
+      owner: null,
+      gateOrder: null,
+      startAfter: null,
+      schedule: null,
+      gates: [],
+      tickets: rows.map(
+        (r) => ticketRow({ ...r, pr: { url: r.pr, ci: r.ci, bugbot: r.bugbot, sha: r.sha, via: r.via } }, r.id)
+      ),
+      critical: [],
+      estimate: null,
+      metrics: s.metrics || null,
+      cap: DEFAULT_CAP,
+      jiraSite: "",
+      project: null,
+      runStartedAt: null,
+      runEndedAt: null,
+      updated: parseTime(s.updatedAt) || modified || null,
+      repo: null
+    };
+  }
+  var PR_URL = /^https?:\/\/[^/]+\/(.+?)\/(?:pull|pulls|merge_requests|-\/merge_requests|pull-requests)\//;
+  function repoFrom(run) {
+    for (const t of run.tickets) {
+      const u = t.pr && t.pr.url;
+      if (!u) continue;
+      const m = PR_URL.exec(String(u));
+      if (m) return m[1].replace(/\/-$/, "");
+    }
+    return null;
+  }
+  function applyState(t, st) {
+    if (!t || !isObj(st) || TERMINAL.has(t.status)) return false;
+    const when = parseTime(st.updatedAt || st.heartbeatAt);
+    if (when == null) return false;
+    const was = parseTime(t.updatedAt);
+    if (was != null && when <= was) return false;
+    const to = own(STATE_STATUS, st.state) ? STATE_STATUS[st.state] : null;
+    let moved = false;
+    if (to && to !== t.status && t.status !== "parked") {
+      t.stateNote = `state.json: ${st.state} (beam said ${t.status})`;
+      t.status = to;
+      t.cat = catOf(to);
+      moved = true;
+    }
+    if (isObj(st.pr) && st.pr.url && !t.pr.url) {
+      t.pr.url = st.pr.url;
+      moved = true;
+    }
+    if (st.alarm && !t.alarm) {
+      t.alarm = st.alarm;
+      moved = true;
+    }
+    if (st.agent && !t.agent) t.agent = st.agent;
+    t.updatedAt = st.updatedAt || st.heartbeatAt || t.updatedAt;
+    return moved;
+  }
+  var runKey = (r) => r.name ? "run:" + r.name : r.instance ? "inst:" + r.instance : "dir:" + r.dir;
+  var docDir = (d) => typeof d.dir === "string" ? d.dir : dirOf(d.path);
+  function buildRuns(docs, extra2) {
+    const runs = /* @__PURE__ */ new Map();
+    const statuses = [];
+    const states = [];
+    let skipped = 0;
+    const keep = (key, r) => {
+      const prev = runs.get(key);
+      if (!prev || (r.updated || 0) > (prev.updated || 0)) runs.set(key, r);
+    };
+    for (const d of Array.isArray(docs) ? docs : []) {
+      const data = d ? d.data : null;
+      const kind = classify(data);
+      if (kind === "beam") {
+        const r = runFromBeam(data, d.path, d.modified);
+        keep(runKey(r), r);
+      } else if (kind === "schedule") {
+        const r = runFromSchedule(data, d.path, d.modified);
+        keep("sched:" + (r.name || r.dir), r);
+      } else if (kind === "status") statuses.push(d);
+      else if (kind === "ticket") states.push(d);
+      else skipped++;
+    }
+    for (const d of statuses) {
+      const s = d.data;
+      const inst = isObj(s.instance) ? s.instance.id : s.instance;
+      const dir = docDir(d);
+      const match = [...runs.values()].find((r2) => r2.kind !== "schedule" && (inst && r2.instance === inst || r2.dir === dir));
+      if (match) {
+        const u = parseTime(s.updatedAt);
+        if (u && u > (match.updated || 0)) match.updated = u;
+        continue;
+      }
+      const r = runFromStatus(s, d.path, d.modified);
+      keep(runKey(r), r);
+    }
+    let overlaid = 0;
+    const when = (d) => parseTime(d.data.updatedAt || d.data.heartbeatAt) || 0;
+    const ordered = states.map((d, i) => ({ d, i })).sort((a, b) => when(a.d) - when(b.d) || a.i - b.i);
+    for (const { d } of ordered) {
+      const st = d.data;
+      const id = String(st.id);
+      const rd = runDirOf(d.path);
+      const all = [...runs.values()];
+      const has2 = (r) => r.tickets.some((t) => t.id === id);
+      const run = all.find((r) => r.dir === rd && has2(r)) || all.find(has2);
+      if (!run) continue;
+      if (applyState(run.tickets.find((t) => t.id === id), st)) overlaid++;
+    }
+    const out = [...runs.values()];
+    const embedded = extra2 && extra2.repo;
+    for (const r of out) {
+      if (r.kind !== "schedule") r.repo = embedded || repoFrom(r);
+      if (extra2 && extra2.jiraSite && !r.jiraSite) r.jiraSite = extra2.jiraSite;
+    }
+    out.sort((a, b) => natCmp(a.name || a.instance || a.dir, b.name || b.instance || b.dir));
+    return { runs: out, skipped, overlaid, states: states.length };
+  }
+
+  // src/load/sources/sources.mjs
+  var WANTED = /(^|\/)(beam|status|state)[^/]*\.json$/i;
+  var MAX_DEPTH = 7;
+  var AUTO_INTERVAL_MS = 3e4;
+  var AUTO_KEY = "warp-dash:autoReload";
+  var SKIP_DIRS = /* @__PURE__ */ new Set([".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "previous"]);
+  var JSON_TYPES = [{ description: "Warp status files", accept: { "application/json": [".json"] } }];
+  var skipDir = (name) => {
+    const n = String(name).toLowerCase();
+    return SKIP_DIRS.has(n) || n.startsWith("previous-");
+  };
+  var wanted = (path) => WANTED.test(String(path));
+  var isAbort = (e) => !!e && (e.name === "AbortError" || e.code === 20);
+  var hasWarpDir = (path) => /(^|\/)\.warp\//.test(path);
+  async function listHandle(dir) {
+    const out = [];
+    if (typeof dir.values === "function") {
+      for await (const h of dir.values()) out.push({ name: h.name, isDir: h.kind === "directory", node: h });
+    } else if (typeof dir.entries === "function") {
+      for await (const [name, h] of dir.entries()) out.push({ name, isDir: h.kind === "directory", node: h });
+    }
+    return out;
+  }
+  function readAllEntries(reader) {
+    return new Promise((resolve, reject) => {
+      const all = [];
+      const next = () => reader.readEntries((batch) => {
+        if (!batch.length) return resolve(all);
+        all.push(...batch);
+        next();
+      }, reject);
+      next();
+    });
+  }
+  async function listEntry(dir) {
+    const items = await readAllEntries(dir.createReader());
+    return items.map((e) => ({ name: e.name, isDir: !!e.isDirectory, node: e }));
+  }
+  var handleSource = (path, node) => ({ path, handle: node });
+  var entrySource = (path, node) => ({ path, entry: node });
+  async function walk(dir, prefix, depth, list3, mk, out) {
+    let items;
+    try {
+      items = await list3(dir);
+    } catch {
+      return;
+    }
+    items.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const it of items) {
+      const path = prefix + "/" + it.name;
+      if (it.isDir) {
+        if (depth < MAX_DEPTH && !skipDir(it.name)) await walk(it.node, path, depth + 1, list3, mk, out);
+      } else if (wanted(it.name)) out.push(mk(path, it.node));
+    }
+  }
+  async function walkRoot(dir, name, list3, mk) {
+    const out = [];
+    let items = [];
+    try {
+      items = await list3(dir);
+    } catch {
+      items = [];
+    }
+    const warp = items.find((it) => it.isDir && it.name === ".warp");
+    if (warp) await walk(warp.node, name + "/.warp", 0, list3, mk, out);
+    else await walk(dir, name, 0, list3, mk, out);
+    return out;
+  }
+  var walkDirectoryHandle = (dir) => walkRoot(dir, dir.name, listHandle, handleSource);
+  var walkDirectoryEntry = (dir) => walkRoot(dir, dir.name, listEntry, entrySource);
+  function sourcesFromInputFolder(files) {
+    const all = Array.from(files || [], (f) => ({ file: f, path: String(f.webkitRelativePath || f.name) }));
+    const ok = all.filter(({ path }) => {
+      const parts = path.split("/");
+      const dirs = parts.slice(1, -1);
+      return dirs.length <= MAX_DEPTH && !dirs.some(skipDir) && wanted(path);
+    });
+    const inWarp = ok.filter(({ path }) => hasWarpDir(path));
+    return (inWarp.length ? inWarp : ok).map(({ file, path }) => ({ path, file })).sort((a, b) => a.path < b.path ? -1 : 1);
+  }
+  var sourcesFromFiles = (files) => Array.from(files || [], (f) => ({ path: String(f.webkitRelativePath || f.name), file: f }));
+  function pickWithInput(doc, id, fromFiles) {
+    return new Promise((resolve) => {
+      const input = doc.getElementById(id);
+      if (!input) return resolve([]);
+      const done = (files) => {
+        input.removeEventListener("change", onChange);
+        input.removeEventListener("cancel", onCancel);
+        resolve(files);
+      };
+      const onChange = () => {
+        const files = Array.from(input.files || []);
+        try {
+          input.value = "";
+        } catch {
+        }
+        done(fromFiles(files));
+      };
+      const onCancel = () => done([]);
+      input.addEventListener("change", onChange);
+      input.addEventListener("cancel", onCancel);
+      input.click();
+    });
+  }
+  async function openFiles({ win, doc }) {
+    if (win && typeof win.showOpenFilePicker === "function") {
+      try {
+        const handles = await win.showOpenFilePicker({ multiple: true, types: JSON_TYPES });
+        return handles.map((h) => handleSource(h.name, h));
+      } catch (e) {
+        if (isAbort(e)) return [];
+        throw e;
+      }
+    }
+    return pickWithInput(doc, "fileInput", sourcesFromFiles);
+  }
+  async function openFolder({ win, doc }) {
+    if (win && typeof win.showDirectoryPicker === "function") {
+      try {
+        return await walkDirectoryHandle(await win.showDirectoryPicker({ mode: "read" }));
+      } catch (e) {
+        if (isAbort(e)) return [];
+        throw e;
+      }
+    }
+    return pickWithInput(doc, "dirInput", sourcesFromInputFolder);
+  }
+  async function sourcesFromDrop(dataTransfer) {
+    if (!dataTransfer) return [];
+    const items = Array.from(dataTransfer.items || []).filter((i) => i.kind === "file");
+    const pending = items.map((item) => {
+      if (typeof item.getAsFileSystemHandle === "function") return { kind: "handle", p: item.getAsFileSystemHandle() };
+      if (typeof item.webkitGetAsEntry === "function") {
+        const entry = item.webkitGetAsEntry();
+        if (entry) return { kind: "entry", entry };
+      }
+      return { kind: "file", file: typeof item.getAsFile === "function" ? item.getAsFile() : null };
+    });
+    const files = Array.from(dataTransfer.files || []);
+    const out = [];
+    let any = false;
+    for (const p of pending) {
+      try {
+        if (p.kind === "handle") {
+          const h = await p.p;
+          if (!h) continue;
+          any = true;
+          if (h.kind === "directory") out.push(...await walkDirectoryHandle(h));
+          else out.push(handleSource(h.name, h));
+        } else if (p.kind === "entry") {
+          any = true;
+          if (p.entry.isDirectory) out.push(...await walkDirectoryEntry(p.entry));
+          else out.push(entrySource(p.entry.name, p.entry));
+        } else if (p.file) {
+          any = true;
+          out.push(...sourcesFromFiles([p.file]));
+        }
+      } catch {
+      }
+    }
+    return any ? out : sourcesFromFiles(files);
+  }
+  async function fileOf(src) {
+    if (src.handle) return src.handle.getFile();
+    if (src.entry) return new Promise((resolve, reject) => src.entry.file(resolve, reject));
+    return src.file;
+  }
+  async function textOf(file) {
+    if (file && typeof file.text === "function") return file.text();
+    if (file && typeof file.arrayBuffer === "function") return new TextDecoder().decode(await file.arrayBuffer());
+    throw new Error("file cannot be read");
+  }
+  async function readSources(sources) {
+    const docs = [];
+    const errors = [];
+    for (const src of Array.isArray(sources) ? sources : []) {
+      try {
+        const file = await fileOf(src);
+        const text = await textOf(file);
+        const data = JSON.parse(text);
+        const m = file && typeof file.lastModified === "number" ? file.lastModified : null;
+        docs.push({ path: src.path, data, modified: m });
+      } catch (e) {
+        errors.push({ path: src.path, error: e && e.message ? e.message : String(e), reopen: !src.handle && !src.entry });
+      }
+    }
+    return { docs, errors };
+  }
+  function embeddedDocs(doc) {
+    const el = doc && doc.getElementById ? doc.getElementById("warp-data") : null;
+    if (!el) return [];
+    let payload;
+    try {
+      payload = JSON.parse(el.textContent || "null");
+    } catch {
+      return [];
+    }
+    if (!payload || !Array.isArray(payload.files)) return [];
+    const gen = payload.generatedAt != null ? parseTime(payload.generatedAt) : null;
+    return payload.files.filter((f) => f && typeof f.path === "string" && "data" in f).map((f) => ({ path: f.path, data: f.data, modified: Number.isFinite(gen) ? gen : null }));
+  }
+  async function reload({ win, doc, sources = [] }) {
+    if (!sources.length && embeddedDocs(doc).length) {
+      win.location.reload();
+      return { mode: "page", docs: [], errors: [], message: "" };
+    }
+    if (!sources.length) return { mode: "none", docs: [], errors: [], message: "Nothing to reload. Open files first." };
+    const { docs, errors } = await readSources(sources);
+    const reopen = errors.some((e) => e.reopen);
+    const message = errors.length ? reopen ? "Could not re-read some files. Open them again." : "Could not re-read " + errors.length + " file" + (errors.length === 1 ? "" : "s") + "." : "";
+    return { mode: "sources", docs, errors, message };
+  }
+  function createAutoReload({ win, doc, onTick, interval = AUTO_INTERVAL_MS }) {
+    let on = false;
+    let timer = null;
+    const load = () => {
+      try {
+        return win.localStorage.getItem(AUTO_KEY) === "1";
+      } catch {
+        return false;
+      }
+    };
+    const save = (v) => {
+      try {
+        win.localStorage.setItem(AUTO_KEY, v ? "1" : "0");
+      } catch {
+      }
+    };
+    const visible = () => !doc || doc.visibilityState !== "hidden";
+    const stop = () => {
+      if (timer != null) {
+        win.clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      stop();
+      timer = win.setInterval(() => {
+        if (!visible()) return;
+        try {
+          const r = onTick && onTick();
+          if (r && typeof r.catch === "function") r.catch(() => {
+          });
+        } catch {
+        }
+      }, interval);
+    };
+    const set = (v) => {
+      on = !!v;
+      save(on);
+      if (on) start();
+      else stop();
+      return on;
+    };
+    on = load();
+    if (on) start();
+    return {
+      get enabled() {
+        return on;
+      },
+      set,
+      toggle: () => set(!on),
+      stop
+    };
+  }
+
+  // src/model/metrics/metrics.mjs
+  var SIZE_HOURS2 = { S: 4, M: 7, L: 11, XL: 16 };
+  var DEFAULT_APPROVAL2 = 0.5;
+  var DEFAULT_CAP2 = 18;
+  var HOUR_MS = 36e5;
+  var sum = (xs) => xs.reduce((a, b) => a + b, 0);
+  var zero = () => ({ done: 0, prog: 0, err: 0, todo: 0 });
+  var own2 = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var sizeOf2 = (t) => {
+    const s = typeof t.size === "string" ? t.size.trim().toUpperCase() : "";
+    return own2(SIZE_HOURS2, s) ? s : null;
+  };
+  function facts(t) {
+    const status = normStatus(t.status);
+    const cat = t.cat || catOf(status);
+    const size = sizeOf2(t);
+    const given = num(t.hours);
+    const hasOwn = given != null && given > 0;
+    const hours2 = hasOwn ? given : SIZE_HOURS2[size || "M"];
+    const fromTicket = t.hoursFrom != null ? t.hoursFrom === "ticket" : hasOwn;
+    const autoMerge = typeof t.autoMerge === "boolean" ? t.autoMerge : size ? size === "S" || size === "M" : true;
+    return {
+      status,
+      cat,
+      bucket: bucketOf(cat),
+      hours: hours2,
+      fromTicket,
+      autoMerge,
+      minutes: num(t.minutes) || 0,
+      tokens: num(t.tokens) || 0,
+      cost: num(t.cost),
+      size,
+      critical: !!t.critical,
+      agent: t.agent || null
+    };
+  }
+  var ticketsOf = (run) => run && Array.isArray(run.tickets) ? run.tickets.filter(Boolean) : [];
+  var gatesOf2 = (run) => run && Array.isArray(run.gates) ? run.gates.filter(Boolean) : [];
+  var approvalOf = (run) => num(run.estimate && run.estimate.approvalHours) || DEFAULT_APPROVAL2;
+  var capOf = (run) => num(run.cap) || DEFAULT_CAP2;
+  var finished = (run) => {
+    const ts = ticketsOf(run);
+    return ts.length > 0 && ts.every((t) => TERMINAL.has(normStatus(t.status)));
+  };
+  function etaOf(run) {
+    if (finished(run)) return 0;
+    const given = run.metrics ? num(run.metrics.etaHours) : null;
+    if (given != null) return given;
+    const open = ticketsOf(run).map(facts).filter((f) => !TERMINAL.has(f.status));
+    const crit = sum(open.filter((f) => f.critical).map((f) => f.hours));
+    const parallel = sum(open.map((f) => f.hours)) / Math.max(1, Math.min(capOf(run), 8));
+    return Math.round(Math.max(crit, parallel) * 10) / 10;
+  }
+  var ms = (v) => typeof v === "string" ? parseTime(v) : num(v);
+  function elapsedOf(run, now = Date.now()) {
+    const start = ms(run.runStartedAt);
+    if (start == null) return null;
+    const ended = ms(run.runEndedAt);
+    const last = ms(run.updated);
+    const stale = ended != null && last != null && last > ended;
+    const live = run.runState === "running" && !run.paused && !finished(run);
+    const end = ended != null && !stale ? ended : live ? now : last ?? ended ?? now;
+    return Math.max(0, (end - start) / HOUR_MS);
+  }
+  function computeMetrics(runs, now = Date.now()) {
+    const list3 = Array.isArray(runs) ? runs.filter(Boolean) : [];
+    const agent = zero();
+    const human = zero();
+    const count = zero();
+    const share = zero();
+    let estTotal = null;
+    let sizeDerived = 0;
+    let actualMin = 0;
+    let tokens = 0;
+    let cost = 0;
+    let costSeen = false;
+    let gatesTotal = 0;
+    let gatesGreen = 0;
+    let elapsed = null;
+    let eta = null;
+    let humanPlan = null;
+    for (const run of list3) {
+      const approval = approvalOf(run);
+      const tickets = ticketsOf(run);
+      for (const t of tickets) {
+        const f = facts(t);
+        count[f.bucket]++;
+        agent[f.bucket] += f.hours;
+        if (!f.autoMerge) human[f.bucket] += approval;
+        if (!f.fromTicket) sizeDerived++;
+        actualMin += f.minutes;
+        tokens += f.tokens;
+        if (f.cost != null) {
+          cost += f.cost;
+          costSeen = true;
+        }
+      }
+      for (const g of gatesOf2(run).filter((x) => x.blocking)) {
+        gatesTotal++;
+        let b = "todo";
+        if (g.status === "green") {
+          b = "done";
+          gatesGreen++;
+        } else if (g.status === "red") b = "err";
+        else if (tickets.some((t) => t.block === g.key && facts(t).cat !== "todo")) b = "prog";
+        human[b] += approval;
+      }
+      const est = run.estimate;
+      const rs = est ? num(est.elapsedHours) : null;
+      if (rs != null) estTotal = (estTotal || 0) + rs;
+      const hp = est ? num(est.humanHours) : null;
+      if (hp != null) humanPlan = (humanPlan || 0) + hp;
+      const el = elapsedOf(run, now);
+      if (el != null) elapsed = (elapsed || 0) + el;
+      const e = etaOf(run);
+      if (e != null) eta = (eta || 0) + e;
+    }
+    const agentTotal = sum(Object.values(agent));
+    for (const k of Object.keys(share)) share[k] = estTotal != null && agentTotal > 0 ? estTotal * agent[k] / agentTotal : null;
+    const finish = sum(list3.map((r) => num(r.finish) || 0)) || null;
+    const assumptions = [
+      ...new Set(list3.flatMap((r) => r.estimate && Array.isArray(r.estimate.assumptions) ? r.estimate.assumptions : []))
+    ];
+    return {
+      finish,
+      assumptions,
+      agent,
+      human,
+      count,
+      share,
+      estTotal,
+      agentTotal,
+      humanTotal: sum(Object.values(human)),
+      ticketTotal: sum(Object.values(count)),
+      humanPlan,
+      sizeDerived,
+      actualH: actualMin / 60,
+      tokens,
+      cost: costSeen ? cost : null,
+      gatesTotal,
+      gatesGreen,
+      elapsed,
+      eta
+    };
+  }
+  var SIZE_ORDER = ["S", "M", "L", "XL", "\u2014"];
+  function group(tickets, keyOf) {
+    const rows = /* @__PURE__ */ new Map();
+    for (const t of tickets) {
+      const f = facts(t);
+      const k = keyOf(f);
+      const row = rows.get(k) || { key: k, n: 0, tokens: 0, minutes: 0 };
+      row.n++;
+      row.tokens += f.tokens;
+      row.minutes += f.minutes;
+      rows.set(k, row);
+    }
+    return [...rows.values()];
+  }
+  function utilization(runs) {
+    const list3 = Array.isArray(runs) ? runs.filter(Boolean) : [];
+    const tickets = list3.flatMap(ticketsOf);
+    const all = tickets.map(facts);
+    const cap = list3.length ? sum(list3.map(capOf)) : null;
+    const active = all.filter((f) => ACTIVE.has(f.status)).length;
+    const spentH = sum(all.map((f) => f.minutes)) / 60;
+    const estimates = list3.map((r) => r.estimate ? num(r.estimate.agentHours) : null).filter((x) => x != null);
+    const estH = estimates.length ? sum(estimates) || null : null;
+    const done = all.filter((f) => f.cat === "done").length;
+    const bySize = group(tickets, (f) => f.size || "\u2014").sort((a, b) => SIZE_ORDER.indexOf(a.key) - SIZE_ORDER.indexOf(b.key));
+    const byAgent = group(tickets, (f) => f.agent || "unassigned").sort((a, b) => natCmp(a.key, b.key));
+    return {
+      active,
+      cap,
+      spentH,
+      estH,
+      tokens: sum(all.map((f) => f.tokens)),
+      done,
+      total: all.length,
+      bySize,
+      byAgent
+    };
+  }
+
+  // src/model/blocks/blocks.mjs
+  var GATE_RE = /^G(\d+)$/i;
+  var gnum = (k) => GATE_RE.test(k) ? parseInt(k.slice(1), 10) : 1e6;
+  function gateKeys(run) {
+    const gates = (run.gates || []).filter((g) => g && g.key);
+    const keys = gates.map((g) => String(g.key));
+    if (gates.length && gates.every((g) => typeof g.at === "number" && isFinite(g.at))) {
+      return gates.map((g, i) => ({ k: String(g.key), at: g.at, i })).sort((a, b) => a.at - b.at || gnum(a.k) - gnum(b.k) || a.i - b.i).map((x) => x.k);
+    }
+    const numbered = keys.filter((k) => GATE_RE.test(k)).sort((a, b) => gnum(a) - gnum(b));
+    return numbered.concat(keys.filter((k) => !GATE_RE.test(k)));
+  }
+  function assignBlocks(run) {
+    const order = gateKeys(run);
+    const tickets = run.tickets || [];
+    const result = {};
+    if (!order.length) {
+      for (const t of tickets) {
+        t.block = null;
+        result[t.id] = null;
+      }
+      run.blockRank = /* @__PURE__ */ new Map();
+      return result;
+    }
+    const rank = new Map(order.map((k, i) => [k, i]));
+    const byId = new Map(tickets.map((t) => [t.id, t]));
+    const members = /* @__PURE__ */ new Map();
+    for (const g of run.gates || []) {
+      if (!g || !g.key) continue;
+      const key = String(g.key);
+      for (const raw of g.members || []) {
+        const id = String(raw);
+        const held = members.get(id);
+        if (held == null || rank.get(key) < rank.get(held)) members.set(id, key);
+      }
+    }
+    const found = /* @__PURE__ */ new Map();
+    const block = (id, seen) => {
+      if (found.has(id)) return found.get(id);
+      const t = byId.get(id) || {};
+      let k;
+      if (t.gate && rank.has(String(t.gate))) k = String(t.gate);
+      else if (members.has(id)) k = members.get(id);
+      else {
+        k = order[0];
+        const next = new Set(seen).add(id);
+        for (const d of t.deps || []) {
+          if (byId.has(d) && !seen.has(d) && d !== id) {
+            const o = block(d, next);
+            if (rank.get(o) > rank.get(k)) k = o;
+          }
+        }
+      }
+      found.set(id, k);
+      return k;
+    };
+    for (const t of tickets) {
+      t.block = block(t.id, /* @__PURE__ */ new Set());
+      result[t.id] = t.block;
+    }
+    run.blockRank = rank;
+    return result;
+  }
+
+  // src/model/plan/plan.mjs
+  var DEFAULT_CAP3 = 18;
+  var DEFAULT_APPROVAL3 = 0.5;
+  var MAX_SLOTS = 64;
+  var EPS = 1e-9;
+  var sum2 = (a) => a.reduce((x, y) => x + (y || 0), 0);
+  var flag = (v) => v ? 1 : 0;
+  var toMs = (v) => {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v.getTime();
+    if (typeof v === "number") return isFinite(v) ? v : null;
+    return parseTime(v);
+  };
+  var gateOf = (run, key) => (run.gates || []).find((g) => g && String(g.key) === key) || null;
+  var hasPlanned = (t) => t.planned && typeof t.planned.slot === "number" && typeof t.planned.start === "number" && typeof t.planned.merge === "number";
+  function chainWeights(ts, byId, deps) {
+    const kids = /* @__PURE__ */ new Map();
+    for (const t of ts) for (const d of deps(t)) {
+      if (!kids.has(d)) kids.set(d, []);
+      kids.get(d).push(t.id);
+    }
+    const tail = /* @__PURE__ */ new Map();
+    const weight = (id, seen) => {
+      if (tail.has(id)) return tail.get(id);
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const w = byId.get(id).hours + Math.max(0, ...(kids.get(id) || []).map((k) => weight(k, seen)));
+      seen.delete(id);
+      tail.set(id, w);
+      return w;
+    };
+    for (const t of ts) weight(t.id, /* @__PURE__ */ new Set());
+    return tail;
+  }
+  function waveCount(ts, byId, deps) {
+    const depth = /* @__PURE__ */ new Map();
+    const lvl = (id, seen) => {
+      if (depth.has(id)) return depth.get(id);
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const v = 1 + Math.max(0, ...deps(byId.get(id)).map((d) => lvl(d, seen)));
+      seen.delete(id);
+      depth.set(id, v);
+      return v;
+    };
+    for (const t of ts) lvl(t.id, /* @__PURE__ */ new Set());
+    return ts.length ? Math.max(...depth.values()) : 0;
+  }
+  function asWritten(run, ts, byId) {
+    for (const t of ts) {
+      t.slot = t.planned.slot - 1;
+      t.start = t.planned.start;
+      t.end = t.planned.start + t.hours;
+      t.mergeAt = Math.max(t.planned.merge, t.end);
+      t.unplaced = false;
+    }
+    const evs = [];
+    for (const t of ts) evs.push([t.start, 1], [t.end, -1]);
+    evs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let cur = 0;
+    let pk = 0;
+    for (const e of evs) {
+      cur += e[1];
+      pk = Math.max(pk, cur);
+    }
+    run.planSource = "schedule";
+    run.finish = Math.max(0, ...ts.map((t) => t.mergeAt));
+    run.peak = pk;
+    run.slots = Math.max(...ts.map((t) => t.slot)) + 1;
+    run.gateAt = /* @__PURE__ */ new Map();
+    for (const k of gateKeys(run)) {
+      const g = gateOf(run, k);
+      if (typeof g.at === "number" && isFinite(g.at)) {
+        run.gateAt.set(k, g.at);
+        continue;
+      }
+      const ids = (g.members || []).map(String).filter((m) => byId.has(m));
+      if (ids.length) run.gateAt.set(k, Math.max(...ids.map((id) => byId.get(id).mergeAt)));
+    }
+  }
+  function simulate(run, ts, byId, deps, tail) {
+    run.planSource = "simulated";
+    const rank = run.blockRank || /* @__PURE__ */ new Map();
+    const strict = run.gateOrder !== "deps" && run.kind === "beam" && rank.size > 1;
+    const cap = Math.max(1, Math.min(num(run.cap) || DEFAULT_CAP3, MAX_SLOTS));
+    const approval = num(run.estimate && run.estimate.approvalHours) || DEFAULT_APPROVAL3;
+    const prio = (a, b) => flag(b.critical) - flag(a.critical) || flag(b.starred) - flag(a.starred) || flag(b.priorityGate) - flag(a.priorityGate) || (a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank) || tail.get(b.id) - tail.get(a.id) || natCmp(a.id, b.id);
+    const pending = new Set(ts.map((t) => t.id));
+    const mergeAt = /* @__PURE__ */ new Map();
+    const slotFree = new Array(cap).fill(0);
+    const blockLeft = /* @__PURE__ */ new Map();
+    for (const t of ts) blockLeft.set(t.block, (blockLeft.get(t.block) || 0) + 1);
+    const blockEnd = /* @__PURE__ */ new Map();
+    const blockOpen = (t, now2) => {
+      if (!strict) return true;
+      const r = rank.get(t.block);
+      for (const [k, i] of rank) if (i < r && (blockLeft.get(k) || 0) > 0) return false;
+      for (const [k, i] of rank) if (i < r && blockEnd.has(k) && blockEnd.get(k) > now2) return false;
+      return true;
+    };
+    const layRest = (now2) => {
+      const t0 = Math.max(now2, ...slotFree);
+      for (const id of [...pending].sort(natCmp)) {
+        const t = byId.get(id);
+        const slot = slotFree.indexOf(Math.min(...slotFree));
+        t.slot = slot;
+        t.start = Math.max(t0, slotFree[slot]);
+        t.end = t.start + t.hours;
+        t.mergeAt = t.end;
+        t.unplaced = true;
+        slotFree[slot] = t.end;
+        mergeAt.set(id, t.end);
+        pending.delete(id);
+        blockLeft.set(t.block, blockLeft.get(t.block) - 1);
+      }
+    };
+    let now = 0;
+    let peak = 0;
+    let guard = 0;
+    const limit = 4 * ts.length + 64;
+    const running = [];
+    while (pending.size) {
+      if (guard++ > limit) {
+        layRest(now);
+        break;
+      }
+      for (let i = running.length - 1; i >= 0; i--) {
+        if (running[i].merge > now) continue;
+        const t = running[i].t;
+        blockLeft.set(t.block, blockLeft.get(t.block) - 1);
+        blockEnd.set(t.block, Math.max(blockEnd.get(t.block) || 0, running[i].merge));
+        running.splice(i, 1);
+      }
+      const ready = [...pending].map((id) => byId.get(id)).filter((t) => deps(t).every((d) => mergeAt.has(d) && mergeAt.get(d) <= now) && blockOpen(t, now)).sort(prio);
+      for (const t of ready) {
+        const slot = slotFree.findIndex((f) => f <= now + EPS);
+        if (slot < 0) break;
+        const end = now + t.hours;
+        const merge = end + (t.autoMerge ? 0 : approval);
+        t.slot = slot;
+        t.start = now;
+        t.end = end;
+        t.mergeAt = merge;
+        t.unplaced = false;
+        slotFree[slot] = end;
+        mergeAt.set(t.id, merge);
+        running.push({ t, merge });
+        pending.delete(t.id);
+      }
+      peak = Math.max(peak, slotFree.filter((f) => f > now + EPS).length);
+      const next = [
+        ...slotFree.filter((f) => f > now + EPS),
+        ...running.map((r) => r.merge).filter((m) => m > now + EPS)
+      ];
+      if (!next.length) {
+        if (pending.size) layRest(now);
+        break;
+      }
+      now = Math.min(...next);
+    }
+    run.finish = Math.max(0, ...ts.map((t) => t.mergeAt || 0));
+    run.peak = peak;
+    run.slots = ts.length ? Math.max(...ts.map((t) => t.slot)) + 1 : 0;
+    run.gateAt = /* @__PURE__ */ new Map();
+    for (const k of gateKeys(run)) {
+      const g = gateOf(run, k);
+      const ids = new Set(
+        ts.filter((t) => t.block === k).map((t) => t.id).concat((g.members || []).map(String).filter((m) => byId.has(m)))
+      );
+      if (!ids.size) continue;
+      run.gateAt.set(k, Math.max(...[...ids].map((id) => byId.get(id).mergeAt || 0)));
+    }
+  }
+  function plan(run) {
+    if (!Array.isArray(run.tickets)) run.tickets = [];
+    if (!Array.isArray(run.gates)) run.gates = [];
+    assignBlocks(run);
+    const ts = run.tickets;
+    const byId = new Map(ts.map((t) => [t.id, t]));
+    const crit = new Set((run.critical || []).map(String));
+    for (const t of ts) if (crit.has(t.id)) t.critical = true;
+    const deps = (t) => (t.deps || []).filter((d) => byId.has(d) && d !== t.id);
+    const tail = chainWeights(ts, byId, deps);
+    run.waves = waveCount(ts, byId, deps);
+    if (ts.length && ts.every(hasPlanned)) asWritten(run, ts, byId);
+    else simulate(run, ts, byId, deps, tail);
+    const critical = ts.filter((t) => t.critical);
+    run.critHours = sum2(critical.map((t) => t.hours));
+    run.critCount = critical.length;
+    return run;
+  }
+  function layoutPlan(run) {
+    if (!(run.gateAt instanceof Map)) plan(run);
+    const gates = gateKeys(run).filter((k) => run.gateAt.has(k)).map((k) => ({ k, at: run.gateAt.get(k), g: gateOf(run, k) }));
+    return {
+      prefix: "T+",
+      label: "Slot",
+      rows: Math.max(1, run.slots),
+      span: run.finish,
+      now: null,
+      unstarted: 0,
+      items: run.tickets.map((t) => ({ t, row: t.slot, s: t.start, e: t.start + t.hours, sz: true })),
+      gates
+    };
+  }
+  var startedInto = (to) => ACTIVE.has(to) || to === "merged" || to === "done";
+  function firstEvent(t) {
+    const ts = (Array.isArray(t.events) ? t.events : []).filter((e) => e && e.type === "status" && startedInto(e.to)).map((e) => parseTime(e.at)).filter((x) => x != null);
+    return ts.length ? Math.min(...ts) : null;
+  }
+  function startOf(t) {
+    const pr = t.pr || {};
+    const cat = t.cat || catOf(t.status);
+    return toMs(t.claimedAt) ?? toMs(pr.openedAt) ?? (cat !== "todo" ? firstEvent(t) : null);
+  }
+  function layoutActual(run, now = Date.now()) {
+    const clock = toMs(now) ?? Date.now();
+    const ended = toMs(run.runEndedAt);
+    const endNow = ended ?? (run.runState === "running" && !run.paused ? clock : toMs(run.updated) ?? clock);
+    const tickets = run.tickets || [];
+    const raw = [];
+    for (const t of tickets) {
+      const s0 = startOf(t);
+      if (s0 == null) continue;
+      const pr = t.pr || {};
+      let e0 = toMs(pr.mergedAt) ?? (TERMINAL.has(t.status) ? toMs(t.updatedAt) : null) ?? endNow;
+      if (e0 < s0) e0 = s0;
+      raw.push({ t, s0, e0 });
+    }
+    const base = toMs(run.runStartedAt) ?? (raw.length ? Math.min(...raw.map((x) => x.s0)) : clock);
+    const H = (ms2) => Math.max(0, (ms2 - base) / 36e5);
+    raw.sort((a, b) => a.s0 - b.s0 || natCmp(a.t.id, b.t.id));
+    const free = [];
+    const items = raw.map((x) => {
+      const s = H(x.s0);
+      const e = Math.max(H(x.e0), s + 0.05);
+      let row = free.findIndex((f) => f <= s + EPS);
+      if (row < 0) {
+        row = free.length;
+        free.push(e);
+      } else free[row] = e;
+      return { t: x.t, row, s, e, sz: false };
+    });
+    const gates = (run.gates || []).filter((g) => g && toMs(g.greenAt) != null).map((g) => ({ k: String(g.key), at: H(toMs(g.greenAt)), g }));
+    const nowH = ended != null ? null : H(endNow);
+    const span = Math.max(1, nowH || 0, ...items.map((i) => i.e), ...gates.map((g) => g.at));
+    return {
+      prefix: "+",
+      label: "Agent",
+      rows: Math.max(1, free.length),
+      span,
+      now: nowH,
+      unstarted: tickets.length - items.length,
+      items,
+      gates
+    };
+  }
+
+  // src/store/store.mjs
+  var runKey2 = (r) => r && (r.name || r.instance || r.dir) || "run";
+  var initialState = () => ({
+    docs: [],
+    sources: [],
+    embedded: null,
+    loadedAt: null,
+    runs: [],
+    tab: "all",
+    view: "timeline",
+    groupBy: "block",
+    colorBy: "status",
+    zoom: 0,
+    clock: "plan",
+    sort: { key: "start", dir: 1 },
+    off: /* @__PURE__ */ new Set(),
+    q: "",
+    closed: /* @__PURE__ */ new Set(),
+    theme: null,
+    printing: false
+  });
+  function prepareRun(run) {
+    if (!run || typeof run !== "object") return run;
+    if (!Array.isArray(run.tickets)) run.tickets = [];
+    for (const t of run.tickets) if (t) t.cat = catOf(t.status);
+    run.gateAt = null;
+    plan(run);
+    return run;
+  }
+  function currentOf(state) {
+    const runs = Array.isArray(state.runs) ? state.runs : [];
+    if (state.tab == null || state.tab === "all") return runs;
+    const hit = runs.filter((r) => runKey2(r) === state.tab);
+    return hit.length ? hit : runs;
+  }
+  function createStore(init = {}) {
+    const state = { ...initialState(), ...init };
+    const subs = /* @__PURE__ */ new Set();
+    const emit = (reason) => {
+      for (const fn of [...subs]) {
+        try {
+          fn(state, reason);
+        } catch {
+        }
+      }
+    };
+    const fixTab = () => {
+      if (state.tab !== "all" && !state.runs.some((r) => runKey2(r) === state.tab)) state.tab = "all";
+    };
+    return {
+      state,
+      getRuns: () => state.runs,
+      current: () => currentOf(state),
+      findTicket(key, id) {
+        const run = state.runs.find((r) => runKey2(r) === key) || null;
+        const ticket = run ? run.tickets.find((t) => t.id === id) || null : null;
+        return { run, ticket };
+      },
+      subscribe(fn) {
+        if (typeof fn !== "function") return () => {
+        };
+        subs.add(fn);
+        return () => subs.delete(fn);
+      },
+      set(patch, reason = "set") {
+        Object.assign(state, patch || {});
+        fixTab();
+        emit(reason);
+      },
+      replaceRuns(runs, reason = "load") {
+        state.runs = (Array.isArray(runs) ? runs : []).filter(Boolean).map(prepareRun);
+        fixTab();
+        emit(reason);
+      },
+      recompute(run) {
+        const list3 = run ? [run] : state.runs;
+        for (const r of list3) prepareRun(r);
+        emit("recompute");
+      }
+    };
+  }
+
+  // src/view/controls/controls.mjs
+  var PREFIX = "warp-dash:";
+  var VIEWS = Object.freeze(["timeline", "board", "table"]);
+  var VIEW_LABELS = Object.freeze({ timeline: "Swimlane", board: "Board", table: "Table" });
+  var GROUPS = Object.freeze(["block", "status", "module", "lane", "repo", "size"]);
+  var COLORS = Object.freeze(["status", "module", "lane"]);
+  var THEMES = Object.freeze(["light", "dark"]);
+  var MENU_ITEMS = Object.freeze([
+    Object.freeze({ act: "open-files", label: "Open status files\u2026", key: "O" }),
+    Object.freeze({ act: "open-folder", label: "Open .warp folder\u2026", key: "\u21E7O" }),
+    Object.freeze({ act: "reload", label: "Reload", key: "R" }),
+    Object.freeze({ act: "auto-reload", label: "Auto-reload every 30s", key: "" }),
+    Object.freeze({ act: "print", label: "Print\u2026", key: "P" }),
+    Object.freeze({ act: "clear", label: "Close all files", key: "" })
+  ]);
+  var ACTIVATE = ".tcard, .lane-h, .trow, th[data-sort]";
+  var TYPING = /^(input|select|textarea)$/i;
+  var initialControls = () => ({
+    off: /* @__PURE__ */ new Set(),
+    q: "",
+    view: "timeline",
+    groupBy: "block",
+    colorBy: "status",
+    zoom: 0,
+    theme: null
+  });
+  var pick = (list3, v, dflt) => list3.includes(v) ? v : dflt;
+  function createPrefs(getStorage) {
+    const read = (k) => {
+      try {
+        const s = getStorage();
+        const v = s ? s.getItem(PREFIX + k) : null;
+        return v == null ? null : v;
+      } catch (e) {
+        return null;
+      }
+    };
+    const write = (k, v) => {
+      try {
+        const s = getStorage();
+        if (!s) return false;
+        s.setItem(PREFIX + k, String(v));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+    return { get: read, set: write };
+  }
+  function loadControls(prefs) {
+    const st = initialControls();
+    const z = prefs ? parseFloat(prefs.get("zoom")) : NaN;
+    st.view = pick(VIEWS, prefs && prefs.get("view"), st.view);
+    st.groupBy = pick(GROUPS, prefs && prefs.get("groupBy"), st.groupBy);
+    st.colorBy = pick(COLORS, prefs && prefs.get("colorBy"), st.colorBy);
+    st.zoom = isFinite(z) ? Math.min(100, Math.max(0, z)) : 0;
+    st.theme = pick(THEMES, prefs && prefs.get("theme"), null);
+    return st;
+  }
+  var remember = (prefs, k, v) => {
+    try {
+      if (prefs) prefs.set(k, v);
+    } catch (e) {
+    }
+  };
+  var switchView = (state, view, prefs) => {
+    const v = pick(VIEWS, view, state.view);
+    remember(prefs, "view", v);
+    return { ...state, view: v };
+  };
+  var setGroupBy = (state, value, prefs) => {
+    const v = pick(GROUPS, value, state.groupBy);
+    remember(prefs, "groupBy", v);
+    return { ...state, groupBy: v };
+  };
+  var setColorBy = (state, value, prefs) => {
+    const v = pick(COLORS, value, state.colorBy);
+    remember(prefs, "colorBy", v);
+    return { ...state, colorBy: v };
+  };
+  var setZoom = (state, value, prefs) => {
+    const n = parseFloat(value);
+    const z = isFinite(n) ? Math.min(100, Math.max(0, n)) : state.zoom;
+    remember(prefs, "zoom", z);
+    return { ...state, zoom: z };
+  };
+  var setQuery = (state, value) => ({ ...state, q: String(value == null ? "" : value).trim().toLowerCase() });
+  var nextTheme = (current, prefersDark) => (current || (prefersDark ? "dark" : "light")) === "dark" ? "light" : "dark";
+  var toggleTheme = (state, prefs, prefersDark) => {
+    const theme = nextTheme(state.theme, prefersDark);
+    remember(prefs, "theme", theme);
+    return { ...state, theme };
+  };
+  var toggleCat = (state, cat) => {
+    const off = new Set(state.off);
+    if (off.has(cat)) off.delete(cat);
+    else off.add(cat);
+    return { ...state, off };
+  };
+  var onlyCat = (state, cat) => {
+    const isOnly = state.off.size === CATS.length - 1 && !state.off.has(cat);
+    return { ...state, off: isOnly ? /* @__PURE__ */ new Set() : new Set(CATS.map((c) => c.key).filter((k) => k !== cat)) };
+  };
+  function visibleControls(state) {
+    return {
+      groupBy: state.view === "board",
+      zoom: state.view === "timeline",
+      colorBy: true
+    };
+  }
+  function legendCounts(runs) {
+    const counts = Object.fromEntries(CATS.map((c) => [c.key, 0]));
+    for (const r of runs || []) for (const t of r.tickets || []) counts[t.cat] = (counts[t.cat] || 0) + 1;
+    return counts;
+  }
+  function renderLegend(runs, state) {
+    const counts = legendCounts(runs);
+    return CATS.map((c) => {
+      const off = state.off.has(c.key);
+      return `<button class="fchip${off ? " off" : ""}" data-cat="${esc(c.key)}" aria-pressed="${off ? "false" : "true"}" title="Show or hide ${esc(c.label)} (double-click: only this)"><i class="sw" style="background:${catColor(c.key)}"></i>${esc(c.label)}<span class="n">${counts[c.key]}</span></button>`;
+    }).join("");
+  }
+  function renderViewSeg(state) {
+    return VIEWS.map(
+      (v) => `<button data-view="${v}" class="${state.view === v ? "on" : ""}" aria-pressed="${state.view === v}">${VIEW_LABELS[v]}</button>`
+    ).join("");
+  }
+  function searchText(ticket, run) {
+    const t = ticket || {};
+    return [t.id, t.title, t.jiraKey, t.module, t.layer, t.lane, t.repo, t.priorityGate, t.agent, t.status, t.block, t.size, run && run.name].map((v) => v == null ? "" : v).join(" ").toLowerCase();
+  }
+  function queryWords(q) {
+    return String(q == null ? "" : q).trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+  function matchesQuery(ticket, run, q) {
+    const words = queryWords(q);
+    if (!words.length) return true;
+    const hay = searchText(ticket, run);
+    return words.every((w) => hay.includes(w));
+  }
+  function matches(ticket, run, state) {
+    const st = state || {};
+    if (st.off && st.off.has(ticket.cat)) return false;
+    return matchesQuery(ticket, run, st.q);
+  }
+  function keyAction(e) {
+    const key = e.key;
+    if (key === "Escape") return "escape";
+    const target = e.target || {};
+    const is = (sel) => typeof target.matches === "function" && target.matches(sel);
+    if ((key === "Enter" || key === " ") && is(ACTIVATE)) return "activate";
+    if (TYPING.test(target.tagName || "") || target.isContentEditable) return null;
+    if (e.metaKey || e.ctrlKey || e.altKey) return null;
+    if (key === "/") return "focus-search";
+    if (key === "o") return "open-files";
+    if (key === "O") return "open-folder";
+    if (key === "r") return "reload";
+    if (key === "p") return "print";
+    return null;
+  }
+
+  // src/view/board/board.mjs
+  var GROUP_BY = GROUPS;
+  var SIZE_LANES = Object.freeze(["S", "M", "L", "XL", "No size"]);
+  var BUCKETS = Object.freeze([
+    { key: "done", label: "Completed", color: "var(--c-done)" },
+    { key: "prog", label: "In progress", color: "var(--c-prog)" },
+    { key: "err", label: "Errored / parked", color: "var(--c-err)" },
+    { key: "todo", label: "To do", color: "var(--c-todo)" }
+  ]);
+  var CHEVRON = '<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>';
+  var toSet = (v) => v instanceof Set ? v : new Set(Array.isArray(v) ? v : []);
+  var sum3 = (a) => a.reduce((x, y) => x + (num(y) || 0), 0);
+  var timeOf = (v) => {
+    const ms2 = typeof v === "number" ? v : parseTime(v);
+    return ms2 != null && !isNaN(new Date(ms2).getTime()) ? ms2 : null;
+  };
+  var normGroupBy = (g) => GROUP_BY.includes(g) ? g : "block";
+  var runKey3 = (r) => r.name || r.instance || r.dir || "run";
+  var runLabel = (r) => r.name || (r.instance ? "warp:" + r.instance : r.dir || "run");
+  function groupKeyOf(t, groupBy) {
+    switch (normGroupBy(groupBy)) {
+      case "status":
+        return t.cat;
+      case "module":
+        return t.module || "No module";
+      case "size":
+        return t.size || "No size";
+      case "lane":
+        return t.lane || t.module || "No lane";
+      case "repo":
+        return t.repo || "No repo";
+      default:
+        return t.block || "All tickets";
+    }
+  }
+  function blocksOf(run, keys) {
+    const tickets = run.tickets || [];
+    if (!keys.length || tickets.every((t) => t.block !== void 0)) return null;
+    const copy = { ...run, tickets: tickets.map((t) => ({ ...t })) };
+    return assignBlocks(copy);
+  }
+  function laneKeys(run, groupBy, gkeys) {
+    const tickets = run.tickets || [];
+    const distinct = (f) => [...new Set(tickets.map(f))].sort(natCmp);
+    switch (groupBy) {
+      case "status":
+        return CATS.map((c) => c.key);
+      case "size":
+        return SIZE_LANES.slice();
+      case "block":
+        return gkeys.length ? gkeys : ["All tickets"];
+      case "lane":
+        return distinct((t) => t.lane || t.module || "No lane");
+      case "repo":
+        return distinct((t) => t.repo || "No repo");
+      default:
+        return distinct((t) => t.module || "No module");
+    }
+  }
+  function lanesFor(runs, groupBy = "block") {
+    const by = normGroupBy(groupBy);
+    const list3 = Array.isArray(runs) ? runs.filter(Boolean) : [];
+    const lanes = /* @__PURE__ */ new Map();
+    const prefixed = list3.length > 1 && by === "block";
+    const laneId = (run, k) => (prefixed ? runLabel(run) + " \xB7 " : "") + k;
+    const gateOf2 = (run, k) => by === "block" ? (run.gates || []).find((g) => g && String(g.key) === k) || null : null;
+    for (const run of list3) {
+      const gkeys = gateKeys(run);
+      const blocks = by === "block" ? blocksOf(run, gkeys) : null;
+      for (const k of laneKeys(run, by, gkeys)) {
+        const id = laneId(run, k);
+        if (!lanes.has(id)) lanes.set(id, { id, key: k, run, gate: gateOf2(run, k), items: [] });
+      }
+      for (const t of run.tickets || []) {
+        const k = blocks ? blocks[t.id] || "All tickets" : groupKeyOf(t, by);
+        const id = laneId(run, k);
+        if (!lanes.has(id)) lanes.set(id, { id, key: k, run, gate: gateOf2(run, k), items: [] });
+        lanes.get(id).items.push({ t, run });
+      }
+    }
+    return [...lanes.values()].filter((l) => l.items.length);
+  }
+  function ticketMatches(t, run, state = {}) {
+    if (typeof state.match === "function") return !!state.match(t, run);
+    return matches(t, run, { off: toSet(state.off), q: state.q });
+  }
+  function safeUrl(u) {
+    const s = String(u == null ? "" : u).trim();
+    return /^https?:\/\/[^\s]+$/i.test(s) ? s : null;
+  }
+  function jiraUrl(site, key) {
+    const s = String(site == null ? "" : site).trim();
+    if (!key || !s) return null;
+    const base = /^https?:\/\//i.test(s) ? s : "https://" + s;
+    return safeUrl(base.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key));
+  }
+  function prLabel(url) {
+    const m = /(\d+)\/?$/.exec(url || "");
+    return m ? "PR #" + m[1] : "PR";
+  }
+  function colorOf(t, colorBy) {
+    if (colorBy === "module" || colorBy === "lane") {
+      const h = hashHue((colorBy === "lane" ? t.lane || t.module : t.module) || "none");
+      const ui = /ui|front|web|app|screen/i.test(t.layer || "");
+      return `hsl(${h} 62% ${ui ? 62 : 46}%)`;
+    }
+    return catColor(t.cat);
+  }
+  function stackBar(values, total) {
+    if (!total) return '<div class="stack"></div>';
+    const parts = BUCKETS.map(
+      (b) => values[b.key] > 0 ? `<i style="width:${100 * values[b.key] / total}%;background:${b.color}" title="${esc(b.label)}"></i>` : ""
+    );
+    return '<div class="stack">' + parts.join("") + "</div>";
+  }
+  var link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)} \u2197</a>`;
+  function renderCard(t, run, opts = {}) {
+    const pr = t.pr || {};
+    const prHref = safeUrl(pr.url);
+    const ju = jiraUrl(run && run.jiraSite, t.jiraKey);
+    const star = t.critical ? "\u2605 " : "";
+    const title = t.title ? esc(t.title) : '<span class="none">No title</span>';
+    const prPart = pr.url ? prHref ? link(prHref, prLabel(prHref)) : `<span>${esc(prLabel(pr.url))}</span>` : "";
+    const jiraPart = t.jiraKey ? ju ? link(ju, t.jiraKey) : `<span>${esc(t.jiraKey)}</span>` : "";
+    const ci = pr.ci ? `<span title="CI">CI ${pr.ci === "green" ? "\u2713" : esc(pr.ci)}</span>` : "";
+    const spent = t.minutes ? `<span title="Agent time spent">spent ${fmtH(t.minutes / 60)}</span>` : "";
+    return `<article class="tcard ${t.critical ? "crit" : ""}" style="--c:${colorOf(t, opts.colorBy)}" data-id="${esc(t.id)}" data-run="${esc(runKey3(run || {}))}" tabindex="0">
+    <div class="l1"><span class="id">${star}${esc(t.id)}</span>${t.size ? `<span class="badge">${esc(t.size)}</span>` : ""}<span class="st">${esc(statusText(t.status))}</span></div>
+    <div class="tt" title="${esc(t.title)}">${title}</div>
+    <div class="l3"><span title="Agent-hour estimate (${esc(t.hoursFrom)})">est ${fmtH(num(t.hours), 0)}</span>${spent}
+      ${prPart}
+      ${jiraPart}
+      ${ci}</div>
+    ${t.alarm ? `<div class="alarm">\u26A0 ${esc(t.alarm)}</div>` : ""}</article>`;
+  }
+  function gateTooltip(gate) {
+    const green = timeOf(gate.greenAt);
+    const starts = Array.isArray(gate.starts) ? gate.starts : [];
+    const checks = (Array.isArray(gate.checks) ? gate.checks : []).map((c) => c && typeof c === "object" ? c.check || c.name || "" : c);
+    return [
+      gate.scope && !gate.blocking ? "scope: " + gate.scope : "",
+      starts.length ? "starts: " + starts.join(", ") : "",
+      green != null ? "green " + new Date(green).toISOString() : "",
+      gate.evidence || "",
+      ...checks.filter(Boolean).map((c) => "check: " + c),
+      gate.onGreen ? "on green: " + gate.onGreen : "",
+      gate.ifRed ? "if red: " + gate.ifRed : ""
+    ].filter(Boolean).join("\n");
+  }
+  function gatePills(gate) {
+    if (!gate) return "";
+    const starts = Array.isArray(gate.starts) ? gate.starts : [];
+    const status = gate.status || "pending";
+    const cls = status === "green" ? "green" : status === "red" ? "red" : "";
+    const green = timeOf(gate.greenAt);
+    return (gate.priority ? '<span class="pill" title="priority gate: its path dispatches ahead of rank">priority</span>' : "") + (starts.length ? `<span class="pill" title="these programs start at this gate">starts ${esc(starts.join(", "))}</span>` : "") + `<span class="pill ${cls}" title="${esc(gateTooltip(gate))}">gate ${esc(status)}${green != null ? " \xB7 " + esc(stamp(green)) : ""}</span>`;
+  }
+  function laneClosed(laneId, { cleared, groupBy, total, laneCount, closed }) {
+    const c = toSet(closed);
+    if (c.has(laneId)) return true;
+    if (c.has("!" + laneId)) return false;
+    return !!cleared && groupBy === "block" && total > 0 && laneCount > 1;
+  }
+  function setLaneClosed(closed, laneId, isClosed) {
+    const next = new Set(toSet(closed));
+    next.delete(laneId);
+    next.delete("!" + laneId);
+    next.add(isClosed ? laneId : "!" + laneId);
+    return next;
+  }
+  var startOf2 = (t) => {
+    const s = num(t.start);
+    return s == null ? Infinity : s;
+  };
+  function renderLane(lane, state = {}, laneCount = 1) {
+    const groupBy = normGroupBy(state.groupBy);
+    const items = lane.items.slice().sort((a, b) => startOf2(a.t) - startOf2(b.t) || natCmp(a.t.id, b.t.id));
+    const values = { done: 0, prog: 0, err: 0, todo: 0 };
+    for (const { t } of items) {
+      const b = bucketOf(t.cat);
+      values[b in values ? b : "todo"]++;
+    }
+    const total = items.length;
+    const doneN = values.done;
+    const gate = lane.gate;
+    const cleared = doneN === total && !(gate && gate.status === "red");
+    const closed = laneClosed(lane.id, { cleared, groupBy, total, laneCount, closed: state.closed });
+    const shown = items.filter(({ t, run }) => ticketMatches(t, run, state));
+    const cat = groupBy === "status" ? CATS.find((c) => c.key === lane.key) : null;
+    const title = groupBy === "status" ? cat ? cat.label : lane.key : lane.id;
+    const swatch = cat ? `<i class="sw" style="background:${catColor(cat.key)}"></i>` : "";
+    const gname = gate && gate.name ? ` <span class="gname">${esc(gate.name)}</span>` : "";
+    const clearedPill = cleared && groupBy === "block" ? '<span class="pill green">cleared</span>' : "";
+    const shownNote = shown.length !== total ? `<span>${shown.length} shown</span>` : "";
+    const cards = shown.map(({ t, run }) => renderCard(t, run, state)).join("") || '<div class="empty-lane">Nothing here.</div>';
+    return `<section class="panel lane ${closed ? "closed" : ""}" data-lane="${esc(lane.id)}">
+      <div class="lane-h" role="button" tabindex="0" aria-expanded="${!closed}">${CHEVRON}
+        <h2>${swatch}${esc(title)}${gname}</h2>
+        ${gatePills(gate)}${clearedPill}
+        <span class="stat"><span>${doneN}/${total} done</span><span>${fmtH(sum3(items.map(({ t }) => t.hours)))} agent</span>${shownNote}${stackBar(values, total)}</span></div>
+      <div class="lane-b">${cards}</div></section>`;
+  }
+  function renderBoard(state = {}) {
+    const lanes = lanesFor(state.runs, state.groupBy);
+    if (!lanes.length) return '<div class="empty">No tickets.</div>';
+    return lanes.map((lane) => renderLane(lane, state, lanes.length)).join("");
+  }
+
+  // src/view/drawer/drawer.mjs
+  var MAX_EVENTS = 25;
+  var SAFE_URL = /^https?:\/\//i;
+  function jiraUrl2(run, key) {
+    const site = run && run.jiraSite;
+    if (!key || !site) return null;
+    const base = /^https?:\/\//.test(site) ? site : "https://" + site;
+    return base.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key);
+  }
+  function prLabel2(url) {
+    const m = /(\d+)\/?$/.exec(url || "");
+    return m ? "PR #" + m[1] : "PR";
+  }
+  var link2 = (href, text) => href && SAFE_URL.test(String(href)) ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text);
+  var hours = (v) => num(v) == null ? null : Math.round(num(v));
+  var catLabel = (t) => {
+    const key = t.cat || catOf(t.status);
+    const c = CATS.find((x) => x.key === key);
+    return { key, label: c ? c.label : key };
+  };
+  function fields(t, run, now) {
+    const pr = t.pr || {};
+    const ju = jiraUrl2(run, t.jiraKey);
+    const cat = catLabel(t);
+    const planned = t.planned && typeof t.planned === "object" ? t.planned : null;
+    const start = hours(t.start);
+    const merge = hours(t.mergeAt);
+    const rows = [
+      ["Status", `<b style="color:${catColor(cat.key)}">${esc(cat.label)}</b> \xB7 ${esc(statusText(t.status))}`],
+      ["Run", esc(run && (run.name || (run.instance ? "warp:" + run.instance : run.dir)) || "\u2014")],
+      ["Block", esc(t.block || "\u2014")],
+      ["Size", esc(t.size || "\u2014") + (t.autoMerge ? " \xB7 auto-merge" : " \xB7 needs approval")],
+      ["Estimate", `${esc(fmtH(t.hours))} <span class="dv-raw">(${esc(t.hoursFrom || "\u2014")})</span>`],
+      [
+        "Planned",
+        start == null || merge == null ? "\u2014" : `T+${start}h \u2192 T+${merge}h \xB7 slot ${esc(num(t.slot) == null ? "\u2014" : t.slot + 1)}${t.unplaced ? " \xB7 dependency could not be met" : ""}`
+      ],
+      ["Spent", t.minutes ? esc(fmtH(t.minutes / 60)) : "\u2014"],
+      ["Tokens / cost", `${t.tokens ? esc(fmtN(t.tokens)) : "\u2014"} / ${t.cost == null ? "\u2014" : "$" + esc(Number(t.cost).toFixed(2))}`],
+      ["Pull request", pr.url ? link2(pr.url, pr.url) : "\u2014"],
+      ["CI / Bugbot", `${esc(pr.ci || "\u2014")} / ${esc(pr.bugbot || "\u2014")}`],
+      [
+        "Jira",
+        t.jiraKey ? link2(ju, t.jiraKey) + (t.jiraStatus ? " \xB7 " + esc(t.jiraStatus) : "") + (t.jiraDone ? " \xB7 Done" : "") : "\u2014"
+      ],
+      [
+        "Merged",
+        pr.sha ? `<span class="mono">${esc(String(pr.sha).slice(0, 10))}</span> ${esc(pr.via || "")} ${esc(pr.mergedAt || "")}` : "\u2014"
+      ],
+      ["Agent", t.agent ? `<span class="mono">${esc(t.agent)}</span>` : "\u2014"],
+      ["Attempts", `${esc(t.attempts || 0)}${t.recoveries ? ` \xB7 ${esc(t.recoveries)} recoveries` : ""}`],
+      ["Module", esc([t.module, t.layer].filter(Boolean).join(" \xB7 ") || "\u2014")]
+    ];
+    if (t.lane || t.repo) rows.push(["Lane / repo", esc([t.lane, t.repo].filter(Boolean).join(" \xB7 "))]);
+    if (t.priorityGate) {
+      rows.push(["Priority gate", `<b>${esc(t.priorityGate)}</b> \xB7 dispatched after the critical chain, ahead of rank`]);
+    }
+    if (planned) {
+      const ls = planned.latest_start;
+      rows.push([
+        "Schedule",
+        `slot ${esc(planned.slot ?? "\u2014")} \xB7 T+${esc(planned.start ?? "\u2014")}h \u2192 T+${esc(planned.merge ?? "\u2014")}h` + (ls != null ? ` \xB7 latest start T+${esc(ls)}h` : "")
+      ]);
+    }
+    const upd = parseTime(t.updatedAt);
+    rows.push(["Updated", upd == null ? "\u2014" : `${esc(stamp(upd))} (${esc(ago(upd, now))})`]);
+    if (t.alarm) rows.splice(1, 0, ["Alarm", `<b class="dv-alarm">${esc(t.alarm)}</b>`]);
+    if (t.stateNote) rows.push(["Note", esc(t.stateNote)]);
+    return rows;
+  }
+  var dl = (rows) => `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  function stamps(t) {
+    const pr = t.pr || {};
+    const marks = [
+      ["Claimed", t.claimedAt],
+      ["PR opened", pr.openedAt],
+      ["Reviewed", pr.reviewedAt],
+      ["Approved", pr.approvedAt],
+      ["Merged", pr.mergedAt],
+      ["Jira last comment", t.jiraCommentAt],
+      ["Updated", t.updatedAt]
+    ];
+    return marks.map(([k, v]) => [k, v ? `${esc(stamp(parseTime(v)))} <span class="dv-raw">${esc(v)}</span>` : "\u2014"]);
+  }
+  function recentEvents(events, max = MAX_EVENTS) {
+    const list3 = (Array.isArray(events) ? events : []).filter((e) => e && typeof e === "object");
+    const times = list3.map((e) => parseTime(e.at));
+    const ordered = times.every((x) => x != null) ? list3.map((e, i) => ({ e, i, at: times[i] })).sort((a, b) => a.at - b.at || a.i - b.i).map((x) => x.e) : list3;
+    return ordered.slice(-max).reverse();
+  }
+  var eventRow = (e) => `<span class="t">${esc(stamp(parseTime(e.at)))}</span><span>${esc(e.type || "")}${e.from || e.to ? ` ${esc(e.from || "")} \u2192 ${esc(e.to || "")}` : ""}${e.detail ? " \xB7 " + esc(e.detail) : ""}</span>`;
+  var tags = (list3) => `<div class="tags">${list3.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>`;
+  function extra(sections, t, run) {
+    let out = "";
+    for (const s of Array.isArray(sections) ? sections : []) {
+      if (!s || typeof s.render !== "function") continue;
+      try {
+        const html = s.render(t, run);
+        if (typeof html === "string") out += html;
+      } catch {
+      }
+    }
+    return out;
+  }
+  function renderDrawer(ticket, run, sections = [], now = Date.now()) {
+    const t = ticket || {};
+    const cat = catLabel(t);
+    const checks = Array.isArray(t.checks) ? t.checks : [];
+    const deps = Array.isArray(t.deps) ? t.deps : [];
+    const locks = Array.isArray(t.locks) ? t.locks : [];
+    const ev = recentEvents(t.events);
+    return `<div class="drawer-h" style="--c:${catColor(cat.key)}"><div class="id">${t.critical ? "\u2605 " : ""}${esc(t.id)}</div><div class="tt">${esc(t.title)}</div><button class="btn icon x" id="drawerClose" aria-label="Close">\u2715</button></div><div class="drawer-b">${dl(fields(t, run, now))}<h4>Timestamps</h4>${dl(stamps(t))}` + (checks.length ? `<h4>Checks when it merges</h4><ul class="dv-checks">${checks.map((c) => `<li>${c.name ? `<b>${esc(c.name)}</b> \u2014 ` : ""}${esc(c.check)}</li>`).join("")}</ul>` : "") + (deps.length ? `<h4>Depends on</h4>${tags(deps)}` : "") + (locks.length ? `<h4>Locks</h4>${tags(locks)}` : "") + (ev.length ? `<h4>Events</h4><div class="ev">${ev.map(eventRow).join("")}</div>` : "") + `${extra(sections, t, run)}</div>`;
+  }
+  function renderTooltip(ticket) {
+    const t = ticket || {};
+    const start = hours(t.start);
+    const merge = hours(t.mergeAt);
+    const meta = [
+      t.size ? esc(t.size) : "",
+      `est ${esc(fmtH(t.hours, 0))}`,
+      start != null && merge != null ? `T+${start}\u2192${merge}h` : "",
+      t.block ? esc(t.block) : "",
+      t.pr && t.pr.url ? esc(prLabel2(t.pr.url)) : "",
+      t.jiraKey ? esc(t.jiraKey) : ""
+    ].filter(Boolean);
+    return `<b>${t.critical ? "\u2605 " : ""}${esc(t.id)}</b> \xB7 ${esc(statusText(t.status))}<br>${esc(t.title)}<br><span class="m">${meta.join(" \xB7 ")}</span>${t.alarm ? `<br>\u26A0 ${esc(t.alarm)}` : ""}`;
+  }
+
+  // src/view/header/header.mjs
+  var BUCKETS2 = Object.freeze([
+    Object.freeze({ key: "done", label: "Completed", color: catColor("done") }),
+    Object.freeze({ key: "prog", label: "In progress", color: catColor("prog") }),
+    Object.freeze({ key: "err", label: "Errored / parked", color: catColor("err") }),
+    Object.freeze({ key: "todo", label: "To do", color: catColor("todo") })
+  ]);
+  var SIZE_ORDER2 = ["S", "M", "L", "XL", "\u2014"];
+  var TABLE_ROWS = 8;
+  var sum4 = (xs) => xs.reduce((a, b) => a + (num(b) || 0), 0);
+  var list2 = (runs) => Array.isArray(runs) ? runs.filter(Boolean) : [];
+  var ticketsOf2 = (r) => r && Array.isArray(r.tickets) ? r.tickets.filter(Boolean) : [];
+  var pick2 = (v, key) => v == null || v === "" ? null : typeof v === "object" ? v[key] || null : String(v);
+  var toMs2 = (v) => {
+    const t = typeof v === "string" ? parseTime(v) : num(v);
+    return t != null && Math.abs(t) <= 864e13 ? t : null;
+  };
+  var runKey4 = (r) => r.name || r.instance || r.dir || "run";
+  var runLabel2 = (r) => r.name || (r.instance ? "warp:" + r.instance : r.dir || "run");
+  function currentRuns(runs, tab = "all") {
+    const all = list2(runs);
+    if (tab == null || tab === "all") return all;
+    const hit = all.filter((r) => runKey4(r) === tab);
+    return hit.length ? hit : all;
+  }
+  function runStateOf(r) {
+    if (r.kind === "schedule") return "plan";
+    if (r.paused && (r.runState === "running" || !r.runState)) return "paused";
+    return r.runState || null;
+  }
+  var chip = (inner, cls = "", title = null) => `<span class="chip${cls ? " " + cls : ""}"${title != null ? ` title="${esc(title)}"` : ""}>${inner}</span>`;
+  function renderMeta(runs, tab = "all", { now = Date.now() } = {}) {
+    const all = list2(runs);
+    if (!all.length) return chip("No run loaded");
+    const cur = currentRuns(all, tab);
+    const r = cur[0];
+    const parts = [];
+    const repo = cur.map((x) => x.repo).find(Boolean);
+    if (repo) parts.push(chip(`repo <b>${esc(repo)}</b>`));
+    if (cur.length === 1) {
+      if (r.name) parts.push(chip(`run <b>${esc(r.name)}</b>`));
+      if (r.instance) parts.push(chip(`warp:${esc(r.instance)}`, "mono"));
+      const st = runStateOf(r);
+      if (st) parts.push(chip(`<i class="dot ${esc(st)}"></i><b>${esc(st)}</b>${r.pauseReason ? " \xB7 " + esc(r.pauseReason) : ""}`));
+      const range = pick2(r.range, "spec");
+      if (range) parts.push(chip(`range <b>${esc(range)}</b>`));
+      const owner = pick2(r.owner, "by");
+      if (owner) parts.push(chip(`owner <b>${esc(owner)}</b>`));
+      const exported = r.export ? toMs2(r.exportedAt) : null;
+      if (exported != null) parts.push(chip(`exported <b>${esc(stamp(exported))}</b>`, "", new Date(exported).toISOString()));
+    } else {
+      const live = all.filter((x) => x.runState === "running" && !x.paused).length;
+      parts.push(chip(`<b>${all.length}</b> runs \xB7 ${live} running`));
+    }
+    const upd = Math.max(0, ...cur.map((x) => toMs2(x.updated) || 0)) || null;
+    if (upd != null) {
+      parts.push(
+        chip(`updated <b>${esc(ago(upd, now))}</b><span class="hide-sm"> \xB7 ${esc(stamp(upd))}</span>`, "", new Date(upd).toISOString())
+      );
+    }
+    return parts.join("");
+  }
+  var plannedStart = (t) => num(t.start) != null ? t.start : Infinity;
+  function renderHeadline(runs) {
+    const cur = list2(runs);
+    if (!cur.length) return { title: "Warp run", subline: "", chain: "" };
+    const one = cur.length === 1 ? cur[0] : null;
+    const repo = cur.map((x) => x.repo).find(Boolean) || cur.map((x) => x.project).find(Boolean);
+    const title = one ? `${one.name ? one.name + " \u2014 " : ""}${repo || "Warp run"} swimlane` : `${repo || "Warp"} \u2014 ${cur.length} runs`;
+    const tickets = cur.flatMap(ticketsOf2);
+    const bits = [`${fmtN(tickets.length)} tickets`];
+    if (one && one.kind !== "status" && num(one.waves) != null) bits.push(`${one.waves} waves`);
+    bits.push(`${fmtN(sum4(tickets.map((t) => t.hours)))} agent-hours`);
+    const cap = one ? num(one.cap) : Math.max(0, ...cur.map((r) => num(r.cap) || 0)) || null;
+    if (cap != null) bits.push(`${one ? "" : "up to "}${cap} agent slots`);
+    const fin = Math.max(0, ...cur.map((r) => num(r.finish) || 0));
+    if (fin) {
+      const note = cur.some((r) => r.kind === "status") ? " (status.json has no dependencies; open beam.json for the plan)" : "";
+      bits.push(`planned finish T+${Math.round(fin)}h${note}`);
+    }
+    if (one && num(one.peak)) bits.push(`peak ${one.peak} in flight`);
+    if (one && num(one.critCount)) bits.push(`critical chain ${fmtH(one.critHours, 0)} over ${one.critCount} tickets`);
+    if (one && one.gateOrder) bits.push(`gate order ${one.gateOrder}`);
+    if (one && one.startAfter) bits.push(`starts after ${[].concat(one.startAfter).join(", ")}`);
+    if (one && one.planSource === "schedule") bits.push("plan as written in schedule.json");
+    const chain = one ? ticketsOf2(one).filter((t) => t.critical).sort((a, b) => plannedStart(a) - plannedStart(b) || natCmp(a.id, b.id)).map((t) => t.id) : [];
+    return {
+      title: esc(title),
+      subline: esc(bits.join(" \xB7 ")),
+      chain: chain.length ? esc("\u2605 " + chain.join(" \u2192 ")) : ""
+    };
+  }
+  function renderTabs(runs, tab = "all") {
+    const all = list2(runs);
+    if (all.length < 2) return "";
+    const on = currentRuns(all, tab).length === 1 ? runKey4(currentRuns(all, tab)[0]) : "all";
+    const button = (key, text) => `<button type="button" class="tab${on === key ? " on" : ""}" data-tab="${esc(key)}" aria-pressed="${on === key}">${text}</button>`;
+    return [button("all", `All runs (${all.length})`)].concat(
+      all.map((r) => {
+        const ts = ticketsOf2(r);
+        return button(runKey4(r), `${esc(runLabel2(r))} \xB7 ${ts.filter((t) => t.cat === "done").length}/${ts.length}`);
+      })
+    ).join("");
+  }
+  function stackBar2(values, total) {
+    if (!total) return '<div class="stack"></div>';
+    return '<div class="stack">' + BUCKETS2.map(
+      (b) => values[b.key] > 0 ? `<i style="width:${100 * values[b.key] / total}%;background:${b.color}" title="${esc(b.label)}"></i>` : ""
+    ).join("") + "</div>";
+  }
+  function rowsFor(values, total, fmt) {
+    return '<div class="rows">' + BUCKETS2.filter((b) => b.key !== "err" || values.err > 0).map((b) => {
+      const v = values[b.key];
+      return `<div><i class="sw" style="background:${b.color}"></i>${esc(b.label)}<span class="v">${v == null ? "\u2014" : fmt(v)}</span><span class="p">${v == null ? "" : pct(v, total)}</span></div>`;
+    }).join("") + "</div>";
+  }
+  function catCounts(runs) {
+    const by = Object.fromEntries(CATS.map((c) => [c.key, 0]));
+    for (const t of list2(runs).flatMap(ticketsOf2)) if (Object.prototype.hasOwnProperty.call(by, t.cat)) by[t.cat]++;
+    return by;
+  }
+  var card = (title, sub, big, bar, rows, foot, extra2 = "") => `<div class="card"><h3>${title} <span>${sub}</span></h3><div class="big">${big}</div>${bar}${rows}<div class="foot">${foot}</div>${extra2}</div>`;
+  function renderCards(m, runs = []) {
+    const many = list2(runs).length > 1;
+    const byCat = catCounts(runs);
+    const assume = m.assumptions && m.assumptions.length ? `<details class="assume"><summary>Assumptions</summary><ul>${m.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>` : "";
+    const run = card(
+      "Run estimate",
+      many ? "all runs, added" : "elapsed, plan",
+      fmtH(m.estTotal),
+      stackBar2(m.share, m.estTotal || 0),
+      rowsFor(m.share, m.estTotal || 0, (v) => fmtH(v)),
+      `<span>Elapsed <b>${fmtH(m.elapsed)}</b></span><span>ETA left <b>${m.eta == null ? "\u2014" : "~" + fmtH(m.eta)}</b></span>` + (m.finish ? `<span title="${many ? "Each run's planned finish on its swimlane, added" : "Planned finish on the swimlane, with blocks in order"}">Swimlane <b>T+${Math.round(m.finish)}h</b></span>` : "") + `<span title="The plan's elapsed estimate, split by agent-hour share">split by agent-hours</span>`,
+      assume
+    );
+    const agent = card(
+      "Agent hours",
+      "estimate",
+      fmtH(m.agentTotal),
+      stackBar2(m.agent, m.agentTotal),
+      rowsFor(m.agent, m.agentTotal, (v) => fmtH(v)),
+      `<span>Actual <b>${m.actualH ? fmtH(m.actualH) : "\u2014"}</b></span><span>Tokens <b>${m.tokens ? fmtN(m.tokens) : "\u2014"}</b></span><span>Cost <b>${m.cost == null ? "\u2014" : "$" + m.cost.toFixed(2)}</b></span>` + (m.sizeDerived ? `<span title="S=4, M=7, L=11, XL=16 (scan.py)">${fmtN(m.sizeDerived)} from size</span>` : "")
+    );
+    const human = card(
+      "People hours",
+      "approvals + gates",
+      fmtH(m.humanTotal),
+      stackBar2(m.human, m.humanTotal),
+      rowsFor(m.human, m.humanTotal, (v) => fmtH(v)),
+      `<span>Plan <b>${fmtH(m.humanPlan)}</b></span><span>Gates <b>${m.gatesTotal ? m.gatesGreen + "/" + m.gatesTotal : "\u2014"}</b> green</span><span>0.5h per review or gate</span>`
+    );
+    const tick = card(
+      "Tickets",
+      `${pct(m.count.done, m.ticketTotal)} complete`,
+      fmtN(m.ticketTotal),
+      stackBar2(m.count, m.ticketTotal),
+      rowsFor(m.count, m.ticketTotal, fmtN),
+      `<span>In review <b>${byCat.rev}</b></span><span>QA ready <b>${byCat.qa}</b></span><span>Coding <b>${byCat.prog}</b></span>`
+    );
+    return run + agent + human + tick;
+  }
+  function miniTable(rows, head, order) {
+    const sorted = order ? order.map((k) => rows.find((r) => r.key === k)).filter(Boolean) : [...rows].sort((a, b) => natCmp(a.key, b.key));
+    const body = sorted.slice(0, TABLE_ROWS).map((v) => `<tr><td class="mono">${esc(v.key)}</td><td>${fmtN(v.n)}</td><td>${fmtN(v.tokens)}</td><td>${fmtN(v.minutes)}</td></tr>`).join("");
+    const more = rows.length > TABLE_ROWS ? `<div class="tlnote">${rows.length - TABLE_ROWS} more</div>` : "";
+    return `<table class="mini"><thead><tr><th>${head}</th><th>tickets</th><th>tokens</th><th>minutes</th></tr></thead><tbody>${body}</tbody></table>${more}`;
+  }
+  var meter = (label, v, max, text) => `<div class="row"><span>${label}</span><span class="bar0"><i class="${max && v > max ? "over" : ""}" style="width:${max ? Math.min(100, 100 * v / max) : 0}%"></i></span><span class="v">${text}</span></div>`;
+  function renderUtil(u) {
+    const cap = num(u.cap);
+    const est = num(u.estH);
+    const head = `${u.active} active of ${fmtN(cap)} agents \xB7 ${fmtH(u.spentH)} spent${est ? " of " + fmtH(est) + " estimated" : ""} \xB7 ${fmtN(u.tokens)} tokens`;
+    return `<summary>Utilization <span class="muted">${head}</span></summary><div class="util-b"><div class="meter">` + meter("Active agents / maxAgents", u.active, cap, `${u.active} / ${fmtN(cap)}`) + meter("Agent hours / estimate", u.spentH, est, `${fmtH(u.spentH)} / ${fmtH(est)}`) + meter("Tickets done", u.done, u.total, `${u.done} / ${u.total}`) + `<div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are the minutes Warp recorded per ticket.</div></div><div>${miniTable(u.bySize || [], "size", SIZE_ORDER2)}</div><div>${miniTable(u.byAgent || [], "agent")}</div></div>`;
+  }
+  function renderActions(actions, state) {
+    const out = [];
+    for (const a of Array.isArray(actions) ? actions : []) {
+      if (!a || typeof a.render !== "function") continue;
+      let html;
+      try {
+        html = a.render(state);
+      } catch {
+        continue;
+      }
+      if (html == null || html === "") continue;
+      out.push(`<span class="hdr-act" data-hook="${esc(a.id)}">${html}</span>`);
+    }
+    return out.join("");
+  }
+  function renderHeader({ runs, tab = "all", metrics, util, actions = [], now = Date.now() } = {}) {
+    const all = list2(runs);
+    const cur = currentRuns(all, tab);
+    const head = renderHeadline(cur);
+    return {
+      meta: renderMeta(all, tab, { now }),
+      title: head.title,
+      subline: head.subline,
+      chain: head.chain,
+      tabs: renderTabs(all, tab),
+      metrics: metrics ? renderCards(metrics, cur) : "",
+      util: util ? renderUtil(util) : "",
+      actions: renderActions(actions, { runs: all, tab, current: cur })
+    };
+  }
+
+  // src/view/swimlane/swimlane.mjs
+  var LABEL_W = 76;
+  var LABEL_W_NARROW = 54;
+  var PRINT_W = 1020;
+  var TICK_STEPS = Object.freeze([1, 2, 5, 10, 20, 25, 50, 100, 200]);
+  var MIN_TICK_PX = 56;
+  var TINY_PX = 70;
+  var GATE_SHARE_PX = 6;
+  var LABEL_CH = 7;
+  var LABEL_PAD = 8;
+  var NAME_CH = 6;
+  var NAME_PAD = 12;
+  var LIFT = "bottom:17px";
+  var finite = (v) => typeof v === "number" && isFinite(v);
+  var clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  function swimlaneScale(layout, opts = {}) {
+    const lab = opts.narrow ? LABEL_W_NARROW : LABEL_W;
+    const span = Math.max(1, Math.ceil((num(layout && layout.span) || 0) / 5) * 5);
+    const wide = num(opts.width) ?? 0;
+    const zoom = clamp(num(opts.zoom) ?? 0, 0, 100);
+    const fit = Math.max(wide < 700 ? 7 : 2, (wide - lab - 24) / span);
+    const pph = opts.print ? Math.max(1, ((num(opts.printWidth) ?? PRINT_W) - lab) / span) : fit * Math.pow(6, zoom / 100);
+    const W = Math.ceil(span * pph) + 16;
+    const step = TICK_STEPS.find((x) => x * pph >= MIN_TICK_PX) || 500;
+    const ticks = [];
+    for (let h = 0; h <= span; h += step) ticks.push(h);
+    return { lab, span, pph, W, step, ticks, zoom };
+  }
+  function gateClass(items) {
+    if (items.some((x) => x.g && x.g.status === "red")) return "red";
+    if (items.length && items.every((x) => x.g && x.g.status === "green")) return "green";
+    return "";
+  }
+  function gateLines(gates, pph) {
+    const sorted = (gates || []).filter((x) => x && finite(x.at)).slice().sort((a, b) => a.at - b.at || natCmp(a.k, b.k));
+    const lines = [];
+    for (const x of sorted) {
+      const last = lines[lines.length - 1];
+      if (last && Math.abs(last.at - x.at) * pph < GATE_SHARE_PX) last.items.push(x);
+      else lines.push({ at: x.at, items: [x] });
+    }
+    return lines;
+  }
+  function gateLabels(gates, pph) {
+    const placed = [];
+    const edge = (pred) => {
+      for (let i = placed.length - 1; i >= 0; i--) if (pred(placed[i])) return placed[i].x;
+      return 0;
+    };
+    const place = (grp) => {
+      const x = grp.at * pph;
+      const text = grp.items.map((it) => it.k).join(" \xB7 ");
+      const wL = text.length * LABEL_CH + LABEL_PAD;
+      const lower = edge((p) => !p.lift);
+      const upper = edge((p) => p.lift);
+      const named = edge((p) => !p.lift && p.name);
+      const nameOf = () => {
+        const n = grp.items.length === 1 ? String(grp.items[0].g && grp.items[0].g.name ? grp.items[0].g.name : "") : "";
+        const wN = n.length * NAME_CH + NAME_PAD;
+        return n && wN < x - Math.max(lower, upper) ? { name: n, wN } : { name: "", wN: 0 };
+      };
+      if (!placed.length || wL <= x - lower) {
+        const { name, wN } = nameOf();
+        placed.push({ ...grp, x, text, lift: false, name, w: Math.max(wL, wN), wL });
+        return;
+      }
+      if (wL <= x - Math.max(upper, named)) {
+        placed.push({ ...grp, x, text, lift: true, name: "", w: wL, wL });
+        return;
+      }
+      const prev = placed.pop();
+      place({ at: prev.at, items: prev.items.concat(grp.items) });
+    };
+    for (const line of gateLines(gates, pph)) place({ at: line.at, items: line.items.slice() });
+    return placed;
+  }
+  function gateTooltip2(x) {
+    const g = x && x.g || {};
+    const key = x && x.k != null ? x.k : g.key;
+    const green = g.greenAt ? new Date(g.greenAt) : null;
+    return [
+      `${key} ${g.name || ""} \u2014 ${g.status || "pending"}`,
+      g.blocking ? "blocking: a red gate stops everyone" : g.scope ? "scope: " + g.scope : "",
+      g.priority ? "priority gate: its path dispatches ahead of rank" : "",
+      Array.isArray(g.starts) && g.starts.length ? "starts: " + g.starts.join(", ") : "",
+      green && !isNaN(green) ? "green " + green.toISOString() : "",
+      g.evidence || "",
+      ...(Array.isArray(g.checks) ? g.checks : []).map((c) => "check: " + (c && typeof c === "object" ? c.check : c)),
+      g.onGreen ? "on green: " + g.onGreen : "",
+      g.ifRed ? "if red: " + g.ifRed : ""
+    ].filter(Boolean).join("\n");
+  }
+  function barColor(t, colorBy = "status") {
+    if (colorBy === "module" || colorBy === "lane") {
+      const h = hashHue((colorBy === "lane" ? t.lane || t.module : t.module) || "none");
+      const ui = /ui|front|web|app|screen/i.test(t.layer || "");
+      return `hsl(${h} 62% ${ui ? 62 : 46}%)`;
+    }
+    return catColor(t.cat || catOf(t.status));
+  }
+  function runKeyOf(run) {
+    return run && (run.name || run.instance || run.dir) || "run";
+  }
+  function ticketMatches2(t, run, opts = {}) {
+    const off = opts.off instanceof Set ? opts.off : new Set(opts.off || []);
+    return matches({ ...t, cat: t.cat || catOf(t.status) }, run, { off, q: opts.query });
+  }
+  function renderBar(it, run, sc, opts, key) {
+    const t = it.t;
+    const pr = t.pr || {};
+    const cat = t.cat || catOf(t.status);
+    const w = Math.max(3, (it.e - it.s) * sc.pph - 2);
+    const tiny = w < TINY_PX;
+    const shown = typeof opts.matches === "function" ? opts.matches(t, run) : ticketMatches2(t, run, opts);
+    const searching = queryWords(opts.query).length > 0;
+    const cls = ["bar", "c-" + cat];
+    if (t.critical) cls.push("crit");
+    if (tiny) cls.push("tiny");
+    if (!shown) cls.push("dim");
+    else if (searching) cls.push("hit");
+    const id = `<span class="id">${t.critical ? "\u2605 " : ""}${esc(t.id)}</span>`;
+    let body = `<div class="l1">${id}</div>`;
+    if (!tiny) {
+      const meta = it.sz ? `${t.size || ""}\xB7${fmtH(num(t.hours), 0)}` : fmtH(it.e - it.s);
+      const flag2 = t.alarm ? "\u26A0" : pr.ci === "red" ? "\u2717" : "";
+      body = `<div class="l1">${id}<span class="sz">${esc(meta)}</span></div><div class="tt">${esc(t.title)}</div>${flag2 ? `<span class="flag">${flag2}</span>` : ""}`;
+    }
+    const label = `${t.id} ${statusText(t.status)} ${t.title || ""}`.trim();
+    return `<div class="${esc(cls.join(" "))}" style="left:${it.s * sc.pph + 1}px;width:${w}px;--c:${esc(barColor(t, opts.colorBy))}" data-id="${esc(t.id)}" data-run="${esc(key)}" role="button" tabindex="0" aria-label="${esc(label)}">${body}</div>`;
+  }
+  function renderSwimlane(run, layout, opts = {}) {
+    const lay = layout || {};
+    const sc = swimlaneScale(lay, opts);
+    const { lab, pph, W, ticks } = sc;
+    const key = opts.runKey != null ? opts.runKey : runKeyOf(run);
+    const prefix = lay.prefix || "T+";
+    const rows = Math.max(1, Math.floor(num(lay.rows) || 0));
+    const lines = gateLines(lay.gates, pph);
+    const labels = gateLabels(lay.gates, pph);
+    let html = `<div class="tl" style="width:${W + lab}px">`;
+    html += `<div class="tl-head"><div class="tl-row gates"><div class="tl-lab"></div><div class="tl-track" style="width:${W}px">`;
+    html += labels.map((gr) => {
+      const tip = gr.items.map(gateTooltip2).join("\n\n");
+      const name = gr.name ? `<small>${esc(gr.name)}</small>` : "";
+      return `<div class="gl${gateClass(gr.items) ? " " + gateClass(gr.items) : ""}" style="left:${gr.x}px;${gr.lift ? LIFT : ""}" title="${esc(tip)}">${esc(gr.text)}${name}</div>`;
+    }).join("");
+    html += `</div></div><div class="tl-row tl-axis"><div class="tl-lab">${esc(prefix)}</div><div class="tl-track" style="width:${W}px">`;
+    html += ticks.map((h) => `<span style="left:${h * pph}px">${esc(prefix)}${h}</span>`).join("");
+    html += `</div></div></div>`;
+    html += `<div class="tl-body" style="position:relative">`;
+    html += `<div class="tl-lines" style="position:absolute;left:${lab}px;top:0;bottom:0;width:${W}px;pointer-events:none">`;
+    html += ticks.map((h) => `<i class="grid-v" style="left:${h * pph}px"></i>`).join("");
+    html += lines.map((ln) => `<i class="gline${gateClass(ln.items) ? " " + gateClass(ln.items) : ""}" style="left:${ln.at * pph}px"></i>`).join("");
+    if (finite(lay.now)) html += `<i class="nowline" style="left:${lay.now * pph}px" title="now"></i>`;
+    html += `</div>`;
+    const byRow = /* @__PURE__ */ new Map();
+    for (const it of Array.isArray(lay.items) ? lay.items : []) {
+      if (!it || !it.t || !finite(it.s) || !finite(it.e) || !Number.isInteger(it.row) || it.row < 0 || it.row >= rows) continue;
+      if (!byRow.has(it.row)) byRow.set(it.row, []);
+      byRow.get(it.row).push(it);
+    }
+    const rowLabel = lay.label || "Slot";
+    for (let row = 0; row < rows; row++) {
+      html += `<div class="tl-row"><div class="tl-lab">${esc(rowLabel)} ${row + 1}</div><div class="tl-track" style="width:${W}px">`;
+      for (const it of byRow.get(row) || []) html += renderBar(it, run, sc, opts, key);
+      html += `</div></div>`;
+    }
+    const overlays = Array.isArray(opts.overlays) ? opts.overlays : [];
+    for (const ov of overlays) {
+      if (!ov || typeof ov.render !== "function") continue;
+      const out = ov.render(lay, run, { ...opts, scale: sc });
+      if (out) html += `<div class="tl-overlay" data-overlay="${esc(ov.id || "")}" style="position:absolute;left:${lab}px;top:0;bottom:0;width:${W}px">${out}</div>`;
+    }
+    html += `</div></div>`;
+    return html;
+  }
+  function swimlaneNote(run, layout, clock) {
+    const lay = layout || {};
+    if (clock === "actual") {
+      const started = Array.isArray(lay.items) ? lay.items.length : 0;
+      return `${lay.rows || 0} agents in use \xB7 ${started} started${lay.unstarted ? ` \xB7 ${lay.unstarted} not started` : ""}${finite(lay.now) ? ` \xB7 now +${Math.round(lay.now)}h` : ""}`;
+    }
+    const tail = run.planSource === "schedule" ? " \xB7 as written in schedule.json" : run.kind !== "beam" ? "" : run.gateOrder === "deps" ? " \xB7 dependency order" : " \xB7 blocks finish in order";
+    return `${run.slots || 0} of ${run.cap} slots \xB7 planned finish T+${Math.round(run.finish || 0)}h${tail}`;
+  }
+  var FOOT_PLAN = "<span>Estimate-hours on a continuous clock. A bar ends at its merge; the slot is reused at once. Bars are the plan; color is the ticket's status now.</span><span>Slots are interchangeable: the parent gives a ready ticket the next free agent.</span>";
+  var FOOT_ACTUAL = "<span>Hours since the run started. A bar runs from claim (or PR opened) to merge; an open ticket runs to now. Gate lines are drawn at greenAt.</span><span>Rows are agents in use at the same time, not agent ids.</span>";
+  function renderSwimlanePanel(run, layout, opts = {}) {
+    const lay = layout || {};
+    const actual = opts.clock ? opts.clock === "actual" : lay.prefix === "+";
+    const key = opts.runKey != null ? opts.runKey : runKeyOf(run);
+    const title = opts.title || "Swimlane";
+    const btn = (clock, label, tip) => {
+      const on = clock === "actual" === actual;
+      return `<button type="button" data-clock="${clock}"${on ? ' class="on"' : ""} aria-pressed="${on}" title="${tip}">${label}</button>`;
+    };
+    return `<section class="panel swimlane" data-run="${esc(key)}">
+    <div class="panel-h"><h2>${esc(title)}</h2><span class="muted">${esc(swimlaneNote(run, lay, actual ? "actual" : "plan"))}</span>
+      <div class="seg clock" role="group" aria-label="Clock">${btn("plan", "Plan", "Estimate-hours: the plan, colored by status now")}${btn("actual", "Actual", "Hours since the run started, from claimed to merged")}</div></div>
+    <div class="tl-scroll">${renderSwimlane(run, lay, opts)}</div>
+    <div class="tl-foot">${actual ? FOOT_ACTUAL : FOOT_PLAN}</div></section>`;
+  }
+
+  // src/view/table/table.mjs
+  var SIZES = Object.freeze(["S", "M", "L", "XL"]);
+  var DEFAULT_SORT = Object.freeze({ key: "start", dir: 1 });
+  var STATUS_ORDER = Object.keys(STATUS_CAT);
+  var timeOf2 = (v) => {
+    if (typeof v === "number") return isFinite(v) ? v : null;
+    if (typeof v !== "string" || v.trim() === "") return null;
+    const t = Date.parse(v);
+    return isNaN(t) ? null : t;
+  };
+  var prOf = (t) => t && t.pr && typeof t.pr === "object" ? t.pr : {};
+  var finite2 = (v) => typeof v === "number" && isFinite(v) ? v : null;
+  var startOf3 = (t) => finite2(t.start) ?? finite2(t.planned && t.planned.start);
+  var COLS = Object.freeze([
+    { key: "id", label: "Ticket", val: (t) => natKey(t.id) },
+    {
+      key: "status",
+      label: "Status",
+      val: (t) => {
+        const c = CATS.findIndex((x) => x.key === t.cat);
+        const s = STATUS_ORDER.indexOf(t.status);
+        return (c < 0 ? CATS.length : c) * 100 + (s < 0 ? 99 : s);
+      }
+    },
+    { key: "title", label: "Summary", val: (t) => String(t.title || "").toLowerCase() },
+    { key: "size", label: "Size", val: (t) => SIZES.includes(t.size) ? SIZES.indexOf(t.size) : null },
+    { key: "block", label: "Block", val: (t) => t.block ? natKey(t.block) : null },
+    { key: "hours", label: "Est", val: (t) => finite2(t.hours) },
+    { key: "start", label: "Plan", val: startOf3 },
+    { key: "minutes", label: "Spent", val: (t) => t.minutes ? finite2(t.minutes) : null },
+    { key: "opened", label: "Opened", val: (t) => timeOf2(prOf(t).openedAt) },
+    { key: "reviewed", label: "Reviewed", val: (t) => timeOf2(prOf(t).reviewedAt) },
+    { key: "approved", label: "Approved", val: (t) => timeOf2(prOf(t).approvedAt) },
+    { key: "merged", label: "Merged", val: (t) => timeOf2(prOf(t).mergedAt) },
+    { key: "links", label: "Links", val: (t) => (prOf(t).url ? 1 : 0) + (t.jiraKey ? 1 : 0) }
+  ]);
+  var runKey5 = (r) => r && (r.name || r.instance || r.dir) || "run";
+  var runLabel3 = (r) => r && (r.name || (r.instance ? "warp:" + r.instance : r.dir)) || "run";
+  var dirOf2 = (d) => d === -1 || d === "descending" || d === "desc" ? -1 : 1;
+  function normSort(sort) {
+    const s = sort && typeof sort === "object" ? sort : {};
+    const col = COLS.find((c) => c.key === s.key) || COLS.find((c) => c.key === DEFAULT_SORT.key);
+    return { key: col.key, dir: s.key === col.key ? dirOf2(s.dir) : DEFAULT_SORT.dir };
+  }
+  function nextSort(sort, key) {
+    const cur = normSort(sort);
+    if (!COLS.some((c) => c.key === key)) return cur;
+    return cur.key === key ? { key, dir: -cur.dir } : { key, dir: 1 };
+  }
+  function sortRows(rows, sort) {
+    const { key, dir } = normSort(sort);
+    const col = COLS.find((c) => c.key === key);
+    const keyed = rows.map((row) => ({ row, v: col.val(row.t) }));
+    keyed.sort((a, b) => {
+      const am = a.v == null;
+      const bm = b.v == null;
+      if (am || bm) return am && bm ? natCmp(a.row.t.id, b.row.t.id) * dir : am ? 1 : -1;
+      if (a.v < b.v) return -dir;
+      if (a.v > b.v) return dir;
+      return natCmp(a.row.t.id, b.row.t.id) * dir;
+    });
+    return keyed.map((k) => k.row);
+  }
+  function jiraUrl3(run, key) {
+    if (!key || !run || !run.jiraSite) return null;
+    const site = /^https?:\/\//.test(run.jiraSite) ? run.jiraSite : "https://" + run.jiraSite;
+    return site.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key);
+  }
+  function prLabel3(url) {
+    const m = /(\d+)\/?$/.exec(url || "");
+    return m ? "PR #" + m[1] : "PR";
+  }
+  var stampCell = (raw) => {
+    const ms2 = timeOf2(raw);
+    return ms2 == null ? "\u2014" : `<span title="${esc(raw)}">${esc(stamp(ms2))}</span>`;
+  };
+  function linksCell(run, t) {
+    const url = prOf(t).url;
+    const pr = url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(prLabel3(url))}</a>` : "";
+    const ju = jiraUrl3(run, t.jiraKey);
+    const jira = t.jiraKey ? ju ? `<a href="${esc(ju)}" target="_blank" rel="noopener">${esc(t.jiraKey)}</a>` : esc(t.jiraKey) : "";
+    return [pr, jira].filter(Boolean).join(" ");
+  }
+  function rowHtml(run, t, many, visible) {
+    const hours2 = finite2(t.hours);
+    const start = startOf3(t);
+    const label = many ? ` <span class="tlnote">${esc(runLabel3(run))}</span>` : "";
+    const cls = visible ? "trow" : "trow dim";
+    return `<tr class="${cls}"${visible ? "" : " hidden"} data-id="${esc(t.id)}" data-run="${esc(runKey5(run))}" tabindex="0">
+<td class="mono"><b>${t.critical ? "\u2605 " : ""}${esc(t.id)}</b>${label}</td>
+<td><span class="chipst" style="--c:${catColor(t.cat)}">${esc(statusText(t.status))}</span></td>
+<td class="t" title="${esc(t.title)}">${esc(t.title)}</td>
+<td>${esc(t.size || "\u2014")}</td>
+<td>${esc(t.block || "\u2014")}</td>
+<td>${hours2 == null ? "\u2014" : fmtH(hours2, 0)}</td>
+<td>${start == null ? "\u2014" : "T+" + Math.round(start)}</td>
+<td>${t.minutes ? fmtH(t.minutes / 60) : "\u2014"}</td>
+<td>${stampCell(prOf(t).openedAt)}</td>
+<td>${stampCell(prOf(t).reviewedAt)}</td>
+<td>${stampCell(prOf(t).approvedAt)}</td>
+<td>${stampCell(prOf(t).mergedAt)}</td>
+<td>${linksCell(run, t)}</td></tr>`;
+  }
+  function renderTable(runs, sort, matches2) {
+    const list3 = (Array.isArray(runs) ? runs : []).filter(Boolean);
+    const s = normSort(sort);
+    const show = typeof matches2 === "function" ? matches2 : () => true;
+    const rows = [];
+    for (const run of list3) {
+      if (!Array.isArray(run.tickets)) continue;
+      let view = run;
+      if (!(run.gateAt instanceof Map)) {
+        view = { ...run, tickets: run.tickets.map((t) => t && typeof t === "object" ? { ...t } : t) };
+        plan(view);
+      }
+      for (const t of view.tickets) rows.push({ t, run: view });
+    }
+    const body = sortRows(rows, s).map(({ t, run }) => rowHtml(run, t, list3.length > 1, !!show(t, run))).join("");
+    const head = COLS.map(
+      (c) => `<th data-sort="${c.key}" tabindex="0"${c.key === s.key ? ` aria-sort="${s.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}</th>`
+    ).join("");
+    return `<section class="panel"><div class="tbl-wrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+  }
+
+  // src/main.mjs
+  var LOGO = '<svg width="54" height="54" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="#0E1719"/><path d="M14 12v40M24 12v40M40 12v40M50 12v40" stroke="#43B3AD" stroke-width="3"/><path d="M14 20h36M14 32h36M14 44h36" stroke="#F7FAFA" stroke-width="2.4" opacity=".85"/></svg>';
+  var HOOKS = Object.freeze(["drawerSections", "headerActions", "swimlaneOverlays", "keys"]);
+  var TOAST_MS = 4e3;
+  var RESIZE_MS = 120;
+  var VIEW_ONLY = /* @__PURE__ */ new Set(["zoom", "clock", "sort", "print", "resize"]);
+  var DRAWER_REFRESH = /* @__PURE__ */ new Set(["load", "reload", "recompute", "plugin"]);
+  var TYPING2 = /^(input|select|textarea)$/i;
+  var apps = /* @__PURE__ */ new WeakMap();
+  function renderEmpty() {
+    return `${LOGO}
+    <h2>Open a Warp run</h2>
+    <p>Open <code>.warp/beam.json</code>, or <code>status.json</code>, or the whole <code>.warp</code> folder. Ticket <code>state.json</code> files are read too. A named run's <code>.warp/runs/&lt;name&gt;/</code> works the same way, and several runs open side by side.</p>
+    <p>You can also drop files or a folder anywhere on this page. Nothing is uploaded: the files are read in this browser.</p>
+    <div class="row">
+      <button class="btn primary" data-act="open-files">Open status files\u2026</button>
+      <button class="btn" data-act="open-folder">Open .warp folder\u2026</button>
+    </div>`;
+  }
+  var reasonOf = (e) => {
+    const m = String(e && e.message ? e.message : e == null ? "" : e);
+    return /JSON|Unexpected token|position \d+/i.test(m) ? "not valid JSON" : m;
+  };
+  function embeddedPayload(doc) {
+    const el = doc.getElementById("warp-data");
+    if (!el) return null;
+    try {
+      const p = JSON.parse(el.textContent || "null");
+      return p && typeof p === "object" ? p : null;
+    } catch {
+      return null;
+    }
+  }
+  function collectHooks(plugins) {
+    const hooks = { drawerSections: [], headerActions: [], swimlaneOverlays: [], keys: [] };
+    for (const p of Array.isArray(plugins) ? plugins : []) {
+      if (!p || typeof p !== "object") continue;
+      for (const h of HOOKS) if (Array.isArray(p[h])) hooks[h].push(...p[h].filter(Boolean));
+    }
+    return hooks;
+  }
+  function createApp({ root = typeof document !== "undefined" ? document : null, plugins = [], now = () => Date.now() } = {}) {
+    const doc = root && root.nodeType === 9 ? root : root && root.ownerDocument;
+    if (!doc || !doc.defaultView) throw new Error("createApp needs a document or an element in one");
+    const win = doc.defaultView;
+    const prev = apps.get(doc);
+    if (prev) prev.destroy();
+    const $ = (s) => root.querySelector(s);
+    const prefs = createPrefs(() => win.localStorage);
+    const ctl = loadControls(prefs);
+    const store = createStore({
+      view: ctl.view,
+      groupBy: ctl.groupBy,
+      colorBy: ctl.colorBy,
+      zoom: ctl.zoom,
+      theme: ctl.theme,
+      clock: prefs.get("clock") === "actual" ? "actual" : "plan"
+    });
+    const S = store.state;
+    const hooks = collectHooks(plugins);
+    const ui = { drawer: null, opener: null, utilWasOpen: false, noStore: false, dragDepth: 0, resizeT: null, listeners: [] };
+    const plugList = Array.isArray(plugins) ? plugins.filter(Boolean) : [];
+    const on = (target, type, fn, opts) => {
+      if (!target) return;
+      target.addEventListener(type, fn, opts);
+      ui.listeners.push([target, type, fn, opts]);
+    };
+    const media = (q) => {
+      try {
+        return typeof win.matchMedia === "function" && !!win.matchMedia(q).matches;
+      } catch {
+        return false;
+      }
+    };
+    const show = (el, visible) => {
+      if (!el) return;
+      el.classList.toggle("hidden", !visible);
+      el.hidden = !visible;
+    };
+    const setHtml = (sel, html) => {
+      const el = $(sel);
+      if (el) el.innerHTML = html;
+      return el;
+    };
+    const match = (t, run) => matches(t, run, S);
+    function toast(msg, err = false) {
+      const host = $("#toasts");
+      if (!host) return;
+      const el = doc.createElement("div");
+      el.className = "toast" + (err ? " err" : "");
+      el.setAttribute("role", err ? "alert" : "status");
+      el.textContent = String(msg);
+      host.appendChild(el);
+      win.setTimeout(() => el.remove(), TOAST_MS);
+    }
+    const ctx = (extra2 = {}) => ({
+      app,
+      store,
+      state: S,
+      root,
+      doc,
+      win,
+      render: () => render("plugin"),
+      toast,
+      openDrawer,
+      closeDrawer,
+      ...extra2
+    });
+    const safe = (fn, fallback = "") => {
+      try {
+        return fn();
+      } catch (e) {
+        win.console.error("plugin.failed", { reason: reasonOf(e) });
+        return fallback;
+      }
+    };
+    function renderSwimlanes(runs, view) {
+      const wide = view.clientWidth || (doc.documentElement.clientWidth || 0) - 40;
+      const narrow = media("(max-width:640px)");
+      const many = runs.length > 1;
+      const t = now();
+      const overlays = hooks.swimlaneOverlays.map((ov) => ({
+        id: ov.id,
+        render: (lay, run, opts) => typeof ov.render === "function" ? safe(() => ov.render(lay, run, opts)) : ""
+      }));
+      return runs.map((run) => {
+        const lay = S.clock === "actual" ? layoutActual(run, t) : layoutPlan(run);
+        return renderSwimlanePanel(run, lay, {
+          width: wide,
+          zoom: S.zoom,
+          narrow,
+          print: S.printing,
+          printWidth: PRINT_W,
+          off: S.off,
+          query: S.q,
+          matches: match,
+          colorBy: S.colorBy,
+          overlays,
+          runKey: runKey2(run),
+          title: many ? runLabel2(run) : "Swimlane",
+          clock: S.clock
+        });
+      }).join("");
+    }
+    function bindOverlays(view) {
+      for (const el of view.querySelectorAll("[data-overlay]")) {
+        const panel = el.closest(".swimlane");
+        const run = panel ? S.runs.find((r) => runKey2(r) === panel.dataset.run) || null : null;
+        for (const ov of hooks.swimlaneOverlays) {
+          if (ov.id === el.dataset.overlay && typeof ov.bind === "function") safe(() => ov.bind(el, ctx({ run })));
+        }
+      }
+    }
+    function renderView() {
+      const view = $("#view");
+      if (!view) return;
+      const runs = currentOf(S);
+      if (!runs.length) view.innerHTML = "";
+      else if (S.view === "table") view.innerHTML = renderTable(runs, S.sort, match);
+      else if (S.view === "board")
+        view.innerHTML = renderBoard({ runs, groupBy: S.groupBy, colorBy: S.colorBy, off: S.off, q: S.q, closed: S.closed });
+      else view.innerHTML = renderSwimlanes(runs, view);
+      bindOverlays(view);
+    }
+    function renderControls() {
+      setHtml("#viewSeg", renderViewSeg(S));
+      const vis = visibleControls(S);
+      show($("#groupCtl"), vis.groupBy);
+      show($("#zoomCtl"), vis.zoom);
+      show($("#colorCtl"), vis.colorBy);
+      const g = $("#groupBy");
+      if (g) g.value = S.groupBy;
+      const c = $("#colorBy");
+      if (c) c.value = S.colorBy;
+      const z = $("#zoom");
+      if (z) z.value = String(S.zoom);
+      const a = $("#autoRefresh");
+      if (a) a.checked = !!(auto && auto.enabled);
+    }
+    function renderActionsBar(html) {
+      const bar = $("#actionsBar");
+      if (!bar) return;
+      bar.innerHTML = html;
+      show(bar, !!html);
+      for (const el of bar.querySelectorAll("[data-hook]")) {
+        for (const a of hooks.headerActions) {
+          if (a.id === el.dataset.hook && typeof a.bind === "function") safe(() => a.bind(el, ctx()));
+        }
+      }
+    }
+    function renderFoot() {
+      const files = S.docs.length;
+      const src = $("#sources");
+      if (src) {
+        const paths = S.docs.slice(0, 4).map((d) => d.path).join(", ");
+        src.textContent = `${files} file${files === 1 ? "" : "s"} read${S.embedded && !S.sources.length ? " (embedded by /warp-dashboard)" : ""}${paths ? " \xB7 " + paths : ""}${files > 4 ? ", \u2026" : ""}`;
+      }
+      const gen = $("#generated");
+      if (gen) {
+        const written = S.embedded && !S.sources.length && S.embedded.generatedAt != null;
+        gen.textContent = written ? "Written by /warp-dashboard " + stamp(S.embedded.generatedAt) : S.loadedAt != null ? "Loaded " + stamp(S.loadedAt) : "";
+      }
+    }
+    function render(reason = "render") {
+      if (reason === "theme") return;
+      const has2 = S.runs.length > 0;
+      if (VIEW_ONLY.has(reason) && has2) {
+        renderControls();
+        renderView();
+        return;
+      }
+      show($("#emptyState"), !has2);
+      show($("#app"), has2);
+      const rb = $("#reloadBtn");
+      if (rb) rb.disabled = !(S.sources.length || S.embedded);
+      const t = now();
+      const cur = currentOf(S);
+      const head = renderHeader({
+        runs: S.runs,
+        tab: S.tab,
+        metrics: has2 ? computeMetrics(cur, t) : null,
+        util: has2 ? utilization(cur) : null,
+        actions: hooks.headerActions,
+        now: t
+      });
+      setHtml("#meta", head.meta);
+      renderActionsBar(head.actions);
+      if (!has2) {
+        setHtml("#view", "");
+        closeDrawer();
+        return;
+      }
+      setHtml("#title", head.title);
+      setHtml("#subline", head.subline);
+      setHtml("#chainline", head.chain);
+      setHtml("#tabs", head.tabs);
+      setHtml("#metrics", head.metrics);
+      setHtml("#util", head.util);
+      setHtml("#legend", renderLegend(cur, S));
+      renderControls();
+      renderView();
+      renderFoot();
+      if (ui.drawer && DRAWER_REFRESH.has(reason)) refreshDrawer();
+    }
+    const drawerSections = () => hooks.drawerSections.map((s) => ({
+      id: s.id,
+      render: (t, run) => {
+        if (typeof s.render !== "function") return "";
+        const html = s.render(t, run);
+        return typeof html === "string" && html ? `<section class="dsec" data-hook="${esc(s.id)}">${html}</section>` : "";
+      }
+    }));
+    function fillDrawer(ticket, run) {
+      const dr = $("#drawer");
+      if (!dr) return null;
+      dr.innerHTML = renderDrawer(ticket, run, drawerSections(), now());
+      for (const el of dr.querySelectorAll(".dsec[data-hook]")) {
+        for (const s of hooks.drawerSections) {
+          if (s.id === el.dataset.hook && typeof s.bind === "function") safe(() => s.bind(el, ctx({ run, ticket })));
+        }
+      }
+      return dr;
+    }
+    function openDrawer(key, id) {
+      const { run, ticket } = store.findTicket(key, id);
+      if (!ticket) return false;
+      const dr = fillDrawer(ticket, run);
+      if (!dr) return false;
+      ui.drawer = { key, id };
+      hideTip();
+      doc.body.classList.add("drawer-open");
+      dr.setAttribute("aria-hidden", "false");
+      const x = dr.querySelector("#drawerClose");
+      if (x) x.focus();
+      return true;
+    }
+    function refreshDrawer() {
+      const { run, ticket } = store.findTicket(ui.drawer.key, ui.drawer.id);
+      if (ticket) fillDrawer(ticket, run);
+      else closeDrawer();
+    }
+    function closeDrawer() {
+      const was = !!ui.drawer;
+      ui.drawer = null;
+      doc.body.classList.remove("drawer-open");
+      const dr = $("#drawer");
+      if (dr) dr.setAttribute("aria-hidden", "true");
+      const back = ui.opener;
+      ui.opener = null;
+      if (was && back && back.isConnected && typeof back.focus === "function") back.focus();
+    }
+    function hideTip() {
+      const tip = $("#tip");
+      if (tip) tip.style.display = "none";
+    }
+    function showTip(e, el) {
+      const tip = $("#tip");
+      const { ticket } = store.findTicket(el.dataset.run, el.dataset.id);
+      if (!tip || !ticket) return;
+      tip.innerHTML = renderTooltip(ticket);
+      tip.style.display = "block";
+      const w = tip.offsetWidth || 0;
+      const h = tip.offsetHeight || 0;
+      const x = Math.min(e.clientX + 14, (win.innerWidth || 0) - w - 8);
+      const y = e.clientY + 16 + h > (win.innerHeight || 0) ? e.clientY - h - 10 : e.clientY + 16;
+      tip.style.left = Math.max(0, x) + "px";
+      tip.style.top = Math.max(0, y) + "px";
+    }
+    function logErrors(errors) {
+      for (const e of errors || []) win.console.error("load.failed", { path: e.path, reason: reasonOf(e.error) });
+    }
+    function loadDocs(docs2, { sources = [], errors = [], quiet = false, reason = "load", embedded = null } = {}) {
+      let built;
+      try {
+        built = buildRuns(docs2, embedded);
+      } catch (e) {
+        toast("Could not read: " + reasonOf(e), true);
+        return false;
+      }
+      if (!built.runs.length) {
+        toast(
+          docs2.length ? "No beam.json, status.json or schedule.json in what was opened." : "Nothing could be read." + (errors[0] ? " " + reasonOf(errors[0].error) : ""),
+          true
+        );
+        return false;
+      }
+      S.docs = docs2;
+      S.sources = sources;
+      S.embedded = embedded;
+      S.loadedAt = now();
+      store.replaceRuns(built.runs, reason);
+      if (!quiet) {
+        const n = built.runs.length;
+        const bits = [`${n} run${n === 1 ? "" : "s"}`, `${S.runs.reduce((a, r) => a + r.tickets.length, 0)} tickets`];
+        if (built.states) bits.push(`${built.states} ticket states (${built.overlaid} newer than the beam)`);
+        if (errors.length) bits.push(`${errors.length} unreadable`);
+        if (built.skipped) bits.push(`${built.skipped} skipped`);
+        toast("Loaded " + bits.join(", "));
+      }
+      return true;
+    }
+    async function loadSources(sources, opts = {}) {
+      const { docs: docs2, errors } = await readSources(sources);
+      logErrors(errors);
+      return loadDocs(docs2, { ...opts, sources, errors });
+    }
+    async function pick3(open) {
+      let sources;
+      try {
+        sources = await open({ win, doc });
+      } catch (e) {
+        toast("Could not open: " + reasonOf(e), true);
+        return false;
+      }
+      if (!sources || !sources.length) return false;
+      return loadSources(sources);
+    }
+    async function reload2({ quiet = false } = {}) {
+      if (!S.sources.length && !S.embedded) {
+        if (!quiet) toast("Nothing to reload. Open files first.");
+        return false;
+      }
+      let r;
+      try {
+        r = await reload({ win, doc, sources: S.sources });
+      } catch (e) {
+        toast("Could not reload: " + reasonOf(e), true);
+        return false;
+      }
+      if (r.mode === "page") return true;
+      if (r.mode === "none") {
+        if (!quiet) toast(r.message);
+        return false;
+      }
+      logErrors(r.errors);
+      const ok = r.docs.length ? loadDocs(r.docs, { sources: S.sources, errors: r.errors, quiet: true, reason: "reload", embedded: S.embedded }) : false;
+      if (r.message) toast(r.message, true);
+      else if (ok && !quiet) toast("Reloaded");
+      return ok;
+    }
+    const auto = createAutoReload({ win, doc, onTick: () => S.runs.length ? reload2({ quiet: true }) : null });
+    function print() {
+      try {
+        if (typeof win.print === "function") win.print();
+      } catch {
+      }
+    }
+    const applyTheme = (theme) => {
+      const el = doc.documentElement;
+      if (theme) el.setAttribute("data-theme", theme);
+      else el.removeAttribute("data-theme");
+    };
+    function setMenu(open) {
+      const m = $("#fileMenu");
+      if (!m) return;
+      m.classList.toggle("open", open);
+      const b = $("#fileBtn");
+      if (b) b.setAttribute("aria-expanded", String(open));
+    }
+    const menuOpen = () => {
+      const m = $("#fileMenu");
+      return !!m && m.classList.contains("open");
+    };
+    function act(name) {
+      setMenu(false);
+      if (name === "open-files") return pick3(openFiles);
+      if (name === "open-folder") return pick3(openFolder);
+      if (name === "reload") return reload2();
+      if (name === "auto-reload") {
+        auto.toggle();
+        return renderControls();
+      }
+      if (name === "print") return print();
+      if (name === "clear") {
+        closeDrawer();
+        store.set({ runs: [], docs: [], sources: [], embedded: null, tab: "all", loadedAt: null }, "clear");
+      }
+      return null;
+    }
+    function toggleLane(head) {
+      const lane = head.closest(".lane");
+      if (!lane) return;
+      const closed = lane.classList.toggle("closed");
+      S.closed = setLaneClosed(S.closed, lane.dataset.lane, closed);
+      head.setAttribute("aria-expanded", String(!closed));
+    }
+    const inside = (t) => !!t && (root === doc || root.contains(t));
+    const elOf = (e) => (e.target && e.target.nodeType === 1 ? e.target : e.target && e.target.parentElement) || null;
+    on(doc, "click", (e) => {
+      const t = elOf(e);
+      if (!inside(t)) return;
+      const a = t.closest("[data-act]");
+      if (a && !t.closest("#drawer, #actionsBar")) {
+        act(a.dataset.act);
+        return;
+      }
+      if (t.closest("#fileBtn")) {
+        setMenu(!menuOpen());
+        return;
+      }
+      if (!t.closest("#fileMenu")) setMenu(false);
+      if (t.closest("#drawerClose, #scrim")) return closeDrawer();
+      if (t.closest("#reloadBtn")) return void reload2();
+      if (t.closest("#printBtn")) return print();
+      if (t.closest("#themeBtn")) {
+        const theme = toggleTheme(S, prefs, media("(prefers-color-scheme: dark)")).theme;
+        applyTheme(theme);
+        return store.set({ theme }, "theme");
+      }
+      const chip2 = t.closest("#legend .fchip[data-cat]");
+      if (chip2) return store.set({ off: toggleCat(S, chip2.dataset.cat).off }, "filter");
+      const tab = t.closest("#tabs [data-tab]");
+      if (tab) return store.set({ tab: tab.dataset.tab }, "tab");
+      const clock = t.closest("#view [data-clock]");
+      if (clock) {
+        const c = clock.dataset.clock === "actual" ? "actual" : "plan";
+        prefs.set("clock", c);
+        return store.set({ clock: c }, "clock");
+      }
+      const th = t.closest("#view th[data-sort]");
+      if (th) {
+        const key = th.dataset.sort;
+        const refocus = doc.activeElement === th;
+        store.set({ sort: nextSort(S.sort, key) }, "sort");
+        const again = refocus ? $(`#view th[data-sort="${key}"]`) : null;
+        if (again) again.focus();
+        return;
+      }
+      const v = t.closest("#viewSeg [data-view]");
+      if (v) return store.set({ view: switchView(S, v.dataset.view, prefs).view }, "view");
+      const lh = t.closest("#view .lane-h");
+      if (lh) return toggleLane(lh);
+      const tk = t.closest("#view .bar, #view .tcard, #view .trow");
+      if (tk && !t.closest("a")) {
+        ui.opener = tk;
+        openDrawer(tk.dataset.run, tk.dataset.id);
+      }
+    });
+    on(doc, "dblclick", (e) => {
+      const t = elOf(e);
+      if (!inside(t)) return;
+      const chip2 = t.closest("#legend .fchip[data-cat]");
+      if (chip2) store.set({ off: onlyCat(S, chip2.dataset.cat).off }, "filter");
+    });
+    on(doc, "keydown", (e) => {
+      const t = elOf(e) || doc.body;
+      if (!inside(t)) return;
+      const typing = TYPING2.test(t.tagName || "") || t.isContentEditable;
+      if (!typing) {
+        const ctrl = e.ctrlKey || e.metaKey;
+        for (const k of hooks.keys) {
+          if (!k || typeof k.run !== "function" || k.key !== e.key) continue;
+          if (!!k.ctrl !== ctrl || k.shift != null && !!k.shift !== e.shiftKey) continue;
+          e.preventDefault();
+          safe(() => k.run(e, ctx()));
+          return;
+        }
+      }
+      let action = keyAction(e);
+      if (!action && (e.key === "Enter" || e.key === " ") && t.matches("#view .bar")) action = "activate";
+      if (!action) return;
+      if (action === "escape") {
+        setMenu(false);
+        hideTip();
+        if (ui.drawer) closeDrawer();
+        return;
+      }
+      e.preventDefault();
+      if (action === "activate") t.click();
+      else if (action === "focus-search") {
+        const q = $("#q");
+        if (q) q.focus();
+      } else act(action);
+    });
+    on(doc, "input", (e) => {
+      const t = elOf(e);
+      if (!inside(t)) return;
+      if (t.id === "q") store.set({ q: setQuery(S, t.value).q }, "filter");
+      else if (t.id === "zoom") store.set({ zoom: setZoom(S, t.value, prefs).zoom }, "zoom");
+    });
+    on(doc, "change", (e) => {
+      const t = elOf(e);
+      if (!inside(t)) return;
+      if (t.id === "groupBy") store.set({ groupBy: setGroupBy(S, t.value, prefs).groupBy }, "group");
+      else if (t.id === "colorBy") store.set({ colorBy: setColorBy(S, t.value, prefs).colorBy }, "color");
+      else if (t.id === "autoRefresh") auto.set(t.checked);
+    });
+    on(doc, "mouseover", (e) => {
+      const t = elOf(e);
+      const b = t && t.closest("#view .bar");
+      if (b) showTip(e, b);
+    });
+    on(doc, "mousemove", (e) => {
+      const t = elOf(e);
+      const b = t && t.closest("#view .bar");
+      if (b) showTip(e, b);
+      else hideTip();
+    });
+    const hasFiles = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+    on(win, "dragenter", (e) => {
+      if (!hasFiles(e)) return;
+      ui.dragDepth++;
+      doc.body.classList.add("dragging");
+      e.preventDefault();
+    });
+    on(win, "dragover", (e) => e.preventDefault());
+    on(win, "dragleave", () => {
+      ui.dragDepth = Math.max(0, ui.dragDepth - 1);
+      if (!ui.dragDepth) doc.body.classList.remove("dragging");
+    });
+    on(win, "drop", (e) => {
+      e.preventDefault();
+      ui.dragDepth = 0;
+      doc.body.classList.remove("dragging");
+      if (!e.dataTransfer) return;
+      sourcesFromDrop(e.dataTransfer).then((sources) => sources.length ? loadSources(sources) : toast("No .json files in what was dropped.", true)).catch((err) => toast("Could not read the drop: " + reasonOf(err), true));
+    });
+    on(win, "resize", () => {
+      win.clearTimeout(ui.resizeT);
+      ui.resizeT = win.setTimeout(() => {
+        if (S.runs.length && S.view === "timeline") render("resize");
+      }, RESIZE_MS);
+    });
+    on(win, "beforeprint", () => {
+      const u = $("#util");
+      if (u) {
+        ui.utilWasOpen = u.open;
+        ui.noStore = true;
+        u.open = true;
+      }
+      if (S.view === "timeline" && S.runs.length) store.set({ printing: true }, "print");
+    });
+    on(win, "afterprint", () => {
+      const u = $("#util");
+      if (u) u.open = !!ui.utilWasOpen;
+      win.setTimeout(() => {
+        ui.noStore = false;
+      }, 0);
+      if (S.printing) store.set({ printing: false }, "print");
+    });
+    const utilEl = $("#util");
+    if (utilEl) {
+      utilEl.open = prefs.get("util") === "1";
+      on(utilEl, "toggle", () => {
+        if (!ui.noStore) prefs.set("util", utilEl.open ? "1" : "");
+      });
+    }
+    function destroy() {
+      for (const [target, type, fn, opts] of ui.listeners) target.removeEventListener(type, fn, opts);
+      ui.listeners = [];
+      auto.stop();
+      win.clearTimeout(ui.resizeT);
+      if (apps.get(doc) === app) apps.delete(doc);
+    }
+    const app = {
+      root,
+      plugins: plugList,
+      hooks,
+      store,
+      recompute: (run) => store.recompute(run),
+      render,
+      openDrawer,
+      closeDrawer,
+      toast,
+      reload: reload2,
+      load: (docs2, opts) => loadDocs(docs2, opts),
+      destroy
+    };
+    apps.set(doc, app);
+    const empty = $("#emptyState");
+    if (empty) empty.innerHTML = renderEmpty();
+    applyTheme(S.theme);
+    store.subscribe((_, reason) => render(reason));
+    for (const p of plugList) if (typeof p.init === "function") safe(() => p.init(app));
+    const docs = embeddedDocs(doc);
+    if (docs.length) {
+      const payload = embeddedPayload(doc) || {};
+      const embedded = { repo: payload.repo || null, jiraSite: payload.jiraSite || "", generatedAt: parseTime(payload.generatedAt) };
+      if (!loadDocs(docs, { quiet: true, embedded })) render("init");
+    } else render("init");
+    return app;
+  }
+  if (typeof document !== "undefined" && document.getElementById("warp-data")) {
+    createApp({ root: document });
+  }
+})();
+</script>
+</body>
+</html>
