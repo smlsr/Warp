@@ -1,4 +1,4 @@
-"""One lock-escape repair at a time. The repair widens locks to the escaped paths."""
+"""Lock-escape repairs start at once, in parallel, decided one at a time so two never take the same file."""
 
 import json
 import shutil
@@ -81,27 +81,136 @@ class AlarmRepairTests(unittest.TestCase):
     def heralds(self, lines):
         return [line[len("herald: ") :] for line in lines if line.startswith("herald: ")]
 
-    def test_one_at_a_time(self):
-        self.write(
-            {
-                "WV-02": ticket("WV-02"),
-                "WV-01": ticket("WV-01"),
-            }
-        )
+    def test_every_free_escape_starts_at_once(self):
+        self.write({"WV-02": ticket("WV-02"), "WV-01": ticket("WV-01")})
         first = self.lines()
         self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in first))
-        self.assertNotIn("alarm-repair: start WV-01", "\n".join(first))
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-01 ") for line in first))
         data = self.load()
-        self.assertEqual(data["alarmRepair"]["active"], "WV-02")
-        self.assertEqual(data["tickets"]["WV-02"]["status"], "claimed")
-        self.assertEqual(data["tickets"]["WV-02"]["alarm"], "lock-escape")
-        self.assertEqual(data["tickets"]["WV-01"]["status"], "alarm")
-        self.assertEqual(data["tickets"]["WV-01"]["alarmRepairs"] if "alarmRepairs" in data["tickets"]["WV-01"] else 0, 0)
+        self.assertEqual(data["alarmRepair"]["active"], ["WV-02", "WV-01"])  # plan order
+        for tid in ("WV-01", "WV-02"):
+            self.assertEqual((data["tickets"][tid]["status"], data["tickets"][tid]["alarm"], data["tickets"][tid]["alarmRepairs"]),
+                             ("claimed", "lock-escape", 1))
         again = self.lines()
         self.assertIn("alarm-repair: working WV-02", again)
+        self.assertIn("alarm-repair: working WV-01", again)
         self.assertFalse(any(line.startswith("alarm-repair: start ") for line in again))
-        self.assertEqual(self.load()["tickets"]["WV-02"]["alarmRepairs"], 1)
+
+    def test_an_escape_starts_without_waiting_for_the_interval(self):
+        self.write({"WV-01": ticket("WV-01", status="coding", alarm=None, escaped=None)})
+        self.assertIn("alarm-repair: idle", self.lines())
+        data = self.load()
+        data["tickets"]["WV-01"].update(status="alarm", alarm="lock-escape", escaped=["extra/WV-01"])
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        got = self.lines(now=plus(NOW, 1))  # one minute later, well inside alarmRepairMinutes
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-01 ") for line in got), got)
+        self.assertNotIn("alarm-repair: wait", got)
+
+    def test_two_escapes_into_one_file_start_one_at_a_time(self):
+        # Decided serially, run in parallel: the first takes the file; the second sees it held and waits.
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/shared.ts"]),
+                    "WV-02": ticket("WV-02", locks=["src/b"], escaped=["src/shared.ts"]),
+                    "WV-03": ticket("WV-03", locks=["src/c"], escaped=["src/own.ts"])})
+        got = self.lines()
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-01 ") for line in got))
+        self.assertIn("alarm-repair: locked WV-02 by WV-01", got)
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-03 ") for line in got))  # not held back by WV-02
+        data = self.load()
+        self.assertEqual(data["tickets"]["WV-01"]["locks"], ["src/a", "src/shared.ts"])
+        self.assertEqual((data["tickets"]["WV-02"]["status"], data["tickets"]["WV-02"]["locks"]), ("alarm", ["src/b"]))
+        self.assertNotIn("alarmRepairs", data["tickets"]["WV-02"])
+        # Normal dispatch in the same pass sees the repair holding the file.
+        data["tickets"]["WV-09"] = ticket("WV-09", status="queued", alarm=None, escaped=None, locks=["src/shared.ts"])
+        self.assertNotIn("WV-09", [t["id"] for t in beam.ready(data)])
+        data["tickets"].pop("WV-09")
+        # WV-01 merges: WV-02 takes the file on the next tick.
+        data["tickets"]["WV-01"]["status"] = "merged"
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        nxt = self.lines(now=plus(NOW, 1))
+        self.assertIn("alarm-repair: passed WV-01", nxt)
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in nxt))
+        self.assertEqual(self.load()["tickets"]["WV-02"]["locks"], ["src/b", "src/shared.ts"])
+
+    def test_one_supervise_pass_repairs_before_it_dispatches(self):
+        import pipeline
+
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/shared.ts"]),
+                    "WV-02": ticket("WV-02", locks=["src/b"], escaped=["src/shared.ts"]),
+                    "WV-09": ticket("WV-09", status="queued", alarm=None, escaped=None, locks=["src/shared.ts"], branch=None)})
+        data = self.load()
+        lines = pipeline.advance(data, beam_path=self.beam_path, now=NOW)
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-01 ") for line in lines), lines)
+        self.assertIn("alarm-repair: locked WV-02 by WV-01", lines)
+        self.assertFalse(any(line.startswith("start WV-09") for line in lines), lines)  # the repair holds the file first
+        self.assertEqual(data["tickets"]["WV-09"]["status"], "queued")
+
+    def test_a_started_repair_holds_its_slot_until_launch_across_calls(self):
+        self.write({"WV-01": ticket("WV-01"), "WV-02": ticket("WV-02"), "WV-03": ticket("WV-03"),
+                    "WV-09": ticket("WV-09", status="queued", alarm=None, escaped=None, locks=["src/q"], branch=None)})
+        data = self.load()
+        data["config"]["maxAgents"] = 2
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        self.lines()
+        data = self.load()
+        self.assertEqual(beam.shuttle_room(data), 0)  # two repairs, not launched yet, already hold both slots
+        self.assertEqual(beam.ready(data), [])  # so the dispatch in the same pass starts nothing new
+        later = self.lines(now=plus(NOW, 1))
+        self.assertFalse(any(line.startswith("alarm-repair: start WV-03 ") for line in later), later)
+        self.assertIn("alarm-repair: queued WV-03 (no free Shuttle slot; maxAgents)", later)
+
+    def test_a_lockfile_counts_as_its_manifest(self):
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["app/package-lock.json"]),
+                    "WV-02": ticket("WV-02", status="coding", alarm=None, escaped=None, locks=["app/package.json"])})
+        self.assertIn("alarm-repair: locked WV-01 by WV-02", self.lines())
+        self.assertTrue(beam.lock_overlap(["app/package.json"], ["app/package-lock.json"]))
+        self.assertFalse(beam.lock_overlap(["app/package.json"], ["web/package-lock.json"]))
+
+    def test_an_escape_seen_while_its_shuttle_works_waits_and_still_holds_its_files(self):
+        live = {"pending": True, "step": "implement"}
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/b"], shuttle=live, workerStartedAt=NOW, lastSeenAt=NOW),
+                    "WV-02": ticket("WV-02", locks=["src/c"], escaped=["src/a/x.ts"])})
+        got = self.lines(now=plus(NOW, 1))
+        self.assertIn("alarm-repair: shuttle-out WV-01 (repaired when its Shuttle returns)", got)
+        self.assertIn("alarm-repair: locked WV-02 by WV-01", got)  # its Shuttle is still in src/a
         self.assertEqual(self.load()["tickets"]["WV-01"]["status"], "alarm")
+
+    def test_a_restarted_alarm_waits_for_locks_a_repair_took(self):
+        import pipeline
+
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/shared.ts"]),
+                    "WV-05": ticket("WV-05", alarm="worker-died", escaped=None, locks=["src/shared.ts"])})
+        self.lines()
+        data = self.load()
+        data["_repoRoot"] = str(self.repo)
+        lines = []
+        pipeline._restart(data, data["tickets"]["WV-05"], lines, "implementing")
+        self.assertIn("shuttle: hold WV-05 (its locks are held by WV-01)", lines)
+        self.assertEqual(data["tickets"]["WV-05"]["status"], "alarm")
+
+    def test_start_and_resume_repair_escapes_before_anything_else(self):
+        import pipeline
+
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/shared.ts"]),
+                    "WV-09": ticket("WV-09", status="queued", alarm=None, escaped=None, locks=["src/shared.ts"], branch=None),
+                    "WV-10": ticket("WV-10", status="queued", alarm=None, escaped=None, locks=["src/other"], branch=None)})
+        data = self.load()
+        self.assertTrue(pipeline.unfinished_line(data).startswith("unfinished: Lock-escape alarms first (locks widened, relaunched): WV-01. "))
+        lines = pipeline.cold_start(self.beam_path)
+        first = next(i for i, line in enumerate(lines) if line.startswith("alarm-repair: start WV-01 "))
+        self.assertEqual(first, 0, lines)
+        self.assertFalse(any(line.startswith("start WV-09") for line in lines), lines)  # the repair holds src/shared.ts
+        self.assertTrue(any(line.startswith("start WV-10") for line in lines), lines)  # new work after, in free slots
+        self.assertEqual(self.load()["tickets"]["WV-01"]["status"], "claimed")
+
+    def test_repairs_take_shuttle_slots(self):
+        self.write({"WV-01": ticket("WV-01"), "WV-02": ticket("WV-02"), "WV-03": ticket("WV-03")})
+        data = self.load()
+        data["config"]["maxAgents"] = 2
+        self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
+        got = self.lines()
+        self.assertEqual(len([line for line in got if line.startswith("alarm-repair: start ")]), 2, got)
+        self.assertIn("alarm-repair: queued WV-03 (no free Shuttle slot; maxAgents)", got)
+        self.assertEqual(self.load()["tickets"]["WV-03"]["status"], "alarm")
 
     def test_repair_adds_escaped_paths(self):
         self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/b", "src/c", "src/b"])})
@@ -118,31 +227,20 @@ class AlarmRepairTests(unittest.TestCase):
         self.write(
             {
                 "WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/held"]),
+                "WV-09": ticket("WV-09", locks=["src/free"], escaped=["src/other"]),
                 "WV-02": ticket("WV-02", status="coding", alarm=None, escaped=None, locks=["src/held"]),
             }
         )
         got = self.lines()
         self.assertIn("alarm-repair: locked WV-01 by WV-02", got)
-        self.assertFalse(any(line.startswith("alarm-repair: start ") for line in got))
+        self.assertFalse(any(line.startswith("alarm-repair: start WV-01 ") for line in got))
         row = self.load()["tickets"]["WV-01"]
-        self.assertEqual(row["status"], "alarm")
-        self.assertEqual(row["alarm"], "lock-escape")
-        self.assertEqual(row["locks"], ["src/a"])
+        self.assertEqual((row["status"], row["alarm"], row["locks"]), ("alarm", "lock-escape", ["src/a"]))
         self.assertNotIn("addedLocks", row)
         self.assertNotIn("alarmRepairs", row)
-        self.assertIsNone(self.load()["alarmRepair"].get("active"))
-        # Still held on the next tick: do not start the other alarm either.
-        self.write(
-            {
-                "WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/held"]),
-                "WV-09": ticket("WV-09", locks=["src/free"], escaped=["src/other"]),
-                "WV-02": ticket("WV-02", status="coding", alarm=None, escaped=None, locks=["src/held"]),
-            }
-        )
-        held = self.lines()
-        self.assertIn("alarm-repair: locked WV-01 by WV-02", held)
-        self.assertEqual(self.load()["tickets"]["WV-09"]["status"], "alarm")
-        self.assertFalse(any(line.startswith("alarm-repair: start ") for line in held))
+        # A held ticket no longer holds back the ones after it.
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-09 ") for line in got))
+        self.assertEqual(self.load()["alarmRepair"]["active"], ["WV-09"])
 
     def test_queued_overlap_is_widened_and_started(self):
         self.write(
@@ -178,8 +276,8 @@ class AlarmRepairTests(unittest.TestCase):
         self.assertEqual(row["addedLocks"], ["src/held"])
         self.assertEqual(row["status"], "claimed")
 
-    def test_fail_moves_to_the_next_and_keeps_the_alarm(self):
-        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/b"]), "WV-02": ticket("WV-02")})
+    def test_a_failure_keeps_the_alarm_and_retries_after_the_interval(self):
+        self.write({"WV-01": ticket("WV-01", locks=["src/a"], escaped=["src/b"])})
         self.lines()
         data = self.load()
         data["tickets"]["WV-01"]["status"] = "alarm"
@@ -187,25 +285,16 @@ class AlarmRepairTests(unittest.TestCase):
         self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
         got = self.lines(now=plus(NOW, 1))
         self.assertIn("alarm-repair: failed WV-01", got)
-        self.assertIn("WV-01 lock-escape repair failed. Taking WV-02.", self.heralds(got))
-        self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in got))
-        saved = self.load()
-        first = saved["tickets"]["WV-01"]
-        self.assertEqual(first["status"], "alarm")
-        self.assertEqual(first["alarm"], "lock-escape")
-        self.assertEqual(first["alarmRepairs"], 1)
-        self.assertEqual(first["locks"], ["src/a", "src/b"])
-        self.assertEqual(saved["tickets"]["WV-02"]["status"], "claimed")
-        self.assertEqual(saved["alarmRepair"]["active"], "WV-02")
-        # Same pass does not start WV-01 again.
-        saved["tickets"]["WV-02"]["status"] = "alarm"
-        saved["tickets"]["WV-02"]["alarm"] = "lock-escape"
-        self.beam_path.write_text(json.dumps(saved, indent=2) + "\n")
-        parked = self.lines(now=plus(NOW, 2))
-        self.assertNotIn("alarm-repair: start WV-01", "\n".join(parked))
-        self.assertEqual(self.load()["tickets"]["WV-01"]["alarmRepairs"], 1)
+        self.assertIn("WV-01 lock-escape repair failed (attempt 1 of 3). It tries again in alarmRepairMinutes.", self.heralds(got))
+        self.assertIn("alarm-repair: retry WV-01 after 15 minutes (failed %s)" % plus(NOW, 1), got)
+        saved = self.load()["tickets"]["WV-01"]
+        self.assertEqual((saved["status"], saved["alarm"], saved["alarmRepairs"], saved["locks"]), ("alarm", "lock-escape", 1, ["src/a", "src/b"]))
+        self.assertFalse(any(line.startswith("alarm-repair: start ") for line in self.lines(now=plus(NOW, 10))))
+        again = self.lines(now=plus(NOW, 16))
+        self.assertTrue(any(line.startswith("alarm-repair: start WV-01 ") for line in again), again)
+        self.assertEqual(self.load()["tickets"]["WV-01"]["alarmRepairs"], 2)
 
-    def test_success_waits_for_completion_before_the_next(self):
+    def test_success_is_settled_when_the_ticket_moves_on(self):
         self.write({"WV-01": ticket("WV-01"), "WV-02": ticket("WV-02")})
         self.lines()
         data = self.load()
@@ -214,17 +303,16 @@ class AlarmRepairTests(unittest.TestCase):
         self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
         waiting = self.lines(now=plus(NOW, 1))
         self.assertIn("alarm-repair: waiting WV-01", waiting)
-        self.assertEqual(self.load()["tickets"]["WV-02"]["status"], "alarm")
-        self.assertFalse(any(line.startswith("alarm-repair: start ") for line in waiting))
+        self.assertIn("alarm-repair: working WV-02", waiting)
         data = self.load()
         data["tickets"]["WV-01"]["status"] = "merged"
         self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
         nxt = self.lines(now=plus(NOW, 2))
         self.assertIn("alarm-repair: passed WV-01", nxt)
-        self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in nxt))
+        self.assertEqual(self.load()["alarmRepair"]["active"], ["WV-02"])
 
-    def test_returned_on_the_normal_path_starts_the_next(self):
-        self.write({"WV-01": ticket("WV-01"), "WV-02": ticket("WV-02")})
+    def test_returned_on_the_normal_path_passes(self):
+        self.write({"WV-01": ticket("WV-01")})
         self.lines()
         data = self.load()
         data["tickets"]["WV-01"]["status"] = "planning"
@@ -232,7 +320,18 @@ class AlarmRepairTests(unittest.TestCase):
         self.beam_path.write_text(json.dumps(data, indent=2) + "\n")
         got = self.lines(now=plus(NOW, 1), returned="WV-01")
         self.assertIn("alarm-repair: passed WV-01", got)
+        self.assertEqual(self.load()["alarmRepair"]["active"], [])
+
+    def test_an_old_single_active_repair_is_read_as_a_list(self):
+        self.write({"WV-01": ticket("WV-01", status="claimed", agent="repair-WV-01-1", alarmRepairs=1,
+                                    alarmRepair={"state": "working", "attempts": 1}), "WV-02": ticket("WV-02")},
+                   alarmRepair={"active": "WV-01", "naming": None, "tried": ["WV-01"], "passOpen": True})
+        got = self.lines()
+        self.assertIn("alarm-repair: working WV-01", got)
         self.assertTrue(any(line.startswith("alarm-repair: start WV-02 ") for line in got))
+        state = self.load()["alarmRepair"]
+        self.assertEqual((state["active"], state["naming"]), (["WV-01", "WV-02"], []))
+        self.assertNotIn("tried", state)
 
     def test_start_prints_the_launch_and_marks_the_repair_step(self):
         self.write({"WV-01": ticket("WV-01", shuttle={"pending": False, "step": "implement", "returned": True})})
@@ -255,7 +354,7 @@ class AlarmRepairTests(unittest.TestCase):
             row = self.load()["tickets"]["WV-01"]
             self.assertEqual(row["alarmRepairs"], 1)
             self.assertEqual(row["alarmRepair"]["state"], "working")
-            self.assertEqual(self.load()["alarmRepair"]["active"], "WV-01")
+            self.assertEqual(self.load()["alarmRepair"]["active"], ["WV-01"])
         # The launch is recorded; the same return now settles the attempt.
         data = self.load()
         data["tickets"]["WV-01"]["alarmRepair"]["launchedAt"] = plus(NOW, 2)

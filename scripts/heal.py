@@ -93,10 +93,9 @@ def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=
     info.update({"state": "cleared", "clearedAt": now_s, "gaveUp": False})
     ticket["alarmRepair"] = info
     repair = data.get("alarmRepair") if isinstance(data.get("alarmRepair"), dict) else {}
-    if repair.get("active") == tid:
-        repair["active"] = None
-    if repair.get("naming") == tid:
-        repair["naming"] = None
+    if repair:
+        alarm_repair._drop(alarm_repair._active(repair), tid)
+        alarm_repair._drop(alarm_repair._naming(repair), tid)
     added = " Added %s to its locks." % ", ".join(widened) if widened else ""
     if ticket.get("status") != "alarm" and orchestrator.shuttle_is_live(ticket, data, now=now):
         # A Shuttle is still out on it. Only the alarm goes; the Shuttle's return moves it on.

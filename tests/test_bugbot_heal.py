@@ -496,7 +496,7 @@ class HealTest(Repo):
         self.assertEqual((got["status"], got["phase"], got["alarm"], got["alarmRepairs"], got["stalled"]),
                          ("review", "reviewing", None, 0, False))
         self.assertFalse(got["shuttle"]["pending"])
-        self.assertIsNone(saved["alarmRepair"]["active"])
+        self.assertFalse(saved["alarmRepair"]["active"])
 
     def test_a_live_shuttle_keeps_its_step_and_only_the_alarm_goes(self):
         self.write([row(status="recovering", alarm="lock-escape", escaped=["app/package-lock.json"],

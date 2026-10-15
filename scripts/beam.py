@@ -463,8 +463,13 @@ def lock_overlap(a: list[str], b: list[str]) -> bool:
     """Same path, or one path is a parent folder of the other.
 
     The lists are the tickets' full lock lists. A shortened board line is not
-    an input to this check.
+    an input to this check. A locked manifest also covers its lockfile
+    (`app/package.json` covers `app/package-lock.json`): npm rewrites it.
     """
+    import alarm_repair
+
+    a = list(a) + alarm_repair.implied_locks(list(a))
+    b = list(b) + alarm_repair.implied_locks(list(b))
     sa = {orchestrator._norm(x) for x in a if orchestrator._norm(x)}
     sb = {orchestrator._norm(y) for y in b if orchestrator._norm(y)}
     if sa & sb:
@@ -482,9 +487,19 @@ def held_locks(beam: dict) -> list[tuple[str, list[str]]]:
 
     held = []
     for t in beam["tickets"].values():
-        if t["status"] in ACTIVE:
+        if holds_now(t, beam):
             held.append((t["id"], multirepo.scoped_locks(beam, t, orchestrator.lock_paths(t))))
     return held
+
+
+def holds_now(ticket: dict, beam: dict, now=None) -> bool:
+    """Its locks are taken: an active ticket, or an alarmed one whose own Shuttle is still working
+    (an escape seen on the pull request while the Shuttle runs). An alarm with no Shuttle out holds nothing."""
+    if not isinstance(ticket, dict):
+        return False
+    if ticket.get("status") in ACTIVE:
+        return True
+    return ticket.get("status") == "alarm" and orchestrator.shuttle_still_out(ticket, beam, now=now)
 
 
 _IN_PROGRESS_PHASES = {"implementing", "pr-open", "reviewing", "fixing", "ready", "merging"}
@@ -585,7 +600,8 @@ def holding_launches_label(beam: dict, count: Optional[int] = None, cap: Optiona
 def running_shuttle_count(beam: dict) -> int:
     """Live Shuttles. A waiting review and a dead claim do not count."""
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and orchestrator.shuttle_is_live(ticket, beam))
+    return sum(1 for ticket in tickets.values() if isinstance(ticket, dict) and (
+        orchestrator.shuttle_is_live(ticket, beam) or orchestrator.repair_awaiting_launch(ticket)))
 
 
 def _local_shuttle_count(beam: dict) -> int:

@@ -808,6 +808,22 @@ def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool
     return True
 
 
+def repair_awaiting_launch(ticket: dict) -> bool:
+    """A lock-escape repair alarm_repair started (claimed, locks widened) whose Shuttle is not launched yet.
+
+    It holds a Shuttle slot from the moment it starts, so the dispatch in the same pass cannot fill that slot.
+    """
+    if not isinstance(ticket, dict) or ticket.get("status") != "claimed":
+        return False
+    info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+    return info.get("state") == "working" and not info.get("launchedAt") and not _shuttle_row(ticket).get("pending")
+
+
+def shuttle_still_out(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
+    """The ticket's own Shuttle is working, not merely marked for a launch (`launching`)."""
+    return shuttle_is_live(ticket, beam, now=now) and not _shuttle_row(ticket).get("launching")
+
+
 def live_slot_holders(beam: dict, config: Optional[dict] = None, skip_id: Optional[str] = None, now=None) -> list:
     """Ticket ids whose live Shuttle holds a shared-machine slot."""
     del config
@@ -819,7 +835,7 @@ def live_slot_holders(beam: dict, config: Optional[dict] = None, skip_id: Option
             continue
         if skip_id and str(ticket.get("id") or tid) == str(skip_id):
             continue
-        if not shuttle_is_live(ticket, beam, now=now):
+        if not shuttle_is_live(ticket, beam, now=now) and not repair_awaiting_launch(ticket):
             continue
         remote = ticket.get("isolation") == "vm" and ticket.get("checkout") == "subagent-vm"
         if remote:

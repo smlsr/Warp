@@ -29,7 +29,7 @@ python3 <plugin>/scripts/scan.py resume --beam .warp/beam.json
 python3 <plugin>/scripts/scan.py stop --beam .warp/beam.json --reason "end of day"
 ```
 
-`scan.py start` and `scan.py resume` print `unfinished: <n> open. ...` and launch that work first: fixes, then tickets whose Shuttle was halted or died, then new tickets. Two caps apply. `maxAgents` is how many agents run at once, of any kind. `maxInProgress` is how many tickets are open at once and holds only new tickets.
+`scan.py start` and `scan.py resume` print `unfinished: <n> open. ...` and launch that work first: lock-escape repairs (`alarm-repair: start` and `alarm-repair: launch` lines; launch each), then fixes, then tickets whose Shuttle was halted or died, then new tickets. Two caps apply. `maxAgents` is how many agents run at once, of any kind. `maxInProgress` is how many tickets are open at once and holds only new tickets.
 
 `scan.py ?` prints these subcommands and their flags. Quote `?` if the shell expands it.
 

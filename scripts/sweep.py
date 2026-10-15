@@ -73,7 +73,9 @@ def _busy(ticket: dict, now: str) -> bool:
 
 def _repair_running(data: dict, ticket: dict) -> bool:
     repair = data.get("alarmRepair") if isinstance(data.get("alarmRepair"), dict) else {}
-    return repair.get("active") == ticket.get("id")
+    import alarm_repair
+
+    return ticket.get("id") in alarm_repair._active(dict(repair))
 
 
 def _bugbot_findings(source: dict) -> list:
