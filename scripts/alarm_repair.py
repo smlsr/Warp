@@ -463,6 +463,10 @@ def _backoff(ticket: dict, now_dt, minutes: int) -> Optional[str]:
     failed = beam.parse_ts(info["failedAt"])
     if failed is None:
         return None
+    waived = beam.parse_ts(str(info.get("backoffWaived") or ""))
+    if waived is not None and waived >= failed:
+        # reconcile.py: nothing else was running, so the wait was waived.
+        return None
     left = minutes - (now_dt - failed).total_seconds() / 60.0
     return None if left <= 0 else info["failedAt"]
 

@@ -52,6 +52,8 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle.pop("returned", None)
     shuttle.pop("returnedAt", None)
     shuttle.pop("startedAt", None)
+    shuttle.pop("failed", None)
+    shuttle.pop("endedBy", None)
     # Marked, not launched yet: the previous Shuttle's heartbeat does not make this one busy.
     shuttle["launching"] = True
     shuttle.pop("launchLines", None)
@@ -67,6 +69,7 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
 def clear_shuttle(ticket: dict) -> None:
     shuttle = _shuttle(ticket)
     shuttle["pending"] = False
+    shuttle.pop("failed", None)
     report = ticket.get("report")
     if isinstance(report, dict):
         report["returned"] = False
@@ -894,6 +897,8 @@ def live_provider(data: dict, beam_path) -> dict:
         repo = multirepo.root_for(data, ticket, root)
         snap = provider_mod.fetch_pr_state(repo, url)
         if snap:
+            # parent-exit --wait compares this with one `gh pr list` and wakes the parent when it changes.
+            ticket["pr"]["signal"] = provider_mod.signal_of(snap)
             if repo not in ci_of:
                 ci_of[repo] = provider_mod.repo_has_ci(repo)
             snap["ciConfigured"] = ci_of[repo]
@@ -1359,6 +1364,50 @@ def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str
         lines.append(herald)
 
 
+def open_despite_cap(data: dict, ticket: dict, lines: list, why: str) -> bool:
+    """A ticket at a recovery or repair cap whose acceptance criteria all pass still gets its pull request.
+
+    The cap stops more Shuttles, not the work already done: with every criterion passing, a ticket with a pull
+    request goes back to review on it, and one without opens it from its pushed branch (`pr: open`). Bugbot, CI,
+    and the merge gate decide the rest. False (the alarm stays) when a criterion is missing or failing, or there
+    is no branch to open from.
+    """
+    import acceptance
+
+    tid = ticket.get("id")
+    if not acs_pass(ticket, data.get("_repoRoot")):
+        listed = acceptance.items(ticket)
+        if listed:
+            got = acceptance.results(ticket)
+            total = len(listed)
+            passed = sum(1 for ident, body in listed if (acceptance.result_for(got, ident, body) or "") in acceptance.PASS)
+        else:
+            total = len(ac_map(ticket))
+            passed = sum(1 for value in ac_map(ticket).values() if value in _PASS)
+        lines.append("cap: %s %s cap reached; acceptance %d/%d pass, so no pull request is opened for it" % (tid, why, passed, total))
+        return False
+    pr = ticket.setdefault("pr", {})
+    if not pr.get("url") and not ticket.get("branch"):
+        lines.append("cap: %s %s cap reached; acceptance passes but it has no branch to open a pull request from" % (tid, why))
+        return False
+    ticket["alarm"] = None
+    ticket["capReached"] = why
+    ticket["needsReplacement"] = False
+    clear_shuttle(ticket)
+    (ticket.get("shuttle") or {}).pop("launching", None)
+    if pr.get("url"):
+        ticket["status"] = "review"
+        _phase(ticket, "reviewing", lines)
+        lines.append("cap: %s %s cap reached, but every acceptance criterion passes: back to review on %s" % (tid, why, pr["url"]))
+        lines.append("herald: %s reached its %s cap, but its acceptance criteria pass: it goes on in review (%s)." % (tid, why, pr["url"]))
+        return True
+    ticket["status"] = "coding"
+    lines.append("cap: %s %s cap reached, but every acceptance criterion passes: opening its pull request from %s" % (tid, why, ticket.get("branch")))
+    lines.append("herald: %s reached its %s cap, but its acceptance criteria pass: opening its pull request." % (tid, why))
+    request_pr_open(ticket, lines)
+    return True
+
+
 def _recover_worker(data: dict, ticket: dict, lines: list, already_counted: bool = False) -> None:
     """Restart the step while recoveries is inside maxRecoveries."""
     cap = _int((data.get("config") or {}).get("maxRecoveries"), 5)
@@ -1369,6 +1418,7 @@ def _recover_worker(data: dict, ticket: dict, lines: list, already_counted: bool
     blocked = used > cap if already_counted else used >= cap
     if blocked:
         lines.append("worker-died: cap %s" % ticket.get("id"))
+        open_despite_cap(data, ticket, lines, "worker-died")
         return
     phase = "fixing" if (ticket.get("pr") or {}).get("url") else "implementing"
     if ticket.get("recoveryPriorStatus") == "fix":
@@ -1387,6 +1437,7 @@ def _recover_stuck(data: dict, ticket: dict, lines: list) -> None:
     used = int(ticket.get("stuckRestarts") or 0)
     if used >= cap:
         lines.append("stuck: cap %s" % ticket.get("id"))
+        open_despite_cap(data, ticket, lines, "stuck")
         return
     ticket["stuckRestarts"] = used + 1
     phase = ticket.get("phase") or ("fixing" if (ticket.get("pr") or {}).get("url") else "implementing")
@@ -1409,6 +1460,16 @@ def _recover_alarm(data: dict, ticket: dict, lines: list, deferred: list) -> boo
         start_review(data, ticket, lines)
         return True
     if alarm == "lock-escape":
+        info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+        if info.get("gaveUp") or info.get("state") == "gave-up":
+            # No more repairs. Work whose criteria pass still goes up for review; its escaped files are named there.
+            if open_despite_cap(data, ticket, lines, "lock-escape repair"):
+                if ticket.get("escaped"):
+                    lines.append("cap: %s edited files outside its locks: %s; the review and the merge check cover them"
+                                 % (ticket.get("id"), ", ".join(str(p) for p in ticket["escaped"][:8])))
+                return True
+            lines.append("alarm: hold %s lock-escape (repairs given up)" % ticket.get("id"))
+            return True
         if not pending(ticket):
             mark_shuttle(ticket, "repair", data)
         deferred.append(ticket.get("id"))
@@ -1470,6 +1531,8 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
     """Consume one Shuttle return. `stop` means do not evaluate the phase again."""
     phase = ticket.get("phase")
     failed = bool((snap or {}).get("workerDied")) or str((snap or {}).get("result") or "").strip().casefold() == "failed"
+    # reconcile.py marks a Shuttle whose Agent ended with an error as a failed return.
+    failed = failed or bool(_shuttle(ticket).get("failed"))
     import agents
 
     if not failed:

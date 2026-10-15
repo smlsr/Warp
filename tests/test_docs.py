@@ -503,6 +503,7 @@ class ScriptHelpTests(unittest.TestCase):
             "multirepo.py": ("check", "show", "--beam", "siblingRoot", "splitRepos"),
             "beamlock.py": ("status", "--beam", ".beam-revs", "run lock"),
             "fresh_start.py": ("--root", "--dry-run", "index.lock", "never removed"),
+            "reconcile.py": ("--beam", "--dry-run", "subagent-end", "staleMinutes"),
             "prompt_gate.py": ("--beam", "--force", "--cursor-home", "transitionJiraIssue", "slack_send_message"),
             "state_commit.py": ("--root", "--beam", "--base", "config.yaml"),
             "upgrade.py": ("--root", "--source", "Warp v", "reload Cursor"),
@@ -612,6 +613,7 @@ class ScriptHelpTests(unittest.TestCase):
             "config_doc.py",
             "beamlock.py",
             "fresh_start.py",
+            "reconcile.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

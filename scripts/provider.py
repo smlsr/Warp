@@ -635,6 +635,56 @@ def _head_committed_at(doc: dict) -> str:
     return str(last.get("committedDate") or last.get("authoredDate") or "")
 
 
+def signal_of(snap: Optional[dict]) -> str:
+    """What a waiting pull request's next step depends on, as one string: head, CI, Bugbot, conflict, state.
+
+    supervise stores it on the ticket (`pr.signal`) from its snapshot; `parent-exit --wait` reads every open pull
+    request in one call (`review_signals`) and wakes the parent when one differs, so a review that turned green,
+    a Bugbot result, a conflict, or a merge made elsewhere is acted on now and not after pollSeconds.
+    """
+    if not snap:
+        return ""
+    return "|".join(str(snap.get(key) or "") for key in ("headSha", "ci", "bugbot", "conflictState", "prState"))
+
+
+def _signal_fields(doc: dict) -> dict:
+    checks = doc.get("statusCheckRollup") or []
+    if not isinstance(checks, list):
+        checks = []
+    mergeable = str(doc.get("mergeable") or "").upper()
+    merge_state = str(doc.get("mergeStateStatus") or "").upper()
+    return {
+        "headSha": str(doc.get("headRefOid") or ""),
+        "ci": _ci_from_checks(checks),
+        "bugbot": _bugbot_from_checks(checks),
+        "conflictState": "conflict" if mergeable == "CONFLICTING" or merge_state in {"DIRTY", "CONFLICTING"} else "",
+        "prState": str(doc.get("state") or "").upper(),
+    }
+
+
+def review_signals(root: Path, runner=None) -> Optional[dict]:
+    """{pull request url: signal} for every open pull request in one gh call. None when gh cannot be asked."""
+    if not shutil.which("gh") and runner is None:
+        return None
+    cmd = ["gh", "pr", "list", "--state", "open", "--limit", "200", "--json",
+           "url,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,state"]
+    try:
+        done = (runner or _run)(cmd, root)
+    except Exception:
+        return None
+    if getattr(done, "returncode", 1) != 0:
+        return None
+    try:
+        rows = json.loads(done.stdout or "[]")
+    except (TypeError, ValueError):
+        return None
+    out = {}
+    for doc in rows if isinstance(rows, list) else []:
+        if isinstance(doc, dict) and doc.get("url"):
+            out[str(doc["url"]).rstrip("/")] = signal_of(_signal_fields(doc))
+    return out
+
+
 def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
     """Live GitHub pull request state, or None when gh cannot be asked.
 
@@ -691,6 +741,7 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         # OPEN, MERGED or CLOSED. Only MERGED, read from the provider, marks a ticket merged.
         "prState": str(doc.get("state") or "").upper(),
     }
+    snap["conflictState"] = _signal_fields(doc)["conflictState"]
     commit = doc.get("mergeCommit") if isinstance(doc.get("mergeCommit"), dict) else {}
     if commit.get("oid"):
         snap["mergeSha"] = str(commit.get("oid"))

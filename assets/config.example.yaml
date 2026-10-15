@@ -84,13 +84,15 @@ maxAgents: 18
 # running agents. There is no separate cap for fixes or for this machine.
 # memoryCheck can lower it on a shared machine when memory is tight.
 
-maxInProgress: 20
+maxInProgress: auto
 # Tickets that are open at once: started and not merged or parked. A ticket
 # waiting on review or CI is open and uses no agent. At this count, nothing
 # new is taken from the ready queue. This does not stop a fix, a rebase, a
 # CI rerun, a Bugbot re-request, or a merge: those tickets are already
 # open. Parked tickets do not count. Already being over the cap does not
-# park or cancel anyone. Default 20.
+# park or cancel anyone. auto (the default) is 3 x maxAgents, at least 20, so
+# tickets waiting on review or CI do not keep Shuttle slots empty. Each pass
+# prints a capacity line, and Herald posts when this cap holds new tickets.
 # Status then says: holding new launches (N/maxInProgress), N fix workers running.
 #
 # Start and resume launch unfinished work first: open pull requests that
@@ -344,7 +346,11 @@ maxAlarmRepairs: 5
 # paths that escaped. Default 5.
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
-pollSeconds: 300
+pollSeconds: 120
+reviewPollSeconds: 60
+# While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every
+# open pull request (one gh call) this often during its wait, and runs the next pass at
+# once when one changed: green, Bugbot done, a conflict, merged elsewhere. At least 30; 0 is off.
 # Longest the parent waits between passes (orchestrator.py parent-exit
 # --wait) when nothing else wakes it. Channel reads use the two intervals
 # below, not this. The wait also returns on a ticket folder, the inbound

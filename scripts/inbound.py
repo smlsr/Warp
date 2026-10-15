@@ -237,10 +237,10 @@ def heartbeat(beam_path: Path, agent_id: str, pid: Optional[str] = None, reason:
 
 
 def poll_seconds(beam_path: Path) -> int:
-    """Shell sleep between channel reads. `pollSeconds`, default 300."""
+    """Shell sleep between channel reads. `pollSeconds`, default 120."""
     beam_path = Path(beam_path)
     data = beam.load_json(beam_path) if beam_path.is_file() else {}
-    return beam.config_int(data if isinstance(data, dict) else {}, beam_path, "pollSeconds", 300)
+    return beam.config_int(data if isinstance(data, dict) else {}, beam_path, "pollSeconds", 120)
 
 
 def release(beam_path: Path) -> str:
