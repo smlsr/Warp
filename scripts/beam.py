@@ -543,7 +543,7 @@ def ticket_in_progress(ticket: dict) -> bool:
 
 
 def max_in_progress(cfg: Optional[dict]) -> int:
-    """How many started tickets may be open. `auto` (the default since 1.7.0): 3 x maxAgents, at least 20, so
+    """How many started tickets may be open. `auto` (the default since 1.7.1): 3 x maxAgents, at least 20, so
     tickets waiting on review or CI (which use no Shuttle) do not keep the slots empty. Negative falls back."""
     default = max(20, 3 * configured_cap(cfg or {}))
     raw = (cfg or {}).get("maxInProgress")

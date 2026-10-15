@@ -820,7 +820,7 @@ class InProgressCapTests(unittest.TestCase):
     def test_parked_and_queued_do_not_count_and_the_default_is_20(self):
         import beam as beam_mod
 
-        self.assertEqual(beam_mod.default_config()["maxInProgress"], "auto")  # 1.7.0: 3 x maxAgents, at least 20
+        self.assertEqual(beam_mod.default_config()["maxInProgress"], "auto")  # 1.7.1: 3 x maxAgents, at least 20
         self.assertEqual(beam_mod.max_in_progress({"maxAgents": 18}), 54)
         self.assertEqual(beam_mod.max_in_progress({"maxAgents": 4}), 20)
         self.assertEqual(beam_mod.max_in_progress({"maxAgents": 18, "maxInProgress": 20}), 20)

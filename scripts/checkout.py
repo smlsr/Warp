@@ -877,7 +877,7 @@ def record_result(
     folder_agent = "" if line_agent else _cloud_agent_from_folder(root, tid)
     agents.note_stopped_result(data, tid, line, beam_path=beam_path, agent_id=folder_agent)
     if not named:
-        # 1.7.0: the Agent is back, whatever its folder says. The next pass handles the return at once
+        # 1.7.1: the Agent is back, whatever its folder says. The next pass handles the return at once
         # (a missing pull request is opened or sent back to fix) instead of waiting staleMinutes for it.
         import beam as beam_mod
         import reconcile

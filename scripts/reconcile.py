@@ -4,7 +4,7 @@
 The beam says which tickets have a Shuttle out. The workers say otherwise in four places: the journal
 (`subagent-end`, written by the subagentStop hook and by `checkout.py result`), the agent registry
 (`.warp/agents.json`), the ticket folders (read by `ticket_state.observe` just before this), and the ticket's
-own status. Before 1.7.0 a Shuttle that ended without writing `done` to its folder (D-01: exited without a
+own status. Before 1.7.1 a Shuttle that ended without writing `done` to its folder (D-01: exited without a
 pull request) was only noticed when its heartbeat went stale, `staleMinutes` (15) later. Each pass now:
 
   1. Ended without a return: the journal or the registry shows the ticket's Shuttle ended after it was

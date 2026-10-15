@@ -1,4 +1,4 @@
-"""1.7.0: the parent wakes the moment there is something new to do, and every pass says why Shuttle slots are idle."""
+"""1.7.1: the parent wakes the moment there is something new to do, and every pass says why Shuttle slots are idle."""
 
 from __future__ import annotations
 
