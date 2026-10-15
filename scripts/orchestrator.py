@@ -2002,21 +2002,18 @@ def supervise_listener(beam_path: Path, returned: Optional[str] = None, now=None
     means the run is paused, stopped, or finished. `listener: none` means
     no channel is configured.
     """
-    import fcntl
-
     import beam as beam_mod
 
     beam_path = Path(beam_path)
     if not beam_path.is_file():
         return ["listener: no beam at %s" % beam_path]
-    lock_path = beam_path.parent / ".listener.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            return _supervise_locked(beam_path, returned, now, beam_mod)
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    import beamlock
+
+    with beamlock.run_lock(beam_path):
+        beamlock.merged_line(beam_path)  # start this pass's count at zero
+        lines = _supervise_locked(beam_path, returned, now, beam_mod)
+        merged = beamlock.merged_line(beam_path)
+        return lines + [merged] if merged else lines
 
 
 LISTENER_CONTRACT = (
@@ -2128,7 +2125,7 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         # A later pass with the same line does not idle the run.
         reason = _returned_reason(folded)
         inbound.stamp_return(data, beam_path, reason, now_s, holder=raw.get("holder") or inbound.LISTENER_ID)
-        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         closing_stop = listener_returned_stop(folded)
     if not listener_should_run(data):
         return ["listener: idle"]
@@ -2163,15 +2160,15 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
         age = None if started is None else (now_dt - started).total_seconds()
         if age is not None and age >= inbound.max_minutes(data, beam_path) * 60:
             inbound.expire_lease(data, now_s)
-            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
-        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=live holder=%s generation=%s" % (holder, inbound.generation_of(data))]
     if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
-        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     begin_listener_poll(data, beam_path, now=now_dt)
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return lost + ["listener: poll"]
 
 
@@ -2582,7 +2579,7 @@ def _load(path: Path) -> dict:
 def _save(path: Path, beam: dict) -> None:
     import beam as beam_mod
 
-    beam_mod.atomic_write(path, json.dumps(beam, indent=2) + "\n")
+    beam_mod.atomic_write(path, json.dumps(beam, indent=2) + "\n", data=beam)
 
 
 def main(argv: Optional[list] = None) -> int:

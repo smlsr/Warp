@@ -436,7 +436,7 @@ def worker_seen(ticket: dict) -> bool:
 
 
 def _active(repair: dict) -> list:
-    """Tickets with a repair Shuttle out. Before 1.6.27 this was one id; a string is read as a list of one."""
+    """Tickets with a repair Shuttle out. Before 1.7.0 this was one id; a string is read as a list of one."""
     raw = repair.get("active")
     ids = [raw] if isinstance(raw, str) and raw else [x for x in (raw or []) if isinstance(x, str) and x]
     repair["active"] = ids
@@ -658,7 +658,7 @@ def _apply(beam_path: Path, now=None, returned: Optional[str] = None, error: Opt
         changed = True
     if changed:
         data["metrics"] = beam.metrics(data)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         for action in sent:
             beam.journal(beam_path, {"type": "send-back", "id": action.get("id"), "outcome": action.get("outcome"), "check": "make ci"})
         if flipped_gates:
@@ -698,7 +698,7 @@ def store_paths(beam_path: Path, tid: str, paths: list, now=None) -> list:
             ticket["escaped"] = cleaned
             ticket["updatedAt"] = now_s
             beam.journal(beam_path, {"type": "alarm-repair", "action": "paths", "id": tid, "escaped": cleaned})
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["alarm-repair: paths %s %s" % (tid, ",".join(cleaned))]
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -739,6 +739,15 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import beamlock
+
+    # Run by hand or by the parent between passes: wait for a supervise pass that is running, so its save
+    # does not overwrite this one and its repair decisions see this one.
+    with beamlock.run_lock(Path(args.beam)):
+        return _main(args)
+
+
+def _main(args) -> int:
     if args.cmd == "paths":
         lines = store_paths(Path(args.beam), args.id, args.path, now=args.now)
         for line in lines:

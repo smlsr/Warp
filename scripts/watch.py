@@ -470,7 +470,7 @@ def _run_action(data: dict, ticket: dict, action: str, lines: list, beam_path: O
 
             import beam as beam_mod
 
-            beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n")
+            beam_mod.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
             lines.extend(alarm_repair.next_repair(Path(beam_path), now=now))
             if Path(beam_path).is_file():
                 # A pass can start several repairs, not only this one: take every ticket it changed.

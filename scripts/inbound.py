@@ -145,7 +145,7 @@ def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None, turn: Optio
             if pid and cur["agentId"] == agent_id and str(cur.get("pid") or "") != str(pid):
                 raw["pid"] = str(pid)
                 data["listener"] = raw
-                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return "listener: already running %s" % cur["agentId"]
         beam.journal(
             beam_path,
@@ -166,7 +166,7 @@ def claim(beam_path: Path, agent_id: str, pid: Optional[str] = None, turn: Optio
         if key in raw:
             record[key] = raw[key]
     data["listener"] = record
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     write_listener_file(beam_path, agent_id, pid=record["pid"], reason="start", when=now)
     beam.journal(beam_path, {"type": "listener-start", "agentId": agent_id, "pid": record["pid"], "turn": turn_id or None})
     return "listener: started %s" % agent_id
@@ -205,7 +205,7 @@ def write_listener_file(
         body["returnedAt"] = returned_at
     path = listener_file(beam_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    beam.atomic_write(path, json.dumps(body, indent=2) + "\n")
+    beam.atomic_write(path, json.dumps(body, indent=2) + "\n", data=body)
     return body
 
 
@@ -231,7 +231,7 @@ def heartbeat(beam_path: Path, agent_id: str, pid: Optional[str] = None, reason:
     if pid:
         raw["pid"] = str(pid)
     data["listener"] = raw
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     write_listener_file(beam_path, agent_id, pid=raw.get("pid"), reason=reason or "poll", when=now)
     return "listener: heartbeat %s" % agent_id
 
@@ -275,7 +275,7 @@ def release(beam_path: Path) -> str:
         raw.pop("pollStartedAt", None)
         data["listener"] = raw
         _finish_row(data, beam_path, now, "stopped")
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         write_listener_file(
             beam_path,
             raw.get("agentId") or LISTENER_ID,
@@ -313,18 +313,11 @@ def _raw(data: dict) -> dict:
 
 
 def _locked(beam_path: Path, fn):
-    """Run fn while holding `.listener.lock`. The lock is not re-entrant."""
-    import fcntl
+    """Run fn while holding the run lock (`.listener.lock`), re-entrant in this process (beamlock.run_lock)."""
+    import beamlock
 
-    beam_path = Path(beam_path)
-    lock_path = beam_path.parent / ".listener.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            return fn()
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    with beamlock.run_lock(Path(beam_path)):
+        return fn()
 
 
 def _int_field(raw: dict, key: str) -> int:
@@ -426,7 +419,7 @@ def touch_parent(beam_path: Path, now_s: str) -> bool:
         if not isinstance(data, dict) or not orchestrator.listener_should_run(data):
             return False
         set_parent_seen(data, now_s)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return True
 
     return _locked(beam_path, run)
@@ -622,7 +615,7 @@ def polled(beam_path: Path, count: int = 0, cursor: str = "") -> str:
             raw["cursor"] = str(cursor)
         data["listener"] = raw
         stamp_return(data, beam_path, "polled", now)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return "listener: polled %d" % int(count or 0)
 
     return _locked(beam_path, run)
@@ -724,7 +717,7 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
             if checked and _may_stamp(data, holder):
                 reason = "stopped"
                 stamp_return(data, beam_path, reason, now_s, holder=holder)
-                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return lines
         if not checked:
             raw = _raw(data)
@@ -735,21 +728,21 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
         if not lease_matches(data, lease, holder):
             if _may_stamp(data, holder):
                 stamp_return(data, beam_path, "stopped", now_s, holder=holder)
-                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return _stop_lines("superseded")
         if parent_orphaned(data, beam_path, now_dt):
             stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return _stop_lines("orphaned")
         if rotation_due(data, beam_path, now_dt):
             stamp_return(data, beam_path, "rotated", now_s, holder=holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["listen: rotate"]
         raw = _raw(data)
         raw["reads"] = _int_field(raw, "reads") + 1
         raw["lastSeenAt"] = now_s
         data["listener"] = raw
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         write_listener_file(
             beam_path,
             raw.get("agentId") or LISTENER_ID,
@@ -779,21 +772,21 @@ def _wait_check(beam_path: Path, lease, holder: Optional[str], now) -> Optional[
     if lines and lines[0].startswith("reap: exit"):
         if _may_stamp(data, holder):
             stamp_return(data, beam_path, "stopped", now_s, holder=holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         reason = lines[0].split()[-1]
         return _stop_lines(reason)
     if not lease_matches(data, lease, holder):
         if _may_stamp(data, holder):
             stamp_return(data, beam_path, "stopped", now_s, holder=holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return _stop_lines("superseded")
     if parent_orphaned(data, beam_path, now_dt):
         stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return _stop_lines("orphaned")
     if rotation_due(data, beam_path, now_dt):
         stamp_return(data, beam_path, "rotated", now_s, holder=holder)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listen: rotate"]
     return None
 
@@ -834,7 +827,7 @@ def wait_for(
             # The wait is the holder at work too; only a holder that stops calling goes stale.
             raw["lastSeenAt"] = beam.utcnow() if now is None else _moment(now)[1]
         data["listener"] = raw
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return fast_seconds(data, beam_path) if fast else slow_seconds(data, beam_path)
 
     limit = float(_locked(beam_path, arm))
@@ -892,7 +885,7 @@ def take_lease(beam_path: Path, holder: str, now=None) -> str:
             agents.note_listener_poll(data, now=now_s, beam_path=beam_path)
         except Exception:
             pass
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         write_listener_file(
             beam_path,
             who,
@@ -939,13 +932,13 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
         if silent is not None:
             # The holder stopped polling (cut off, crashed). Anyone may hand its slot back.
             stamp_return(data, beam_path, "lost", now_s, holder=str(_raw(data).get("holder") or "") or holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return "listener: returned lost (no poll or wait for %dm; the slot is free)" % silent
         if reason == "cut-off" and lease_matches(data, lease, holder):
             # The holder has to stop before the script says so: Cursor flagged its cycle as repetitive,
             # or its turn is ending. Refusing left a live lease no one held (leases 17, 23, 24).
             stamp_return(data, beam_path, "cut-off", now_s, holder=holder)
-            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return "listener: returned cut-off. The slot is free; the parent starts the next listener on its next pass."
         if lease is not None or holder not in (None, ""):
             if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
@@ -963,7 +956,7 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
         if str(raw.get("returnReason") or "") == reason and not str(raw.get("holder") or ""):
             return "listener: returned %s" % reason
         stamp_return(data, beam_path, reason, now_s, holder=holder)
-        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+        beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return "listener: returned %s" % reason
 
     return _locked(beam_path, run)
@@ -1291,7 +1284,7 @@ def _requeue(beam_path: Path, tid: str, by: Optional[str] = None) -> str:
         tail = "status queued; the next claim reuses %s" % (ticket.get("branch") or "its branch") if ticket.get("branch") else "status queued; it starts from the ready queue"
     ticket["updatedAt"] = now
     data["metrics"] = beam.metrics(data)
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     beam.journal(beam_path, {"type": "retry", "id": tid, "from": prev, "to": mode, "by": by or ""})
     head = "%s retried: was %s%s, %s. Alarm cleared; fix, stall and recovery counts start again (old counts on retryLog)." % (
         tid, prev, " (%s)" % alarm if alarm else "", tail)
@@ -1327,7 +1320,7 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
             ok, range_lines = blocks.apply(held, decision.get("range") or "")
             if not ok:
                 return "action: none\n" + "\n".join(range_lines)
-            beam.atomic_write(Path(beam_path), json.dumps(held, indent=2) + "\n")
+            beam.atomic_write(Path(beam_path), json.dumps(held, indent=2) + "\n", data=held)
         scan.set_run(beam_path, state, decision.get("reason"))
         extra = ""
         if action in {"pause", "stop"}:

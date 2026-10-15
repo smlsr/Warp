@@ -161,7 +161,7 @@ def update_state(beam_path: Path, push: bool = True, finalize=None) -> int:
     if finalize is not None:
         finalize(patched)
     patched["metrics"] = beam.metrics(patched)
-    beam.atomic_write(beam_path, json.dumps(patched, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(patched, indent=2) + "\n", data=patched)
     beam.journal(beam_path, {"type": "update-state", "pulled": pulled, "won": won})
     beam.write_board_files(beam_path, patched)
     code = 0

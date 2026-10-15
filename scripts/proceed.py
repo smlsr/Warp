@@ -198,7 +198,7 @@ def describe(beam_path: Path, token: str, by: Optional[str]) -> tuple[int, str]:
         pr["approvedBy"] = who
     if not pr.get("approvedAt"):
         pr["approvedAt"] = jira_sync.now()
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     beam.journal(beam_path, {"type": "proceed", "id": tid, "by": who, "matched": how})
     import multirepo
 

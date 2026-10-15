@@ -272,7 +272,7 @@ def gate_start(beam_path: Path, force: bool = False, env: Optional[dict] = None,
         beam["promptForced"] = True
         import beam as beam_mod
 
-        beam_mod.atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+        beam_mod.atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
         if gap:
             print(ENV_WARN)
         print("prompt-gate: force")

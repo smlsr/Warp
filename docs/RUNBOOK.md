@@ -311,6 +311,10 @@ Runs in one repo also get names: `/warp-init core`, `/warp-init admin`, `/warp-i
 
 Pause, stop, and `/warp-cleanup` touch only agents in their own registry or carrying their own tag. Another run's agents are not matched, and neither is any other agent in the repo, whatever words are in its name. To act on another run's leftovers on purpose, name its tag: `/warp-list --tag <instance>`, then `/warp-cleanup --tag <instance>`. Nothing checks whether that run is still going.
 
+## A status, heartbeat, or review went missing from the beam
+
+Before 1.7.0 a supervise pass could save over what a Shuttle saved while the pass ran (a `beam.py set`, a heartbeat, a recorded review), and the parent sometimes saw the older value, or a `.tmp` file next to `beam.json`. Now saves merge (`beam: merged <n> saves by other processes …` in the pass output). Leftover `beam.json.*.tmp` files from an old crash can be deleted. `python3 scripts/beamlock.py status` shows the revision. If a field is still wrong, run `/warp-resume`: the next pass rereads the ticket folders and the provider and sets it again. STATE.md "Concurrent saves" has the rules.
+
 ## Lock-escape repair
 
 `lock-escape` means the diff needed a path outside the ticket's locks. The Shuttle stores each of those paths with `--escaped` when it sets the alarm. It does not widen the lock itself.
@@ -319,7 +323,7 @@ The parent's pass, while the run is running, calls `alarm_repair.py next` on the
 
 Do not start that repair when an in-flight ticket holds one of those paths, or holds one of the ticket's current locks. `alarm-repair: locked <id> by <holder>` means wait. When the holder finishes (it is no longer in flight), the next pass widens and starts. The holder can be another repair started earlier in the same call: repairs are decided one ticket at a time, so two tickets that escaped into the same file never both start. A ticket that waits does not hold back the ones after it. A queued ticket's overlapping lock can be widened. Nothing is stolen from work that is running.
 
-Repairs run in parallel, each taking a Shuttle slot (`alarm-repair: queued <id>` when `maxAgents` is full). If a repair alarms `lock-escape` again, or the Shuttle errors, leave the alarm and record the attempt; that ticket tries again `alarmRepairMinutes` after the failure (`alarm-repair: retry <id> after 15 minutes`). If the repair puts the ticket back on the normal path and clears the alarm, or the ticket merges, it is settled (`alarm-repair: passed <id>`). A second tick while a ticket's repair Shuttle is working does not start another for it. A ticket that sat in alarm before 1.6.27 was waiting on the old cadence: one repair at a time, a pass every `alarmRepairMinutes`.
+Repairs run in parallel, each taking a Shuttle slot (`alarm-repair: queued <id>` when `maxAgents` is full). If a repair alarms `lock-escape` again, or the Shuttle errors, leave the alarm and record the attempt; that ticket tries again `alarmRepairMinutes` after the failure (`alarm-repair: retry <id> after 15 minutes`). If the repair puts the ticket back on the normal path and clears the alarm, or the ticket merges, it is settled (`alarm-repair: passed <id>`). A second tick while a ticket's repair Shuttle is working does not start another for it. A ticket that sat in alarm before 1.7.0 was waiting on the old cadence: one repair at a time, a pass every `alarmRepairMinutes`.
 
 `maxAlarmRepairs` (default 5) is the cap. After that the alarm stays and later passes skip the ticket. Herald posts `<id> lock-escape repair given up.` An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before it edits. Pause and stop do not repair, because the run is not running. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired this way. `/warp-init` appends `alarmRepairMinutes` and `maxAlarmRepairs` when the config does not have them yet.
 

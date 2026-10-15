@@ -750,7 +750,9 @@ def _stamp_beam(root, name: str) -> None:
     data["run"] = name
     if isinstance(data.get("config"), dict):
         data["config"]["run"] = name
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    import beam as beam_mod
+
+    beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
 
 
 def start_blocker(root, beam_path) -> Optional[str]:

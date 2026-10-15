@@ -504,7 +504,7 @@ def start_refusal(beam_path: Path, cfg: dict, clone=True) -> list:
     problems, lines = check(home_root, data, cfg, clone=clone)
     if problems:
         return lines + ["refuse: multi-repo run not started: %s" % p for p in problems]
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return lines
 
 

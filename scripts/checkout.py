@@ -467,7 +467,7 @@ def _save_launch(path: Path, data: dict, ticket_id: str) -> bool:
 def _save(path: Path, beam: dict) -> None:
     import beam as beam_mod
 
-    beam_mod.atomic_write(path, json.dumps(beam, indent=2) + "\n")
+    beam_mod.atomic_write(path, json.dumps(beam, indent=2) + "\n", data=beam)
 
 
 def _ticket(beam: dict, tid: str) -> dict:
@@ -944,27 +944,45 @@ def main(argv: Optional[list] = None) -> int:
               "(launch: worktree, subagentVm: false); do not start the subagent" % (args.id, multirepo.ticket_repo(data, ticket)))
         return 2
     if args.cmd == "launch":
-        if orchestrator.launch_mode(cfg) == "agent":
-            return _launch_agent(root, path, data, ticket, branch, base, args.id)
-        if orchestrator.shared_machine(cfg, data):
-            gib = None
-            if orchestrator.memory_check(cfg):
-                gib = orchestrator.available_gib()
-                if gib is not None:
-                    print("memory: available %s GiB" % gib)
-                cap = orchestrator.local_subagent_cap(cfg, gib)
-            else:
-                cap = orchestrator.shared_cap(cfg)
-            room = orchestrator.local_room(data, cfg, skip_id=args.id, available=gib)
-            holders = orchestrator.live_slot_holders(data, cfg, skip_id=args.id)
-            shown = ", ".join(holders) if holders else "none"
-            print("local-cap: %s" % cap)
-            print("live shuttles %d/%d: %s" % (len(holders), cap, shown))
-            if room < 1:
-                print("refuse: local subagent cap %s (live %d/%d: %s)" % (cap, len(holders), cap, shown))
-                return 2
-            return _launch_worktree(root, path, data, ticket, branch, base, args.id)
-        return _launch_vm(root, path, data, ticket, branch, args.id)
+        import beamlock
+
+        # A launch checks the Shuttle cap and saves the claim: one decision at a time with supervise and other launches.
+        with beamlock.run_lock(path):
+            # Everything the launch decides on is read again inside the lock.
+            data = _load(path)
+            cfg = data.get("config") or {}
+            ticket = _ticket(data, args.id)
+            base = getattr(args, "base", "") or str(cfg.get("baseBranch") or "HEAD")
+            branch = orchestrator.branch_name(ticket, cfg)
+            return _launch(root, path, data, ticket, branch, base, args, cfg)
+    return _other(root, path, data, ticket, branch, base, args, cfg)
+
+
+def _launch(root, path, data, ticket, branch, base, args, cfg) -> int:
+    if orchestrator.launch_mode(cfg) == "agent":
+        return _launch_agent(root, path, data, ticket, branch, base, args.id)
+    if orchestrator.shared_machine(cfg, data):
+        gib = None
+        if orchestrator.memory_check(cfg):
+            gib = orchestrator.available_gib()
+            if gib is not None:
+                print("memory: available %s GiB" % gib)
+            cap = orchestrator.local_subagent_cap(cfg, gib)
+        else:
+            cap = orchestrator.shared_cap(cfg)
+        room = orchestrator.local_room(data, cfg, skip_id=args.id, available=gib)
+        holders = orchestrator.live_slot_holders(data, cfg, skip_id=args.id)
+        shown = ", ".join(holders) if holders else "none"
+        print("local-cap: %s" % cap)
+        print("live shuttles %d/%d: %s" % (len(holders), cap, shown))
+        if room < 1:
+            print("refuse: local subagent cap %s (live %d/%d: %s)" % (cap, len(holders), cap, shown))
+            return 2
+        return _launch_worktree(root, path, data, ticket, branch, base, args.id)
+    return _launch_vm(root, path, data, ticket, branch, args.id)
+
+
+def _other(root, path, data, ticket, branch, base, args, cfg) -> int:
     if args.cmd == "verify":
         host = getattr(args, "hostname", "") or ""
         if host:

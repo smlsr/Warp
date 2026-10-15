@@ -868,7 +868,7 @@ def cold_start(beam_path) -> list:
     dispatch_replacements(data, lines)
     _refill(data, lines)
     if lines:
-        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
     return lines
 
 
@@ -2267,7 +2267,7 @@ def _run_repairs(data: dict, beam_path: Optional[Path], lines: list, now) -> Non
     import beam as beam_mod
 
     path = Path(beam_path)
-    beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
     lines.extend(alarm_repair.next_repair(path, now=now))
     if path.is_file():
         loaded = beam_mod.load_json(path)

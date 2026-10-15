@@ -1075,7 +1075,7 @@ def generate(
         data["runEndedAt"] = now_text
         if not data.get("runStartedAt"):
             data["runStartedAt"] = data.get("generatedAt") or now_text
-    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     show_partial = partial or is_partial(data)
     root = repo_root(beam_path)
     ctx = execution_context(root, data)
@@ -1104,7 +1104,7 @@ def maybe_complete(beam_path: Path, announce: bool = True, because_stopped: bool
         if not reportable(data, because_stopped):
             if data.get("runComplete"):
                 data["runComplete"] = False
-                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return None
         if not report_settings(beam_path, data).get("reportOnComplete", True):
             return None

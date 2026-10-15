@@ -383,5 +383,6 @@ A cloud agent that opens a pull request can be woken by Cursor when CI fails on 
 | `list: kept <id> reason=...` | `/warp-list` | the same reasons, in a listing |
 | `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>` | `/warp-list` | what is still out |
 | `run: was paused (<reason>). Continuing.` / `was stopped. Starting.` / `was already running.` | start, resume | where the run came from |
+| `beam: merged <n> saves by other processes (<k> of their changes kept)` | `supervise` | Shuttles saved the beam while the pass ran; their changes are kept. `; <c> fields both changed, this pass's value kept` names a true conflict |
 | `unfinished: <n> open. ...` | start, resume | the work that starts first; `unfinished: Lock-escape alarms first …` names the repairs that start before it |
 | `config: <key>: <value> is retired and ignored.` | start, resume, version | a retired key is still in `.warp/config.yaml` |

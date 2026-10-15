@@ -228,7 +228,7 @@ def backfill(beam_path: Path) -> list:
     filled = fill(tickets, criteria)
     if not filled:
         return []
-    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n")
+    beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return ["acceptance: criteria added to %d tickets from %s (%s)" % (len(filled), ", ".join(used), ", ".join(filled[:12]) + (" ..." if len(filled) > 12 else ""))]
 
 

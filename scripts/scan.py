@@ -627,7 +627,7 @@ def print_open_work(beam_path: Path) -> None:
 
     beam = load_json(beam_path)
     lines = watch.snapshot(beam)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     for line in lines:
         print(line)
 
@@ -684,7 +684,7 @@ def write_status(beam_path: Path) -> None:
         "metrics": beam["metrics"],
     }
     out = beam_path.parent / "status.json"
-    atomic_write(out, json.dumps(payload, indent=2) + "\n")
+    atomic_write(out, json.dumps(payload, indent=2) + "\n", data=payload)
     try:
         import version
 
@@ -729,7 +729,7 @@ def write_status(beam_path: Path) -> None:
     open_lines = watch.snapshot(beam)
     lines += ["", "## Open work", ""]
     lines += open_lines or ["None."]
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     for line in open_lines:
         print(line)
     if (beam_path.parent / "warp-complete.html").is_file():
@@ -811,7 +811,7 @@ def export_plan(beam_path: Path, dest: Path) -> None:
             for t in beam["tickets"].values()
         ],
     }
-    atomic_write(dest, json.dumps(plan, indent=2) + "\n")
+    atomic_write(dest, json.dumps(plan, indent=2) + "\n", data=plan)
     md = dest.with_suffix(".md")
     lines = [
         "# Warp plan — analysis brief",
@@ -913,6 +913,14 @@ def apply_ownership(root: Path, run: str, graph: dict, skip: bool) -> int:
 
 
 def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
+    import beamlock
+
+    # Start and resume decide what starts: one at a time with a supervise pass, Slack commands, and launches.
+    with beamlock.run_lock(Path(beam_path)):
+        return _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now)
+
+
+def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
     """`start` and `resume`. They are the same command.
 
     Load the beam from main when this checkout has none, run the prompt
@@ -989,7 +997,7 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
             runs.refresh_external(root, held, force=True)
         except Exception as e:
             print(f"runs: other runs not read ({e})")
-    atomic_write(beam_path, json.dumps(held, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(held, indent=2) + "\n", data=held)
     resume_hint.print_hint(beam_path)
     for line in orchestrator_notes(beam_path):
         print(line)
@@ -1085,7 +1093,7 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         import agents
 
         stop_lines = agents.halt_local(beam, beam_path=beam_path, reason=state)
-    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n")
+    atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
     journal(beam_path, {"type": state, "reason": reason})
     heal_lines = []
     if state == "running":
@@ -1302,7 +1310,7 @@ def main() -> None:
                 print("      scanning all of them and using the richest. Pass a folder to scope: /warp-scan <folder>")
         warp = root / ".warp"
         warp.mkdir(parents=True, exist_ok=True)
-        atomic_write(warp / "scan.json", json.dumps(found, indent=2) + "\n")
+        atomic_write(warp / "scan.json", json.dumps(found, indent=2) + "\n", data=found)
         graph = pick(root, found)
         if not graph:
             where = f" in {folder.relative_to(root)}" if folder else ""
@@ -1424,7 +1432,7 @@ def main() -> None:
             args.max_agents,
             (beam.get("config") or {}).get("autoMergeSizes"),
         )
-        atomic_write(Path(args.out), json.dumps(beam, indent=2) + "\n")
+        atomic_write(Path(args.out), json.dumps(beam, indent=2) + "\n", data=beam)
         try:
             import jira_project
 
@@ -1507,7 +1515,7 @@ def main() -> None:
                 for k in ("status", "agent", "branch", "attempts", "tokens", "minutes", "alarm", "pr", "jira"):
                     t[k] = prev.get(k, t.get(k))
         beam["runState"] = "stopped"
-        atomic_write(Path(args.beam), json.dumps(beam, indent=2) + "\n")
+        atomic_write(Path(args.beam), json.dumps(beam, indent=2) + "\n", data=beam)
         journal(Path(args.beam), {"type": "import", "plan": args.plan, "tickets": len(beam["tickets"])})
         print(f"replaced plan tickets={len(beam['tickets'])} runState=stopped")
     elif args.cmd == "status":
