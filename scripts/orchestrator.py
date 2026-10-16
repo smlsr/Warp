@@ -42,6 +42,8 @@ or stopped. parent-exit --wait blocks first: until a ticket folder changes,
 the inbound queue changes, the listener writes its return stamp, the run
 halts, or pollSeconds pass. That is the one wait in a run. It also writes
 listener.parentSeenAt every step. --session is the id scan.py start printed.
+parent-alive --every <seconds> is the heartbeat a timer or schedule wake runs
+first: the listener then allows that gap (supervise --every records it too).
 A later start or resume takes the run over, and this prints parent: exit
 superseded.
 The listener is one background subagent on the parent's checkout. subagentVm
@@ -2285,18 +2287,33 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
     if holder:
         started = beam_mod.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt"))
         age = None if started is None else (now_dt - started).total_seconds()
-        if age is not None and age >= inbound.max_minutes(data, beam_path) * 60:
+        if age is not None and age >= inbound.max_minutes(data, beam_path) * 60 and inbound.parent_waiting(data, now_dt, within=_wait_window(data, beam_path)):
+            # A parent that waits starts the next listener as soon as this one hands back. A parent woken by a timer
+            # would leave none until its next wake, so then the listener stays up (1.7.4).
             inbound.expire_lease(data, now_s)
             beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=live holder=%s generation=%s" % (holder, inbound.generation_of(data))]
+    stopped_for = beam_mod.parse_ts(str(raw.get("stoppedAt") or ""))
+    if (raw.get("awaitReturn") and not inbound.return_ready(data) and stopped_for is not None
+            and (now_dt - stopped_for).total_seconds() / 60.0 >= inbound.silent_minutes(data, beam_path)):
+        # The lease was expired and its copy never handed it back (it was already gone): free the slot.
+        inbound.stamp_return(data, beam_path, "lost", now_s, holder=str(raw.get("previousHolder") or inbound.LISTENER_ID))
+        lost.append("listener: generation %s never handed its expired lease back; its slot is free." % inbound.generation_of(data))
     if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return lost + ["listener: poll"]
+
+
+def _wait_window(data: dict, beam_path: Path) -> int:
+    """Seconds since the parent's last wait step within which it still counts as a waiting parent at a pass."""
+    import beam as beam_mod
+
+    return max(int(beam_mod.config_int(data, beam_path, "pollSeconds", 120)), 60) + 120
 
 
 def parent_wait(
@@ -2330,7 +2347,7 @@ def parent_wait(
         now_dt = datetime.fromtimestamp(tick(), tz=timezone.utc)
         now_s = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            alive = inbound.touch_parent(path, now_s)
+            alive = inbound.touch_parent(path, now_s, waiting=True)
         except (OSError, ValueError):
             alive = False
         if not alive:
@@ -2541,6 +2558,34 @@ def sync_state(path: Path, by: str = "") -> list:
         why = next((line for line in out if line.startswith("state: not published")), "state: not published")
         out.append("herald: warp:sync could not push the run state: %s." % why[len("state: "):])
     return out
+
+
+def parent_alive(beam_path: Path, every: Optional[int] = None, now=None) -> list:
+    """A parent heartbeat outside a pass: what a timer or schedule wake runs first (1.7.4).
+
+    It writes `listener.parentSeenAt`, so the listener's orphan check sees a live parent, and with `every` records
+    how far apart the wakes are (`parentEvery`), so the listener allows that gap (listenerOrphanMinutes, or
+    every plus 3 minutes, whichever is longer).
+    """
+    import beam as beam_mod
+    import inbound
+
+    path = Path(beam_path)
+    if not path.is_file():
+        return ["parent: no beam at %s" % path]
+    now_s = beam_mod.coerce_now(now)[1]
+    if not inbound.touch_parent(path, now_s, every=every):
+        return ["parent: alive; the run is paused, stopped, or finished, so no listener is kept"]
+    data = _load(path)
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    holder = str(raw.get("holder") or "")
+    limit = inbound.orphan_limit_minutes(data, path)
+    every_now = inbound._int_field(raw, "parentEvery")
+    head = "parent: alive at %sZ%s; the listener waits up to %dm for the next one" % (
+        now_s[11:19], (" (woken every %ds)" % every_now) if every_now else "", limit)
+    if holder:
+        return [head, "listener: generation %s is up" % inbound.generation_of(data)]
+    return [head, "listener: none is up; run a supervise pass now to start one"]
 
 
 def _close_listener_on_exit(data: dict, path: Path) -> str:
@@ -2774,8 +2819,13 @@ def main(argv: Optional[list] = None) -> int:
     px.add_argument("--wait", nargs="?", type=int, const=-1, default=None, help="block until a ticket folder changes, the listener is due, or this many seconds pass (default pollSeconds)")
     px.add_argument("--session", default="", help="the parent session id scan.py start printed")
 
+    pa = sub.add_parser("parent-alive", help="a parent heartbeat: run it first when a timer or schedule wakes you")
+    pa.add_argument("--beam", required=True)
+    pa.add_argument("--every", type=int, default=None, help="seconds between your timer wakes; 0 clears it")
+
     ps = sub.add_parser("supervise")
     ps.add_argument("--beam", required=True)
+    ps.add_argument("--every", type=int, default=None, help="seconds between your timer wakes (the same as parent-alive --every)")
     ps.add_argument("--returned", default=None, help="line the listener returned: listen: N, or listen: stopped")
     ps.add_argument("--now", default=None, help="timestamp for tests")
     ps.add_argument("--provider", default=None, help="JSON file of id to pull request, checks, and Bugbot")
@@ -2859,7 +2909,13 @@ def main(argv: Optional[list] = None) -> int:
         for line in parent_exit(Path(args.beam), session=args.session, wait=args.wait):
             print(line)
         return 0
+    if args.cmd == "parent-alive":
+        for line in parent_alive(Path(args.beam), every=args.every):
+            print(line)
+        return 0
     if args.cmd == "supervise":
+        if args.every is not None:
+            parent_alive(Path(args.beam), every=args.every)
         provider = None
         if args.provider:
             provider = json.loads(Path(args.provider).read_text())

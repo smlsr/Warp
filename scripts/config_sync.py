@@ -37,6 +37,7 @@ OLD_DEFAULTS = {
     "maxSpawnsPerHour": {40},
     "maxInProgress": {20},
     "pollSeconds": {300},
+    "listenerOrphanMinutes": {5},
 }
 
 

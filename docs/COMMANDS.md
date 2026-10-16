@@ -212,6 +212,15 @@ python3 <plugin>/scripts/fresh_start.py ?
 
 `/warp-start` and `/warp-resume` run this first. It removes Warp's temporary files (`.warp/**/*.tmp`, never under `.warp/worktrees/`) older than 10 minutes: `start: removed 2 leftover .tmp files in .warp (older than 10m)`. It removes a git lock file (`index.lock`, `HEAD.lock`, `config.lock`, `packed-refs.lock`, `refs/**/*.lock`, `objects/maintenance.lock`, `worktrees/*/index.lock`) in this checkout and each sibling clone when it is older than 10 minutes and no git process is running: `start: removed stale Core/.git/index.lock (30m old, no git running)`. A lock it cannot delete is moved to `<git dir>/_delete/`. A younger lock, or one while git runs, is named and left: `start: Core/.git/index.lock is 30m old, but a git process is running. Left in place; remove it once git is done.` Warp's own lock files (`.warp/.listener.lock`, `.beam.lock`, …) are kernel locks released when their process dies, so they are never removed. `--dry-run` lists without removing; with nothing to clean it prints `start: nothing to clean`.
 
+### Parent heartbeat
+
+```bash
+python3 <plugin>/scripts/orchestrator.py parent-alive --beam .warp/beam.json --every 600
+python3 <plugin>/scripts/orchestrator.py supervise --beam .warp/beam.json --every 600
+```
+
+The parent's heartbeat between passes, for a parent woken by a timer or a schedule instead of `parent-exit --wait`. It writes `listener.parentSeenAt`; `--every` records the seconds between wakes (`parentEvery`; `0` clears it), so the listener waits that long plus 3 minutes (or `listenerOrphanMinutes`, whichever is longer) before it exits `orphaned`. It prints `parent: alive at <time>Z (woken every 600s); the listener waits up to 13m for the next one` and `listener: generation <n> is up`, or `listener: none is up; run a supervise pass now to start one`. `checkout.py`, `inbound.py apply-pending`, `autoscan.py`, and `session_note.py` count as heartbeats too.
+
 ### Auto-scan and config sync
 
 ```bash

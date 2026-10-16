@@ -367,7 +367,7 @@ listenerFastSeconds: 15
 # The sleep is in Python, in 2-second steps.
 listenerSlowSeconds: 120
 # Seconds inbound.py wait sleeps after an empty read.
-listenerOrphanMinutes: 5
+listenerOrphanMinutes: 15
 # A listener.parentSeenAt older than this makes the listener exit orphaned.
 # The parent writes that stamp. A stale stamp does not start a replacement.
 listenerSilentMinutes: 5

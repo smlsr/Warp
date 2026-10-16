@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.4
+
+The listener outlives a parent woken by a timer. In run warp:bce0ae it reached generation 364: it lived only as long as the parent kept a heartbeat, and a parent woken every 10 minutes mostly was not running.
+
+- Fixed: the end of a parent turn no longer ends the listener. `session_note.py --type session-stop` released it every time (118 `listener-stop` lines, each in the same second as a `session-stop`), on the idea that a listener lasts one turn. While the run is running it now keeps the listener up (`listener: kept`) and counts as a heartbeat; `/warp-pause`, `/warp-stop`, and a finished run still end it.
+- New: `orchestrator.py parent-alive --beam .warp/beam.json --every <seconds>` (also `supervise --every`), the heartbeat a timer or schedule wake runs first. `--every` records the gap between wakes (`parentEvery`), and the listener's orphan check allows it: `listenerOrphanMinutes`, or the gap plus 3 minutes, whichever is longer. Before, a 10-minute timer against the 5-minute orphan check guaranteed a gap with no listener. It says when no listener is up, so the pass run next starts one. Every parent command (`checkout.py`, `inbound.py apply-pending`, the auto-scan, `session_note.py`) is a heartbeat too, so a turn spent fixing one ticket by hand keeps the listener alive.
+- Changed: `listenerOrphanMinutes` defaults to 15 (was 5); a beam that still has 5 and a `.warp/config.yaml` that does not set it takes 15.
+- Changed: a listener rotates (`listenerMaxReads`, `listenerMaxMinutes`) only while the parent is inside `parent-exit --wait` (`parentWaitingAt`), which starts the replacement within seconds. Before, it rotated every ~8 minutes (4 reads, 120-second waits) and only a parent pass started the next one, so a timer parent left no listener until its next wake. Past its limit with no parent waiting it keeps listening (`listen: cycle 5 at … (generation N; past 4, it hands off when the parent waits)`), and supervise no longer expires its lease by age unless the parent waits.
+- Fixed: an expired lease whose copy never handed it back (it was already gone) held the slot (`listener: hold reason=await-return`) forever. After `listenerSilentMinutes` it is freed and the same pass starts a listener.
+
 ## 1.7.3
 
 Bugs found in run warp:bce0ae (HumanifyOS).

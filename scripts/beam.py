@@ -1851,7 +1851,7 @@ def default_config() -> dict:
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "listenerFastSeconds": 15,
         "listenerSlowSeconds": 120,
-        "listenerOrphanMinutes": 5,
+        "listenerOrphanMinutes": 15,
         "listenerSilentMinutes": 5,
         "listenerMaxMinutes": 60,
         "listenerMaxReads": 4,

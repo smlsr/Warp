@@ -574,6 +574,7 @@ class ListenerSelfStampTest(Repo):
         self.assertEqual(self.load()["listener"]["holder"], "listener")
         data = self.load()
         data["listener"]["reads"] = 3
+        data["listener"]["parentWaitingAt"] = "2026-10-13T19:02:00Z"  # 1.7.4: rotation waits for a waiting parent
         self.beam_path.write_text(json.dumps(data))
         self.assertEqual(inbound.mark_returned(self.beam_path, "rotated", lease=1, holder="listener", now="2026-10-13T19:02:00Z"),
                          "listener: returned rotated")

@@ -178,6 +178,10 @@ class ListenerHandOffTest(Repo):
         lease = self.load()["listener"]["generation"]
         seen = []
         for minute in range(1, 6):
+            if minute == 5:
+                data = self.load()  # 1.7.4: the parent is in parent-exit --wait, so the rotation is not deferred
+                data["listener"]["parentWaitingAt"] = "2026-10-14T00:05:00Z"
+                self.beam_path.write_text(json.dumps(data))
             lines = inbound.poll_lines(self.beam_path, lease=lease, holder="listener", now="2026-10-14T00:%02d:00Z" % minute)
             seen.append(lines)
         self.assertIn("listen: cycle 1 of 4 at 00:01:00Z (generation %s)" % lease, seen[0])

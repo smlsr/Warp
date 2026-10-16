@@ -939,6 +939,9 @@ def main(argv: Optional[list] = None) -> int:
         path = root / args.beam
     if not path.is_file():
         sys.exit("no beam at %s" % args.beam)
+    import inbound
+
+    inbound.parent_alive_quiet(path)  # only the parent runs checkout.py: a heartbeat for the listener
     data = _load(path)
     cfg = data.get("config") or {}
     ticket = _ticket(data, args.id)
