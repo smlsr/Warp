@@ -107,7 +107,7 @@ Write the dependency as `<run>:<id>`: `deps: ["core:P-014"]` in `schedule.json`,
 
 ### Several repos, one run (multi-repo)
 
-A build-schedule/2 schedule.json can cover several repos: 380 tickets in `HumanifyOS` and 20 in `HumanifyOS-UI`, with dependencies both ways. Since 1.6.26 one run works them all, in one agent window. Run `/warp-scan` in the repo with the most tickets. That repo is the parent: the beam, journal, board, and published state live there. Each other repo is a sibling, worked from a clone next to the parent:
+A build-schedule/2 schedule.json can cover several repos: 380 tickets in `HumanifyOS` and 20 in `HumanifyOS-UI`, with dependencies both ways. Since 1.6.26 one run works them all, in one agent window. Run `/warp-scan` in the repo with the most tickets. That repo is the parent, unless the other one already has Warp state: since 1.7.2, when exactly one repo has a beam (`.warp/beam.json` in its checkout or clone, or one published on its base branch, `.warp/beam.json` or `.warp/runs/<run>/beam.json`), that repo stays the parent, whatever its count; with state in both, or neither, the most tickets decides. The parent holds the beam, journal, board, and published state. Each other repo is a sibling, worked from a clone next to the parent:
 
 ```
 ~/src/HumanifyOS/       parent checkout: .warp/ (all the state), .warp/worktrees/<id> (every ticket's worktree)

@@ -1258,6 +1258,10 @@ def _requeue(beam_path: Path, tid: str, by: Optional[str] = None) -> str:
     ticket["attempts"] = 0
     ticket["recoveries"] = 0
     ticket["stuckRestarts"] = 0
+    try:
+        agents.reset_spawns(data, ticket, beam_path=Path(beam_path))  # a fresh maxSpawnsPerTicket budget too
+    except Exception:
+        pass
     for key in ("fixerAttempts", "seenAlarm"):
         watch.pop(key, None)
     for key in ("parkReason", "recoveryPriorStatus"):

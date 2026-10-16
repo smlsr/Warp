@@ -1010,6 +1010,11 @@ def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = 
             return code
     for line in state_commit.load_main_beam(beam_path):
         print(line)
+    import config_sync
+
+    # .warp/config.yaml into the beam before anything decides on it (a raised maxSpawnsPerHour, a new maxAgents).
+    for line in config_sync.sync_on_disk(beam_path):
+        print(line)
     blocked = runs.start_blocker(root, beam_path)
     if blocked:
         print(blocked)

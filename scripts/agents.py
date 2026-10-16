@@ -134,7 +134,7 @@ def cloud_key_missing(cfg: Optional[dict], env: Optional[dict] = None, beam_path
             "requireCursorApiKey: false in .warp/config.yaml to run without it.")
 HOUR_MINUTES = 60
 DEFAULT_MAX_SPAWNS_PER_TICKET = 8
-DEFAULT_MAX_SPAWNS_PER_HOUR = 40
+DEFAULT_MAX_SPAWNS_PER_HOUR = 200
 _LIVE = {"starting", "running"}
 _SETTLED = {"merged", "done", "parked", "skipped"}
 
@@ -337,7 +337,10 @@ def _within_hour(stamp: str, now_s: str) -> bool:
 
 
 def spawn_blocked(data: dict, ticket_id: str, now=None, beam_path: Optional[Path] = None) -> str:
-    """Empty when a new spawn is allowed. Otherwise `closed` or `cap`."""
+    """Empty when a new spawn is allowed. Otherwise `closed`, `cap` (this ticket's maxSpawnsPerTicket), or `hour`
+    (the run's maxSpawnsPerHour: a wait, not a cap on the ticket; before 1.7.2 it capped the ticket for good).
+
+    A ticket's count starts again at `spawnResetAt` (an auto-scan or warp:retry reset)."""
     if not spawns_open(data):
         return "closed"
     doc = registry(data, beam_path)
@@ -346,17 +349,32 @@ def spawn_blocked(data: dict, ticket_id: str, now=None, beam_path: Optional[Path
     _now_dt, now_s = beam_mod.coerce_now(now)
     per_ticket = _cfg(data, "maxSpawnsPerTicket", DEFAULT_MAX_SPAWNS_PER_TICKET)
     per_hour = _cfg(data, "maxSpawnsPerHour", DEFAULT_MAX_SPAWNS_PER_HOUR)
+    ticket = (data.get("tickets") or {}).get(ticket_id) if isinstance(data.get("tickets"), dict) else None
+    since = str((ticket or {}).get("spawnResetAt") or "") if isinstance(ticket, dict) else ""
     mine = [
         row
         for row in _spawns(doc)
         if isinstance(row, dict) and str(row.get("ticket") or "") == str(ticket_id) and row.get("role") != "listener"
+        and (not since or str(row.get("at") or "") > since)
     ]
     if len(mine) >= per_ticket:
         return "cap"
     recent = [row for row in _spawns(doc) if isinstance(row, dict) and _within_hour(str(row.get("at") or ""), now_s)]
     if len(recent) >= per_hour:
-        return "cap"
+        return "hour"
     return ""
+
+
+def reset_spawns(data: dict, ticket: dict, now=None, beam_path: Optional[Path] = None) -> None:
+    """A fresh maxSpawnsPerTicket budget for this ticket: its capped rows are cleared and its count starts now."""
+    doc = registry(data, beam_path)
+    tid = str(ticket.get("id") or "")
+    for row in _rows(doc):
+        if isinstance(row, dict) and str(row.get("ticket") or "") == tid and row.get("capped"):
+            row["capped"] = False
+    ticket["spawnResetAt"] = beam_mod.coerce_now(now)[1]
+    ticket.pop("spawnCapped", None)
+    flush(data, beam_path)
 
 
 def _mark_capped(doc: dict, ticket_id: str, role: str) -> None:
@@ -520,6 +538,8 @@ def prepare_launch(
         return {"action": "cap", "id": ""}
     if reason == "closed":
         return {"action": "closed", "id": ""}
+    if reason == "hour":
+        return {"action": "hour", "id": ""}
     if replacing:
         end_ticket(data, ticket, "dead", now=now, beam_path=beam_path)
         doc = registry(data, beam_path)
@@ -828,6 +848,10 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
         return ["shuttle: hold %s" % tid]
     if action == "closed":
         return ["spawn: closed %s" % tid]
+    if action == "hour":
+        # The run spawned maxSpawnsPerHour in the last 60 minutes. The ticket waits; the next pass tries again.
+        return ["spawn: hour %s (maxSpawnsPerHour %d reached in the last 60 minutes; it starts when the hour rolls off)"
+                % (tid, _cfg(data, "maxSpawnsPerHour", DEFAULT_MAX_SPAWNS_PER_HOUR))]
     if action == "cap":
         ticket["status"] = "alarm"
         ticket["alarm"] = "spawn-cap"

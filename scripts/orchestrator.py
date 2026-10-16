@@ -1844,6 +1844,11 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
     if not path.is_file():
         return lines
     if provider is None:
+        import config_sync
+
+        # A .warp/config.yaml edited during the run reaches the beam before this pass reads it.
+        lines.extend(config_sync.sync_on_disk(path, only_if_changed=True))
+    if provider is None:
         # Read every in-flight ticket's folder first (state, log, a recorded review), so this
         # pass acts on what the Shuttles wrote since the last one, not only on start or resume.
         try:
@@ -1860,6 +1865,14 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
             lines.extend(reconcile.run_on_disk(path, now=now))
         except Exception as exc:
             lines.append("reconcile: skipped (%s)" % exc)
+        try:
+            import autoscan
+
+            # Every autoScan seconds (600): capped alarms get a fresh budget, stuck merges and pull requests are
+            # asked again, and the repair sweep runs now; this pass then refills every free slot.
+            lines.extend(autoscan.run_on_disk(path, now=now))
+        except Exception as exc:
+            lines.append("autoscan: skipped (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
         state = str(data.get("runState") or "")
@@ -2268,6 +2281,11 @@ def parent_wait(
         changed = _changed_ticket(path, since)
         if changed:
             return "ticket %s" % changed
+        import autoscan
+
+        if isinstance(data.get("autoScan"), dict) and data["autoScan"].get("at") and autoscan.due(data, path, now_s):
+            # The thorough scan is due (autoScan): run the pass that does it now, even when nothing else moved.
+            return "work autoscan"
         checks += 1
         if checks % 3 == 1:
             import nextwork

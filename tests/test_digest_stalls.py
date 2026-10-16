@@ -32,7 +32,9 @@ class DigestTest(unittest.TestCase):
         digest = next(line for line in lines if line.startswith("digest: "))
         self.assertIn("stalls=0", digest)
         self.assertIn("open=14", digest)
-        self.assertIn("herald: Status: 14 open (13 queued, 1 reviewing), in progress 1/20. No alarms. Nothing stalled.", lines)
+        # 1.7.2: tickets in review are listed by id, not only counted.
+        self.assertIn("herald: Status: 14 open (13 queued, 1 reviewing), in progress 1/20. No alarms. Nothing stalled. "
+                      "In review (1): WE-01 (CI unknown, Bugbot not asked yet).", lines)
 
     def test_only_stalled_tickets_count_and_an_alarm_counts_once(self):
         data = edit_run()

@@ -212,6 +212,19 @@ python3 <plugin>/scripts/fresh_start.py ?
 
 `/warp-start` and `/warp-resume` run this first. It removes Warp's temporary files (`.warp/**/*.tmp`, never under `.warp/worktrees/`) older than 10 minutes: `start: removed 2 leftover .tmp files in .warp (older than 10m)`. It removes a git lock file (`index.lock`, `HEAD.lock`, `config.lock`, `packed-refs.lock`, `refs/**/*.lock`, `objects/maintenance.lock`, `worktrees/*/index.lock`) in this checkout and each sibling clone when it is older than 10 minutes and no git process is running: `start: removed stale Core/.git/index.lock (30m old, no git running)`. A lock it cannot delete is moved to `<git dir>/_delete/`. A younger lock, or one while git runs, is named and left: `start: Core/.git/index.lock is 30m old, but a git process is running. Left in place; remove it once git is done.` Warp's own lock files (`.warp/.listener.lock`, `.beam.lock`, …) are kernel locks released when their process dies, so they are never removed. `--dry-run` lists without removing; with nothing to clean it prints `start: nothing to clean`.
 
+### Auto-scan and config sync
+
+```bash
+python3 <plugin>/scripts/autoscan.py --beam .warp/beam.json
+python3 <plugin>/scripts/autoscan.py --beam .warp/beam.json --dry-run
+python3 <plugin>/scripts/autoscan.py ?
+python3 <plugin>/scripts/config_sync.py --beam .warp/beam.json
+python3 <plugin>/scripts/config_sync.py --beam .warp/beam.json --dry-run
+python3 <plugin>/scripts/config_sync.py ?
+```
+
+Supervise runs the auto-scan every `autoScan` seconds (600) and `parent-exit --wait` returns `pass: work autoscan` when it is due; `autoscan.py` runs it now, due or not, and `--dry-run` lists what it would do (`autoscan: would reset W-1 (worker-died at maxRecoveries 5)`). Its first line is `autoscan: scan <n>: <r> reset, <m> asked to merge again, <p> pull requests to open, <l> left for a person`, then one line per ticket, and one `herald: Auto-scan: …` when it did anything. What it resets is in [CONFIG.md](CONFIG.md) under `autoScan`. `config_sync.py` copies `.warp/config.yaml` into the beam's config (start, resume, and any pass after the file changed run it), one `config: <key> <old> -> <new>` line per change, `config: the beam matches .warp/config.yaml` when nothing changed.
+
 ### Reconcile and keep work moving
 
 ```bash

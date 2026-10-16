@@ -580,7 +580,12 @@ def _digest(data: dict, lines: list, now: str) -> None:
     slot["stalls"] = stalled
     lines.append("digest: %s" % text)
     lines.append("slack: digest %s" % text)
-    lines.append("herald: %s" % digest_sentence(rows, counts, alarmed, stalled, beam_mod.in_progress_label(data)))
+    import news
+
+    # Every open ticket by where it is (working, Bugbot reviewing, in review, ready, approval, alarms), by id.
+    where = news.pipeline_text(data, now)
+    lines.append("herald: %s%s" % (digest_sentence(rows, counts, alarmed, stalled, beam_mod.in_progress_label(data)),
+                                   (" " + where) if where else ""))
 
 
 def digest_sentence(rows: list, counts: dict, alarmed: list, stalled: list, progress: str) -> str:

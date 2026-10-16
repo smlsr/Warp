@@ -226,10 +226,68 @@ def counts(tickets: list, fallback: str = "") -> dict:
     return out
 
 
-def choose_parent(by_repo: dict, order: list) -> str:
-    """The repo with the most tickets. A tie goes to the one the schedule lists first."""
+def choose_parent(by_repo: dict, order: list, stated: Optional[dict] = None) -> str:
+    """The repo that already holds Warp state, when exactly one does; otherwise the one with the most tickets.
+
+    `stated` is {repo: where} from `state_repos`. With state in both (or none), most tickets wins, and a tie goes
+    to the one the schedule lists first.
+    """
+    held = [r for r in by_repo if (stated or {}).get(r)]
+    if len(held) == 1:
+        return held[0]
     rank = {r.casefold(): i for i, r in enumerate(order or [])}
     return sorted(by_repo, key=lambda r: (-by_repo[r], rank.get(r.casefold(), len(rank)), r.casefold()))[0]
+
+
+def _git_out(root: Path, *args: str) -> str:
+    import subprocess
+
+    try:
+        done = subprocess.run(["git", "-C", str(root)] + list(args), capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout if done.returncode == 0 else ""
+
+
+def state_in(repo_root: Path) -> str:
+    """Where a checkout already has Warp state: `.warp/beam.json` on disk, or a beam published on its base branch
+    (`.warp/beam.json` or `.warp/runs/<run>/beam.json` on origin's default branch). Empty when it has none or is not
+    a clone here."""
+    root = Path(repo_root)
+    if not (root / ".git").exists():
+        return ""
+    local = root / ".warp" / "beam.json"
+    try:
+        if local.is_file() and local.stat().st_size > 2:
+            return ".warp/beam.json"
+    except OSError:
+        pass
+    head = _git_out(root, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").strip()
+    for ref in [head] + ["origin/main", "origin/master"]:
+        if not ref:
+            continue
+        listed = _git_out(root, "ls-tree", "-r", "--name-only", ref, "--", ".warp")
+        for name in listed.splitlines():
+            name = name.strip()
+            if name == ".warp/beam.json" or re.fullmatch(r"\.warp/runs/[^/]+/beam\.json", name):
+                return "%s on %s" % (name, ref)
+        if listed:
+            break
+    return ""
+
+
+def state_repos(home_root: Path, cfg: dict, here: str, repos: list) -> dict:
+    """{repo: where its Warp state is} for each repo of the schedule: this checkout and each sibling clone."""
+    root_dir = str((cfg or {}).get("siblingRoot") or "..").strip() or ".."
+    out = {}
+    for name in repos:
+        if same(name, here):
+            where = Path(home_root)
+        else:
+            rel = Path(root_dir) / name
+            where = (rel if rel.is_absolute() else Path(home_root) / rel).resolve()
+        out[name] = state_in(where)
+    return out
 
 
 def derive_url(home_url: str, name: str) -> str:

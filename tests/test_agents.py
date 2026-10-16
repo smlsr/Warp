@@ -219,8 +219,14 @@ class RegistryTests(unittest.TestCase):
             lines = agents.launch_lines(other, other["tickets"][tid], "implement", beam_path=self.path, now=NOW)
             self.assertTrue(lines[0].startswith("start "))
         blocked = agents.launch_lines(other, other["tickets"]["C-1"], "implement", beam_path=self.path, now=NOW)
-        self.assertIn("spawn: cap C-1", blocked)
-        self.assertEqual(blocked[0], "spawn: cap C-1")
+        # 1.7.2: the run's hourly cap is a wait, not a cap on the ticket: no alarm, and it starts once the hour rolls off.
+        self.assertTrue(blocked[0].startswith("spawn: hour C-1 (maxSpawnsPerHour 2 reached"), blocked)
+        self.assertNotEqual(other["tickets"]["C-1"].get("alarm"), "spawn-cap")
+        later = agents.launch_lines(other, other["tickets"]["C-1"], "implement", beam_path=self.path, now="2026-10-06T14:30:00Z")
+        self.assertTrue(later[0].startswith("start "), later)
+        # A reset gives a capped ticket a fresh maxSpawnsPerTicket budget.
+        agents.reset_spawns(data, row, now=NOW, beam_path=self.path)
+        self.assertTrue(agents.launch_lines(data, row, "implement", beam_path=self.path, now=NOW)[0].startswith("start "))
 
     def test_the_listener_is_one_registry_row_across_polls(self):
         data = beam_of(ticket())

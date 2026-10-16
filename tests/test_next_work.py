@@ -61,7 +61,7 @@ class WaitTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         path = tmp / ".warp" / "beam.json"
         path.parent.mkdir(parents=True)
-        data = run([row("Q-1", "coding", report={"returned": True})], pollSeconds=600)
+        data = run([row("Q-1", "coding", report={"returned": True})], pollSeconds=600, autoScan=0)
         data["listener"] = {}
         data["pass"] = {"work": [], "startedAt": "2026-10-15T10:00:00Z"}
         path.write_text(json.dumps(data))
@@ -276,7 +276,7 @@ class ReviewWaitTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         path = tmp / ".warp" / "beam.json"
         path.parent.mkdir(parents=True)
-        data = run([row("V-1", "review", phase="reviewing", pr={"url": "u", "signal": "s"})], pollSeconds=600, reviewPollSeconds=30)
+        data = run([row("V-1", "review", phase="reviewing", pr={"url": "u", "signal": "s"})], pollSeconds=600, reviewPollSeconds=30, autoScan=0)
         data["listener"] = {}
         data["pass"] = {"work": nextwork.keys(data), "startedAt": "2026-10-15T10:00:00Z"}
         path.write_text(json.dumps(data))
