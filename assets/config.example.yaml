@@ -330,7 +330,7 @@ maxSpawnsPerTicket: 8
 # New Shuttle spawns for one ticket. A resume of the Shuttle that returned
 # does not count. Past this cap the ticket is alarm spawn-cap and no new
 # Shuttle starts. Default 8.
-maxSpawnsPerHour: 40
+maxSpawnsPerHour: 200
 # New Shuttle and Bugbot spawns in the last 60 minutes, across the run.
 # Past this cap no ticket starts a new agent until an hour has passed.
 # Default 40.
@@ -347,6 +347,13 @@ maxAlarmRepairs: 5
 respectMergeWindows: false
 mergeWindows: ["08:30", "13:00", "17:00"]
 pollSeconds: 120
+autoScan: 600
+# Seconds between auto-scans: a thorough pass over every open ticket that gives capped alarms
+# (worker-died, stuck, spawn-cap, given-up lock-escape repairs, ci-red, bugbot-failed, parked at a
+# fix cap) a fresh budget, asks again for merges and pull requests that never happened, runs the
+# repair sweep, and then fills every free Shuttle slot. 0 turns it off.
+autoScanResets: 3
+# Fresh budgets the auto-scan gives one ticket before it leaves it for a person (warp:retry).
 reviewPollSeconds: 60
 # While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every
 # open pull request (one gh call) this often during its wait, and runs the next pass at

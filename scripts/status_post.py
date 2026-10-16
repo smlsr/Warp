@@ -43,6 +43,12 @@ def payload(beam_path: Path) -> dict:
         for t in beam["tickets"].values()
         if t["status"] in {"claimed", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
     ]
+    import news
+
+    try:
+        groups = news.pipeline_groups(beam)
+    except Exception:
+        groups = []
     root = beam_path.resolve().parent.parent
     msg = fmt.message(
         root,
@@ -53,6 +59,7 @@ def payload(beam_path: Path) -> dict:
             ("Run", str(beam.get("runState"))),
             ("Done", str(counts["done"])),
             ("Working", ", ".join(working) or "none"),
+            *[(name, ", ".join(items[:15]) + (" +%d more" % (len(items) - 15) if len(items) > 15 else "")) for name, items in groups],
             ("Left", str(counts["left"])),
         ],
         footer="Reply warp:status to refresh. warp:pause / warp:resume / warp:stop / warp:start control the run.",

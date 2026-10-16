@@ -580,7 +580,7 @@ Only that folder is searched for `CURSOR_PLAN.md`, `schedule.json`, `WARP_PLAN.j
 
 ## Several repos, one run
 
-When a build-schedule/2 schedule's tickets span several repos (say 380 in `HumanifyOS` and 20 in `HumanifyOS-UI`, with dependencies both ways), one run works them all in one agent window, and a merge in either repo unblocks the other in the same pass. Run `/warp-scan` in the repo with the most tickets: the parent. It holds all of the state. Every other repo is a sibling, worked from a clone next to the parent (`siblingRoot`, default `..`, so `../HumanifyOS-UI`).
+When a build-schedule/2 schedule's tickets span several repos (say 380 in `HumanifyOS` and 20 in `HumanifyOS-UI`, with dependencies both ways), one run works them all in one agent window, and a merge in either repo unblocks the other in the same pass. Run `/warp-scan` in the repo with the most tickets: the parent. It holds all of the state. When exactly one repo already has Warp state (a beam in its checkout or published on its base branch), that repo stays the parent instead (1.7.2). Every other repo is a sibling, worked from a clone next to the parent (`siblingRoot`, default `..`, so `../HumanifyOS-UI`).
 
 - `/warp-scan` decides it and writes `multiRepo: true` and `siblingRepos: {HumanifyOS-UI: <git url>}` to `.warp/config.yaml` (`multiRepo: false` for one repo). Scanning in a sibling checkout refuses and names the parent. The schedule and Jira are not changed.
 - A sibling ticket's worktree is a worktree of the sibling clone, kept under the parent's gitignored `.warp/worktrees/`. Its branch, pull request, Bugbot review, merge check, merge (by URL, in the sibling), and branch delete are all in the sibling repo. The parent only ever gets `.warp/` state, never sibling files.
@@ -724,7 +724,7 @@ You edit `.warp/config.yaml`, on your machine. It stays gitignored. The repo kee
 | `gateOrder` | unset (`strict`; `deps` for a build-schedule/2 schedule) | Commented in the example. `strict`: a ticket waits until every block before its own is cleared. `deps`: only dependencies and a blocking gate that is not green hold it. A build-schedule/2 schedule.json runs in `deps` with milestone gates unless its `model.gate_order` is `strict`. A line here overrides the schedule. A config `/warp-init` 1.6.0–1.6.2 wrote has the live line `gateOrder: strict`, which keeps every schedule strict: delete it for milestone gates. |
 | `startAfter` | `""` | Another run's gate this run waits for, such as `core:G2`. `/warp-start` refuses until it is cleared. `--now` starts anyway. |
 | `paths` | `""` | Repo paths this run may change, separated by commas. A ticket whose locks leave them does not start. Empty means no limit. |
-| `multiRepo` | `false` | Written by `/warp-scan`. `true`: one run works every repo in the schedule from this checkout, the one with the most tickets. See [Several repos, one run](#several-repos-one-run). |
+| `multiRepo` | `false` | Written by `/warp-scan`. `true`: one run works every repo in the schedule from this checkout: the one that already has Warp state when only one does, otherwise the one with the most tickets. See [Several repos, one run](#several-repos-one-run). |
 | `splitRepos` | `false` | `true` keeps one run per repo for a schedule that spans several. |
 | `siblingRoot` | `".."` | Where a multi-repo run's sibling clones are. `/warp-start` clones a missing one there. Not copied into the repo. |
 | `siblingRepos` | `{}` | Written by `/warp-scan`: each sibling repo and its git URL (`#branch` when its base is not main). |

@@ -957,7 +957,7 @@ def _start_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
         replacing=replacing,
         beam_path=_beam_path(data),
     )
-    if lines and (lines[0].startswith("spawn: cap") or lines[0].startswith("spawn: closed")):
+    if lines and lines[0].startswith(("spawn: cap", "spawn: closed", "spawn: hour")):
         shuttle = _shuttle(ticket)
         shuttle["pending"] = False
     elif lines and (lines[0].startswith("start ") or lines[0].startswith("resume ")):

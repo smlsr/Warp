@@ -277,7 +277,14 @@ def multi_repo(graph: dict, root: Path, cfg: dict, repos: list, here: str) -> tu
     import multirepo
 
     by = multirepo.counts(graph["tickets"])
-    parent = multirepo.choose_parent(by, repos)
+    try:
+        stated = multirepo.state_repos(root, cfg, here, list(by))
+    except Exception:
+        stated = {}
+    parent = multirepo.choose_parent(by, repos, stated)
+    held = [r for r in by if stated.get(r)]
+    why = ("; it already has Warp state (%s), so it stays the parent" % stated[parent]) if len(held) == 1 else (
+        "; every repo has Warp state, so the most tickets decides" if len(held) > 1 else "")
     for t in graph["tickets"]:
         if not t.get("repo"):
             t["repo"] = parent
@@ -285,17 +292,17 @@ def multi_repo(graph: dict, root: Path, cfg: dict, repos: list, here: str) -> tu
     shown = ", ".join("%s %d" % (r, n) for r, n in sorted(by.items(), key=lambda kv: (-kv[1], kv[0].casefold())))
     if here.casefold() != parent.casefold():
         graph["repoRefusal"] = (
-            "repos: the parent repo is %s (most tickets: %s), and this checkout is %s. The parent holds the run's state "
+            "repos: the parent repo is %s (%s: %s%s), and this checkout is %s. The parent holds the run's state "
             "and works the other repos from sibling clones. Run /warp-scan in a %s checkout, or set splitRepos: true to "
-            "keep one run per repo." % (parent, shown, here, parent))
+            "keep one run per repo." % (parent, "tickets" if len(held) == 1 else "most tickets", shown, why, here, parent))
         return None, [graph["repoRefusal"]]
     graph.setdefault("schedule", {})["repo"] = parent
     graph["repos"] = {"home": parent, "counts": by}
     ids = {t["id"]: t.get("repo") for t in graph["tickets"]}
     cross = sum(1 for t in graph["tickets"] for d in list(t.get("after") or []) + list(t.get("deps") or [])
                 if d in ids and (ids[d] or "").casefold() != (t.get("repo") or "").casefold())
-    lines = ["repos: multi-repo run: %s is the parent (%d tickets, holds the state); %s from sibling clones"
-             % (parent, by[parent], ", ".join("%s (%d tickets)" % (r, n) for r, n in sorted(by.items()) if r.casefold() != parent.casefold()))]
+    lines = ["repos: multi-repo run: %s is the parent (%d tickets, holds the state%s); %s from sibling clones"
+             % (parent, by[parent], why, ", ".join("%s (%d tickets)" % (r, n) for r, n in sorted(by.items()) if r.casefold() != parent.casefold()))]
     if cross:
         lines.append("deps: %d dependencies cross repos; they stay plain ids and unblock in the same pass" % cross)
     return parent, lines

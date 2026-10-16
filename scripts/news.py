@@ -184,7 +184,11 @@ def run_line(data: dict, verb: str, prior: dict, lines: list) -> str:
         head, merged, len(tickets), open_, out, "" if out == 1 else "s",
         (", in alarm: " + ", ".join(alarms[:8]) + (" +%d" % (len(alarms) - 8) if len(alarms) > 8 else "")) if alarms else "")
     text += (" Starting now: %s." % ", ".join(seen[:12]) + (" +%d" % (len(seen) - 12) if len(seen) > 12 else "")) if seen else " Nothing new to start yet."
-    return text
+    try:
+        where = pipeline_text(data)
+    except Exception:
+        where = ""
+    return text + ((" " + where) if where else "")
 
 
 def refused_line(verb: str, lines: list) -> Optional[str]:
@@ -289,3 +293,78 @@ def stage_news(data: dict, lines: list) -> list:
         if text and str(ticket.get("id") or tid) not in said:
             out.append("herald: " + text)
     return out
+
+
+# ---- where every open ticket is ---------------------------------------------------------------------------
+
+GROUPS = ("Shuttles working", "Fixing", "Bugbot reviewing", "In review", "Waiting on a pull request",
+          "Ready to merge", "Waiting for approval", "Alarms")
+
+
+def _ci_word(pr: dict) -> str:
+    ci = str(pr.get("ci") or pr.get("rollup") or "").strip().casefold()
+    return {"green": "CI green", "pending": "CI running", "red": "CI red", "absent": "CI not started"}.get(ci, "CI unknown")
+
+
+def pipeline_groups(data: dict, now=None) -> list:
+    """[(group, [items])] for every open ticket that is past the queue, in GROUPS order, empty groups left out.
+
+    Bugbot reviewing is a pull request Cursor Bugbot is checking or was asked to check; In review is one waiting on
+    CI, acceptance, or its Bugbot request. Status posts, the digest, and the start and resume line show these, so
+    tickets in review are listed by id, not only counted.
+    """
+    import beam as beam_mod
+    import bugbot
+    import orchestrator
+    import pipeline
+
+    cfg = data.get("config") or {}
+    now_dt = beam_mod.coerce_now(now)[0]
+    out = {name: [] for name in GROUPS}
+    for tid, t in sorted((data.get("tickets") or {}).items(), key=lambda kv: str(kv[0])):
+        if not isinstance(t, dict):
+            continue
+        status = str(t.get("status") or "queued")
+        if status in orchestrator.SETTLED or status in {"queued", "blocked"}:
+            continue
+        pr = t.get("pr") if isinstance(t.get("pr"), dict) else {}
+        shuttle = t.get("shuttle") if isinstance(t.get("shuttle"), dict) else {}
+        tid = str(tid)
+        if status == "alarm":
+            out["Alarms"].append("%s (%s)" % (tid, t.get("alarm") or "alarm"))
+        elif shuttle.get("pending") and not orchestrator.shuttle_returned(t):
+            step = str(shuttle.get("step") or "work")
+            group = "Fixing" if status == "fix" or step == "fix" else "Shuttles working"
+            out[group].append("%s (%s%s)" % (tid, step, ", not launched" if shuttle.get("launching") else ""))
+        elif status == "awaiting_approval":
+            out["Waiting for approval"].append(tid)
+        elif t.get("phase") in {"ready", "merging"} or status == "merging":
+            out["Ready to merge"].append(tid)
+        elif not pr.get("url"):
+            out["Waiting on a pull request"].append(tid)
+        elif orchestrator.bugbot_applies(t, cfg) and not pipeline.bugbot_finished(t, cfg):
+            shown = bugbot.activity(pr, now)
+            if shown.startswith("running("):
+                out["Bugbot reviewing"].append("%s running %s" % (tid, shown[len("running("):-1]))
+            elif pr.get("bugbotRequested") or pr.get("bugbotRequestedAt"):
+                since = bugbot._age_minutes(pr.get("bugbotRequestedAt"), now_dt)
+                out["Bugbot reviewing"].append("%s not started%s" % (tid, (" " + bugbot._duration(since)) if since is not None else ""))
+            else:
+                out["In review"].append("%s (%s, Bugbot not asked yet)" % (tid, _ci_word(pr)))
+        elif status == "fix":
+            out["Fixing"].append("%s (waiting for its fix Shuttle)" % tid)
+        else:
+            why = _ci_word(pr)
+            if why == "CI green" and not pipeline.acs_pass(t, data.get("_repoRoot")):
+                why = "CI green, acceptance not recorded"
+            out["In review"].append("%s (%s)" % (tid, why))
+    return [(name, out[name]) for name in GROUPS if out[name]]
+
+
+def pipeline_text(data: dict, now=None, limit: int = 10) -> str:
+    """`Shuttles working (3): A (implement), …. Bugbot reviewing (2): C running 4m, D not started 2m. In review (1): E (CI running).`"""
+    parts = []
+    for name, items in pipeline_groups(data, now):
+        shown = ", ".join(items[:limit]) + (" +%d more" % (len(items) - limit) if len(items) > limit else "")
+        parts.append("%s (%d): %s." % (name, len(items), shown))
+    return " ".join(parts)
