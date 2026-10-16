@@ -786,6 +786,45 @@ def _stale_minutes(beam: Optional[dict]) -> int:
     return number if number > 0 else 15
 
 
+LAUNCH_GRACE_MINUTES = 10
+
+
+def _launch_grace(beam: Optional[dict]) -> int:
+    cfg = (beam or {}).get("config") if isinstance(beam, dict) else {}
+    try:
+        value = int((cfg or {}).get("launchGraceMinutes") or LAUNCH_GRACE_MINUTES)
+    except (TypeError, ValueError):
+        return LAUNCH_GRACE_MINUTES
+    return value if value > 0 else LAUNCH_GRACE_MINUTES
+
+
+def unlaunched_for(stamp, beam: Optional[dict], now=None) -> bool:
+    """True when a Shuttle (or repair) marked at `stamp` is past the launch grace without a launch. A mark with no
+    time (before 1.7.3) is past it."""
+    import beam as beam_mod
+
+    marked = beam_mod.parse_ts(str(stamp or "")) if stamp else None
+    if marked is None:
+        return True
+    now_dt = beam_mod.coerce_now(now)[0]
+    return (now_dt - marked).total_seconds() / 60.0 > _launch_grace(beam)
+
+
+def phantom(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
+    """A slot claimed for a Shuttle nobody launched: marked (`launching`, no `startedAt`) or a repair started and not
+    launched, longer than the launch grace (10 minutes). It does not hold a slot: before 1.7.3 it held one forever, and
+    the launch check counted tickets as live Shuttles with no agent running."""
+    if not isinstance(ticket, dict):
+        return False
+    shuttle = _shuttle_row(ticket)
+    if shuttle.get("pending") and shuttle.get("launching") and not shuttle.get("startedAt"):
+        return unlaunched_for(shuttle.get("markedAt"), beam, now)
+    info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+    if ticket.get("status") == "claimed" and info.get("state") == "working" and not info.get("launchedAt") and not shuttle.get("pending"):
+        return unlaunched_for(info.get("startedAt"), beam, now)
+    return False
+
+
 def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
     """A slot is one Shuttle that is still out.
 
@@ -799,6 +838,8 @@ def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool
     shuttle = _shuttle_row(ticket)
     if not shuttle.get("pending") or shuttle_returned(ticket):
         return False
+    if shuttle.get("phantom") and shuttle.get("launching") and not shuttle.get("startedAt"):
+        return False  # reconcile.py found it never launched: it holds no slot
     import beam as beam_mod
 
     now_dt, _now_s = beam_mod.coerce_now(now)
@@ -816,7 +857,9 @@ def repair_awaiting_launch(ticket: dict) -> bool:
     if not isinstance(ticket, dict) or ticket.get("status") != "claimed":
         return False
     info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
-    return info.get("state") == "working" and not info.get("launchedAt") and not _shuttle_row(ticket).get("pending")
+    if info.get("state") == "working" and not info.get("launchedAt") and not _shuttle_row(ticket).get("pending"):
+        return not info.get("phantom")  # reconcile.py found it never launched: it holds no slot
+    return False
 
 
 def shuttle_still_out(ticket: dict, beam: Optional[dict] = None, now=None) -> bool:
@@ -2153,12 +2196,35 @@ def _returned_reason(folded: str) -> str:
     return "polled"
 
 
+_LISTENER_RETURN = re.compile(r"^(listen: (\d+|stopped|rotate)\b|reap: exit [a-z-]+|listener: returned [a-z-]+)")
+
+
+def listener_return_kind(text: str) -> str:
+    """`listener` when `--returned` is a line a listener returns, `stale` when it is the exit of a copy whose lease
+    was already taken over (`reap: exit superseded`: the script stamped, or left the newer generation alone), and
+    `other` for anything else (a ticket id, a Shuttle's result line). Only `listener` may stamp the live listener."""
+    folded = (text or "").strip().casefold()
+    if not folded:
+        return ""
+    if _explicit_stop(folded):
+        return "listener"
+    if folded.startswith("reap: exit superseded") or folded.startswith("listen: stopped superseded"):
+        return "stale"
+    return "listener" if _LISTENER_RETURN.match(folded) else "other"
+
+
 def _explicit_stop(folded: str) -> bool:
     """A pause or stop command. `listen: stopped` is the listener's own exit line."""
     return folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop")
 
 
 def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -> list:
+    ignored: list = []
+    lines = _supervise_body(beam_path, returned, now, beam_mod, ignored)
+    return ignored + lines
+
+
+def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ignored: list) -> list:
     import inbound
 
     data = beam_mod.load_json(beam_path)
@@ -2167,6 +2233,20 @@ def _supervise_locked(beam_path: Path, returned: Optional[str], now, beam_mod) -
     folded = returned_text.casefold()
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
     closing_stop = False
+    kind = listener_return_kind(returned_text)
+    named = re.search(r"\blease=(\d+)", folded)
+    if kind == "listener" and named and int(named.group(1)) != inbound.generation_of(data):
+        kind = "stale"
+    if kind == "other":
+        # Before 1.7.3 any text stamped the live listener: a ticket id passed here stopped it.
+        ignored.append("listener: --returned %r is not a line a listener returns (listen: <n>, listen: stopped, "
+                       "listen: rotate, reap: exit <reason>); ignored. A Shuttle's line goes to checkout.py result."
+                       % returned_text[:80])
+        returned_text, folded = "", ""
+    elif kind == "stale":
+        ignored.append("listener: %r came from a listener whose lease was already taken over; the live listener is left alone."
+                       % returned_text[:80])
+        returned_text, folded = "", ""
     if returned_text and raw.get("pollStartedAt"):
         # This pass still has the generation that returned. Record it once.
         # A later pass with the same line does not idle the run.

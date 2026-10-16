@@ -229,7 +229,7 @@ def _run(path: Path, data: dict, now=None) -> list:
         heal_action = escapes.get(tid, ("", ""))[0] if t.get("alarm") == "lock-escape" else ""
         if heal_action in {"clear", "widen"}:
             widened = heal._paths(t)[1] if heal_action == "widen" else []
-            lines.append("autoscan: %s %s: %s" % (tid, why, heal._clear_lock_escape(data, t, now_s, widened, now=now)[len("heal: "):]))
+            lines.append("autoscan: %s %s: %s" % (tid, why, heal._clear_lock_escape(data, t, now_s, widened, now=now, beam_path=path)[len("heal: "):]))
         elif heal_action == "repair":
             t["alarmRepairs"] = 0
             info = t.get("alarmRepair") if isinstance(t.get("alarmRepair"), dict) else {}

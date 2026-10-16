@@ -368,6 +368,7 @@ def _start(data: dict, ticket: dict, now_s: str, beam_path: Path, lines: list) -
         }
     )
     info.pop("error", None)
+    info.pop("phantom", None)  # a new start holds its slot again
     info.pop("failedAt", None)
     info.pop("launchedAt", None)
     ticket["updatedAt"] = now_s
