@@ -77,7 +77,7 @@ def keep_cycling(data: dict, beam_path, now_s: str) -> str:
         _int_field(raw, "reads"), max_reads(data, beam_path), clock)
 DEFAULT_FAST_SECONDS = 15
 DEFAULT_SLOW_SECONDS = 120
-DEFAULT_ORPHAN_MINUTES = 5
+DEFAULT_ORPHAN_MINUTES = 15
 DEFAULT_MAX_MINUTES = 60
 DEFAULT_MAX_READS = 4
 
@@ -399,14 +399,26 @@ def listener_model(data: dict, beam_path: Path) -> str:
     return str(val).strip()
 
 
-def set_parent_seen(data: dict, now_s: str) -> None:
-    """Record that the parent is alive. The caller holds the lock and writes the beam."""
+def set_parent_seen(data: dict, now_s: str, waiting: bool = False, every: Optional[int] = None) -> None:
+    """Record that the parent is alive. The caller holds the lock and writes the beam.
+
+    `waiting`: the parent is inside `parent-exit --wait`, so a listener that rotates now is replaced at once.
+    `every`: the parent is woken by a timer this many seconds apart (`parent-alive --every`), so the listener's
+    orphan check allows that gap.
+    """
     raw = _raw(data)
     raw["parentSeenAt"] = now_s
+    if waiting:
+        raw["parentWaitingAt"] = now_s
+    if every is not None:
+        if int(every) > 0:
+            raw["parentEvery"] = int(every)
+        else:
+            raw.pop("parentEvery", None)
     data["listener"] = raw
 
 
-def touch_parent(beam_path: Path, now_s: str) -> bool:
+def touch_parent(beam_path: Path, now_s: str, waiting: bool = False, every: Optional[int] = None) -> bool:
     """Write `listener.parentSeenAt`. False when the run should not keep a listener."""
     beam_path = Path(beam_path)
     if not beam_path.is_file():
@@ -418,11 +430,37 @@ def touch_parent(beam_path: Path, now_s: str) -> bool:
         data = beam.load_json(beam_path)
         if not isinstance(data, dict) or not orchestrator.listener_should_run(data):
             return False
-        set_parent_seen(data, now_s)
+        set_parent_seen(data, now_s, waiting=waiting, every=every)
         beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return True
 
     return _locked(beam_path, run)
+
+
+def parent_alive_quiet(beam_path) -> None:
+    """A parent command ran (checkout.py, apply-pending, the auto-scan, …): that is a heartbeat too. Never raises."""
+    try:
+        touch_parent(Path(beam_path), beam.utcnow())
+    except Exception:
+        pass
+
+
+PARENT_WAITING_SECONDS = 90
+
+
+def parent_waiting(data: dict, now_dt, within: int = PARENT_WAITING_SECONDS) -> bool:
+    """True while the parent is inside `parent-exit --wait` (it writes `parentWaitingAt` every step)."""
+    age = _age_seconds(_raw(data).get("parentWaitingAt"), now_dt)
+    return age is not None and age <= within
+
+
+def orphan_limit_minutes(data: dict, beam_path: Path) -> int:
+    """`listenerOrphanMinutes`, widened to cover a parent woken by a timer (`parentEvery` plus 3 minutes)."""
+    limit = orphan_minutes(data, beam_path)
+    every = _int_field(_raw(data), "parentEvery")
+    if every > 0:
+        limit = max(limit, -(-every // 60) + 3)
+    return limit
 
 
 def lease_matches(data: dict, generation, holder: Optional[str]) -> bool:
@@ -689,7 +727,7 @@ def parent_orphaned(data: dict, beam_path: Path, now_dt) -> bool:
     out longer than that window. A generation that just started is not.
     """
     raw = _raw(data)
-    limit = orphan_minutes(data, beam_path) * 60.0
+    limit = orphan_limit_minutes(data, beam_path) * 60.0
     seen = _age_seconds(raw.get("parentSeenAt"), now_dt)
     if seen is None:
         started = _age_seconds(raw.get("generationStartedAt") or raw.get("pollStartedAt"), now_dt)
@@ -700,14 +738,19 @@ def parent_orphaned(data: dict, beam_path: Path, now_dt) -> bool:
 
 
 def rotation_due(data: dict, beam_path: Path, now_dt) -> bool:
-    """True at `listenerMaxReads` or `listenerMaxMinutes`, whichever comes first."""
+    """True at `listenerMaxReads` or `listenerMaxMinutes`, whichever comes first, while the parent is waiting.
+
+    Only a parent pass starts the next listener. Before 1.7.4 a listener rotated whenever it reached its limit, and a
+    parent woken by a timer left no listener until its next wake. Now a rotation that is due waits until the parent is
+    inside `parent-exit --wait` (`parentWaitingAt`), which starts the replacement within seconds; until then the
+    listener keeps listening.
+    """
     raw = _raw(data)
-    if _int_field(raw, "reads") >= max_reads(data, beam_path):
-        return True
-    age = _age_seconds(raw.get("generationStartedAt") or raw.get("pollStartedAt"), now_dt)
-    if age is None:
-        return False
-    return age >= max_minutes(data, beam_path) * 60.0
+    due = _int_field(raw, "reads") >= max_reads(data, beam_path)
+    if not due:
+        age = _age_seconds(raw.get("generationStartedAt") or raw.get("pollStartedAt"), now_dt)
+        due = age is not None and age >= max_minutes(data, beam_path) * 60.0
+    return due and parent_waiting(data, now_dt)
 
 
 def _apply_cursor(raw: dict, cursor: str = "", count: Optional[int] = None) -> None:
@@ -778,8 +821,13 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
             return_reason="",
         )
         since = str(raw.get("cursor") or "")
-        lines.append("listen: cycle %d of %d at %sZ (generation %s)" % (
-            _int_field(raw, "reads"), max_reads(data, beam_path), now_s[11:19], generation_of(data)))
+        reads, most = _int_field(raw, "reads"), max_reads(data, beam_path)
+        if reads > most:
+            # Its rotation is due and waits for a parent that is waiting, so no gap opens with no listener (1.7.4).
+            lines.append("listen: cycle %d at %sZ (generation %s; past %d, it hands off when the parent waits)" % (
+                reads, now_s[11:19], generation_of(data), most))
+        else:
+            lines.append("listen: cycle %d of %d at %sZ (generation %s)" % (reads, most, now_s[11:19], generation_of(data)))
         for kind, channel in channels(beam_path):
             lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
         return lines
@@ -1815,6 +1863,7 @@ def main(argv: Optional[list] = None) -> int:
         print(enqueue(beam_path, args.text, args.by, args.message_id, args.source))
         return 0
     if args.cmd == "apply-pending":
+        parent_alive_quiet(beam_path)  # the parent runs this: a heartbeat
         results = apply_pending(beam_path)
         if not results:
             print("inbound: nothing pending")

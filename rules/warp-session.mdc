@@ -45,7 +45,17 @@ python3 <plugin>/scripts/orchestrator.py parent-exit --beam .warp/beam.json --wa
 python3 <plugin>/scripts/session_note.py --type session-stop --root .
 ```
 
-A second call is skipped while that line is still the last journal event.
+A second call is skipped while that line is still the last journal event. While the run is running it leaves the listener up and counts as a parent heartbeat (`listener: kept`); only a paused, stopped, or finished run ends it there (1.7.4).
+
+## When a timer or a schedule wakes you
+
+Run this first, every wake, with the seconds between wakes, then a supervise pass:
+
+```bash
+python3 <plugin>/scripts/orchestrator.py parent-alive --beam .warp/beam.json --every 600
+```
+
+It is the parent's heartbeat between passes. With `--every`, the listener allows that gap before it calls the parent gone (`listenerOrphanMinutes`, or every plus 3 minutes, whichever is longer). `listener: none is up; run a supervise pass now to start one` means do that now.
 
 ## When a Shuttle finishes
 

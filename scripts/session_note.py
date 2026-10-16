@@ -56,13 +56,26 @@ def last_type(path: Path) -> Optional[str]:
 
 
 def _release_listener(state_dir: Path) -> None:
-    """The listener subagent ends with the parent turn. Clear a running flag."""
+    """End the listener only when the run is paused, stopped, or finished.
+
+    Before 1.7.4 every session-stop ended it, on the idea that the listener lasts one parent turn. A parent woken by
+    a timer ends its turn every few minutes, so each turn end tore the listener down (118 `listener-stop` lines, each
+    in the same second as a `session-stop`). While the run is running the listener now stays up, and the end of the
+    turn counts as a parent heartbeat; /warp-pause and /warp-stop still end it.
+    """
     beam_path = state_dir / "beam.json"
     if not beam_path.is_file():
         return
     try:
+        import beam as beam_mod
         import inbound
+        import orchestrator
 
+        data = beam_mod.load_json(beam_path)
+        if isinstance(data, dict) and orchestrator.listener_should_run(data):
+            inbound.touch_parent(beam_path, beam_mod.utcnow())
+            print("listener: kept (the run is running; /warp-pause or /warp-stop ends it)")
+            return
         inbound.release(beam_path)
     except Exception:
         return

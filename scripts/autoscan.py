@@ -306,7 +306,9 @@ def main(argv: Optional[list] = None) -> int:
             print("autoscan: would %s %s (%s)" % (action, tid, why))
         return 0
     import beamlock
+    import inbound
 
+    inbound.parent_alive_quiet(path)
     with beamlock.run_lock(path):
         for line in run_on_disk(path, force=True) or ["autoscan: the run is not running"]:
             print(line)

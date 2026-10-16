@@ -221,7 +221,7 @@ class ListenerLoopTests(unittest.TestCase):
         data = self.beam()
         self.assertEqual(inbound.fast_seconds(data, self.beam_path), 15)
         self.assertEqual(inbound.slow_seconds(data, self.beam_path), 120)
-        self.assertEqual(inbound.orphan_minutes(data, self.beam_path), 5)
+        self.assertEqual(inbound.orphan_minutes(data, self.beam_path), 15)  # 1.7.4: was 5
         self.assertEqual(inbound.max_minutes(data, self.beam_path), 60)
         self.assertEqual(inbound.max_reads(data, self.beam_path), 4)
         self.assertEqual(inbound.listener_model(data, self.beam_path), "")
@@ -599,6 +599,9 @@ class ListenerLeaseTests(unittest.TestCase):
         data["config"]["listenerMaxMinutes"] = 1
         self.write(data)
         self.start()
+        data = self.beam()
+        data["listener"]["parentWaitingAt"] = plus(NOW, 2)  # a parent in parent-exit --wait: it replaces the listener at once
+        self.write(data)
         held = orchestrator.supervise_listener(self.beam_path, now=plus(NOW, 2))
         self.assertEqual(held, ["listener: hold reason=await-return generation=2"])
         self.assertEqual(self.beam()["listener"]["holder"], "")
@@ -620,6 +623,13 @@ class ListenerLeaseTests(unittest.TestCase):
         self.assertEqual(inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)[0], "reap: continue")
         self.assertEqual(inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)[0], "reap: continue")
         self.assertEqual(self.beam()["listener"]["reads"], 2)
+        # 1.7.4: with no parent waiting (a parent woken by a timer), the rotation waits and the listener keeps reading.
+        deferred = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
+        self.assertEqual(deferred[0], "reap: continue")
+        self.assertIn("it hands off when the parent waits", deferred[1])
+        data = self.beam()
+        data["listener"]["parentWaitingAt"] = NOW
+        self.write(data)
         rotated = inbound.poll_lines(self.beam_path, lease=1, holder="listener", now=NOW)
         self.assertEqual(rotated, ["listen: rotate"])
         self.assertEqual(self.beam()["listener"]["returnReason"], "rotated")
