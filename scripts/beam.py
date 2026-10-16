@@ -1846,7 +1846,7 @@ def default_config() -> dict:
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,
         "autoScan": 600,
-        "autoScanResets": 3,
+        "autoScanResets": 5,
         "staleMinutes": DEFAULT_STALE_MINUTES,
         "listenerFastSeconds": 15,
         "listenerSlowSeconds": 120,

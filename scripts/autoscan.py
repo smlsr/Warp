@@ -10,7 +10,7 @@ cap or a lost step left standing, then makes room for new work:
      reset otherwise), `ci-red` and `bugbot-failed`, and tickets parked at `maxFixAttempts` or `maxStallFixes`.
      With a pull request the ticket goes back to fix on it; without one it is queued and reuses its branch.
      Any other alarm that is still there one scan later gets the same. `gate-red` is left alone.
-     Each ticket gets at most `autoScanResets` (default 3) of these; past that it is named and left for a person.
+     Each ticket gets at most `autoScanResets` (default 5) of these; past that it is named and left for a person.
   2. A merge asked for and not confirmed for one scan interval is asked again.
   3. A pull request the run asked to open and never did is asked again.
   4. The run-wide repair sweep (`repairSweepMinutes`) runs now: stalled reviews (Bugbot asked again, CI rerun,
@@ -37,7 +37,7 @@ from typing import Optional
 
 HELP = __doc__
 DEFAULT_SECONDS = 600
-DEFAULT_RESETS = 3
+DEFAULT_RESETS = 5
 LEAVE = {"gate-red"}
 CAPPED_PARK = {"parked", "stalled"}
 

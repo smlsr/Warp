@@ -352,7 +352,7 @@ autoScan: 600
 # (worker-died, stuck, spawn-cap, given-up lock-escape repairs, ci-red, bugbot-failed, parked at a
 # fix cap) a fresh budget, asks again for merges and pull requests that never happened, runs the
 # repair sweep, and then fills every free Shuttle slot. 0 turns it off.
-autoScanResets: 3
+autoScanResets: 5
 # Fresh budgets the auto-scan gives one ticket before it leaves it for a person (warp:retry).
 reviewPollSeconds: 60
 # While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every

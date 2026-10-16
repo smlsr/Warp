@@ -102,7 +102,9 @@ class ScanTest(Beam):
         self.assertEqual(self.load()["tickets"]["F-1"]["status"], "queued")
 
     def test_resets_run_out_and_a_person_is_told_once(self):
-        self.write([row("W-1", "alarm", alarm="worker-died", recoveries=5, autoScanResets=3)])
+        self.assertEqual(beam_mod.default_config()["autoScanResets"], 5)
+        self.assertEqual(autoscan.DEFAULT_RESETS, 5)
+        self.write([row("W-1", "alarm", alarm="worker-died", recoveries=5, autoScanResets=5)])
         lines = autoscan.run_on_disk(self.path, now=NOW)
         self.assertIn("left for a person (warp:retry W-1)", "\n".join(lines))
         self.assertTrue(any(l.startswith("herald: Auto-scan: needs a person") for l in lines), lines)
