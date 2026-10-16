@@ -201,8 +201,55 @@ def _orphan_locks(data: dict, lines: list, dry: bool) -> None:
         lines.append("reconcile: %s is %s but still held %d lock%s; %s" % (
             tid, ticket.get("status"), len(locks), "" if len(locks) == 1 else "s", "would release" if dry else "released"))
         if not dry:
-            ticket["locks"] = []
+            import lockkeep
+
+            lockkeep.release(ticket)  # kept on the ticket: a retry gives them back (1.7.3)
             lines.append("lock: remove %s" % tid)
+
+
+def _restore_locks(data: dict, beam_path: Optional[Path], lines: list, dry: bool) -> None:
+    """A ticket back at work (or queued to start) with no locks gets the ones it released, or the plan's."""
+    import lockkeep
+    import orchestrator
+
+    for tid, ticket in sorted((data.get("tickets") or {}).items()):
+        if not isinstance(ticket, dict) or ticket.get("status") in orchestrator.SETTLED:
+            continue
+        if [p for p in (ticket.get("locks") or []) if str(p).strip()]:
+            continue
+        if dry:
+            probe = dict(ticket)
+            said = lockkeep.restore(probe, beam_path)
+            if said:
+                lines.append("reconcile: would restore: " + said)
+            continue
+        said = lockkeep.restore(ticket, beam_path)
+        if said:
+            lines.append("reconcile: %s is %s with no locks (a park or settle released them); %s"
+                         % (tid, ticket.get("status"), said[len("locks: "):]))
+
+
+def _phantoms(data: dict, now_s: str, lines: list, dry: bool) -> None:
+    """Slots claimed for a Shuttle nobody launched, past the launch grace: said once; they hold no slot."""
+    import orchestrator
+
+    for tid, ticket in sorted((data.get("tickets") or {}).items()):
+        if not isinstance(ticket, dict) or not orchestrator.phantom(ticket, data, now_s):
+            continue
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+        mark = "%s|%s" % (shuttle.get("markedAt") or "", info.get("startedAt") or "")
+        if ticket.get("phantomNoted") == mark:
+            continue
+        what = "a lock-escape repair" if not shuttle.get("pending") else "a Shuttle (%s)" % (shuttle.get("step") or "work")
+        lines.append("reconcile: %s was claimed for %s that was never launched; it no longer holds a Shuttle slot "
+                     "(the start line is printed again until it is launched)" % (tid, what))
+        if not dry:
+            ticket["phantomNoted"] = mark
+            if shuttle.get("pending"):
+                ticket["shuttle"]["phantom"] = True
+            else:
+                info["phantom"] = True
 
 
 def _waive_idle_backoff(data: dict, beam_path: Optional[Path], now_dt, now_s: str, lines: list, dry: bool) -> None:
@@ -247,6 +294,8 @@ def run(data: dict, beam_path: Optional[Path] = None, now=None, dry: bool = Fals
             lines.append("reconcile: %s repair Shuttle returned; settling the repair now" % tid)
         _settled_with_shuttle(data, lines, dry)
         _orphan_locks(data, lines, dry)
+        _restore_locks(data, beam_path, lines, dry)
+        _phantoms(data, now_s, lines, dry)
         _waive_idle_backoff(data, beam_path, now_dt, now_s, lines, dry)
     except Exception as exc:  # reconcile never stops a pass
         lines.append("reconcile: skipped (%s)" % exc)

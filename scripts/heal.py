@@ -78,12 +78,15 @@ def plan(data: dict) -> list:
     return rows
 
 
-def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=None) -> str:
+def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=None, beam_path=None) -> str:
     import alarm_repair
     import inbound
     import orchestrator
 
     tid = ticket.get("id")
+    import lockkeep
+
+    restored = lockkeep.restore(ticket, beam_path)
     if widened:
         alarm_repair._widen(ticket, widened)
     ticket["alarm"] = None
@@ -97,6 +100,9 @@ def _clear_lock_escape(data: dict, ticket: dict, now_s: str, widened: list, now=
         alarm_repair._drop(alarm_repair._active(repair), tid)
         alarm_repair._drop(alarm_repair._naming(repair), tid)
     added = " Added %s to its locks." % ", ".join(widened) if widened else ""
+    if restored:
+        said = restored[len("locks: ") + len(str(tid)) + 1:]
+        added += " " + said[:1].upper() + said[1:] + "."
     if ticket.get("status") != "alarm" and orchestrator.shuttle_is_live(ticket, data, now=now):
         # A Shuttle is still out on it. Only the alarm goes; the Shuttle's return moves it on.
         ticket["updatedAt"] = now_s
@@ -323,7 +329,7 @@ def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
             lines.append("heal: %s left in alarm (%s). Fix the gate's check; the gate reruns it." % (tid, detail))
         elif action in {"clear", "widen"}:
             widened = _paths(ticket)[1] if action == "widen" else []
-            lines.append(_clear_lock_escape(data, ticket, now_s, widened, now=now))
+            lines.append(_clear_lock_escape(data, ticket, now_s, widened, now=now, beam_path=beam_path))
             beam_mod.append_ticket_event(beam_path, ticket, {"at": now_s, "type": "heal", "value": "lock-escape cleared"})
         elif action == "repair":
             ticket["alarmRepairs"] = 0

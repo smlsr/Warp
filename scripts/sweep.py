@@ -148,7 +148,9 @@ def _orphan_locks(data: dict, findings: list, actions: list, lines: list) -> Non
             continue
         tid = ticket.get("id")
         findings.append({"kind": "lock", "id": tid, "detail": "orphaned lock"})
-        ticket["locks"] = []
+        import lockkeep
+
+        lockkeep.release(ticket)  # kept on the ticket: a retry gives them back (1.7.3)
         actions.append({"kind": "lock", "id": tid})
         lines.append("sweep: action %s lock removed" % tid)
         lines.append("lock: remove %s" % tid)

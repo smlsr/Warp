@@ -436,17 +436,36 @@ def lease_matches(data: dict, generation, holder: Optional[str]) -> bool:
     return gen == generation_of(data) and who == holder_of(data) and holder_of(data) != ""
 
 
-def _may_stamp(data: dict, holder: Optional[str]) -> bool:
+def _may_stamp(data: dict, holder: Optional[str], lease=None) -> bool:
     """True when this copy is the one that should write the return stamp.
 
     A holder that already belongs to someone else is left alone. The copy
-    that was invalidated, and the copy that still holds the lease, may stamp.
+    that holds the live lease may stamp, and so may the copy whose lease was
+    expired (holder cleared, waiting for its return stamp). Every generation
+    uses the holder name `listener`, so the lease decides: a copy from an
+    older generation never stamps a newer one (before 1.7.3 a late poll from
+    generation N stamped generation N+1 stopped, and each new listener died
+    within seconds).
     """
     who = str(holder or "").strip()
     if not who:
         return False
     raw = _raw(data)
     current = str(raw.get("holder") or "")
+    if lease is not None:
+        try:
+            mine = int(lease)
+        except (TypeError, ValueError):
+            return False
+        gen = generation_of(data)
+        if mine == gen:
+            return current == who
+        if mine > gen:
+            return False
+        # An older generation: only the one whose lease was expired and not taken since hands it back.
+        if current:
+            return False
+        return bool(raw.get("awaitReturn")) and mine == gen - 1 and str(raw.get("previousHolder") or "") in {"", who}
     if current and current != who:
         return False
     if current == who:
@@ -633,11 +652,17 @@ def channels(beam_path: Path) -> list:
     return found
 
 
-def _stop_lines(reason: str) -> list:
+def _stop_lines(reason: str, lease=None) -> list:
+    if reason == "superseded":
+        # A copy whose lease was taken over says so in its return line, so the parent's `supervise --returned`
+        # never stamps the newer generation with it (1.7.3).
+        tail = "listen: stopped superseded%s" % (" lease=%s" % lease if lease is not None else "")
+    else:
+        tail = "listen: stopped"
     return [
         "reap: exit %s" % reason,
-        "reap: stop now. Return `listen: stopped`. Do not read the channel. Do not start an agent, subscribe, set a timer, or sleep.",
-        "listen: stopped",
+        "reap: stop now. Return `%s`. Do not read the channel. Do not start an agent, subscribe, set a timer, or sleep." % tail,
+        tail,
     ]
 
 
@@ -714,7 +739,7 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
         data = beam.load_json(beam_path)
         now_dt, now_s = _moment(now)
         if lines and lines[0].startswith("reap: exit"):
-            if checked and _may_stamp(data, holder):
+            if checked and _may_stamp(data, holder, lease):
                 reason = "stopped"
                 stamp_return(data, beam_path, reason, now_s, holder=holder)
                 beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
@@ -726,10 +751,10 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
                 lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
             return lines
         if not lease_matches(data, lease, holder):
-            if _may_stamp(data, holder):
+            if _may_stamp(data, holder, lease):
                 stamp_return(data, beam_path, "stopped", now_s, holder=holder)
                 beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
-            return _stop_lines("superseded")
+            return _stop_lines("superseded", lease)
         if parent_orphaned(data, beam_path, now_dt):
             stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
@@ -770,16 +795,16 @@ def _wait_check(beam_path: Path, lease, holder: Optional[str], now) -> Optional[
     now_dt, now_s = _moment(now)
     lines = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
     if lines and lines[0].startswith("reap: exit"):
-        if _may_stamp(data, holder):
+        if _may_stamp(data, holder, lease):
             stamp_return(data, beam_path, "stopped", now_s, holder=holder)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         reason = lines[0].split()[-1]
         return _stop_lines(reason)
     if not lease_matches(data, lease, holder):
-        if _may_stamp(data, holder):
+        if _may_stamp(data, holder, lease):
             stamp_return(data, beam_path, "stopped", now_s, holder=holder)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
-        return _stop_lines("superseded")
+        return _stop_lines("superseded", lease)
     if parent_orphaned(data, beam_path, now_dt):
         stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
         beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
@@ -941,7 +966,7 @@ def mark_returned(beam_path: Path, reason: str, lease=None, holder: Optional[str
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return "listener: returned cut-off. The slot is free; the parent starts the next listener on its next pass."
         if lease is not None or holder not in (None, ""):
-            if not lease_matches(data, lease, holder) and not _may_stamp(data, holder):
+            if not lease_matches(data, lease, holder) and not _may_stamp(data, holder, lease):
                 return "listener: return refused"
             if lease_matches(data, lease, holder) and not _script_says_stop(data, beam_path, holder, reason, now_dt):
                 # The holder of a live lease does not end its own generation. poll and wait
@@ -1272,6 +1297,12 @@ def _requeue(beam_path: Path, tid: str, by: Optional[str] = None) -> str:
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
     if shuttle is not None:
         shuttle["pending"] = False
+    import lockkeep
+
+    # A parked ticket gave its locks back; it works on the same files again (1.7.3).
+    restored = lockkeep.restore(ticket, beam_path)
+    if restored:
+        lines.append(restored)
     if mode == "fix":
         import orchestrator
 

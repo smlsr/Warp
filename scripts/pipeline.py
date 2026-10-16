@@ -56,6 +56,10 @@ def mark_shuttle(ticket: dict, step: str, data: Optional[dict] = None) -> None:
     shuttle.pop("endedBy", None)
     # Marked, not launched yet: the previous Shuttle's heartbeat does not make this one busy.
     shuttle["launching"] = True
+    import beam as beam_mod
+
+    shuttle["markedAt"] = beam_mod.utcnow()
+    shuttle.pop("phantom", None)  # a mark nobody launches stops holding a slot after LAUNCH_GRACE_MINUTES
     shuttle.pop("launchLines", None)
     shuttle["headAtMark"] = str((ticket.get("pr") or {}).get("headSha") or "")
     if isinstance(ticket.get("pr"), dict):
@@ -1355,6 +1359,11 @@ def _restart(data: dict, ticket: dict, lines: list, step_phase: str, herald: str
             lines.append("shuttle: hold %s (its locks are held by %s)" % (ticket.get("id"), holder))
             return
     replacing = agents.confirmed_dead(ticket, data) and not bool(agents.can_resume(data, ticket, beam_path=_beam_path(data)))
+    import lockkeep
+
+    restored = lockkeep.restore(ticket, _beam_path(data))
+    if restored:
+        lines.append(restored)
     ticket["alarm"] = None
     ticket["status"] = "recovering"
     _phase(ticket, step_phase, lines)
@@ -1390,6 +1399,11 @@ def open_despite_cap(data: dict, ticket: dict, lines: list, why: str) -> bool:
     if not pr.get("url") and not ticket.get("branch"):
         lines.append("cap: %s %s cap reached; acceptance passes but it has no branch to open a pull request from" % (tid, why))
         return False
+    import lockkeep
+
+    restored = lockkeep.restore(ticket, _beam_path(data))
+    if restored:
+        lines.append(restored)
     ticket["alarm"] = None
     ticket["capReached"] = why
     ticket["needsReplacement"] = False

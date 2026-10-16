@@ -644,7 +644,9 @@ def signal_of(snap: Optional[dict]) -> str:
     """
     if not snap:
         return ""
-    return "|".join(str(snap.get(key) or "") for key in ("headSha", "ci", "bugbot", "conflictState", "prState"))
+    # The Bugbot check as GitHub reports it (`bugbotCheck`), so a neutral check read as a pass matches the list.
+    fields = dict(snap, bugbot=snap.get("bugbotCheck", snap.get("bugbot")))
+    return "|".join(str(fields.get(key) or "") for key in ("headSha", "ci", "bugbot", "conflictState", "prState"))
 
 
 def _signal_fields(doc: dict) -> dict:
@@ -748,9 +750,21 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
     if bugbot:
         snap["bugbot"] = bugbot
     snap.update(pr_times(doc, checks))
+    snap["bugbotCheck"] = bugbot
     if bugbot == "fail" and sha:
-        snap["findings"] = bugbot_findings(root, text, sha) or [
-            "Cursor Bugbot found issues on %s (see its review comments on the pull request)" % sha[:12]]
+        found = current_bugbot_findings(root, text, sha)
+        if found == [] and _bugbot_neutral(checks):
+            # 1.7.3: Bugbot's check stays `neutral` while older threads are open, even when it found nothing on this
+            # commit. With no finding on the head (only outdated threads), that is a pass: before, it was red,
+            # each fix pushed nothing, and the ticket burned maxFixAttempts and parked.
+            bugbot = "pass"
+            snap["bugbot"] = "pass"
+            snap["bugbotNeutralClean"] = True
+            snap["findings"] = []
+            snap["rollup"] = interpret_rollup(_neutral_as_success(checks))
+        else:
+            snap["findings"] = found or [
+                "Cursor Bugbot found issues on %s (see its review comments on the pull request)" % sha[:12]]
     elif bugbot == "pass":
         snap["findings"] = []
     return snap
@@ -824,28 +838,59 @@ def bugbot_findings(root: Path, url: str, head: str, runner=None) -> list:
 
     Bugbot reports what it found as review comments; its check only says `neutral`.
     """
+    return current_bugbot_findings(root, url, head, runner=runner) or []
+
+
+def _outdated(row: dict) -> bool:
+    """A review comment GitHub shows as outdated: its lines are gone from the latest diff."""
+    return row.get("position") is None and row.get("line") is None and ("position" in row or "line" in row)
+
+
+def current_bugbot_findings(root: Path, url: str, head: str, runner=None) -> Optional[list]:
+    """Bugbot's findings that still stand on this head: top-level review comments on the head commit that are not
+    outdated. None when gh cannot read them (unknown, not clean)."""
     owner, repo, number = _repo_and_number(url)
     if not number:
-        return []
+        return None
     run = runner or (lambda cmd: _run(cmd, root, timeout=30))
     done = run(["gh", "api", "--paginate", "repos/%s/%s/pulls/%s/comments" % (owner, repo, number)])
     if done.returncode != 0:
-        return []
+        return None
     text = (done.stdout or "").strip()
     try:
         rows = json.loads(text) if text.startswith("[") and text.count("][") == 0 else json.loads("[" + text.replace("][", ",")[1:-1] + "]")
     except json.JSONDecodeError:
-        return []
+        return None
     out = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or not is_bugbot_comment(row):
             continue
+        if row.get("in_reply_to_id") or _outdated(row):
+            continue  # a reply in a thread, or a thread on code the latest commit replaced
         commit = str(row.get("commit_id") or row.get("original_commit_id") or "")
         if head and commit and not (commit.startswith(head) or head.startswith(commit)):
             continue
         line = finding_line(row)
         if line and line not in out:
             out.append(line)
+    return out
+
+
+def _bugbot_neutral(checks: list) -> bool:
+    """Every Bugbot check finished `neutral` (it found something, or left threads open), none failed outright."""
+    rows = [item for item in checks if isinstance(item, dict) and _bugbot_check(item)]
+    if not rows:
+        return False
+    kinds = {str(item.get("conclusion") or item.get("state") or "").strip().casefold() for item in rows}
+    return "neutral" in kinds and kinds <= {"neutral", "success", "skipped"}
+
+
+def _neutral_as_success(checks: list) -> list:
+    out = []
+    for item in checks:
+        if isinstance(item, dict) and _bugbot_check(item) and str(item.get("conclusion") or "").strip().casefold() == "neutral":
+            item = dict(item, conclusion="SUCCESS")
+        out.append(item)
     return out
 
 
