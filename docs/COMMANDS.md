@@ -37,7 +37,7 @@ One reference for the chat commands and the scripts they run. Config keys and de
 | `/warp-proceed <id>` | Merge one green manual ticket and move Jira to Done | `proceed.py` `--beam` `--by` |
 | `/warp-report` | Completion report, or a partial snapshot | `report.py` `--beam` `--out` `--open` `--partial` |
 | `/warp-version` | Installed copy, source copy, `.warp/version` | `version.py` |
-| `/warp-upgrade` | Replace the project plugin copy. Leaves config and the beam | `upgrade.py` `--root` `--source` |
+| `/warp-upgrade` | Replace the project plugin copy. Leaves config and the beam. Live while a run runs: Shuttles keep working | `upgrade.py` `--root` `--source` `--live` `--no-live` |
 | `/warp-uninstall` | Delete `.cursor/plugins/warp` and `.warp/` after you confirm | `install.py uninstall` `--yes` `--remove-gitignore` |
 
 `jira_sync.py` subcommands, each printed by `?`: `verify`, `catchup`, `sync`, `map`, `resolve`, `project`, `external-id`, `record-external-id`, `plan`, `pick`, `record`, `record-comment`.
@@ -558,7 +558,11 @@ A second run with the same flags writes nothing. Changed files get a `.bak`. `/w
 python3 <plugin>/scripts/upgrade.py ?
 python3 <plugin>/scripts/upgrade.py --root .
 python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
+python3 <plugin>/scripts/upgrade.py --root . --live
+python3 <plugin>/scripts/upgrade.py --root . --no-live
 ```
+
+A live upgrade is the default while the run is running (`--live` forces it, `--no-live` turns it off). Run it between passes. It holds the run lock, so supervise, launches, and Slack commands wait for it; Shuttles and the listener keep working, and nothing is paused, reaped, or restarted. Each plugin file is replaced atomically (written beside it, then renamed onto it), so a Shuttle that runs a script mid-upgrade gets the old file or the new one, never half of one. Then the new `install.py init --live` adds new config keys, refreshes the rules, the allowlist, and `.warp/version` (the run is kept), `config_sync.py` brings `.warp/config.yaml` and the new defaults into the beam, the beam records `upgrade` and `pluginVersion`, the journal gets an `upgrade` line, and Slack gets `Warp upgraded live from vA to vB. N Shuttles kept working; nothing was paused or restarted.` It prints `upgrade: live, from Warp vA …`, the plain upgrade's lines, the init lines, and `upgrade: done. The run lock is released and the run goes on.` Then re-read the new `skills/warp/SKILL.md` and `rules/*.mdc` and run the next pass. Do not reload Cursor while Shuttles are out: a reload ends the subagents. Shuttles already out keep their prompts and run the new scripts; new Shuttles get the new prompts. Reload when the run is paused or no Shuttle is out, to list new slash commands. A plain upgrade during a running run warns about this.
 
 Run it in the repo that has Warp installed. It replaces `.cursor/plugins/warp` with the plugin tree this command is running from (`--source` names another tree). When that tree is a git checkout with an `origin` remote, the command fetches the default branch and copies that tree. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. The installed copy stays. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor (Developer: Reload Window), then confirm with `/warp-version`. `--force` is not an upgrade flag. `?` prints `--root` and `--source`. A second run with the same source prints the same version.
 

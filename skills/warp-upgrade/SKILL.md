@@ -25,4 +25,17 @@ python3 <plugin>/scripts/upgrade.py --root .
 python3 <plugin>/scripts/upgrade.py --root . --source /path/to/warp
 ```
 
+## Live, while a run runs
+
+While the run is running the upgrade is live by default (`--live` forces it, `--no-live` turns it off). Run it between two passes, after a supervise pass and instead of the wait:
+
+1. It holds the run lock: supervise, launches, and Slack commands wait. Shuttles and the listener keep working. Nothing is paused, reaped, or restarted.
+2. It replaces each plugin file atomically, so a Shuttle running a script gets the old file or the new one.
+3. It runs the new `install.py init --live` (new config keys, rules, allowlist, `.warp/version`; the run is kept) and `config_sync.py` (the new config and defaults into the beam).
+4. It records the upgrade on the beam and posts `Warp upgraded live from vA to vB. N Shuttles kept working; nothing was paused or restarted.`
+5. `upgrade: done` means the lock is released. Re-read `<plugin>/skills/warp/SKILL.md` and `<plugin>/rules/*.mdc` now: they replace what you loaded. Then run the next pass as usual.
+6. Do not reload Cursor while Shuttles are out: a reload ends the subagents. Reload when the run is paused or no Shuttle is out, to list new slash commands.
+
+`/warp-init <run>` with this checkout's run name is safe during a run too: it keeps the live state. `install.py init --live` refuses another name.
+
 `?`, `help`, `-h`, and `--help` print the same reference. Quote `?` if the shell expands it. The flags are `--root` and `--source`. A second run is safe.

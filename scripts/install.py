@@ -656,6 +656,7 @@ def main() -> None:
     pi.add_argument("name", nargs="?", default="", help="name this checkout's run, for example core, admin, or ui")
     pi.add_argument("--adopt", action="store_true", help="name the unnamed run this checkout already has, and keep its state")
     pi.add_argument("--switch", action="store_true", help="move this checkout to another run; the old files are kept in .warp/previous-<name>/")
+    pi.add_argument("--live", action="store_true", help="refresh while the run runs (what a live /warp-upgrade runs): keep the run, post nothing")
     pu = sub.add_parser("uninstall")
     pu.add_argument("--root")
     pu.add_argument("--remove-gitignore", action="store_true")
@@ -679,6 +680,13 @@ def main() -> None:
             ok, why = runs.valid_name(name)
             if not ok:
                 sys.exit(f"refuse: {why}")
+        if args.live:
+            # A live upgrade refreshes the install around a running run. Taking up a run would replace the live beam.
+            current = runs.current(root) or ""
+            if name and name != current:
+                sys.exit("refuse: %s is this checkout's run%s; a live refresh keeps it. /warp-pause, then "
+                         "/warp-init %s --switch, to move to another run." % (current or "an unnamed run", "", name))
+            name = ""
         steps = init(root, args.channel, args.dry_run, allow=not args.no_allow)
         print(f"Repo: {root}" + ("  (dry run, nothing written)" if args.dry_run else ""))
         for status, msg in steps:
@@ -686,6 +694,12 @@ def main() -> None:
         if any(s == "fail" for s, _ in steps):
             sys.exit(1)
         run_acted = False
+        if args.live:
+            current = runs.current(root) or ""
+            print("run: %s kept (live refresh; the run goes on)" % (current or "unnamed"))
+            changed = [msg for s, msg in steps if s == "done"]
+            print("init: refreshed for a live upgrade (%s)" % (("; ".join(changed)) if changed else "nothing to change"))
+            return
         if name:
             code, run_lines = runs.take_up(root, name, switch=args.switch, adopt=args.adopt, dry=args.dry_run)
             for line in run_lines:
