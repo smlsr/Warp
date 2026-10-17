@@ -55,6 +55,8 @@ Then, in the repo you want Warp to build, type `/warp-init`. It does the manual 
 8. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. The installed copy stays.
 9. `/warp-init` does not upgrade an existing copy. This command does.
 
+While a run is running the upgrade is live (1.7.6; `--live` forces it, `--no-live` turns it off): run it between passes, and it holds Warp's passes while every Shuttle and the listener keep working, refreshes init (`install.py init --live`) and the beam's config, posts the upgrade, and says `upgrade: done`. Then the parent re-reads the new skill and rules and goes on. Do not reload Cursor while Shuttles are out (a reload ends them); reload once the run is paused or no Shuttle is out.
+
 `--force` is not an upgrade flag. `python3 <plugin>/scripts/upgrade.py ?` prints `--root` and `--source`.
 
 ```bash

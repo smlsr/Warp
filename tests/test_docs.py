@@ -371,9 +371,9 @@ class Since140DocTests(unittest.TestCase):
             check=True,
         ).stdout
         help_flags = set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", help_text))
-        self.assertEqual(help_flags, {"--root", "--source", "--help"})
+        self.assertEqual(help_flags, {"--root", "--source", "--live", "--no-live", "--help"})  # 1.7.6: the live upgrade
         advertised = set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", update)) - {"--force"}
-        self.assertEqual(advertised, {"--root", "--source"})
+        self.assertEqual(advertised, {"--root", "--source", "--live", "--no-live"})
         self.assertNotIn("--force", help_flags)
 
     def test_new_commands_and_config_keys_stay_required(self):
