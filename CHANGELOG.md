@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.5
+
+- Fixed: a Shuttle that stops on a problem has returned. Warp counted a Shuttle as back only when it wrote `done` (or a check or a review). One that wrote `lock-escape`, `failed`, or `alarm` and returned still held its slot and its ticket until its heartbeat went stale (`staleMinutes`, 15): the lock-escape repair waited (`alarm-repair: shuttle-out <id>`), a failed step was not restarted, and an alarm was not acted on. Any of the three from the Shuttle that is out (its agent, after it started) now counts as its return (`shuttle: returned <id> step=<step> (lock-escape)`), and its registry row is ended in the same read. In that pass a lock-escape is widened and repaired, a failed step is restarted (a recovery is counted, up to `maxRecoveries`), `stuck` and `worker-died` restart, and any other alarm frees the slot (`shuttle: <id> returned in alarm (<reason>) …; its slot is free`) and the fixer restarts it while its budget lasts. A line from an earlier Shuttle, or another agent, is not taken as a return.
+- New: the Shuttle prompt says how to stop: write `lock-escape` (with each `--escaped` path), `failed` (with `--error`), or `alarm` (with `--alarm <reason>`) as the last state instead of `done`, then return.
+
 ## 1.7.4
 
 The listener outlives a parent woken by a timer. In run warp:bce0ae it reached generation 364: it lived only as long as the parent kept a heartbeat, and a parent woken every 10 minutes mostly was not running.

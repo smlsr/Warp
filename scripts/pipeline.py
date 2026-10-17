@@ -1554,7 +1554,14 @@ def _on_return(data: dict, ticket: dict, snap: Optional[dict], lines: list) -> s
     else:
         agents.note_closed(data, ticket, "dead", beam_path=_beam_path(data))
     shuttle_head = str(_shuttle(ticket).get("headAtMark") or "")
+    ended_by = str(_shuttle(ticket).get("endedBy") or "")
     clear_shuttle(ticket)
+    if not failed and ticket.get("status") == "alarm":
+        # It stopped on an alarm no restart or repair handles (its own reason). Its slot is free now; the fixer
+        # restarts it in this pass while maxRecoveries allows, and the auto-scan after that.
+        lines.append("shuttle: %s returned in alarm (%s)%s; its slot is free" % (
+            ticket.get("id"), ticket.get("alarm") or "alarm", " after writing %s" % ended_by if ended_by else ""))
+        return "stop"
     if failed:
         orchestrator.note_subagent_failure(ticket)
         _recover_worker(data, ticket, lines, already_counted=True)

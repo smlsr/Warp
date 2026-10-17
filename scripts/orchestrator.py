@@ -1513,9 +1513,21 @@ def done_lines(ticket: dict, done_cmd: str, push: bool = False) -> list:
             "On a cloud runner it is the only way the parent knows you returned:") if push else \
         "Last, when your step is finished (pushed, check and results recorded), write done. It is how the parent knows you returned:"
     criteria = acceptance.prompt_lines(ticket, done_cmd)
+    stop = stop_line(done_cmd)
     if criteria:
-        return criteria[:-2] + [head] + criteria[-1:]
-    return [head, done_cmd]
+        return criteria[:-2] + [head] + criteria[-1:] + [stop]
+    return [head, done_cmd, stop]
+
+
+def stop_line(done_cmd: str) -> str:
+    """What a Shuttle writes instead of done when it stops on a problem. The parent takes any of them as its return
+    (1.7.5), so the next step starts at once instead of after staleMinutes."""
+    base = done_cmd.split(" --state done", 1)[0]
+    rest = done_cmd.split(" --state done", 1)[1] if " --state done" in done_cmd else ""
+    return ("If you cannot finish the step, write one of these as your last state instead of done, then return: "
+            "edits outside your locks `%s --state lock-escape --escaped <path>%s` (one --escaped per path), a step that "
+            "failed `%s --state failed --error \"<why>\"%s`, or a problem you cannot get past `%s --state alarm --alarm "
+            "<reason> --error \"<why>\"%s`." % (base, rest, base, rest, base, rest))
 
 
 def _prompt_head(ticket: dict, branch: str, instance: str = "", config: Optional[dict] = None) -> list:

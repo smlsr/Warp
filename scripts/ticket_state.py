@@ -398,6 +398,11 @@ def _apply_check(beam_path: Path, data: dict, ticket: dict, result: str, name: s
 # read from "a pull request appeared", so the folder says it.
 _RETURN_STEPS = {"implement", "restart", "fix", "repair", "review", "verify"}
 _RETURN_STATES = {"done", "check-green", "check-red", "review-pass", "review-fail"}
+# A Shuttle's last line when it stops on a problem instead of finishing: it has returned too (1.7.5). Before, only
+# `done` (and a check or a review) counted, so a Shuttle that wrote one of these and returned still held its slot
+# and its ticket until its heartbeat went stale (staleMinutes, 15): a lock-escape repair waited
+# (`alarm-repair: shuttle-out`), a failed step was not restarted, and an alarm was not acted on.
+_STOP_STATES = {"lock-escape", "failed", "alarm"}
 
 
 def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[list] = None) -> bool:
@@ -414,7 +419,8 @@ def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[l
         return False
     state = str(event.get("state") or "")
     step = str(shuttle.get("step") or "")
-    if state not in _RETURN_STATES or (state != "done" and step not in _RETURN_STEPS):
+    stop = state in _STOP_STATES
+    if not stop and (state not in _RETURN_STATES or (state != "done" and step not in _RETURN_STEPS)):
         return False
     if state in {"review-pass", "review-fail"} and step != "review":
         # The working Shuttle records its review before it returns its own line; "done" or the
@@ -432,6 +438,10 @@ def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[l
     shuttle["returned"] = True
     shuttle["returnedAt"] = str(event.get("at") or stamp)
     _pr(ticket)["shuttleReturned"] = True
+    if stop:
+        shuttle["endedBy"] = state
+        if state == "failed":
+            shuttle["failed"] = True  # the pass restarts the step (a recovery is counted)
     if lines is not None:
         lines.append("shuttle: returned %s step=%s (%s)" % (ticket.get("id"), step or "?", state))
     return True
@@ -444,6 +454,14 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
         return False
     noted = _apply_acs(ticket, event, lines, heralded)
     returned = note_shuttle_return(ticket, event, str(event.get("at") or now), lines)
+    if returned and state in _STOP_STATES:
+        # Its turn is over: end its registry row now, so a restart or a repair is not held for a live Shuttle.
+        try:
+            import agents
+
+            agents.note_closed(data, ticket, "failed" if state == "failed" else "returned", beam_path=beam_path)
+        except Exception:
+            pass
     return _apply_event_state(beam_path, data, ticket, event, now, heralded, lines, state) or returned or noted
 
 
