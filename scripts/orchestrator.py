@@ -2986,6 +2986,11 @@ def main(argv: Optional[list] = None) -> int:
         _save(path, data)
         if applied:
             print("%s merged" % args.id)
+            # A merge recorded by hand (the GitHub MCP merged it) publishes the run state to the base branch, the
+            # same as a merge supervise makes, so main shows it merged (1.7.7). publishOnChange: false and
+            # WARP_PUBLISH=0 still turn it off.
+            for line in publish_on_change(path, ["merge: %s merged" % args.id]):
+                print(line)
             return 0
         print("%s %s" % (args.id, args.outcome))
         print("not merged")

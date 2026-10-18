@@ -72,12 +72,15 @@ class Python39SyntaxTests(unittest.TestCase):
                 unions = _annotation_unions(tree)
                 if unions:
                     problems.append(f"{path.relative_to(ROOT)} annotation | on lines {unions}")
+                # ast.parse on an older Python already rejects newer syntax; these node types exist only on newer
+                # ones (Match 3.10, TryStar 3.11, TypeAlias 3.12), so look them up instead of naming them.
+                match_t, trystar_t, alias_t = (getattr(ast, name, ()) for name in ("Match", "TryStar", "TypeAlias"))
                 for node in ast.walk(tree):
-                    if isinstance(node, ast.Match):
+                    if match_t and isinstance(node, match_t):
                         problems.append(f"{path.relative_to(ROOT)}:{node.lineno} match")
-                    elif isinstance(node, ast.TryStar):
+                    elif trystar_t and isinstance(node, trystar_t):
                         problems.append(f"{path.relative_to(ROOT)}:{node.lineno} except*")
-                    elif isinstance(node, ast.TypeAlias):
+                    elif alias_t and isinstance(node, alias_t):
                         problems.append(f"{path.relative_to(ROOT)}:{node.lineno} type alias")
                     elif isinstance(node, ast.JoinedStr):
                         for value in node.values:
