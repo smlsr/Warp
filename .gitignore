@@ -38,3 +38,6 @@ go.work.sum
 # Python
 __pycache__/
 *.pyc
+
+# Scratch files and folders marked for deletion (an agent that cannot delete names them _delete*)
+_delete*

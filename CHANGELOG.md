@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.8
+
+- Fixed: scratch files committed by mistake in `1f9d6ca` (`_delete_main-check.bundle`, `_delete_test-1.7.6.log`, and a full copy of the plugin in `_delete_wt-1.7.6/`, 246 files) are removed, and `.gitignore` now ignores anything named `_delete*`, so files marked for deletion are never committed again.
+
 ## 1.7.7
 
 - Fixed: a merge recorded with `orchestrator.py merge --id <id> --outcome merged` (for a pull request merged outside a pass, with the GitHub MCP or by hand) now publishes the run state to the base branch, the same as a merge supervise makes (`state: published (merged <id>)`), so main shows the ticket merged at once. Before, the beam on main kept it in review until the next publish. `publishOnChange: false` and `WARP_PUBLISH=0` still turn it off.
