@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Print the Warp plugin version.
+
+VERSION at the plugin root is the source of truth. `.cursor-plugin/plugin.json`
+carries the same number for Cursor. `scripts/check_version.py` fails when they
+disagree.
+
+  version.py --root .     installed copy, source copy, and .warp/version
+
+The installed copy is `.cursor/plugins/warp`. The source copy is the plugin
+tree this script lives in (the GitHub or local checkout Cursor loaded).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+INSTALLED_REL = Path(".cursor/plugins/warp")
+RECORDED_REL = Path(".warp/version")
+
+
+def read_version_file(root: Path) -> Optional[str]:
+    path = root / "VERSION"
+    if not path.is_file():
+        return None
+    text = path.read_text().strip()
+    return text or None
+
+
+def read_manifest_version(root: Path) -> Optional[str]:
+    path = root / ".cursor-plugin" / "plugin.json"
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text()).get("version")
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def version_of(root: Path) -> Optional[str]:
+    """VERSION if that file is present, otherwise the manifest."""
+    return read_version_file(root) or read_manifest_version(root)
+
+
+def recorded_version(root: Path) -> Optional[str]:
+    path = root / RECORDED_REL
+    if not path.is_file():
+        return None
+    text = path.read_text().strip()
+    return text or None
+
+
+def label(version: Optional[str]) -> str:
+    return f"Warp v{version}" if version else "Warp"
+
+
+def upgrade_line(installed: str, source: str) -> str:
+    return f"plugin is v{installed}, repo copy is v{source}: run /warp-upgrade"
+
+
+# The project copy of the upgrade script. It runs without /warp-upgrade.
+UPGRADE_SCRIPT = "python3 .cursor/plugins/warp/scripts/upgrade.py"
+# The project copy of the insurance sync. It runs without /warp-update-state.
+UPDATE_STATE_SCRIPT = "python3 .cursor/plugins/warp/scripts/update_state.py"
+# The project copy of agent cleanup. It runs without /warp-cleanup.
+CLEANUP_SCRIPT = "python3 .cursor/plugins/warp/scripts/agents.py"
+
+
+def upgrade_fallback() -> str:
+    """Script lines for a palette that does not list /warp-upgrade."""
+    return f"{UPGRADE_SCRIPT}\n{UPGRADE_SCRIPT} ?"
+
+
+def update_state_fallback() -> str:
+    """Script lines for a palette that does not list /warp-update-state."""
+    return f"{UPDATE_STATE_SCRIPT} --beam .warp/beam.json\n{UPDATE_STATE_SCRIPT} ?"
+
+
+def cleanup_fallback() -> str:
+    """Script lines for a palette that does not list /warp-list or /warp-cleanup."""
+    return (
+        f"{CLEANUP_SCRIPT} list --beam .warp/beam.json\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply\n"
+        f"{CLEANUP_SCRIPT} cleanup --beam .warp/beam.json --cloud --apply --running\n"
+        f"{CLEANUP_SCRIPT} ?"
+    )
+
+
+def describe(root: Path) -> str:
+    root = root.resolve()
+    source = version_of(PLUGIN_ROOT)
+    installed = version_of(root / INSTALLED_REL)
+    recorded = recorded_version(root)
+    lines = []
+    if installed and source and installed != source:
+        lines.append(upgrade_line(installed, source))
+    else:
+        lines.append(label(source or installed))
+    lines.append(f"installed: {installed or 'none'} ({INSTALLED_REL})")
+    lines.append(f"source: {source or 'none'}")
+    if recorded:
+        lines.append(f"recorded: {recorded} ({RECORDED_REL})")
+    try:
+        import prompt_gate
+        import orchestrator
+
+        beam_path = root / ".warp" / "beam.json"
+        beam = {}
+        if beam_path.is_file():
+            try:
+                loaded = json.loads(beam_path.read_text())
+                beam = loaded if isinstance(loaded, dict) else {}
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                beam = {}
+        cfg = prompt_gate.effective_config(beam, root)
+        note = orchestrator.override_note(cfg)
+        if note:
+            lines.append(note)
+        lines.append(orchestrator.effective_text(cfg))
+    except Exception as exc:
+        lines.append("effective: unavailable (%s)" % exc)
+    try:
+        import agents
+
+        if beam_path.is_file():
+            lines.append(agents.instance_line(beam))
+        lines.extend(orchestrator.retired_notes(root))
+        lines.append("this machine: %s host=%s" % (agents.machine_id(), agents._hostname() or "unknown"))
+    except Exception as exc:
+        lines.append("instance: unavailable (%s)" % exc)
+    lines.append("If /warp-upgrade is not in the command list:")
+    lines.append(upgrade_fallback())
+    lines.append("If /warp-update-state is not in the command list:")
+    lines.append(update_state_fallback())
+    lines.append("If /warp-list or /warp-cleanup is not in the command list:")
+    lines.append(cleanup_fallback())
+    return "\n".join(lines)
+
+
+def find_root(arg: Optional[str]) -> Path:
+    if arg:
+        return Path(arg).resolve()
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return Path(out.stdout.strip()).resolve()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return Path.cwd().resolve()
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    p = argparse.ArgumentParser(
+        description="Print the Warp plugin version",
+        epilog="examples:\n  python3 scripts/version.py ?\n  python3 scripts/version.py --root .\n\n"
+        "Prints installed (.cursor/plugins/warp), source (this plugin tree), and recorded (.warp/version).\n"
+        "When /warp-upgrade is missing from an older command list, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/upgrade.py\n"
+        "  python3 .cursor/plugins/warp/scripts/upgrade.py ?\n"
+        "That script does not need the slash command. ? prints its flags. Quote ? if the shell expands it.\n"
+        "When /warp-update-state is missing, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n"
+        "  python3 .cursor/plugins/warp/scripts/update_state.py ?\n"
+        "That script is on a 1.4.12 install and does not need the slash command.\n"
+        "When /warp-list or /warp-cleanup is missing, it also prints:\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py list --beam .warp/beam.json\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running\n"
+        "  python3 .cursor/plugins/warp/scripts/agents.py ?\n"
+        "The --cloud line is a dry run for this repo: agents in .warp/agents.json, or whose name\n"
+        "or prompt carries this run's [warp:<instance>] tag. It leaves the agent running the command and\n"
+        "this run's parent. A RUNNING or ACTIVE match is skipped (reason=running) unless --running;\n"
+        "a dry run with --running shows it as `cleanup: would cancel <id>`.\n"
+        "--apply archives the IDLE matches. --apply --running also cancels each running match, then\n"
+        "archives it; pause or stop the run first. --all-idle stays on this repo. --any-repo is the wide sweep.\n"
+        "?, help, -h, and --help print this text.\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--root", help="repo whose .cursor/plugins/warp copy to read")
+    import usage
+
+    args = p.parse_args(usage.normalize_argv(argv))
+    print(describe(find_root(args.root)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

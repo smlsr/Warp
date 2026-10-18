@@ -1,0 +1,590 @@
+# Runbook
+
+## Orchestrator
+
+The orchestrator is the only merger. It dispatches, merges, and tracks. It writes no ticket product code. Shuttles do not merge, do not push to the base branch, and do not ask mid-ticket. Reed reviews and does not merge.
+
+Ready work is a ticket whose dependency and `after` lists are merged on the base branch, and whose full lock list does not overlap a lock an in-flight ticket holds. Overlap includes a parent folder. An open or green pull request is not merged. On a run with gates or other runs, the block order, `paths`, other runs' locks, and `run:id` dependencies also hold a ticket back ([GUIDE.md](GUIDE.md) "Run in blocks", [RUNS.md](RUNS.md)). With a build-schedule/2 schedule in deps order, a pending gate holds nothing. The dispatch loop runs at start and after every merge, failure, and freed slot. Starred tickets start first, then tickets on a priority gate's path (`priorityGate`), then priority, then the lowest rank, until `maxAgents` are in flight. A project may set 18. A slot stays occupied after the Shuttle opens the pull request, until the provider check rollup is green. Locks stay until that pull request is merged or the ticket is parked. Bugbot runs on the pull request after the push. `mergeQueue: true`, or a GitHub merge queue the provider reports, enqueues the pull request. A direct merge that branch protection rejects is not marked merged.
+
+The merge queue is serial and automatic for sizes in `autoMergeSizes`: rebase onto the current base, run `checkCommand` on that head, merge, delete the branch, dispatch. When `checkCommand` is empty, the check is Bugbot and CI as configured. Several green auto-merge pull requests may be stacked in rank order and checked once. A red stack falls back to one pull request at a time. Sizes not in `autoMergeSizes` wait for `/warp-proceed` or `warp:proceed` before they enter the queue.
+
+`appendOnlyPaths` is empty by default. A conflict in one of those files keeps both sides, every added line. Any other conflict is sent back to that ticket's Agent on the same branch. Do not hand-merge it. A red pull request, or red after rebase, goes back the same way with the failing output. It takes a slot at that ticket's rank. `orchestrator.py fail --output` records it. Past `maxFixAttempts` (default 5) the ticket parks: locks release, the branch and pull request stay open, and the blocker is written on the plan record. Tickets that do not depend on it keep going. Parked tickets and what they block are in `.warp/warp-complete.html`.
+
+`make ci` is kept as the full check command. The space is part of the command. A red result is stored on `pr.check` and the ticket is sent back with the log (`send-back <id> fix` and a `start` line), the same way as `orchestrator.py fail`. Past `maxFixAttempts` (default 5) the ticket parks. The run does not sit idle. A Shuttle already on the ticket is not sent again. The gate stays while that check is red. It still clears when every member is merged or done and no current check is red. The name alone is not a red check.
+
+A red base branch stops merging. Sub-agents keep working. Dispatch a fix ahead of every rank. Resume the queue when the base is green. On start or resume, rebuild from git (`merged`, `in-flight`, `pending`) and run the dispatch loop. Done means every ticket is merged or explicitly parked, and the base branch is green. `state_commit.py commit` commits the beam, journal, STATUS, and BOARD and strips tokens, cost, API keys, and webhook URLs. `.warp/config.yaml` stays gitignored. Its published copy, `.warp/runs/<run>/config.yaml` (`.warp/config.published.yaml` when the run has no name), is committed with the state with the machine keys and secrets left out, and `/warp-start` and `/warp-resume` always push it.
+
+Start one subagent per ticket in its own worktree, in parallel up to `maxAgents`. `checkout.py launch` fetches origin and runs `git worktree add <worktreeRoot>/<id> -b warp/<id>-<jira> origin/main` (`warp/<name>/<id>-<jira>` on a named run). The subagent works only inside that absolute path, commits, pushes, and opens the pull request. It never merges, never touches the parent checkout, and never calls Jira or Slack. It writes `.warp/tickets/<id>/state.json` and `log.jsonl` into the parent checkout by absolute path. `checkout.py verify` runs after it and raises `lock-escape` when the parent is dirty outside `.warp/` or the diff leaves the locks. Merge or park removes the worktree and prunes. A failed subagent result raises `worker-died`. The heartbeat watchdog still covers a parent that dies mid-turn. `/warp-resume` reuses the surviving worktrees and branches. Optional `launch: agent` prints an IMPLEMENT prompt for one new Agent. This plugin does not call a Cloud Agents API. Clone main so `.cursor` rules load, then create the branch. A beam file does not have to exist on the branch before that Agent starts. Never two workers in one worktree.
+
+One agent is long-lived: the parent. Only the parent starts agents, and only the parent waits. A Shuttle does one step of one ticket and returns one line. The listener is one background subagent on the parent's checkout. `checkout.py launch` is the only source of a Shuttle prompt. It records the Shuttle in `.warp/agents.json` first. Its output is split by the line `prompt: pass every line below this one to the subagent, and nothing above it`. Every worker prompt carries `agent: <id>`, the worker contract, and the reap command (`agents.py reap --beam .warp/beam.json --id <agent> --ticket <id>`, or `--remote` on a dedicated VM). The parent ends every pass with the one wait, `orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>`. `<session>` is the id `scan.py start` and `scan.py resume` print as `parent: session <id>`. The whole rule is in [LIFECYCLE.md](LIFECYCLE.md).
+
+## Pause overnight but keep the board
+
+`/warp-pause` with a reason. Pause is the same teardown as `/warp-stop`. The one difference is that stop also writes the completion report and records `stoppedAt`. Every agent in `.warp/agents.json` is ended (`stop: <id>`) and marked halted, every Shuttle slot is freed, the listener's poll is closed (`halt: paused agents=<n>`), and the state is pushed to main. With `CURSOR_API_KEY` in the environment, every cloud agent in the registry, and every agent in this repo whose name carries this run's `[warp:<instance>]` tag, has its run cancelled and is archived. The agent running the command and this run's parent are skipped. Without the key the command prints `cleanup: link https://cursor.com/agents/<id>` for each one. In-flight Shuttles are not left running. Each one reads `reap: exit paused` at its next check and returns `result: <id> stopped paused`. Branches, worktrees, pull requests, locks, and `jira.startedAt` stay. The HTML board stays valid. In the morning run `/warp-start` or `/warp-resume`. They are the same command. It prints `run: was paused (<reason>). Continuing.` and the `unfinished:` line, reconciles, launches one new Shuttle with a new agent id on the same branch for each ticket that had one out (`fix: <id> resume after halt`), then ticks. Unfinished work starts before any new ticket. Nothing from before the pause is resumed. That is not a recovery, and no worker-died message is posted.
+
+## Pipeline
+
+`orchestrator.py supervise` and the dispatch tick are the pipeline. There are two caps. `maxAgents` (default 18) is how many agents run at once: every Shuttle, whatever its step (implement, fix, rebase, rerun, restart, repair), in a worktree on this machine or on its own VM. `maxInProgress` (default `auto`: 3 × maxAgents, at least 20) caps started tickets that are not merged or parked. At that cap, nothing new is taken from the ready queue. A fix, a rebase, or a relaunch still starts, because its ticket is already open. It takes a `maxAgents` slot like any other agent. `/warp-status` prints `in progress N/maxInProgress`, or `holding new launches (N/maxInProgress), N fix workers running` when that cap is full, and `live shuttles N/cap` with the dead tickets waiting for a replacement. `N fix workers running` is a count. It is not a cap. A dead Shuttle does not hold a slot. Parked tickets do not count. Being over the cap does not park anyone. With no `--provider` file, supervise loads each open pull request from GitHub. A CONFLICTING or DIRTY pull request rebases in that pass, and route registration files keep both sides. Zero check runs older than `ciStartGraceMinutes` (default 5) start CI in that pass. `review: wait` is not printed for either case. A heartbeat, or a start that does not change the commit, the phase, or a check result, does not reset the stall clock. Phases are `implementing`, `pr-open`, `reviewing`, `fixing`, `ready`, `merging`, then `merged` or `parked`. Opening a pull request is not done. Launch a Shuttle when the pass prints `start <id> ... step=implement`, `step=fix`, or `step=restart`: run `checkout.py launch --id <id>` and start one subagent with the lines below the `prompt:` mark. `spawn: closed <id>` means no prompt was printed: start nothing. The first line of the pass is the listener: `listener: poll`, `listener: hold reason=live`, `listener: hold reason=await-return`, `listener: idle`, or `listener: none`. Request Bugbot when it prints `bugbot: request <id> <url>`. Post `herald:`, do `jira: MUST DO`, post `slack:`, and push the beam when a ticket merges. `/warp-start` and `/warp-resume` adopt an existing open pull request into `reviewing` or `fixing`. A `lock-escape` from `checkout.py verify` is repaired in that same pass. `/warp-status`, start, and resume list every ticket that is not merged, alarms and stalls first. A ticket with no progress inside its stall limit is stalled, and that supervise pass tries one fix: ask Bugbot again, rerun CI, rebase, restart a silent Shuttle, widen a lock-escape, clear a stale gate, start a base-branch fix, or return an approved pull request to the merge queue. Past `maxStallFixes` the ticket parks and Slack gets one alarm. A ticket at its `maxRecoveries` cap, or whose lock-escape repairs were given up, still opens its pull request (or goes back to review on it) when every acceptance criterion passes (`cap: <id> …`); a cap only stops new Shuttles. The digest posts every `statusDigestMinutes`, and a new stall or alarm posts once. Every `repairSweepMinutes` (default 15) that pass also sweeps the whole run: what is broken, and what can be fixed that is not already queued or running. Broken covers tickets, pull requests, CI on main, locks, gates, the listener, and the beam, including red or stuck CI, a merge conflict, unresolved Bugbot findings, a stale or orphaned lock, a red base, a stuck gate, a listener with no holder, and a beam that is out of sync with main. The sweep reuses the fixer paths, starts work up to the slot cap, and logs findings and actions. `/warp-status` shows the last sweep. Slack is posted only when the sweep starts something new or escalates.
+
+## A PR will not go green
+
+`orchestrator.py supervise` starts a fix Shuttle for a Bugbot finding, red CI, or a failed acceptance criterion, then asks Bugbot to review again. After `maxFixAttempts` (default 5) the ticket is `parked`. Warp will not retry it by itself. Reply `warp:retry <id>`: a parked ticket with an open pull request goes back to `fix` with a fresh fix budget, and a fix Shuttle starts on the next pass. Add a note on the Jira issue first if the Shuttle needs to know something. There is no `warp:hold` command. `/warp-pause` ends every agent and stops new claims.
+
+Manual tickets (`autoMerge` false) use that loop before anyone is asked to review. `beam.py set --status awaiting_approval` is refused until `pr.bugbot` is `pass` and `pr.ci` is `green`, unless `bugbotManual` is false (Bugbot off for that path only) or `bugbotRequired` is false (Bugbot off for both). QA Ready is the Jira move for that status, not for pull-request open.
+
+New commits after QA Ready (`--sha` while status is `awaiting_approval`) set status `bugbot_running`, clear Bugbot and CI, and comment "new commits, re-running Bugbot" on Jira and, in connected mode, the pull request. Jira stays at QA Ready. A later Bugbot failure goes to `fix` or `alarm` and does not move the Jira issue backwards. A later pass returns to `awaiting_approval` and comments again, without a second transition.
+
+## Sizes not in autoMergeSizes waiting on you
+
+Herald posts the pull request, or the local branch when `pushMerge` is false, and `warp:proceed <id>`. An approval on the provider (GitHub review or Bitbucket APPROVED) is enough. The chat command is the override, and it is the only signal in local-only mode besides the listener. Jira is at QA Ready while this waits. After the merge it moves to Done (`jiraDoneOnManualMerge`, default true).
+
+The listener is a Subagent of the parent. The channel reader is one `warp-listen` Subagent for the beam, not one per awaiting_approval ticket. It is not a separate Agent. It shares the parent's session and checkout. It is one background subagent. `subagentVm` does not apply. `orchestrator.py supervise` prints `listener: poll`, then the prompt (first line `[warp:<instance>] listener`, then `LISTEN`), when no holder is live and the return stamp is in. The parent starts exactly one in the background and does not wait. Each cycle runs `inbound.py poll --lease` before any read, reads each channel once from the `since` mark, runs `inbound.py accept` and `inbound.py enqueue` for each `warp:` command (both take `--message-id`), posts the ack, then `inbound.py wait`, which sleeps in Python. A duplicate Slack ts prints `inbound: duplicate <id>` and writes no second ack. `.warp/listener.json` gets `lastPollAt`, `reason`, `generation`, `holder`, and `returnReason` (`returnedAt` once the generation exits). The parent applies queued commands with `inbound.py apply-pending` when the pending file changes (`pass: command`). `listener: hold reason=live` means a holder has the lease. `listener: hold reason=await-return` means the lease was bumped and the return stamp is not in. Neither starts a second. `listener: idle` means the run is paused, stopped, or finished. `listener: none` means no `slackChannel` or `teamsChannel` is set, so no listener is started at all. Only a return stamp, or a holder that has not polled or waited for `listenerSilentMinutes` (`listener: lost`), starts another listener. The return stamp does. There is no restart cap: the next generation starts from that stamp. `/warp-start` and `/warp-resume` do not claim a listener. `inbound.py claim` and `inbound.py heartbeat` are for a listener someone starts by hand. A run does not use them. A running flag from the previous turn does not block the next tick. `/warp-pause` and `/warp-stop` close the poll and set `listener.state` to `stopped` through `inbound.py release`. The listener must not keep reading while paused or stopped. Cursor cannot start it from Slack. There is no webhook, and plugin hooks do not run on cloud runners. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders. Pause and stop do not start a listener.
+
+`/warp-proceed WV-01` also accepts the Jira key (`WAR-1`) or a `#` number (`#01`). The listener runs `inbound.py`, which acks in the channel before `proceed.py`. The ack is `Received warp:proceed XV-01. Merging and moving Jira to Done.` A bad id acks and merges nothing else. If the ticket is not `awaiting_approval`, the ack says so and does not merge. When it accepts, merge in that same turn and run the post-merge MUST DO before you reply. The channel gets the ack first, then the merge sha and the Jira status.
+
+Do not proceed a red PR. Reed will refuse.
+
+A ticket that already merged without leaving QA Ready shows up on `/warp-jira-check` as `merged-but-not-done`. `catchup` prints the Done transition, the merged comment, and the exact command:
+
+```bash
+python3 <plugin>/scripts/jira_sync.py catchup --beam .warp/beam.json --id <id>
+```
+
+Record the result with `record --event done`. If Jira has no transition from QA Ready to Done, `pick --kind done` tries the name and then one done-category transition. `record --result no-transition` writes `.warp/outbox.md` and Herald posts Jira not updated. Set `jiraDoneOnManualMerge: false` only when QA should keep Done.
+
+## Run finished or stopped
+
+When nothing is queued or active, or you run `/warp-stop`, Warp writes `.warp/warp-complete.html` and Herald posts the totals and the path. Both run the same teardown as `/warp-pause` first: every agent in `.warp/agents.json` is ended and marked halted, and with `CURSOR_API_KEY` the run's cloud agents are cancelled and archived. The line is `halt: stopped agents=<n>` after `/warp-stop`, and `halt: done agents=<n>` once when every ticket is merged or parked. Then `parent-exit` prints `parent: exit` and the parent ends its turn. A stopped run starts nothing until `/warp-start` or `/warp-resume`, which are the same command. The file is local and gitignored. `reportOnComplete: false` skips that automatic write. While the run is still going, `/warp-report --partial` writes a snapshot and does not wait for the end.
+
+## Gate red
+
+Fix on the member branch (G0 is L-01, M-01, D-01). Dependents stay out of `ready()` until `beam.py gate --status green --evidence "..."`. A red critical-path gate is the one case to pause the program: later agents will only pile up lock-free work that cannot ship. A red gate stays red when a member check is red or the evidence names a red check. A stale red, with every member merged or done and no red check, is cleared on the same pass as a pending gate.
+
+With a build-schedule/2 schedule in deps order, gates are milestones: a pending gate holds nothing, a red blocking gate stops every ticket outside it, and a red non-blocking gate stops the tickets that need its members (`gate.hold`). So a milestone gate holds work only while it is red.
+
+## Gate still pending
+
+Nothing in flight, nothing awaiting approval, no alarms, and an empty ready set can still mean a pending or stale red gate whose members are already merged or done and no check is actually red. The same is true when every ticket on the beam is merged and a gate is still pending. The parent's repair pass (`alarmRepairMinutes`, default 15) recomputes those gates. The listener does not run it. A gate turns green when every member is merged or done, or when every ticket is, the evidence is `members merged:` and those ids, and the board is rewritten. Then that pass runs the tick. G1 with members P-002, P-003, P-004, and P-018 stores `members merged: P-002, P-003, P-004, P-018`. Herald posts `G1 pending cleared. Members merged. Tick ran.` and that pass runs the dispatch tick so work blocked only by the stale gate starts. Every tick recomputes before `ready()`, so a merge does not wait for the pass. The pass is the backstop when no tick is running. A member that is not merged, a ticket that is still alarmed or parked, or a check that is actually red leaves the gate as it is. A recovered ticket that is merged counts. A second pass does not dispatch again. A green gate stays green. Pause and stop do not recompute.
+
+## First ticket is not linked to Jira
+
+The first claimed ticket of a run is the claim made while no ticket has `jira.startedAt`. No earlier ticket was linked and moved to In Progress. If Jira says that issue was not found (`record --result not-found`), or the lookup cannot resolve a real issue key, Warp does not leave the claim standing. It sets the ticket back to `queued`, clears `agent`, `branch`, `jira.startedAt`, and `jira.previousStatus`, writes a session note, and stops the run the same way as `/warp-stop`. Beam, `.warp/STATUS.md`, and `.warp/BOARD.md` all show that ticket as queued and the run stopped. Nothing is implemented and no pull request is opened.
+
+Herald posts one message:
+
+```text
+Run stopped because Jira issues are not linked (WV-01 / WAR-1). Fix jiraProject, /warp-jira-match, or /warp-jira-external-id, then /warp-resume.
+```
+
+It does not also post that the claim still stands. The reason on the beam is `tickets are not linked to Jira (WV-01 / WAR-1)`. Fix `jiraProject`, run `/warp-jira-match`, or run `/warp-jira-external-id`, then `/warp-resume`.
+
+A later miss, after at least one ticket has `jira.startedAt`, stays a per-ticket alarm. The claim stands, Herald posts Jira not updated, and the run continues. `jiraTransition: false` does not stop the run. A missing transition or a disconnected Jira server is still that per-ticket note, not this stop, unless the result is not-found or the key cannot be resolved on the first ticket.
+
+## Jira status did not move
+
+`/warp-jira-check` runs `jira_sync.py verify`, then `catchup`. `verify` with no flags only prints. It does not call Jira. For each ticket: `status: keyed` or `status: unmapped`, `source`, beam status, `startedAt`, `inReviewAt`, `qaReadyAt`, `doneAt`, comment ids, `jira.id`, and `lastAttempt` when a move failed. An unmapped ticket also has `reason` and one `fix` command. When every ticket is unmapped the report ends with `why nothing linked`.
+
+Walk the first line that matches. Stop when the ticket has a stored key and `catchup` prints the move that is still owed.
+
+1. `jiraProject not set: Jira moves are disabled until you set it (candidates: WAR, ABC)`. If every stored key is already in one project, scan wrote it (`jira: set jiraProject to WAR (every stored key is in project WAR)`) even when `getVisibleJiraProjects` is missing. Do not run `project --set` for that line. Jira moves use the key that was written. Mixed keys stay empty and the line names the projects. A different existing value is not overwritten. Otherwise `project --list` prints candidates and writes nothing. One project you recognize: `project --set WAR`. That also fills an empty `jiraKeyPrefixes`. Jira is connected and more than one project is visible: `project --probe` writes the search, then `project --record` stores the single project that contains the plan id. Several hits are listed and nothing is guessed. One Atlassian site from `project --apply` is stored in `jiraSite`.
+2. `why nothing linked: jiraProject is empty`. Same as step 1. No transition runs until a project is set.
+3. `why nothing linked: the map file has keys the beam never stored`. `verify --link` copies `.warp/jira-map.json` or `jiraKeyMap` onto the beam and writes `.warp/jira-resolve.json`. Then `catchup`.
+4. `status: unmapped` and `fix` is `verify --link`. Run it. If tickets are still unmapped and Jira is connected, run that file's queries: external-id field, then label `warp:<id>`, then a remote link. `verify --apply results.json` stores one exact match. Two matches are named and neither is stored. A summary match is not stored on this path. A manual key is not overwritten.
+5. The check prints `summary candidate: WAR-1 (exact 1.00)`. `/warp-jira-match --apply --id WV-01` stores an exact, `external`, or 60-character prefix hit. `external` is the issue's External ID equal to the plan id, with the plan summary's first 60 characters anywhere in the Jira summary: Jira titles that start with the id (`WE-01 Editor scaffold …`) match. Before 1.6.23 they missed. When the External ID holds another tool's id instead of the plan id, set `jiraMatchOnText: true` (or run `/warp-jira-match --text-only`): the summary alone then decides, and the scan stores the match. Two issues that contain the same text stay ambiguous. A fuzzy proposal stays unstored until `--apply --yes`. Ambiguous rows are listed and not stored. Done issues and issues already mapped to another ticket are skipped. The full flags are `--chars`, `--min-score`, `--include-done`, and `--all`.
+6. Still unmapped, and you know the key. `map --set WV-01=WAR-1`, or `beam.py set --jira`. `--force` is only for a prefix that is not configured. Then `catchup`.
+7. `key missing: claim lookup result was not recorded`. The search may already have found `WAR-1`. Record it before any transition: `resolve --ticket WV-01 --key WAR-1 --issue-id <id> --cloud-id <cloudId>`. That writes the beam and `.warp/jira-map.json` together. A plan id is refused. `transitionJiraIssue` uses only the stored key.
+8. `key stored` and `lastAttempt: claim failed — ...`. That line is `record --result failed --error "..."`. `jira.startedAt` was not set. Fix the error (workflow name, missing transition, connector), then `record` the success. The same text is in `.warp/outbox.md`.
+9. `key stored` and catch-up still lists a move. The agent calls `getTransitionsForJiraIssue`, `jira_sync.py pick`, then `transitionJiraIssue`, then `addOrEditJiraIssueComment`, then `record` and `record-comment`. An already-merged auto-merge ticket is asked for Done, not a move back to In Progress.
+10. `key stored` and nothing is missing, but Jira still did not move. `jiraTransition` is not false. `jiraMcp` is the server name Cursor shows. `jiraInProgressStatus`, `jiraInReviewStatus`, `jiraQaReadyStatus`, and `jiraDoneStatus` match the workflow. An empty `jiraInReviewStatus` means that move is off. Re-run `/warp-init` if the config file is missing keys. The script cannot see whether the server is connected.
+
+`/warp-jira-view WAR-1` (or a plan id) prints the live fields when you need to see why a transition is absent. It does not write the beam.
+
+**External ID not written.** `jiraWriteExternalId: true` makes `/warp-scan` and `/warp-jira-check` print `MUST DO write External ID` for mappings that already exist. The flag is the consent. `--yes` is not required. The agent calls `editJiraIssue` for each line, then `jira_sync.py record-external-id`. To do it without a scan: `/warp-jira-external-id`, then `/warp-jira-external-id --apply --yes`. A key whose source is `external` is skipped. A different non-empty value needs `--force-external-id`. No comment is added. `jira.externalId` on the beam is not proof the Jira field was written. `jira.externalIdWritten` is, and its `method` says `field`, `label`, or `remote-link`.
+
+**External ID field missing.** One line, not one skip per ticket. `.warp/jira-field.json` stores the miss. The default fallback adds label `warp:<id>`. Create the field in Jira admin (Short text, name External ID, add it to the project screens), then `/warp-jira-external-id --recheck`. Or `/warp-jira-external-id --create-field --yes` to probe for a create tool. The Rovo catalog does not have one. `jira mapping:` on `/warp-jira-check` and `stored in Jira:` on `/warp-jira-view` say which method landed.
+
+## Nothing linked
+
+`needs mapping` on `/warp-jira-check` does not mean the external-id search already ran. Read `why nothing linked` before running another search.
+
+| Line | What to do |
+|---|---|
+| `jiraProject is empty` | `project --list`, then `--set`, or `--probe` and `--record` |
+| `the map file has keys the beam never stored` | `verify --link` |
+| `no Jira key in the plan, export, or map file` | Connect Jira and let scan or `verify --link` search, or `/warp-jira-match` when the summaries correspond, or `map --set` |
+| `ambiguous matches` | Do not pick one. `map --set WV-01=WAR-1` |
+| `stored WV-01 is the plan id` | The lookup was never recorded. `resolve --ticket` with the issue key |
+
+A Jira JSON import stores `externalId` as the plan id. `h2. Size`, `h2. Locks`, `h2. Blocked by`, `h2. Acceptance`, and labels `size:S`, `auto-merge`, and `area:*` describe the ticket. None of those fields are the issue key. The issue `key` in an export is the only export field that becomes `jiraKey`.
+
+## Stuck agent
+
+Reconcile marks `stuck` when `updatedAt` is older than `stuckAfterMinutes` (default 90) and the ticket is not `awaiting_approval`. Reattach by spawning a Shuttle on the same id; it must reuse the branch. That window is not worker death. A dead background worker is `staleMinutes` below.
+
+## Dead worker
+
+Warp's background worker is the Shuttle on a claimed ticket (`claimed`, `planning`, `coding`, `fix`). The one `warp-listen` listener (`listener` on the beam) is one background subagent on the parent's checkout. `subagentVm` does not apply. A dead turn does not notify Warp. Cursor does not restart it. Plugin hooks do not run on cloud runners. There is no process table.
+
+Each Shuttle writes a heartbeat the parent can see. A remote Agent writes `.warp/tickets/<id>/state.json` (`heartbeatAt`) and a `heartbeat` line in `log.jsonl`, and pushes only that directory, at claim, at each status change, and at least every 5 minutes. The tick copies that onto `lastSeenAt`. It does not replace the live beam with the branch snapshot. `beam.py heartbeat` writes `lastSeenAt` directly when the worker is already on the live beam, and prints the `reap:` line. A heartbeat is not a timer. A Shuttle writes it between steps of work it is already doing. The parent writes `listener.parentSeenAt` from `parent-exit --wait`. Each read writes `listener.lastSeenAt` and `.warp/listener.json`. `inbound.py heartbeat` is for a listener someone starts by hand. A run does not use it. Shuttles stay inside `staleMinutes` (default 15). Channel reads use `listenerFastSeconds` and `listenerSlowSeconds`. `pollSeconds` is only the parent-wait cap. Only a return stamp, or a holder that has not polled or waited for `listenerSilentMinutes` (`listener: lost`), starts another listener.
+
+`beam.py watchdog` runs on every Warp tick and from `/warp-start` and `/warp-resume` (`scan.py start` and `scan.py resume`). A Shuttle is dead when `lastSeenAt` is older than `staleMinutes`, or it never heartbeated and the claim is older than `staleMinutes`. A fresh heartbeat is alive. Do not start a second worker. `watchdog: skipped (paused)` or `watchdog: skipped (stopped)` means do not recover and do not start a replacement. The watchdog prints no listener line and never starts a listener.
+
+The listener is a Subagent of the parent turn, not a worker the watchdog replaces. The parent starts the next listener from `orchestrator.py supervise` (`listener: poll`) when no holder is live and the return stamp is in. A `running` flag left when the window closed does not block the next tick. Close the window, open a new one, `/warp-start`. State comes from main plus ticket folders. `/warp-start` and `/warp-resume` fetch origin/main, load that beam when the checkout is empty, then patch each in-flight ticket from `.warp/tickets/<id>/`. On every merge, and at the end of each parent tick, the live beam is pushed to main. `/warp-update-state` is the insurance sync: load main, patch `.warp/tickets/<id>/` only, keep pause, stop, claims, and runState the parent has that main does not, and push. `/warp-pause` and `/warp-stop` run that sync before they return. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true.
+
+Dead Shuttle: the ticket stays on the same work. Branch, pull request, `jira.startedAt`, and locks stay. The launch slot is released immediately, so a dead claim does not count against `maxAgents`. Status becomes `recovering` when the replacement actually starts (not a silent stuck claim, and not `queued`). On start or resume, a stale heartbeat is dead and a fresh heartbeat stays. Warp dispatches open-pull-request fixes first, then `shuttle: replace <id>` lines, up to the live caps. Dispatch exactly one new Shuttle for each of those lines. Do not queue a duplicate. Do not launch a `shuttle: release` line. `ready()` will not give those locks to another ticket. `recoveredAt` and `recoveries` record the replacement. The new Shuttle heartbeats, sets status back to `recoveryPriorStatus`, and continues that branch. It does not open a second pull request. Herald posts one line: `<id> worker died. A new Shuttle started.` A Shuttle that `/warp-pause` or `/warp-stop` ended is not a dead worker. `/warp-start` or `/warp-resume` launches a new Shuttle on the same branch (`fix: <id> resume after halt`), counts no recovery, and posts no worker-died message.
+
+Two ticks close together reserve the replacement on the first write. The second tick sees the fresh start and does not launch another.
+
+`maxRecoveries` (default 5) caps Shuttle replacements. Past the cap the ticket is `alarm` with reason `worker-died` and no new Shuttle starts. Herald posts `<id> worker died. Recovery cap reached.` Branch, pull request, and `jira.startedAt` stay. `warp:retry <id>` in the Slack or Teams channel restarts it: back to `fix` when it has a pull request, else `queued`, with the recovery count reset. It is a channel verb only. There is no slash command for it. `/warp-init` appends `staleMinutes` and `maxRecoveries` when `.warp/config.yaml` does not have them yet.
+
+## Agents pile up or keep waking
+
+Agents pile up when four things are true together. A worker can start a worker. A worker waits for something instead of returning. Nothing ends an agent that is no longer wanted. And nobody can list what is out. Five mechanisms remove those. [LIFECYCLE.md](LIFECYCLE.md) is the rule.
+
+| Mechanism | What it does |
+|---|---|
+| The gate | `checkout.py launch` is the only source of a Shuttle prompt. It prints `spawn: closed <id>` and a `refuse:` line, and exits 2, while the run is paused, stopped, or finished, and for a merged or parked ticket. Only the parent starts agents. |
+| The contract | Every worker prompt carries `agent: <id>` and the worker contract: one step, one line. A worker never starts another agent, never subscribes, sets a timer, loops, sleeps, or waits on a pull request, CI, Bugbot, Slack, or an approval. Only the parent waits. |
+| The reap check | `agents.py reap --beam .warp/beam.json --id <agent> --ticket <id>` (`--remote` on a dedicated VM) prints `reap: continue`, or `reap: exit <reason>` and exits 3. `ticket_state.py append`, `beam.py heartbeat`, and `inbound.py poll` print the same line. |
+| The halt | `/warp-pause` and `/warp-stop` are the same teardown. Every row in `.warp/agents.json` is ended and marked halted. With `CURSOR_API_KEY`, the run's cloud agents are cancelled and archived. The same teardown runs once at the end of a run (`halt: done agents=<n>`). |
+| The list and the clear | `/warp-list` shows what is still out and changes nothing. `/warp-cleanup` cancels and archives it. You run it yourself. It never runs on its own. |
+
+Use `/warp-list` to see what is out, and `/warp-cleanup` to cancel and archive it. They take the same selection options.
+
+```bash
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+```
+
+`/warp-list` runs the first line. It changes nothing. It prints `instance: warp:<instance> host=<host> machine=<machine id>`, then one line per row in `.warp/agents.json` (`agent: <id> role= ticket= state= started= ended=`), then `registry: live=<n> ended=<n>`. With `CURSOR_API_KEY` in the environment it prints `cloud: id= name= repo= status= updated=` for each cloud agent in this repo that is in the registry or whose name starts with this run's `[warp:<instance>]` tag. `status=ACTIVE` is still running. `status=IDLE` is not. An agent it would leave alone is `list: kept <id> reason=parent` (this run's parent), `reason=self` (the agent running the command), or `reason=running-untagged`. The last line is `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>`. Without the key it prints `cloud: not read.` and one `cloud: link https://cursor.com/agents/<id>` for each recorded cloud agent.
+
+`/warp-cleanup` runs the second line. Run `/warp-pause` or `/warp-stop` first. It cancels the run of each RUNNING or ACTIVE match (`cleanup: cancelled <id>`) and archives every match (`cleanup: archived <id>`). The agent running the command stays (`cleanup: skip <id> reason=self`), and so does this run's parent (`reason=parent`). Leave `--apply` off for a dry run: it prints `cleanup: tag [warp:<instance>]`, each match, `cleanup: would cancel <id>` for the running ones, and `cleanup: count`, and changes nothing. Archive is reversible in the Cursor UI. Warp never deletes an agent.
+
+| What is piled up | List it | Clear it |
+|---|---|---|
+| This run's agents | `/warp-list` | `/warp-cleanup` |
+| Agents from before 1.5.0, which carry no tag | `/warp-list --untagged` | `/warp-cleanup --untagged` |
+| What another Warp run left behind | `/warp-list --tag <instance>` | `/warp-cleanup --tag <instance>` |
+| What any Warp run left behind | `/warp-list --tag all` | `/warp-cleanup --tag all` |
+| Agents in any repo whose name, summary, or prompt contains a word | `/warp-list --scan="Jira","Fix","Bugbot"` | `/warp-cleanup --scan="Jira","Fix","Bugbot"` |
+
+`<instance>` is the six characters in that run's header and names, for example `a1b2c3`. `warp:a1b2c3` and `[warp:a1b2c3]` are the same. `--untagged` matches loosely, on Warp role words in the name or prompt, so it can show someone else's agent. Read the list before you clear it. An idle one is archived. One that only matched loosely and is still running is left alone (`reason=running-untagged`), because it may be someone else's. `--force` cancels it. `--all-idle` and `--any-repo` widen the match further. Leave them off for a pile of Warp agents in this repo. `--scan` is the word match, and it crosses repos: it ignores this repo and the tag and registry rules, and pages through every agent the key can see. `--scan="Jira","Fix","Bugbot"`, `--scan Jira,Fix,Bugbot`, and `--scan Jira --scan Fix` are the same. Matching is case-insensitive, on the name, the summary or description, and the first prompt. Read `/warp-list --scan` before `--apply`. A dry run prints `cleanup: would archive` and `cleanup: would cancel`. An idle match is archived. A running one is left (`reason=running-scan`) unless `--force`. The agent running the command and this run's parent are never matched. The refusal while the run is running still applies.
+
+An agent that keeps waking after it returned may be woken by Cursor, not by Warp. Depending on the Cloud Agents settings for the account, Cursor can wake a cloud agent that opened a pull request when CI fails on it or a comment arrives. That wake-up is not a step from the parent. The worker contract tells the worker to run the reap check and return without acting, and the parent handles red CI on its next pass. To stop the wake-ups at the source, turn off automatic CI fixes for Cloud Agents in the Cursor dashboard for the repos Warp runs in.
+
+## Pause or stop printed `cleanup: link`
+
+`cleanup: link https://cursor.com/agents/<id>` means `CURSOR_API_KEY` is not in the environment, so the pause or stop could not cancel or archive that cloud agent. The local half still ran: every row in `.warp/agents.json` is ended and marked halted (`halt: paused agents=<n>` or `halt: stopped agents=<n>`), the state is pushed, and each worker reads `reap: exit` at its next check. Open each link and archive the agent in the Cursor UI. Or export `CURSOR_API_KEY`, run `/warp-list` to see what is out, and run `/warp-cleanup` to cancel and archive it:
+
+```bash
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+```
+
+The key is read from the environment and is never written to the repo.
+
+## `cleanup: cut short`
+
+`cleanup: cut short; run /warp-cleanup for the rest` means the cloud half of a pause or stop gave up after 45 seconds, before every cloud agent was cancelled and archived. The run is still paused or stopped, and every row in `.warp/agents.json` is still ended. Run `/warp-list` to see what is still out, then `/warp-cleanup` for the rest:
+
+```bash
+python3 <plugin>/scripts/agents.py list --beam .warp/beam.json
+python3 <plugin>/scripts/agents.py cleanup --beam .warp/beam.json --cloud --apply --running
+```
+
+Agents it did not reach still exit at their next reap check.
+
+## A Shuttle returned `result: <id> stopped <reason> agent=<agent>`
+
+That line is a clean stop, not a failure. `<agent>` is the registry id or the cloud id of the Shuttle that read `reap: exit`. The parent stamps `reaped` on that row only. A late line from a halted or replaced VM does not end the Shuttle that replaced it; it is journaled as `reap-stale`. The Shuttle read `reap: exit <reason>` from its reap check (`agents.py reap`, or the same line from `ticket_state.py append` or `beam.py heartbeat`), did not commit, push, or open anything more, and returned. Do not relaunch the ticket because of it. It is not a dead worker: no recovery is counted and `worker-died` is not raised.
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `paused`, `stopped` | `/warp-pause` or `/warp-stop` ran | Nothing. `/warp-resume` or `/warp-start` launches a new Shuttle on the same branch (`fix: <id> resume after halt`). |
+| `done` | Every ticket is merged or parked | Nothing. The run is finished. |
+| `settled` | This ticket is merged or parked | Nothing. |
+| `replaced` | The parent started another Shuttle for this ticket, or another parent took the run | Nothing. The other Shuttle has the ticket. |
+| `halted` | The Shuttle was started before a pause or a stop, and the run moved on without it | Nothing. `/warp-start` or `/warp-resume` already launched a new one for that ticket. |
+| `archived` | Cleanup archived this agent | Nothing. Work it had not pushed stays in the archived agent. Unarchive it in the Cursor UI to get it back. |
+| `not-resumed` | Its turn returned more than `staleMinutes` ago and the parent did not resume it | Nothing. Something other than the parent woke it. The parent handles the ticket on its next pass. |
+| `not-launched` | No launch was recorded for this id | Find what started it. Only the parent starts a Shuttle, from `checkout.py launch`. |
+
+## `pass: aborted` or `cleanup: unreachable`
+
+`orchestrator.py supervise` prints `pass: aborted. The run was paused during this pass.` (or `stopped`) when `/warp-pause` or `/warp-stop` landed from another window or from the channel while the pass was working. The halt wins. The pass does not write over it, anything it recorded in `.warp/agents.json` is ended, and no `start` line from it counts. Start nothing and run `parent-exit`, which prints `parent: exit`.
+
+`cleanup: unreachable <id>`, `cleanup: cancel failed <id>`, and `cleanup: archive failed <id>` mean a Cloud Agents API call failed, with the link to that agent. Nothing is aborted: the pause, stop, merge, or pass carries on. The agent is left as it is, never archived while it might still be running, and tried again on the next pass or the next `/warp-cleanup`. The agent itself still exits at its next reap check.
+
+## `spawn: closed <id>` from `checkout.py launch`
+
+`checkout.py launch --id <id>` printed `spawn: closed <id>` and a `refuse:` line, printed no prompt, and exited 2. That is the gate. Start nothing.
+
+| Line | What to do |
+|---|---|
+| `refuse: Warp is paused. No agent starts. /warp-resume or /warp-start opens the run.` (also `stopped` and `finished`) | `/warp-resume` or `/warp-start`. Launch from the `start <id>` lines that command prints. A finished run has nothing left to launch. |
+| `refuse: ticket <id> is merged. Nothing starts for it.` (also `parked`) | Nothing for a merged ticket. A parked ticket starts again with `warp:retry <id>`. |
+
+## `parent: exit superseded`
+
+`orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>` prints `parent: exit superseded` when a later `/warp-start` or `/warp-resume`, in this window or another one, took the run over. One parent per run. End that turn at once and start nothing. The later parent owns the run. Its id is the `parent: session <id>` line that its `scan.py start` or `scan.py resume` printed. To take the run back, run `/warp-start` or `/warp-resume` in the window you want. It prints `run: was already running. This session takes it over.` The other parent exits on its next `parent-exit`.
+
+## `listener: none`
+
+`orchestrator.py supervise` prints `listener: none` when no `slackChannel` or `teamsChannel` is set for the `messenger` in use. No channel is configured, so no listener is started at all and `warp:` messages are not read. Use the slash commands (`/warp-proceed`, `/warp-pause`, `/warp-stop`), or set a channel in `.warp/config.yaml`. `listener: hold reason=live` means a holder has the lease. `listener: hold reason=await-return` means the lease was bumped and the return stamp is not in. Neither starts a second. `listener: idle` means the run is paused, stopped, or finished, and starts nothing.
+
+## Listener exited `reap: exit orphaned`
+
+`inbound.py poll` or `inbound.py wait` printed `reap: exit orphaned` and `listen: stopped`. The parent's stamp, `listener.parentSeenAt`, is older than `listenerOrphanMinutes` (default 5), so the listener stopped reading and wrote the return stamp (`returnReason: orphaned`). Nothing replaces it until a parent is alive. Usually the parent's turn died. Run `/warp-resume` or `/warp-start`. The next `supervise` sees the stamp and prints `listener: poll`. `reap: exit superseded` is the same exit for a copy whose lease another holder took. Start nothing for it.
+
+## `listener: hold reason=await-return` does not clear
+
+The lease was bumped because the holder passed `listenerMaxMinutes`, or a generation ended without a return stamp, and the old listener has not written that stamp yet. It writes it at its next `poll` or `wait`, which wakes about every 2 seconds. If it stays, that listener is gone without a stamp, for example the window closed. Open a chat and run `/warp-listen`. It runs `inbound.py take --holder chat`, which prints `listener: lease generation=<n> holder=chat` and holds the lease in that chat. To clear the stamp by hand instead, run `inbound.py returned --beam .warp/beam.json --reason stopped`. It prints `listener: returned stopped`, and the next `supervise` prints `listener: poll`.
+
+## The parent's turn died
+
+A dead turn does not notify Warp, and Cursor does not restart it. Nothing restarts the parent. No worker does, and no hook does. Workers that were out finish their step, write their ticket folder, and return. They start nothing. Run `/warp-resume` or `/warp-start`. They are the same command. It prints a new `parent: session <id>`, loads state from main plus the ticket folders, releases Shuttles whose heartbeat is stale, and runs passes again. An earlier parent that is still alive reads `parent: exit superseded` on its next `parent-exit` and ends its turn.
+
+## `cleanup: --running refused while the run is running`
+
+`agents.py cleanup --cloud --apply --running` prints `cleanup: --running refused while the run is running. /warp-pause or /warp-stop first.` when the run is still running. `--running` would cancel Shuttles that are doing work. The command carries on without it: idle matches are archived and RUNNING or ACTIVE matches are skipped (`reason=running`). Run `/warp-pause` or `/warp-stop`, then run `/warp-cleanup` again. `/warp-list` shows what is still out at any time, because it changes nothing. `--force` overrides the refusal and cancels live work.
+
+## Should I pause or stop?
+
+`/warp-pause` and `/warp-stop` are the same teardown. Stop also writes the completion report. That is the one difference. Either way, carry on with `/warp-start` or `/warp-resume`, which are the same command.
+
+| | `/warp-pause` | `/warp-stop` |
+|---|---|---|
+| `runState` | `paused` | `stopped` |
+| Every agent in `.warp/agents.json` ended, every Shuttle slot freed | yes | yes |
+| This run's cloud agents cancelled and archived (with `CURSOR_API_KEY`) | yes | yes |
+| Branches, worktrees, pull requests, locks, `jira.startedAt` | kept | kept |
+| Completion report `.warp/warp-complete.html` and the Herald totals | no | yes |
+| `stoppedAt` recorded as the end of the run | no | yes |
+| Use it when | you will carry on: overnight, a meeting, a bad base branch | the run is over, or you want the report |
+| To carry on | `/warp-start` or `/warp-resume` | `/warp-start` or `/warp-resume` |
+
+## `/warp-start` on a paused run
+
+It continues. `/warp-start` is not refused on a paused run, and there is nothing to choose between it and `/warp-resume`. Either one sets the run running from a stopped run, a paused run, or a run that is already running, and prints which:
+
+| Line | The run was |
+|---|---|
+| `run: was stopped. Starting.` | stopped, or never started |
+| `run: was paused (<reason>). Continuing.` | paused |
+| `run: was already running. This session takes it over.` | running. The earlier parent reads `parent: exit superseded` |
+
+Both run the same prompt gate, and `--force` means the same on both.
+
+## New tickets are not starting after a start
+
+Read the `unfinished:` line that `/warp-start` or `/warp-resume` printed:
+
+```text
+unfinished: 6 open. 1 need a fix, 3 need a Shuttle, 0 have a Shuttle out, 2 wait on review or checks. These start first, up to maxAgents 18. New tickets start after, while fewer than maxInProgress 20 are open.
+```
+
+Unfinished work takes the `maxAgents` slots first: lock-escape alarms (locks widened, relaunched), then open pull requests that need a fix, then tickets whose Shuttle was halted or died, then new tickets from the ready queue. With lock-escape alarms on the beam the line starts `unfinished: Lock-escape alarms first (locks widened, relaunched): WE-07, WE-12.`, and those repairs start before anything else, so no fix, replacement, or new ticket takes their files or slots first. A new ticket starts only in a slot unfinished work did not need. `unfinished: none. New tickets start from the ready queue.` means nothing was left over.
+
+`holding new launches (N/maxInProgress), N fix workers running` in the open-work list means `maxInProgress` is full: that many tickets are started and not merged or parked. A ticket waiting on review or CI is open and uses no agent. New tickets start again when one merges or parks. Fixes are not held.
+
+The `effective:` line shows both caps: `effective: runner=<r> subagentVm=<b> memoryCheck=<b> maxAgents=<n> maxInProgress=<n> launch=<l>`. On a shared machine `checkout.py launch` prints `local-cap: <n>`, and `refuse: local subagent cap <n> (live ...)` when the slots are full. That number is `maxAgents`, or lower when `memoryCheck: true` and memory is tight.
+
+## `config: <key> is retired and ignored`
+
+`/warp-start`, `/warp-resume`, and `/warp-version` print `config: <key>: <value> is retired and ignored.` for a key in `.warp/config.yaml` that no longer does anything. The line goes on to say what replaced the key, and ends `Remove it from .warp/config.yaml.` The run is not blocked. Remove the key.
+
+| Key | What replaced it |
+|---|---|
+| `maxLocalSubagents` | `maxAgents`. It is the one cap on agents that run at once, on this machine or on their own VMs. `memoryCheck: true` lowers it on a shared machine when memory is tight |
+| `maxFixWorkers` | `maxAgents`. A fix is an agent like any other and takes a slot. Unfinished work takes the slots first |
+| `listenerStaleMinutes` | The return stamp. A stale listener heartbeat does not start another listener |
+| `listenerRestartNote` | The return stamp. One background listener is replaced only from it |
+| `maxListenerRestartsPerHour` | The return stamp. One background listener is replaced only from it |
+
+The full list is [CONFIG.md](CONFIG.md) "Retired keys".
+
+## Two Warp runs in one repo or one channel
+
+Each run has its own tag, `warp:<instance>`. The instance is six characters that `/warp-start` sets once on the beam, and a resume from another window or VM keeps it. Every agent the run starts is named `[warp:<instance>] <ticket> <step>`, and the listener is `[warp:<instance>] listener`. To tell two runs apart, read the header on any Slack or Teams message, `Warp | <repo> / <project> | run <name> | warp:<instance>` (`| run <name>` appears only on a named run), or the `instance: warp:<instance> host=<host> machine=<machine id>` line that `/warp-list`, `/warp-status`, `/warp-version`, start, and resume print.
+
+Runs in one repo also get names: `/warp-init core`, `/warp-init admin`, `/warp-init ui`. Each has its own checkout, beam, and branches, and its own folder `.warp/runs/<name>/` in the repo ([RUNS.md](RUNS.md)). `/warp-start` on a run another agent has marked running takes it over (same machine, or a run that is not live; from another machine a live named run needs `--takeover`), so give each developer their own run name.
+
+Pause, stop, and `/warp-cleanup` touch only agents in their own registry or carrying their own tag. Another run's agents are not matched, and neither is any other agent in the repo, whatever words are in its name. To act on another run's leftovers on purpose, name its tag: `/warp-list --tag <instance>`, then `/warp-cleanup --tag <instance>`. Nothing checks whether that run is still going.
+
+## `fatal: Unable to create '.git/index.lock': File exists`
+
+A git command was killed while it held the lock, so git refuses every later command, including Warp's state publish. `/warp-start` and `/warp-resume` remove such a lock when it is older than 10 minutes and no git process is running (`start: removed stale <repo>/.git/index.lock …`). If it says `Left in place`, wait for the running git to finish, or remove the file yourself once nothing uses that repo. `python3 scripts/fresh_start.py --root . --dry-run` lists what it would remove.
+
+## A status, heartbeat, or review went missing from the beam
+
+Before 1.7.0 a supervise pass could save over what a Shuttle saved while the pass ran (a `beam.py set`, a heartbeat, a recorded review), and the parent sometimes saw the older value, or a `.tmp` file next to `beam.json`. Now saves merge (`beam: merged <n> saves by other processes …` in the pass output). Leftover `beam.json.*.tmp` files from an old crash are removed by the next `/warp-start` or `/warp-resume` once they are 10 minutes old. `python3 scripts/beamlock.py status` shows the revision. If a field is still wrong, run `/warp-resume`: the next pass rereads the ticket folders and the provider and sets it again. STATE.md "Concurrent saves" has the rules.
+
+## Lock-escape repair
+
+`lock-escape` means the diff needed a path outside the ticket's locks. The Shuttle stores each of those paths with `--escaped` when it sets the alarm. It does not widen the lock itself.
+
+The parent's pass, while the run is running, calls `alarm_repair.py next` on the pass that sees the alarm. The listener does not start the repair. The repair widens that ticket's locks to the paths that escaped, records the added paths on `addedLocks`, and prints `alarm-repair: launch <id>` with the `checkout.py launch` command for one Shuttle inside the widened lock. The parent runs it and starts that Shuttle, once per started repair. Herald's start line names the paths added. `--returned <id>` before that launch prints `alarm-repair: not launched <id>` and does not use one of the `maxAlarmRepairs` attempts.
+
+Do not start that repair when an in-flight ticket holds one of those paths, or holds one of the ticket's current locks. `alarm-repair: locked <id> by <holder>` means wait. When the holder finishes (it is no longer in flight), the next pass widens and starts. The holder can be another repair started earlier in the same call: repairs are decided one ticket at a time, so two tickets that escaped into the same file never both start. A ticket that waits does not hold back the ones after it. A queued ticket's overlapping lock can be widened. Nothing is stolen from work that is running.
+
+Repairs run in parallel, each taking a Shuttle slot (`alarm-repair: queued <id>` when `maxAgents` is full). If a repair alarms `lock-escape` again, or the Shuttle errors, leave the alarm and record the attempt; that ticket tries again `alarmRepairMinutes` after the failure (`alarm-repair: retry <id> after 15 minutes`). If the repair puts the ticket back on the normal path and clears the alarm, or the ticket merges, it is settled (`alarm-repair: passed <id>`). A second tick while a ticket's repair Shuttle is working does not start another for it. A ticket that sat in alarm before 1.7.0 was waiting on the old cadence: one repair at a time, a pass every `alarmRepairMinutes`.
+
+`maxAlarmRepairs` (default 5) is the cap. After that the alarm stays and later passes skip the ticket. Herald posts `<id> lock-escape repair given up.` An older alarm with no path list prints `alarm-repair: name <id>`. That Shuttle names the paths with `alarm_repair.py paths` before it edits. Pause and stop do not repair, because the run is not running. `bugbot-failed`, `stuck`, `worker-died`, `ci-red`, and `gate-red` are not repaired this way. `/warp-init` appends `alarmRepairMinutes` and `maxAlarmRepairs` when the config does not have them yet.
+
+## Which model did a Shuttle run on
+
+`checkout.py launch` printed `model: <slug> (<why>)` above the prompt mark, and the supervise line `start <id> ... model=<slug> step=<step>` names it too. `<why>` is `modelL for size L`, `model`, or `fixModel: fix round 2, fixModelAfter 2`. A slug the Cursor model picker does not list makes the subagent start fail: fix the line in `.warp/config.yaml`; the next launch reads it. Nothing changes while the lines are still commented out (`# modelS: ...`). A value with a trailing `# comment` reads as the value alone.
+
+## Cap change
+
+Edit `.warp/config.yaml` `maxAgents`. Next tick picks it up if the skill re-reads yaml. Also set the copy inside the beam if a tick reads only the beam: a rescan (`/warp-scan`) is wrong for a live run; edit `beam.config.maxAgents` with a journal note, or set it in both places.
+
+## Reinstall or reset
+
+`/warp-init` is idempotent. It never overwrites `.warp/config.yaml` values or existing plugin files, so it will not upgrade an installed copy. It does append config keys the file is missing, and it records the installed version in `.warp/version`. When that copy is older than the plugin you ran, it prints `plugin is vOLD, repo copy is vNEW: run /warp-upgrade`. `/warp-upgrade` replaces `.cursor/plugins/warp`. Run it in the repo that has Warp installed. When the source is a git checkout, it fetches the default branch. If the fetch fails, it prints `fetch failed` and `keeping the installed copy`. The installed copy stays. It does not overwrite `.warp/config.yaml` or the beam. It prints `Warp vX.Y.Z`. Reload Cursor, then confirm with `/warp-version`. `/warp-init` does not upgrade an existing copy. This command does. `--force` is not an upgrade flag. The flags are `--root` and `--source`. If `/warp-upgrade` is not in the command list, `/warp-version` prints `python3 .cursor/plugins/warp/scripts/upgrade.py` (`?` prints the flags). The script does not need the slash command. A 1.4.6 tree includes that file. See the README Update section. On a cloud runner, `/warp-start` refuses when `transitionJiraIssue`, `addOrEditJiraIssueComment`, or `slack_send_message` is missing from the MCP allow list unless `--force`. A local runner does not block. Init and upgrade write every `commands/*.md` file to `.cursor/commands/`, including `.cursor/commands/warp-upgrade.md`, so a reload lists `/warp-upgrade`, `/warp-update-state`, `/warp-status`, and the other commands when the plugin command index still omits that path.
+
+## agents stop and ask to Run/Allow
+
+`slack_send_message` and `addOrEditJiraIssueComment` prompt when the allowlist entry does not match the server id Cursor shows, or when the entry was never written.
+
+Before 1.3.13, `/warp-allow-notify` wrote `slack:<tool>` and `atlassian:<tool>` only, Jira tools required `--with-jira`, and `/warp-init` did not run it. The Run dialog often names `user-slack`, `plugin-slack-slack`, `project-0-<folder>-slack`, `atlassian-rovo`, or `claude_ai_Atlassian`. `project-0-<folder>` changes when you open another workspace or worktree. A literal `slack:slack_send_message` does not match those.
+
+`/warp-init` now writes the project list (specific tools, plus `user-`, `plugin-`, and `*<name>*:<tool>`). `autoAllowTools: false` or `/warp-init --no-allow` skips it. User-level `~/.cursor` files still need `/warp-allow-notify --user --yes`.
+
+Then:
+
+1. Set Run Mode to Auto-review, Allowlist, or Run Everything. Ask Every Time ignores `permissions.json`. A team admin override ignores it too.
+2. `/warp-allow-notify --check` prints detected servers, what project and user files cover, and the entries that would fix a gap. `--list` only prints servers.
+3. If the dialog's tool name is not in `scripts/mcp_tools.py`, add `server:tool` to `notifyAllow` and run `/warp-allow-notify` again.
+4. Reload Cursor (Developer: Reload Window) or start a new chat.
+5. Undo with `/warp-allow-notify --revoke`. That removes only the entries Warp recorded.
+
+IDE agents prompt until that matches. Cloud agents and automations do not prompt, and plugin hooks do not run on cloud runners. The Cursor CLI uses `.cursor/cli.json` (`Mcp(server:tool)`), not the IDE button; `agent -f` approves tools for that process. A `beforeMCPExecution` allow does not skip the IDE prompt. On a cloud runner, `scripts/mcp_allow.py --server SERVER --tool TOOL` prints `allow` or `ask`. Call the tool only when it prints `allow`. That is the same Slack, Teams, Jira, and optional GitHub list, not every MCP tool, and it does not approve shell commands. `--allow-server-tools` writes `server:*`, which allows every tool on that server, including destructive ones. Leave it off unless you mean that.
+
+## The agent running a named run is gone
+
+Open a new agent in a checkout of the repo and run `/warp-init <name>`. Warp reads origin, prints `run: <name> already exists on origin/<base>. You are taking up a previous run.`, then the saved config, folder, scan, state, and progress, restores the run, and says `next: /warp-start`. If it prints `warn: the last parent saved state ... Another agent may still be running it`, check that the old agent is really gone: `/warp-start` takes the run over (same machine, or a run that is not live; from another machine a live named run needs `--takeover`) and the old parent ends its turn. Run `/warp-list` to see leftover cloud agents and `/warp-cleanup` to archive them. State is as fresh as the last checkpoint; `/warp-sync` brings the beam in line with Jira for anything newer.
+
+## `refuse: <name> is running under <who> on <host>, since <time>`
+
+The full line is `refuse: <name> is running under <who> on <host>, since <time> (parent last seen <ago>). /warp-start --takeover takes it over. /warp-init <name> shows its state.` The run is live on another machine. If that agent is gone, `/warp-start --takeover` takes the run over; their parent ends its turn on its next pass. If it is not gone, give each developer their own run name. `/warp-runs` shows the owner and when the parent was last seen.
+
+## `refuse: <name> starts after core:G2`
+
+`startAfter` in the config names a gate in another run. The `startAfter:` line before the refusal says where that run is, for example `startAfter: core:G2 not met (core is at G1 (3 of 8 merged). It must clear G2 first).` Wait, or `/warp-start --now` to start anyway. `/warp-runs` shows only `startAfter=core:G2(waits)` or `(met)`, not the other run's blocks.
+
+## Tickets are ready but nothing starts on a named run
+
+Check in this order. `blocks.py show` lists each block and whether it is cleared; in strict order (`gateOrder: strict`, the default) a ticket waits for every earlier block, and a parked ticket holds the later ones. A build-schedule/2 schedule runs in deps order unless its `model.gate_order` or a `gateOrder` line in the config says strict. `gateOrder: deps` goes back to dependencies only. In deps order a milestone gate holds work only while it is red: a red blocking gate stops every ticket outside it. A dependency written `core:P-014` waits until that ticket is merged in the other run. A blocker in another repo waits the same way, and waits for good while that repo is not readable: `external.repos` on the beam shows `<run>: unreachable`, or the scan printed `deps: set externalRepos ...` ("`deps: set externalRepos`" below). A ticket whose locks overlap another run's active locks waits. With `paths` set, a ticket whose locks fall outside it prints `hold: N tickets, locks outside this run's paths`. A `startAfter` that was met is not rechecked after the run starts.
+
+## `range: G0-G3 complete ... Pausing.`
+
+The range you started with is cleared. The run paused. `/warp-start G4-` (or `/warp-resume`, which clears the range) continues.
+
+## Base fix does not start in a run
+
+With `baseFixOwner: core`, only the run named `core` dispatches the base fix. The others print that they are leaving it to the owner. Clear the key to let every run fix it.
+
+## `/warp-delete <name>` refused
+
+It refuses a run that is live, and a run another run depends on or starts after, unless `--force`. Without `--apply` it only lists what it would remove. `--apply` removes `.warp/runs/<name>/` in one commit and pushes it; `--branches` also deletes the run's origin branches. When this checkout runs `<name>`, its local files are moved to `.warp/previous-<name>/` and `run:` is cleared (`local: this checkout ran <name>. ...`). Another checkout's local files are left alone.
+
+## `refuse: <name> has no scan`
+
+A named run cannot start until `/warp-scan` has run. Run `/warp-scan [folder]`, then `/warp-start`.
+
+## `refuse: this checkout runs <other>`
+
+One checkout runs one run. Use another checkout, or `/warp-init <name> --switch` to move this one; the old files are kept in `.warp/previous-<other>/`. A checkout that has an unnamed run with tickets needs `--adopt` to name it or `--switch` to set it aside.
+
+## `scan: N ticket ids are already owned by another run`
+
+Two runs may not share a ticket id. The scan listed the ids and the owner and wrote nothing (exit 4). Narrow the folder with `/warp-scan <folder>`, or add `--skip-owned` to leave those tickets out. Tickets that depend on a skipped ticket are rewritten to `<owner>:<id>` and wait for that ticket to merge in the owning run.
+
+## Scan one folder
+
+`/warp-scan <folder>` limits the search to that folder. If the name matches several folders the scan stops and lists them; re-run with the full path. The beam and `scan.json` record the folder. The folder is saved as `scanFolder` and the next `/warp-scan` reuses it; `/warp-scan /` clears it and scans the whole repo.
+
+## Rebuild the graph
+
+Only when `schedule.json` is regenerated. Copy `.warp/` aside first. `/warp-scan` overwrites live status: every ticket starts `queued` again. `/warp-import <file>` keeps status, pull request, tokens, and minutes for ids that still exist (`--keep-status`, the default), from a `WARP_PLAN.json` or a `schedule.json` tickets list.
+
+## `no plan found`
+
+`/warp-scan` printed `no plan found — looked for CURSOR_PLAN.md, schedule.json, WARP_PLAN.json, jira ticket json` and exited 2. The repo, or the folder, has no plan file. If the work is in Jira, the next line says what to run: `next: the work is in Jira? /warp-from-jira <label>[,<label>] writes a plan folder from the issues with those labels`. Run `/warp-from-jira <labels>`, then the `/warp-scan <folder>` it prints. When a folder was scanned the line is `no plan found in <folder> — ...`. If that is a saved `scanFolder`, `/warp-scan /` scans the whole repo.
+
+## `/warp-from-jira` printed `refuse:` or `warn:`
+
+`/warp-from-jira` writes the search to `.warp/jira-pull.json`, the agent saves every page of `searchJiraIssuesUsingJql` to `.warp/jira-pull/issues.json`, and `jira_pull.py build` writes the plan folder. Nothing is written to Jira. A `refuse:` line writes nothing.
+
+| Line | What to do |
+|---|---|
+| `refuse: <folder> already has a plan (...). /warp-scan <folder> reads it. --force rebuilds it from Jira.` | Scan that folder, or pass `--force` to rebuild it. `build` prints the same refusal ending `--force rebuilds it.` |
+| `refuse: <file> holds no issues. jql: <jql>. Check the labels and the project.` | The search came back empty. Check the label spelling and `jiraProject` (`--any-project` searches every project), then search again |
+| `refuse: dependency cycle: A → B → A. Fix the links in Jira, then build again.` | Two issues block each other. Remove one "is blocked by" link in Jira, search again, and build |
+| `refuse: no saved search at <file>. ...` | Run the search the `plan` step printed and save every page there |
+| `refuse: no open issue is left to plan.` | Every issue found is Done, an epic, or without the labels. The `note:` lines above list them |
+
+`warn:` lines do not stop the build. They are also written to `plan/FROM_JIRA.md`.
+
+| Line | What it means |
+|---|---|
+| `warn: <n> without a size (...), planned as M: ...` | Add a `size:S` label or a Size section to plan them right |
+| `warn: <n> without locks (...); Warp cannot keep them apart: ...` | Add a Locks section, one path per line. Without locks two tickets can edit the same files at once |
+| `warn: blockers outside these labels and not Done, left out (...)` | Add the label to the blocker, or write `<run>:<id>` in Blocked by when another run owns it |
+| `warn: <KEY> and <KEY> both say plan id <id>: ...` | Two issues claim one plan id. The second keeps its Jira key as its id |
+
+## `repos: set repo: <name>`
+
+The scan printed `repos: the schedule spans <A>, <B> and this checkout is '<name>'. All tickets kept.` and `` repos: set `repo: <name>` in .warp/config.yaml to run one repo's tickets here. `` A build-schedule/2 schedule names more than one repo and none matches this checkout (`repo:` in the config, else origin's name). Every ticket was kept, so this run would also start the other repo's tickets. Set `repo:` in `.warp/config.yaml` to this checkout's repo as the schedule spells it, then `/warp-scan` again. The line `repo: <name> — <n> of <m> tickets; the other <k> belong to ...` means the split worked. See [RUNS.md "Runs in other repos"](RUNS.md#runs-in-other-repos).
+
+## `deps: set externalRepos` or an `unreachable` repo
+
+`deps: set externalRepos in .warp/config.yaml so Warp can read <run> (...); until then those tickets wait` means a ticket here waits on a ticket in another repo, and the config does not say where that repo is. Add `externalRepos: {<run>: <git url or path>}` (with `#branch` when it is not main or master), and name the run on the other side with `repoRuns` when it is not the repo name in lowercase. The run must be named (`/warp-init <name>`) for Warp to read other runs at all.
+
+When `externalRepos` is set but the fetch fails, `external.repos` on the beam shows `<run>: unreachable`, and those tickets wait. Check the URL, the branch, and that this machine can fetch it. The parent tries again every few minutes, and at start.
+
+## `gateOrder: strict in .warp/config.yaml overrides the schedule's deps`
+
+The scan printed `schedule: <program> build-schedule/2, gate order strict — gateOrder: strict in .warp/config.yaml overrides the schedule's deps; delete that line to use the schedule's`. The schedule asks for milestone gates, and the config line keeps strict block order. A config written by `/warp-init` 1.6.0 to 1.6.2 has that line. Delete it from `.warp/config.yaml` for milestone gates; the next `/warp-start` uses the schedule's order, and `/warp-scan` prints it. Keep it to run the blocks in order. `gate order deps (gates are milestones: only a red gate holds work)` with no override means the schedule's order applies.
+
+## Dashboard shows old data or no data
+
+`/warp-dashboard` runs `dashboard.py write --beam .warp/beam.json`. It prints `dashboard: .warp/dashboard.html tickets=<n> files=<n>` and `open: file://...`. The page has the beam, each ticket's `state.json`, and the other runs' published beams inside it. Once the file exists, every status write rewrites it. Press Reload in the page to see the new state. The file is local: state commits leave it out. Delete it to stop the rewrites. `refuse: no beam at <path>. Run /warp-scan first, or pass --empty to write the page without data.` means there is no run yet. `--empty --out <path>` writes a page with no data, and File > Open reads the files by hand. See the [README](../README.md#dashboard).
+
+## Slack or Teams got the start message and nothing for the tickets
+
+Before 1.6.18 a supervise pass only printed its `herald:` lines (`WE-01 done`, `WE-01 review`), and posting each one was left to the parent, which did not. The start message was posted because it came as a payload file. Now every pass writes its `herald:` lines into `.warp/notify-pass.json` (a `pass` payload, "Run update (pass <n>)") and ends with `herald: post .warp/notify-pass.json to <channel> ...` and `herald: then run: ... notify.py posted --root .`. The lines are sentences: `WE-01 claimed: ...`, `WE-01: code complete; the Shuttle finished and returned.`, `WE-01 pull request opened: <url>`, `WE-01 Cursor Bugbot is reviewing PR #24`, `WE-01 Cursor Bugbot finished PR #24: 3 finding(s) (took 7m). Back to fix.`, `WE-02 is ready and waits for approval`, `WE-01 merged.`. Lines nobody marked posted are carried into the next pass's payload, so nothing is lost when a pass is skipped. With `notify: quiet` the payload keeps only alarms, parks, approval waits, red results and work needed by hand.
+
+## warp:stop said "This repo has more than one run"
+
+A bare `warp:pause`, `warp:resume`, `warp:stop` or `warp:start` is ambiguous only when another open run is published in the repo. Before 1.6.18 a finished run counted too: with the view run done (20 of 20 merged), `warp:stop` in the edit run's channel was refused, the listener handed back its slot, the parent started the next listener, and the run went on, so it looked like it stopped and started again. A finished run (every ticket merged, parked or skipped, or its end-of-run teardown ran) no longer counts. With two open runs, name the run: `warp:stop edit`. After a stop, every `supervise` prints `run: stopped at <time>. Start nothing ...`, and `parent-exit` prints `parent: exit`.
+
+## Merged tickets don't look merged
+
+Before 1.6.20 every pull request was squash-merged. GitHub folds a squashed branch's commits into one new commit on main, so in a git graph the ticket branch dead-ends and never joins main. The work is on main as that one `[<id>] …` commit: PR #24's head `8a69213` became `5796d14` on main. Since 1.6.20 the default is `mergeMethod: merge`, a merge commit that joins the branch; `mergeMethod: squash` keeps the old behavior. `deleteBranchOnMerge: true` removes merged branches. If the board, status files or viewer still show a merged ticket in review, the run state on main is behind: since 1.6.20 supervise publishes it right after each merge (`state: published (merged <id>)`). `state: not published (...)` says why it didn't; `publishOnChange: false` turns this off. Since 1.6.21, with `stateInMerge` (the default), the merge commit itself carries the run state: `state: in the merge commit (<id>)`. `merge: <id> through the provider (<why>)` says why it could not, for example a branch protection rule that refuses Warp's push; then a separate `Warp state` commit follows. To push it now, send `warp:sync` (or `warp:sync <run>`) in the channel: the parent refreshes the board and status files, pushes the run state, and posts `Run state pushed to main at <sha>`.
+
+## Is the run stalled, or waiting on Bugbot?
+
+Shuttles show up as background agents, and Cursor Bugbot does not: it runs on GitHub. Since 1.6.18 every pass says what Bugbot is doing on each ticket's head:
+
+- `bugbot: not started <id> on <sha> (asked <m> ago)`: asked, no check yet. After `bugbotStartMinutes` (10) Warp comments `bugbot run` (see the next section).
+- `bugbot: running <id> <url> on <sha> (started <hh:mm>Z)`, then `bugbot: running <id> on <sha>, <m> so far` on each pass: it is checking. Bugbot usually takes 3 to 10 minutes.
+- `bugbot: done <id> pass on <sha> (took <m>)`, or `bugbot: done <id> <n> finding(s) … (took <m>): <path:line title (severity)>; …`: it ended. A finding starts a fix Shuttle in the same pass.
+
+Slack or Teams gets one Herald line when the check starts and one when it ends, in verbose mode. The lines in between are not posted. `parent-exit --wait` ends with `bugbot: waiting on Cursor Bugbot: WE-01 running 4m, WE-03 not started 2m` while anything waits on it, and returns every `bugbotPollSeconds` (120) instead of `pollSeconds`, so the result shows soon after Bugbot ends. `/warp-status` and the status post show `bugbot=running(4m)`, and `next=wait for Bugbot (running 4m)` or `(not started)`. A merged ticket's late check prints the same lines with `after the merge`.
+
+## Bugbot never starts
+
+`bugbot: request` only records that a review was asked for. When Bugbot is on for the repo it starts by itself, and its `Cursor Bugbot` check shows up on the pull request. If it does not show up within `bugbotStartMinutes` (default 10), Warp:
+
+1. writes `bugbotTrigger: comment` to `.warp/config.yaml` (the run state publishes it) and prints `config: bugbotTrigger comment. ...` with one Herald line;
+2. posts `bugbot run` on that pull request (`bugbot: commented <id> <url>`). Without gh it prints `bugbot: MUST DO ...`: post the comment with the GitHub MCP, then `bugbot.py run --id <id> --posted`;
+3. from then on posts `bugbot run` each time it asks for a review, once per head commit.
+
+Still nothing `bugbotStartMinutes` after a comment: one more comment. After two, Bugbot is not listening on the repo (the Cursor Bugbot app is not installed on it, or the pull request author's "Run only when mentioned" setting). Warp writes `bugbotTrigger: manual`, prints `bugbot: silent <id>` and one Herald line, and asks for the review by hand.
+
+`bugbotTrigger: manual` is also the setting to choose up front when GitHub or Bitbucket is not connected to Cursor. Each head commit gets `bugbot: manual <id> <url> branch=<branch>`, a `MUST DO` line and one Herald line. Run Bugbot on it the way your setup allows, then record the result:
+
+```bash
+python3 <plugin>/scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result pass --evidence "<link or note>"
+python3 <plugin>/scripts/bugbot.py record --beam .warp/beam.json --id WV-01 --result fail --finding "null check in util.mjs"
+```
+
+A recorded `pass` counts as Bugbot passing for that head commit, and a provider read with no Bugbot check does not clear it. A recorded `fail` sends the ticket to fix with the findings. A new commit needs a new review. `python3 <plugin>/scripts/bugbot.py status` lists every ticket still waiting on Bugbot.
+
+Set `bugbotTrigger` back to `auto` once Bugbot is on for the repo.
+
+`bugbotTrigger: shuttle` puts the review in the Shuttle. Its prompt has the review step: once the pull request is open and the check is green, diff the branch against the base the way Bugbot does, fix what it finds inside the locks, push, and record the result for the head commit:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state review-pass --sha <head sha> --source shuttle
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state review-fail --sha <head sha> --source shuttle --finding "util.mjs:12 null deref"
+```
+
+The parent reads that line from the ticket folder like any other state. A review of an older commit is ignored. A `fail` goes to fix with the findings, and the fix Shuttle reviews again at the end. When the work is done but no review is recorded for the head and no Shuttle is out (it returned without one, the review stalled, or the ticket went `stuck` or `worker-died` with its pull request open), the parent starts a review-only Shuttle: `start <id> ... step=review` and `bugbot: review-shuttle <id> 1/2`. It changes no code and returns `result: <id> ok review=pass|fail findings=<n>`. A second one may follow. After two with nothing recorded, Warp asks for the review by hand, as in `manual`.
+
+A repo with no CI workflows (no `.github/workflows/*.yml`, no `bitbucket-pipelines.yml`) is not a CI that never started: Warp does not send a Shuttle to push empty commits. The Shuttle's own check and Bugbot decide. Bugbot's check alone makes the rollup green once it passes.
+
+## A lock-escape that keeps coming back
+
+The Shuttle's `.warp/tickets/<id>/state.json` used to keep `alarm: lock-escape` and the escaped paths after later states, so every newer state raised the alarm again, even after the repair had widened the locks. A later state now clears those fields, a leftover field is not read as a new lock-escape, and paths already inside the ticket's locks never raise it. `/warp-resume` clears one that is already on a ticket (`heal: <id> lock-escape cleared, ...`).
+
+A lockfile beside a locked manifest is covered by that lock and is never an escape. That covers `package.json` and its npm, yarn, pnpm or bun lockfile, `go.mod` and `go.sum`, `Cargo.toml` and `Cargo.lock`, `pyproject.toml` and its poetry, uv or pdm lockfile, `Pipfile`, `Gemfile`, and `composer.json`. The Shuttle prompt's `locks:` line names those lockfiles.
+
+## How the parent knows a Shuttle came back
+
+A Shuttle's return is read from its ticket folder, the one channel that works on a cloud runner too. The step's Shuttle (implement, fix, restart, repair, review) writes `done` as its last state. A check result (`check-green`, `check-red`) from the same agent after it started counts as well, and for a review Shuttle so does the review it recorded. Supervise prints `shuttle: returned <id> step=<step> (<state>)`, frees the slot, and moves the ticket on.
+
+Before 1.6.10, only a first implement step that opened a new pull request was seen to return. A restart, fix, or repair Shuttle on a pull request that already existed stayed "out" until its heartbeat went stale (`staleMinutes`, 15), then was counted dead and replaced (`shuttle: replace`, `worker died`). That is how WV-01's restart was marked dead after it had pushed and recorded a green check. A returned Shuttle whose heartbeat later goes stale is not dead: the watchdog prints `shuttle: returned <id>` and leaves it.
+
+## Acceptance criteria
+
+A ticket merges only when every acceptance criterion has a `pass` for the head commit. Where they come from: `acs` or `acceptance` on the plan's ticket, or `acceptanceCriteria` (`[{id, kind, text}]`) in the pack's `tickets/tickets.json`. A build-schedule/2 schedule.json has none of its own, so `/warp-scan` fills them from the pack's ticket file (matched by `tempId`, `externalId`, or `id`) and prints `acceptance: <n> of <m> tickets have criteria`, with the tickets that have none. `/warp-start` and `/warp-resume` fill them on a beam scanned before 1.6.11 (`acceptance: criteria added to <n> tickets from ...`).
+
+The Shuttle's prompt lists them, one line each, and its last line records a result for each:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root <parent> --id WV-01 --state done --agent <agent> --ac AC-1=pass --ac AC-2=pass
+```
+
+The parent reads them from the ticket folder each pass (`herald: WV-01 acceptance: 5 recorded, all pass.`). A `fail` sends the ticket to fix with that criterion. Results belong to the commit that was checked; a new commit needs them again.
+
+When the work is done (Bugbot finished, checks green, no findings) and some criteria have no result, and no Shuttle is out, the parent starts a verify Shuttle (`start <id> ... step=verify`, `acceptance: verify-shuttle <id> 1/2 missing AC-1, ...`). It changes no code: it checks each criterion against the branch and records the results with its `done` line. After two with nothing recorded, `acceptance: MUST DO <id>` asks for them by hand:
+
+```bash
+python3 <plugin>/scripts/ticket_state.py append --root . --id WV-01 --state acceptance --ac AC-1=pass --ac AC-2=pass
+python3 <plugin>/scripts/acceptance.py show --beam .warp/beam.json --id WV-01
+```
+
+A ticket with no criteria at all still cannot merge until a result is recorded for it; scan names those tickets so the pack can be fixed.
+
+## How a merge is recorded
+
+A ticket is recorded merged only when its pull request is merged on the provider. When a ticket is ready (Bugbot, checks, every acceptance criterion pass), the supervise pass prints `merge: request <id> <url>` and, once it knows the pass was not cut short by a pause or stop, merges it with `gh pr merge --<mergeMethod>` (`--merge` by default) and reads the pull request back. `MERGED` prints `merge: <id> merged on the provider (gh pr merge --merge, confirmed MERGED)`, then the usual `merge: <id> merged`, the Jira Done move, Slack, and the gate check.
+
+When the merge cannot run here (gh missing, a read-only token, branch protection), the ticket stays `merging` and nothing downstream moves: `merge: not merged <id>: <reason>` and `merge: MUST DO <id>: merge <url> (merge) with the GitHub MCP merge tool (merge_pull_request, merge_method merge) or gh pr merge --merge`. `/warp-allow-notify --with-git` allows `merge_pull_request`. Whoever merges it, the next pass reads the pull request as `MERGED` and records it (`merge: <id> merged on the provider (confirmed)`). In between, `merge: wait <id>`. A merge queue prints `merge: <id> enqueued` and is recorded the same way when it lands. Local mode (`pushMerge: false`) prints the `provider.py merge-local` command to run.
+
+Before 1.6.12 a pass with no merge result from the provider recorded the merge without one, cleared the gate, and asked for the Jira Done move while the pull request stayed open. `/warp-resume` now checks every ticket recorded merged that has a pull request and no confirmed merge: an open pull request goes back to ready (`heal: <id> was recorded merged, but <url> is open on the provider. Back to ready to merge; the next pass merges it.`) and its gate is pending again.
+
+## A Shuttle that could not open its pull request
+
+A Shuttle on a cloud VM can be refused when it opens the pull request (a 403) after it pushed its branch. When it comes back with no pull request, the supervise pass prints `pr: open <id> <branch>` and, in the same pass, opens it: it looks for a pull request already open for the branch, checks the branch is on origin, then runs `gh pr create` (`pr: opened <id> <url>`). Only a branch that is not on origin goes back to the Shuttle as a fix. When gh cannot open it here, `pr: MUST DO <id>` names the GitHub MCP `create_pull_request` tool and the `orchestrator.py opened --id <id> --pr <url>` command that records it; the ticket waits and is not relaunched. `/warp-allow-notify --with-git` allows `create_pull_request`. Recording a pull request with `orchestrator.py opened` also clears a step that was marked and never launched, so a ticket a 1.6.12 pass sent to fix for a missing pull request goes on to review; do not launch that fix.
+
+A Shuttle that asks `mcp_allow.py` about `create_pull_request` gets `allow` whenever the list allows any of Warp's GitHub tools on that server, also a list written before 1.6.12. After a push, a refused pull request is not local-only: the Shuttle writes `done`, and `provider.py note` (if it runs) says the branch was pushed.
+
+## Jira moves when a pass starts a ticket
+
+A ticket started by a supervise pass gets its move to In Progress and its claim comment as `jira: MUST DO` lines right after its `start` line, once per ticket (`jira.startedAt` records it). Before 1.6.13 only `beam.py set --status claimed` asked for that move, so tickets the pass started stayed To Do.
+
+## A Shuttle replaced while it was working
+
+A Shuttle is alive while it writes to its ticket folder (any line, not only `heartbeat`) or changes its worktree (a file, a stage, a commit). The watchdog calls it dead only when none of those happened for `staleMinutes` (default 15) since it started. `checkout.py launch` starts that clock, so a heartbeat left by the Shuttle before it does not count either way. A Shuttle on its own VM has no worktree on this disk: its heartbeat lines are the only signal. A replacement always gets a new id (`shuttle-<id>-r<n>`); an id that ended is never used again.
+
+## A gate flagged stuck
+
+`sweep: finding <gate> gate stuck` means a pending gate has a member in alarm or parked, or nothing in the run moved since the last sweep (no Shuttle out, no ticket in flight, no merge). A pending gate while its members, or an earlier block's, are being worked is not stuck. The second sweep in a row escalates once (`sweep: escalate`). A red gate is always a finding: fix the base or the check.
+
+## The listener stopped and supervise keeps holding
+
+Cursor can stop the listener because its poll-and-wait calls look like a loop. It cannot write its return stamp after that. Once it has not polled or waited for `listenerSilentMinutes` (default 5, never under one `listenerSlowSeconds` wait plus three minutes), the next `supervise` prints `listener: lost holder=<id> generation=<n> (no poll or wait for <m>m). Its slot is free.` and then `listener: poll`: start the one listener it names. `inbound.py returned` is accepted for a lost holder as well. A listener that is still polling or waiting keeps its slot.
+
+Since 1.6.14 a generation hands off before Cursor's cutoff. It rotates after `listenerMaxReads` (4) reads, and the parent starts the next one at once. Every `poll` and `wait` prints its cycle number and time, so no two calls repeat the same output. `parent-exit --wait` wakes the parent when the holder goes silent, so a listener Cursor still stops is replaced within `listenerSilentMinutes`, not after the next timeout. A listener that knows it has to stop runs `inbound.py returned --reason cut-off --lease <gen> --holder <id>` first, which frees the slot at once. A `parent: exit` closes the lease too, so `.warp/listener.json` never shows a lease as running after the parent left. On an older install, run `inbound.py release` before `/warp-resume` if it does.
+
+## Bugbot found issues but the ticket merged
+
+Cursor Bugbot finishes its check `neutral` when it finds issues and `success` when it finds none. Before 1.6.14 Warp counted `neutral` as green, and with `bugbotTrigger: shuttle` a ticket merged on its Shuttle's review alone. Now a `neutral` Bugbot check is a finding. Warp reads the finding text from Bugbot's review comments on the head commit, and the ticket goes to a fix step. Under `bugbotTrigger: shuttle`, where Bugbot runs on the repo, the merge waits for Bugbot's own result after the Shuttle's review passes (`bugbot: wait <id> (the Shuttle's review passed; ...)`).
+
+A finding that arrives after a merge, for a pull request merged before 1.6.14 or one merged by hand, queues a follow-up ticket: `bugbot: late <id> <url> <n> finding(s) after the merge. Follow-up ticket <id>-BB<n> queued.` It has each finding as an acceptance criterion and the original's locks plus the files the findings name. It runs like any ticket and asks for no Jira move. Do not fix those findings by hand on main. The check runs at the start of every pass, also when every ticket is merged: run `/warp-resume` on a finished run, and the first pass queues the follow-ups, reopens the run, and starts their Shuttles. A merge Bugbot has not reported on yet keeps the run open for up to an hour after it. A follow-up sits in its parent's block. It does not reopen that block or hold a later one under `gateOrder: strict`, but a `/warp-start` range is not complete while one is open.
+
+## The table shows `—` for a time or for Spent
+
+Warp records each pull request's times as the run reaches them:
+- **Opened:** `openedAt`, from GitHub's `createdAt`.
+- **Reviewed:** `reviewedAt`. This is Cursor Bugbot's finished check on the head, or the moment the head passed its review and checks.
+- **Approved:** `approvedAt`. This is the last GitHub approval, `warp:proceed`, or the auto-merge rule when the ticket is ready (`approvedBy: auto-merge`).
+- **Merged:** `mergedAt`, from GitHub.
+
+A pass also stamps `claimedAt` when it starts a ticket. Spent is the sum of the ticket's Shuttles' time out, from `.warp/agents.json`.
+
+Runs before 1.6.17 recorded almost none of these, and runs before 1.6.22 recorded no merge time (`pr.mergedAt` stayed null, so the viewer's Merged column was empty). `/warp-start` or `/warp-resume` fills them in from each pull request and prints `times: filled in <ids> from the pull requests`; a merged ticket with no merge time is read again. Each supervise pass also fills a missing merge time from the merge commit (`times: merged time filled in for <ids> from the merge commits`), and `warp:sync` runs the backfill before it pushes. For a finished run, or the published copy in a checkout of main, run `python3 <plugin>/scripts/heal.py --times --beam .warp/runs/<run>/beam.json`, then commit that file. A `—` that remains is a step that has not happened. For example, Approved stays `—` for a ticket that needs a person and has not been approved.

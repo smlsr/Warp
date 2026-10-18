@@ -1,0 +1,443 @@
+# Live state stays in the working copy and is gitignored.
+# Use an absolute path to keep it outside the repo, for example
+# /Users/you/.warp/humanifyos
+stateDir: .warp
+
+# run: admin
+# The name of this checkout's run. /warp-init <name> writes this line, so it is
+# commented here. One repo can hold several runs (core, admin, ui). A named
+# run publishes to .warp/runs/<name>/ on the base branch and on its ticket
+# branches, names its branches warp/<name>/<id>-<jira>, and is the only writer of
+# that folder. Lowercase letters, digits, and dashes. No name is one unnamed
+# run, as before.
+scanFolder: ""
+# The folder /warp-scan last scanned, for a run that works one segment of the
+# repo. Empty means the whole repo. /warp-scan <folder> sets it, /warp-scan /
+# clears it, and a bare /warp-scan reuses it. The run's copy in the repo
+# carries it, so a restored run scans the same folder.
+checkpointMinutes: 10
+# A named run publishes its folder to the base branch when a ticket changes
+# status or the run changes state, and at least this often while it runs.
+# gateOrder: strict
+# Unset (the default): strict, except a build-schedule/2 schedule.json, which
+# runs in deps order with milestone gates unless its model.gate_order is strict.
+# strict: a ticket in block G3 does not start until every block before it is
+# cleared. A block is cleared when all its tickets are merged, done, or skipped
+# and its gate is not red. A parked ticket holds the blocks after it.
+# deps: only dependencies and a gate hold a ticket back. Setting this line
+# overrides the schedule either way. /warp-start G0-G3 runs a range of blocks.
+startAfter: ""
+# A run that waits on another run reaching a gate: core:G2, or several separated
+# by commas. /warp-start refuses until that run has cleared the gate and every
+# block before it. /warp-start --now starts it anyway.
+paths: ""
+# Repo paths this run may change, separated by commas: HOS/UI/Admin, packages/admin.
+# A ticket whose locks leave them does not start. Empty means no limit.
+baseFixOwner: ""
+# The run that fixes the shared base branch when it goes red, for example core.
+# The other runs wait for it and dispatch no fix of their own. Empty means every
+# run fixes its own.
+# repo: HumanifyOS
+# repoRuns: {HumanifyOS-UI: admin-ui}
+# externalRepos: {admin-ui: https://github.com/acme/HumanifyOS-UI.git}
+# For a build-schedule/2 schedule.json that spans several repos. repo is the
+# repo this checkout is (default: origin's name); the scan keeps its tickets.
+# repoRuns names the Warp run that works each other repo (default: the repo
+# name in lowercase), so a blocker there becomes <run>:<id>. externalRepos says
+# where that run's repo is (git URL or local path, #branch optional), so the
+# parent can read its published beam. These apply with splitRepos: true.
+multiRepo: false
+# Written by /warp-scan. true: the schedule's tickets span several repos and this
+# one run works them all from this checkout, the repo with the most tickets, which
+# holds the state. The other repos' tickets are worked in sibling clones (see
+# siblingRoot and siblingRepos). /warp-start checks the clones before it starts.
+splitRepos: false
+# true keeps the older mode for a schedule that spans several repos: one run per
+# repo, with repo, repoRuns, and externalRepos above.
+siblingRoot: ".."
+# Where a multi-repo run's sibling clones are, relative to this checkout:
+# ../HumanifyOS-UI. /warp-start clones a missing one there.
+# siblingRepos: {HumanifyOS-UI: https://github.com/acme/HumanifyOS-UI.git}
+# Written by /warp-scan for a multi-repo run: each sibling repo and its git URL,
+# with #branch when its base branch is not main.
+
+# --- Shuttle models. Uncomment a line to use it; the slug must match the Cursor model picker. ---
+# model: claude-sonnet-5-5-high   # the default, as before
+# modelS: claude-haiku-5-5        # empty = use model
+# modelM: ""
+# modelL: ""
+# modelXL: claude-opus-5-5
+# fixModel: claude-opus-5-5       # empty = keep the ticket's model
+# fixModelAfter: 2
+# model is every Shuttle's model unless modelS/M/L/XL sets one for that ticket
+# size. fixModel starts the fix Shuttle from fix round fixModelAfter on (Bugbot
+# findings, red CI, failed acceptance); rounds before a warp:retry count too.
+
+# Two caps, and only two.
+#   maxAgents      how many agents run at once
+#   maxInProgress  how many tickets are open at once
+
+maxAgents: 18
+# Agents that run at once: every Shuttle, whatever its step (implement, fix,
+# rebase, rerun, restart, repair), in a worktree on this machine or on its
+# own VM. No per-person cap. A project may set 18. It is the one cap on
+# running agents. There is no separate cap for fixes or for this machine.
+# memoryCheck can lower it on a shared machine when memory is tight.
+
+maxInProgress: auto
+# Tickets that are open at once: started and not merged or parked. A ticket
+# waiting on review or CI is open and uses no agent. At this count, nothing
+# new is taken from the ready queue. This does not stop a fix, a rebase, a
+# CI rerun, a Bugbot re-request, or a merge: those tickets are already
+# open. Parked tickets do not count. Already being over the cap does not
+# park or cancel anyone. auto (the default) is 3 x maxAgents, at least 20, so
+# tickets waiting on review or CI do not keep Shuttle slots empty. Each pass
+# prints a capacity line, and Herald posts when this cap holds new tickets.
+# Status then says: holding new launches (N/maxInProgress), N fix workers running.
+#
+# Start and resume launch unfinished work first: open pull requests that
+# need a fix (a conflict, CI that never started, red CI, then Bugbot
+# findings), then tickets whose Shuttle was halted or died, then new
+# tickets. All of it draws on maxAgents, so a new ticket starts only in a
+# slot unfinished work did not need.
+
+checkCommand: ""
+# Optional. The orchestrator runs this on the pull request's head, in a
+# throwaway worktree, before it merges. A red result is not merged and goes to
+# a fix step with the output.
+mergeCheck: auto
+# auto: with checkCommand empty, run the test script of each package that holds
+# the ticket's locks (npm test, after npm ci when there is a lockfile), or
+# `make ci` from a root Makefile. off: run nothing before a merge.
+mergeCheckMinutes: 10
+# The merge check's time limit. Past it, the check counts as red.
+mergeMethod: merge
+# merge: a merge commit, so each ticket branch joins the base in a git graph. squash:
+# one commit on the base (the branch's own commits never join it). rebase: the
+# branch's commits replayed onto the base.
+deleteBranchOnMerge: false
+# true: delete a merged ticket's branch on origin (and locally when no worktree holds it).
+publishOnChange: true
+# Publish the run state to the base branch right after a merge, so main shows it merged at
+# once. false: leave it to the parent and the checkpoints. warp:sync publishes on request.
+pushStateNew: false
+# true: also publish the run state when a ticket's branch is created (in progress on main
+# at once). false: the next merge, warp:sync or checkpoint carries it.
+stateInMerge: true
+# With mergeMethod merge: Warp writes the merge commit itself, with the run state in it,
+# and pushes it to the base branch; GitHub marks the pull request merged. No separate
+# state commit. A refused push (branch protection) falls back to gh pr merge.
+requireCursorApiKey: true
+# A run that starts cloud agents (a Cursor cloud session, subagentVm, or cloud
+# agents already in the registry) needs CURSOR_API_KEY so pause, stop, and the
+# end-of-run cleanup can cancel and archive them. /warp-init warns, and
+# /warp-start refuses, until it is set. false allows it anyway.
+# `make ci` is a valid command. The space is part of the command.
+# A red result is stored on pr.check and sent back to that ticket with the log.
+
+appendOnlyPaths: []
+# Shared files a ticket may append to, besides its lock paths. Empty by default.
+# A conflict in one of these files keeps both sides, every added line.
+# Any other conflict is sent back to that ticket's Agent. Nothing here is a special filename.
+
+mergeQueue: false
+# true: enqueue the pull request instead of merging it from the agent.
+# false is the default. Warp also enqueues when GitHub says this repo uses a
+# merge queue. A direct merge that branch protection rejects is not marked merged.
+
+autoMergeSizes: [S, M]
+# Sizes in this list auto-merge after Bugbot and CI. Sizes not in autoMergeSizes wait.
+
+messenger: both
+# slack | teams | both
+notify: verbose
+# verbose | quiet
+runner: cloud
+# cloud = this session is a cloud agent. local = this machine.
+# auto = cloud when this session is a cloud agent, otherwise local.
+# The runner is the main driver. local forces subagentVm false and launch worktree,
+# skips the cloud-environment start check, and overrides other cloud-only settings.
+# Start, /warp-version, and status print the effective values after that override.
+# To run on this machine, comment out the line above and uncomment the next.
+# runner: local
+# runner: auto
+launch: worktree
+# worktree = one subagent per ticket in its own git worktree, in parallel up to maxAgents.
+# agent = optional IMPLEMENT prompt for one new Agent, for a future Cursor Cloud Agents API.
+# This plugin does not call that API. Clone main so .cursor rules load. A beam file
+# does not have to exist on the branch before that Agent starts.
+# launch: agent
+worktreeRoot: .warp/worktrees
+# Parent of ticket worktrees: <worktreeRoot>/<id>. The default is gitignored.
+subagentVm: false
+# false is the default: one git worktree per ticket on this machine.
+# true, on a cloud runner: the prompt asks for a dedicated VM with its own
+# clone and branch, not a git worktree on this machine. The subagent config
+# has no isolation field. It fetches latest main, creates warp/<id>-<jira>,
+# runs hostname and free -g first, and pushes .warp/tickets/<id>/ on that branch.
+# The parent patches the beam from that folder. The same hostname is a worktree
+# on this machine. One warning per run.
+# runner: local forces false even when this line is true.
+# Cloud subagents use the MCP servers at cursor.com/agents, not this session.
+# In the Agents Window, /in-cloud is the manual fallback, one ticket at a time.
+memoryCheck: false
+# true: on a shared machine, free -g lowers maxAgents when available memory
+# is under 2 GiB per extra subagent. At least one still runs. false: only
+# maxAgents limits how many run at once, and free -g is not read.
+cloudSnapshot: ""
+# Snapshot id. With .cursor/environment.json, either one is a cloud environment.
+# On a cloud runner, subagentVm true with neither warns and refuses /warp-start.
+# --force allows the start and still warns.
+
+jiraProject: ""
+# Jira project key, for example WAR. Leave this empty: /warp-init and /warp-scan
+# fill it when one prefix is clear, when Jira shows one project, or when every
+# stored issue key is in one project (even if the project-list tool is missing).
+# A plan id is a Jira issue only when its prefix matches this or jiraKeyPrefixes.
+# WV-01 is not WAR-1. Set it by hand only when the warning lists several candidates:
+# python3 scripts/jira_sync.py project --set WAR
+jiraKeyPrefixes: ""
+# Extra project prefixes, comma-separated, that confirm a Jira key.
+# jiraKeyPrefixes: "WAR, HOS"
+jiraKeyMap: {}
+# Optional plan-id to issue-key map. .warp/jira-map.json is merged on top.
+# jiraKeyMap: {"WV-01": "WAR-1"}
+jiraExternalIdField: externalId
+# Field name or customfield id matched to the plan id. Tried first, then
+# External ID, External Id, ExternalId, External Key, Plan ID, and Ticket ID.
+# A label warp:<id> and a remote-link id are next. One exact hit is stored.
+# A summary match waits for confirmation. Two matches are reported, not picked.
+# jiraExternalIdField: "External ID"
+# jiraExternalIdField: customfield_10050
+jiraWriteExternalId: false
+# true: /warp-scan and /warp-jira-check queue a write of the plan id into the
+# Jira External ID field for every mapped ticket that is not already confirmed.
+# The flag is the consent, so --yes is not required. A key found by the
+# external-id search is skipped. false: scan and catchup never queue that write.
+# /warp-jira-external-id --apply --yes still can. A different value already
+# in that field is left alone unless --force-external-id. No comment is posted.
+jiraExternalIdFieldName: "External ID"
+# Name used when creating the field. Creation is off unless the next key is true.
+jiraCreateExternalIdField: false
+# true: when the field is missing, scan and /warp-jira-external-id may ask the
+# agent to create a single-line text field. That is a site-wide Jira admin
+# change. The Rovo MCP catalog has no create-field tool; if the probe finds
+# none, or permission is denied, Warp does not fail. false: print the one
+# command /warp-jira-external-id --create-field --yes and use the fallback.
+jiraMatchOnText: false
+# true: a Jira summary that contains the plan summary's first 60 characters anywhere is a
+# match on its own, whatever the External ID says (another tool's id). The scan stores it.
+jiraExternalIdFallback: label
+# When the External ID field is missing: label (add warp:<id>, default),
+# remote-link (createJiraIssueRemoteIssueLink), or none. label uses
+# editJiraIssue update.labels add and does not remove other labels.
+# .warp/jira-field.json remembers a missing field so the next scan prints
+# one summary. --recheck looks again.
+jiraTransition: true
+# On claim, move the Jira issue to In Progress. Only tickets with a Jira key.
+# Needs the Jira MCP server; without it Warp logs a note and the claim goes on.
+jiraInProgressStatus: "In Progress"
+# Target status name. The transition is looked up by name or status category.
+jiraInReviewStatus: "In Review"
+# Fourth move. Bugbot request, or the pull request opening when Bugbot is off.
+# A missing key keeps In Review. An empty string or null turns the move off:
+# the issue stays where it is, and Bugbot, QA Ready, and Done still run.
+# jiraInReviewStatus: ""
+jiraRestoreOnRelease: false
+# true: when a claim is released back to queued, move the issue back to the status
+# it had before. false: leave it. Pause and stop never move an issue.
+jiraQaReadyStatus: "QA Ready"
+# Manual path (sizes not in autoMergeSizes, any ticket with autoMerge false): the issue moves
+# here when it is ready for a person to review and merge. It stays here until the
+# merge. warp:proceed or a provider approval is what moves it on.
+jiraDoneStatus: "Done"
+# Status after a merge, auto or manual, connected or local.
+jiraDoneOnManualMerge: true
+# true: after a manual merge (warp:proceed or a provider approval), move Jira to
+# jiraDoneStatus. false: leave the issue at jiraQaReadyStatus and let QA set Done.
+# QA Ready is still the status while the ticket waits for approval.
+jiraSite: ""
+# Atlassian site URL, for example https://yoursite.atlassian.net. Passed as cloudId
+# when you have more than one site. Empty: look the site up with getAccessibleAtlassianResources.
+bugbotRequired: true
+# Both paths. false: Bugbot is not required before auto-merge or before QA Ready.
+bugbotManual: true
+# Manual tickets (autoMerge false) only. true: Bugbot must pass before QA Ready,
+# the same gate as auto-merge. false: skip Bugbot on that path. bugbotRequired
+# still covers auto-merge. This says whether Bugbot is needed, not how it starts:
+# that is bugbotTrigger.
+bugbotTrigger: auto
+# How Warp gets a Bugbot review.
+#   auto:    every new pull request and push gets a review on its own. If no Bugbot check
+#            shows up within bugbotStartMinutes, Warp sets this to comment and says so.
+#   comment: the Cursor Bugbot app is on the repo and hears comments. Warp posts
+#            `bugbot run` each time it asks. Two unanswered comments: Warp sets manual.
+#   manual:  nothing can start Bugbot from here (GitHub or Bitbucket not connected to
+#            Cursor). Warp asks once per commit for a review by hand, and the ticket waits
+#            until `bugbot.py record --id <id> --result pass|fail` records it.
+#   shuttle: the Shuttle runs the review. When its pull request is open and its check is
+#            green, it reviews its own diff the way Bugbot does, fixes what it finds, and
+#            records the result. Work that is done with no review recorded (the Shuttle
+#            returned without one, stalled, or is stuck) gets a review-only Shuttle, up to
+#            2 per commit; after that Warp asks for a review by hand.
+bugbotStartMinutes: 10
+# Minutes to wait for Bugbot to start after a request or a `bugbot run` comment.
+bugbotPollSeconds: 120
+# While Cursor Bugbot checks a head (or was asked to), the parent looks again this often
+# instead of every pollSeconds, so `bugbot: done` shows soon after Bugbot ends.
+maxFixAttempts: 5
+stuckAfterMinutes: 90
+# Minutes with no progress before supervise marks that state stalled.
+# Progress is a new commit, a phase change, or a check result change.
+# A heartbeat, or a start that does not change those, does not clear the stall.
+stallImplementingMinutes: 90
+stallPrOpenMinutes: 20
+stallReviewingMinutes: 45
+stallFixingMinutes: 90
+stallReadyMinutes: 30
+stallMergingMinutes: 20
+stallQueuedMinutes: 180
+stallApprovalMinutes: 240
+stallMinutes: 45
+# Fallback for recovering and alarm, and for a state without its own key.
+ciStartGraceMinutes: 5
+# Minutes before a pull request head with zero check runs counts as CI that
+# never started. supervise re-requests the workflow or pushes an empty commit
+# in that pass. A conflict is rebased first. Default 5.
+statusDigestMinutes: 60
+# How often supervise posts one short Slack digest of alarms, stalls, and counts.
+# A new stall or alarm posts once and is not posted again.
+maxStallFixes: 5
+# Fixer attempts for one stalled or alarmed ticket. Past this cap the ticket
+# parks and Slack gets one alarm. Default 5.
+repairSweepMinutes: 15
+# How often supervise sweeps the whole run for broken tickets, pull requests,
+# CI on main, locks, gates, the listener, and the beam. It skips a fix that
+# is already queued or running, and starts what it can inside the slot cap.
+# Slack posts only when the sweep starts something new or escalates. Default 15.
+staleMinutes: 15
+# A Shuttle is dead when lastSeenAt is older than this, or it never
+# heartbeated and the claim is older than this. The watchdog replaces a dead
+# Shuttle while the run is running. Pause and stop do not. A fresh heartbeat
+# is left alone. A Shuttle whose turn returned this long ago and was not
+# resumed reads reap: exit not-resumed if it wakes up. /warp-init appends
+# this key when the file does not have it yet.
+maxRecoveries: 5
+# Dead Shuttle replacements on one ticket. Past this cap the ticket is alarm
+# worker-died and no new Shuttle starts. Branch, pull request, and
+# jira.startedAt stay. Default 5.
+maxSpawnsPerTicket: 8
+# New Shuttle spawns for one ticket. A resume of the Shuttle that returned
+# does not count. Past this cap the ticket is alarm spawn-cap and no new
+# Shuttle starts. Default 8.
+maxSpawnsPerHour: 200
+# New Shuttle and Bugbot spawns in the last 60 minutes, across the run.
+# Past this cap no ticket starts a new agent until an hour has passed.
+# Default 40.
+alarmRepairMinutes: 15
+# Minutes a failed lock-escape repair waits before it tries again. A new
+# escape is repaired on the pass that sees it, in parallel with the others;
+# two that need the same file never both start. Only while the run is
+# running. Pause and stop do not repair. /warp-init appends this key when
+# the file does not have it yet.
+maxAlarmRepairs: 5
+# Repair attempts for one lock-escape ticket. Past this cap the alarm stays
+# and later passes skip it. The repair widens that ticket's locks to the
+# paths that escaped. Default 5.
+respectMergeWindows: false
+mergeWindows: ["08:30", "13:00", "17:00"]
+pollSeconds: 120
+autoScan: 600
+# Seconds between auto-scans: a thorough pass over every open ticket that gives capped alarms
+# (worker-died, stuck, spawn-cap, given-up lock-escape repairs, ci-red, bugbot-failed, parked at a
+# fix cap) a fresh budget, asks again for merges and pull requests that never happened, runs the
+# repair sweep, and then fills every free Shuttle slot. 0 turns it off.
+autoScanResets: 5
+# Fresh budgets the auto-scan gives one ticket before it leaves it for a person (warp:retry).
+reviewPollSeconds: 60
+# While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every
+# open pull request (one gh call) this often during its wait, and runs the next pass at
+# once when one changed: green, Bugbot done, a conflict, merged elsewhere. At least 30; 0 is off.
+# Longest the parent waits between passes (orchestrator.py parent-exit
+# --wait) when nothing else wakes it. Channel reads use the two intervals
+# below, not this. The wait also returns on a ticket folder, the inbound
+# queue, and the listener return stamp.
+listenerFastSeconds: 15
+# Seconds inbound.py wait sleeps after a cycle that queued a command.
+# The sleep is in Python, in 2-second steps.
+listenerSlowSeconds: 120
+# Seconds inbound.py wait sleeps after an empty read.
+listenerOrphanMinutes: 15
+# A listener.parentSeenAt older than this makes the listener exit orphaned.
+# The parent writes that stamp. A stale stamp does not start a replacement.
+listenerSilentMinutes: 5
+# A listener that has not polled or waited for this long is gone (Cursor can
+# stop it as a loop). supervise prints `listener: lost` and starts a new one in
+# the same pass. Never under one listenerSlowSeconds wait plus three minutes.
+listenerMaxMinutes: 60
+# Rotate a generation after this many minutes, or listenerMaxReads,
+# whichever comes first. The parent starts the next one from the return stamp.
+listenerMaxReads: 4
+# Few on purpose: Cursor stops an agent whose calls repeat (it stopped the
+# listener after nine polls). A generation hands off after this many reads and
+# the parent starts the next one at once.
+# Successful poll --lease calls in one generation before rotation.
+listenerModel: ""
+# Empty: the listener inherits the parent's model (model: inherit).
+# A slug is printed as model: <slug>. agents/listener.md has no model key.
+reportOnComplete: true
+# true: when every ticket is merged, done, skipped, blocked, or alarmed, or the run
+# is stopped, write .warp/warp-complete.html and ask Herald to post the totals.
+# false: write the file only when someone runs /warp-report.
+reportPath: ".warp/warp-complete.html"
+# Where the completion report is written, relative to the repo. The default is
+# inside .warp, which /warp-init gitignores. A second copy is not made when this
+# is already that path.
+
+jiraMcp: atlassian
+gitProvider: auto
+# auto | github | bitbucket. auto reads the host of the origin remote, and
+# /warp-init writes the one it finds. Other hosts run local-only.
+# Uncomment one of these to force a provider, and comment out the line above.
+# gitProvider: github
+# gitProvider: bitbucket
+githubMcp: github
+bitbucketMcp: bitbucket
+ghCli: true
+# GitHub only: use the gh CLI when no GitHub server is connected, if gh is
+# installed and logged in. Warp never installs gh or logs in.
+# Uncomment to never try the gh CLI.
+# ghCli: false
+pushMerge: true
+# true: connected mode, push branches, open and merge PRs through the provider.
+# false: local-only. Never push, never open PRs, never call a provider; merge
+# ticket branches into baseBranch with local git. No remote also means local.
+# Uncomment for local-only: never push and never open a pull request.
+# pushMerge: false
+baseBranch: ""
+# Branch tickets start from and merge into. Empty uses origin's default, then main or master.
+# Uncomment to branch and merge into develop instead of the detected default.
+# baseBranch: "develop"
+slackMcp: slack
+teamsMcp: teams
+slackChannel: "warp"
+teamsChannel: "warp"
+# Channel to post into, and to watch for warp:status. One shared channel for
+# every repo; each message names its repo in the header. Warp does not create
+# the channel. Create it once, or change these to a channel that exists.
+# Use lowercase: Slack channel names are lowercase.
+projectName: ""
+# Shown in message headers after the repo: "Warp | repo / project".
+# Empty uses jiraProject, then the workspace folder name.
+notifyAllow: []
+# Extra MCP tools that may run without a Run prompt. Each entry is "server:tool".
+# No wildcards. Re-run /warp-allow-notify after changing this.
+# notifyAllow:
+#   - "slack:some_other_post_tool"
+autoAllowTools: true
+# true: /warp-init writes .cursor/permissions.json so Slack and Jira calls Warp
+# makes do not prompt. The list is specific tools, on the configured server
+# name and the ids Cursor actually shows (user-, plugin-, and *name*).
+# false: init skips that write. /warp-allow-notify still can.
+# User-level ~/.cursor files are never written by init. Undo: /warp-allow-notify --revoke.
+# /warp-init --no-allow skips one run without changing this key.

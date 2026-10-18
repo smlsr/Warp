@@ -1,0 +1,315 @@
+"""Run with: python3 -m unittest discover -s tests"""
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+
+
+def _frontmatter_block(text: str) -> str:
+    if not text.startswith("---\n"):
+        raise AssertionError("missing frontmatter")
+    end = text.find("\n---\n", 3)
+    if end < 0:
+        raise AssertionError("unclosed frontmatter")
+    return text[4:end]
+
+
+def _frontmatter_keys(text: str) -> list:
+    keys = []
+    for line in _frontmatter_block(text).splitlines():
+        if not line or line.startswith(" "):
+            continue
+        keys.append(line.split(":", 1)[0])
+    return keys
+
+
+def _frontmatter_value(text: str, key: str) -> str:
+    for line in _frontmatter_block(text).splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name == key:
+            return value.strip().strip("\"'")
+    raise AssertionError(key)
+sys.path.insert(0, str(SCRIPTS))
+import check_version  # noqa: E402
+import version  # noqa: E402
+
+INSTALL = SCRIPTS / "install.py"
+SCAN = SCRIPTS / "scan.py"
+BUMP = SCRIPTS / "bump_version.py"
+CHECK = SCRIPTS / "check_version.py"
+VERSION_PY = SCRIPTS / "version.py"
+PLAN = ROOT / "examples" / "CURSOR_PLAN.sample.md"
+VER = (ROOT / "VERSION").read_text().strip()
+
+
+def run(script, *args, cwd):
+    return subprocess.run(
+        [sys.executable, "-B", str(script), *args], cwd=cwd, capture_output=True, text=True
+    )
+
+
+class PluginManifestTests(unittest.TestCase):
+    def test_manifest_has_customize_fields_and_logo(self):
+        manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        for key in (
+            "name",
+            "displayName",
+            "description",
+            "version",
+            "publisher",
+            "repository",
+            "keywords",
+            "logo",
+        ):
+            self.assertIn(key, manifest, key)
+            self.assertTrue(manifest[key], key)
+        self.assertEqual(manifest["name"], "warp")
+        self.assertEqual(manifest["displayName"], "Warp")
+        self.assertEqual(manifest["publisher"], "HumanifyOS")
+        self.assertEqual(manifest["author"]["name"], "HumanifyOS")
+        self.assertEqual(manifest["repository"], "https://github.com/smlsr/Warp")
+        self.assertEqual(manifest["homepage"], "https://github.com/smlsr/Warp")
+        self.assertIsInstance(manifest["keywords"], list)
+        self.assertGreater(len(manifest["keywords"]), 0)
+        self.assertEqual(manifest["logo"], "assets/logo.svg")
+        self.assertNotIn("..", manifest["logo"])
+        logo = ROOT / manifest["logo"]
+        self.assertTrue(logo.is_file(), logo)
+        text = logo.read_text()
+        self.assertTrue(text.lstrip().startswith("<svg"))
+        self.assertIn("viewBox", text)
+        self.assertGreater(logo.stat().st_size, 0)
+
+        market = json.loads((ROOT / ".cursor-plugin" / "marketplace.json").read_text())
+        self.assertEqual(market["name"], "warp")
+        self.assertTrue(market["owner"]["name"])
+        self.assertEqual(len(market["plugins"]), 1)
+        entry = market["plugins"][0]
+        self.assertEqual(set(entry), {"name", "source", "description"})
+        self.assertEqual(entry["name"], manifest["name"])
+        self.assertEqual(entry["source"], ".")
+        self.assertTrue(entry["description"])
+        plugin_dir = (ROOT / entry["source"]).resolve()
+        self.assertEqual(plugin_dir, ROOT.resolve())
+        self.assertTrue((plugin_dir / ".cursor-plugin" / "plugin.json").is_file())
+
+    def test_warp_upgrade_command_is_registered_with_the_others(self):
+        command = (ROOT / "commands" / "warp-upgrade.md").read_text()
+        version_cmd = (ROOT / "commands" / "warp-version.md").read_text()
+        self.assertEqual(_frontmatter_keys(command), _frontmatter_keys(version_cmd))
+        self.assertEqual(_frontmatter_keys(command), ["name", "description"])
+        self.assertEqual(_frontmatter_value(command, "name"), "warp-upgrade")
+        self.assertEqual(_frontmatter_value(version_cmd, "name"), "warp-version")
+        self.assertEqual(_frontmatter_value(command, "name"), (ROOT / "commands" / "warp-upgrade.md").stem)
+        self.assertEqual(_frontmatter_value(version_cmd, "name"), (ROOT / "commands" / "warp-version.md").stem)
+        self.assertTrue(_frontmatter_value(command, "description"))
+        self.assertTrue(_frontmatter_value(version_cmd, "description"))
+        upgrade_skill = (ROOT / "skills" / "warp-upgrade" / "SKILL.md").read_text()
+        version_skill = (ROOT / "skills" / "warp-version" / "SKILL.md").read_text()
+        self.assertEqual(_frontmatter_keys(upgrade_skill), _frontmatter_keys(version_skill))
+        self.assertEqual(_frontmatter_keys(upgrade_skill), ["name", "description"])
+        self.assertEqual(_frontmatter_value(upgrade_skill, "name"), "warp-upgrade")
+        self.assertEqual(_frontmatter_value(version_skill, "name"), "warp-version")
+        self.assertEqual(
+            _frontmatter_value(upgrade_skill, "name"),
+            (ROOT / "skills" / "warp-upgrade" / "SKILL.md").parent.name,
+        )
+        manifest = json.loads((ROOT / ".cursor-plugin" / "plugin.json").read_text())
+        # Directory paths: the published index registers every file in them. An explicit
+        # file list did not reach the published index (1.6.3 fresh installs had no commands).
+        self.assertEqual(manifest["commands"], "./commands/")
+        self.assertEqual(manifest["skills"], "./skills/")
+        for path in sorted((ROOT / "commands").glob("*.md")):
+            self.assertEqual(_frontmatter_value(path.read_text(), "name"), path.stem, path.name)
+            self.assertTrue(_frontmatter_value(path.read_text(), "description"), path.name)
+        for path in sorted((ROOT / "skills").glob("*/SKILL.md")):
+            self.assertEqual(_frontmatter_value(path.read_text(), "name"), path.parent.name, str(path))
+            self.assertTrue(_frontmatter_value(path.read_text(), "description"), str(path))
+        self.assertEqual(sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir() and p.name != "__pycache__"),
+                         sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")), "a skills folder without SKILL.md")
+        self.assertTrue((ROOT / "commands" / "warp-upgrade.md").is_file())
+        self.assertTrue((ROOT / "commands" / "warp-version.md").is_file())
+        self.assertTrue((ROOT / "scripts" / "upgrade.py").is_file())
+
+
+class RepoVersionTests(unittest.TestCase):
+    def test_version_files_and_changelog_agree(self):
+        self.assertEqual(check_version.problems(ROOT), [])
+        self.assertEqual(version.read_version_file(ROOT), VER)
+        self.assertEqual(version.read_manifest_version(ROOT), VER)
+        self.assertIn(f"## {VER}", (ROOT / "CHANGELOG.md").read_text())
+
+    def test_disagreement_and_missing_changelog_fail(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".cursor-plugin").mkdir(parents=True)
+        (tmp / "VERSION").write_text("1.3.1\n")
+        (tmp / ".cursor-plugin" / "plugin.json").write_text('{"version": "1.3.0"}\n')
+        (tmp / "CHANGELOG.md").write_text("# Changelog\n\n## 1.3.0\n\n- old\n")
+        found = check_version.problems(tmp)
+        self.assertTrue(any("plugin.json" in item for item in found))
+        self.assertTrue(any("CHANGELOG" in item for item in found))
+
+    def test_bump_patch_updates_every_place(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".cursor-plugin").mkdir(parents=True)
+        (tmp / "VERSION").write_text("1.3.1\n")
+        (tmp / ".cursor-plugin" / "plugin.json").write_text('{\n  "name": "warp",\n  "version": "1.3.1"\n}\n')
+        (tmp / "CHANGELOG.md").write_text("# Changelog\n\n## 1.3.1\n\n- current\n")
+        proc = run(BUMP, "--root", str(tmp), "--note", "A test bump.", cwd=tmp)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((tmp / "VERSION").read_text().strip(), "1.3.2")
+        self.assertEqual(json.loads((tmp / ".cursor-plugin" / "plugin.json").read_text())["version"], "1.3.2")
+        text = (tmp / "CHANGELOG.md").read_text()
+        self.assertTrue(text.startswith("# Changelog\n\n## 1.3.2\n"))
+        self.assertIn("A test bump.", text)
+        self.assertIn("## 1.3.1", text)
+        self.assertEqual(check_version.problems(tmp), [])
+        minor = run(BUMP, "--root", str(tmp), "--minor", cwd=tmp)
+        self.assertEqual(minor.returncode, 0, minor.stderr)
+        self.assertEqual((tmp / "VERSION").read_text().strip(), "1.4.0")
+
+
+class CommandTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_prints_source_when_nothing_is_installed(self):
+        proc = run(VERSION_PY, "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(f"Warp v{VER}", proc.stdout)
+        self.assertIn("installed: none", proc.stdout)
+        self.assertIn(f"source: {VER}", proc.stdout)
+        self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py\n", proc.stdout)
+        self.assertIn("python3 .cursor/plugins/warp/scripts/upgrade.py ?\n", proc.stdout)
+        self.assertIn(
+            "python3 .cursor/plugins/warp/scripts/update_state.py --beam .warp/beam.json\n",
+            proc.stdout,
+        )
+        self.assertIn("python3 .cursor/plugins/warp/scripts/update_state.py ?\n", proc.stdout)
+
+    def test_init_records_version_and_messages_include_it(self):
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
+        subprocess.run(["git", "remote", "add", "origin", "git@github.com:acme/Demo.git"], cwd=self.repo, check=True)
+        (self.repo / "spec").mkdir()
+        shutil.copy(PLAN, self.repo / "spec" / "CURSOR_PLAN.md")
+        proc = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn(f"recorded Warp v{VER} in .warp/version", proc.stdout)
+        self.assertEqual((self.repo / ".warp" / "version").read_text().strip(), VER)
+        payload = json.loads((self.repo / ".warp" / "notify-post.json").read_text())
+        self.assertIn(f"Warp v{VER}", payload["text"])
+        self.assertTrue(payload["text"].startswith("Warp | "))
+        scan = run(SCAN, "scan", "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(scan.returncode, 0, scan.stderr + scan.stdout)
+        scanned = json.loads((self.repo / ".warp" / "notify-post.json").read_text())
+        self.assertIn(f"Warp v{VER}", scanned["text"])
+        status = run(SCAN, "status", "--beam", ".warp/beam.json", cwd=self.repo)
+        self.assertEqual(status.returncode, 0, status.stderr + status.stdout)
+        self.assertIn(f"Warp v{VER}", status.stdout)
+        self.assertIn(f"installed: {VER}", status.stdout)
+        self.assertIn(f"Warp v{VER}", (self.repo / ".warp" / "STATUS.md").read_text())
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        again = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertIn("Nothing changed", again.stdout)
+        after = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
+    def test_old_project_copy_asks_for_reinstall(self):
+        proc = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        plug = self.repo / ".cursor" / "plugins" / "warp"
+        (plug / "VERSION").write_text("1.3.0\n")
+        manifest = plug / ".cursor-plugin" / "plugin.json"
+        data = json.loads(manifest.read_text())
+        data["version"] = "1.3.0"
+        manifest.write_text(json.dumps(data, indent=2) + "\n")
+        again = run(INSTALL, "init", "--root", str(self.repo), cwd=self.repo)
+        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-upgrade", again.stdout)
+        self.assertEqual((self.repo / ".warp" / "version").read_text().strip(), "1.3.0")
+        shown = run(VERSION_PY, "--root", str(self.repo), cwd=self.repo)
+        self.assertIn(f"plugin is v1.3.0, repo copy is v{VER}: run /warp-upgrade", shown.stdout)
+        self.assertEqual(data["version"], "1.3.0")
+
+
+class AgainstMainTests(unittest.TestCase):
+    def test_this_version_is_newer_than_main(self):
+        ref = subprocess.run(
+            ["git", "rev-parse", "--verify", "origin/main"], cwd=ROOT, capture_output=True, text=True
+        )
+        if ref.returncode != 0:
+            self.skipTest("origin/main is not available")
+        self.assertEqual(check_version.against(ROOT, "origin/main"), [])
+        proc = run(CHECK, "--against", "origin/main", cwd=ROOT)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+class AgainstRefTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        _git(self.tmp, "init", "-q", "-b", "main")
+        _git(self.tmp, "config", "user.email", "warp-test@example.com")
+        _git(self.tmp, "config", "user.name", "Warp Test")
+        (self.tmp / "VERSION").write_text("1.3.14\n")
+        (self.tmp / "README.md").write_text("hello\n")
+        _git(self.tmp, "add", "VERSION", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "base")
+
+    def test_equal_version_on_the_same_tree_passes(self):
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+
+    def test_equal_version_with_a_tracked_change_fails(self):
+        (self.tmp / "README.md").write_text("changed\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.14 is not newer than main (1.3.14)"])
+
+    def test_committed_change_without_a_bump_fails(self):
+        _git(self.tmp, "checkout", "-q", "-b", "feature")
+        (self.tmp / "README.md").write_text("changed\n")
+        _git(self.tmp, "add", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "change")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.14 is not newer than main (1.3.14)"])
+
+    def test_newer_version_passes_when_the_tree_differs(self):
+        (self.tmp / "VERSION").write_text("1.3.16\n")
+        (self.tmp / "README.md").write_text("changed\n")
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+
+    def test_minor_bump_past_a_higher_patch_passes(self):
+        (self.tmp / "VERSION").write_text("1.3.26\n")
+        _git(self.tmp, "add", "VERSION")
+        _git(self.tmp, "commit", "-q", "-m", "1.3.26")
+        (self.tmp / "VERSION").write_text("1.4.0\n")
+        (self.tmp / "README.md").write_text("changed\n")
+        self.assertEqual(check_version.against(self.tmp, "main"), [])
+        (self.tmp / "VERSION").write_text("1.4.0\n")
+        _git(self.tmp, "add", "VERSION", "README.md")
+        _git(self.tmp, "commit", "-q", "-m", "1.4.0")
+        (self.tmp / "README.md").write_text("again\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.4.0 is not newer than main (1.4.0)"])
+        (self.tmp / "VERSION").write_text("1.3.26\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.26 is not newer than main (1.4.0)"])
+
+    def test_older_version_fails(self):
+        (self.tmp / "VERSION").write_text("1.3.13\n")
+        found = check_version.against(self.tmp, "main")
+        self.assertEqual(found, ["version 1.3.13 is not newer than main (1.3.14)"])

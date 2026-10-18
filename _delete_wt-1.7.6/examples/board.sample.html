@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Warp board</title>
+<style>
+body { margin:0; background:#0E1719; color:#F7FAFA; font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
+main { max-width:980px; margin:0 auto; padding:32px 24px 64px; }
+h1 { font-weight:560; letter-spacing:-.03em; }
+.stat { display:flex; gap:18px; flex-wrap:wrap; color:#43B3AD; }
+table { width:100%; border-collapse:collapse; margin-top:18px; }
+td,th { text-align:left; padding:6px 8px; border-bottom:1px solid #1c2c30; }
+.muted { color:#9bb; }
+</style></head><body><main>
+<h1>Warp</h1>
+<p class="muted">HumanifyOS beam · 2026-10-03T16:43:24Z</p>
+<div class="stat">
+  <span>3/366 done (0.8%)</span>
+  <span>0 tokens</span>
+  <span>0 min</span>
+  <span>ETA ~427.4h</span>
+</div>
+<p class="muted">in flight 0 · alarms 0 · awaiting approval 0</p>
+<h2>Gates</h2><ul><li><b>G0</b> green — Skeleton</li><li><b>G1</b> pending — Contracts</li><li><b>G2</b> pending — Ingest → ready (LOOM)</li><li><b>G3</b> pending — Query plane + sets (LOOM)</li><li><b>G4</b> pending — Swatch rows</li><li><b>G5</b> pending — RUBRIC definitions + query API</li><li><b>G6</b> pending — CORE engines + orchestrator</li><li><b>G7</b> pending — Workbench UI</li><li><b>G8</b> pending — APP BFF + seed</li><li><b>G9</b> pending — TTEC Quality UI</li><li><b>G10</b> pending — System works (compose e2e)</li><li><b>G11</b> pending — Ship (hos-dev)</li></ul>
+<h2>Not queued</h2>
+<table><thead><tr><th>id</th><th>status</th><th>size</th><th>module</th><th>summary</th></tr></thead>
+<tbody><tr><td>D-01</td><td>merged</td><td>M</td><td>LOOM</td><td>Compose Dapr sidecars per Go process and dapr run convention</td></tr><tr><td>L-01</td><td>merged</td><td>M</td><td>LOOM</td><td>Compose stack: pgvector Postgres 16, NATS, MinIO, Redis, core-api, placement</td></tr><tr><td>M-01</td><td>merged</td><td>L</td><td>LOOM</td><td>Migration 0001: tenants/programs/subtenants, txn + policy pair, installer</td></tr></tbody></table>
+</main></body></html>

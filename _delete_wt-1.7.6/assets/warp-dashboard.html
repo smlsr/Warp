@@ -1,0 +1,1517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warp Dashboard</title>
+<meta name="description" content="Warp run dashboard: open a beam.json, status.json, or a .warp folder to see every ticket on a slot swimlane, colored by status.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%230E1719'/%3E%3Cpath d='M14 12v40M24 12v40M40 12v40M50 12v40' stroke='%2343B3AD' stroke-width='3'/%3E%3Cpath d='M14 20h36M14 32h36M14 44h36' stroke='%23F7FAFA' stroke-width='2.4'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f6f7; --panel: #ffffff; --panel2: #eef2f3; --ink: #0e1719; --ink2: #2b3a3e; --muted: #5d6d72;
+  --line: #dbe2e4; --line2: #c6d0d3; --brand: #0b6e6e; --brand2: #43b3ad; --focus: #43b3ad;
+  --c-done: #1f9d55; --c-err: #d64545; --c-prog: #2f6fde; --c-rev: #8b5cf6; --c-qa: #d99a00; --c-todo: #8c99a5;
+  --tint: 16%; --tint-todo: 10%; --shadow: 0 1px 2px rgba(14,23,25,.06), 0 2px 8px rgba(14,23,25,.05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1214; --panel: #111b1e; --panel2: #162327; --ink: #e7eff0; --ink2: #c8d5d8; --muted: #8fa3a8;
+    --line: #22343a; --line2: #2c434a; --brand: #43b3ad; --brand2: #6fd0ca;
+    --c-done: #34c172; --c-err: #f06363; --c-prog: #5b8ff0; --c-rev: #a587ff; --c-qa: #f0b429; --c-todo: #73828d;
+    --tint: 24%; --tint-todo: 16%; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1214; --panel: #111b1e; --panel2: #162327; --ink: #e7eff0; --ink2: #c8d5d8; --muted: #8fa3a8;
+  --line: #22343a; --line2: #2c434a; --brand: #43b3ad; --brand2: #6fd0ca;
+  --c-done: #34c172; --c-err: #f06363; --c-prog: #5b8ff0; --c-rev: #a587ff; --c-qa: #f0b429; --c-todo: #73828d;
+  --tint: 24%; --tint-todo: 16%; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1680px; margin: 0 auto; padding: 0 20px; }
+
+/* top bar */
+.top { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 14px; min-height: 58px; flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: -.01em; white-space: nowrap; }
+.brand small { font-weight: 500; color: var(--muted); font-size: 13px; }
+.meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex: 1; min-width: 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.chip b { font-weight: 600; color: var(--ink); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-todo); flex: none; }
+.dot.running { background: var(--c-done); box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-done) 60%, transparent); animation: pulse 2s infinite; }
+.dot.paused { background: var(--c-qa); } .dot.plan { background: var(--brand2); } .dot.stopped { background: var(--c-todo); } .dot.done { background: var(--brand2); }
+@keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); background: var(--panel); border-radius: 8px; font-size: 13px; font-weight: 500; }
+.btn:hover { border-color: var(--brand2); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+:root[data-theme="dark"] .btn.primary { color: #071012; }
+.btn.icon { width: 32px; padding: 0; justify-content: center; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.btn svg { width: 16px; height: 16px; }
+.menu { position: relative; }
+.menu-list { position: absolute; right: 0; top: 38px; min-width: 250px; background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 6px; display: none; z-index: 40; }
+.menu.open .menu-list { display: block; }
+.menu-list button, .menu-list label { display: flex; width: 100%; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: none; border-radius: 6px; text-align: left; font-size: 13px; cursor: pointer; }
+.menu-list button:hover, .menu-list label:hover { background: var(--panel2); }
+.menu-list kbd { margin-left: auto; color: var(--muted); font-size: 11px; font-family: inherit; }
+.menu-list hr { border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
+
+/* summary */
+.headline { padding: 18px 0 6px; }
+.headline h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.headline .sub { color: var(--muted); margin-top: 3px; font-size: 13px; }
+.headline .chain { color: var(--muted); margin-top: 3px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabs { display: flex; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
+.tab { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 12px; font-size: 13px; }
+.tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+/* metrics */
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 12px; box-shadow: var(--shadow); min-width: 0; }
+.card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; gap: 8px; }
+.card h3 span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.big { font-size: 30px; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+.big small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+.stack { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--panel2); border: 1px solid var(--line); }
+.stack i { display: block; height: 100%; }
+.rows { margin-top: 10px; display: grid; gap: 4px; font-size: 13px; }
+.rows div { display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.rows .sw { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.rows .v { margin-left: auto; font-weight: 600; }
+.rows .p { color: var(--muted); width: 42px; text-align: right; }
+.foot { margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.foot b { color: var(--ink2); font-weight: 600; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 0 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line2); background: var(--panel); font-size: 13px; }
+.fchip .sw { width: 11px; height: 11px; border-radius: 3px; }
+.fchip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fchip.off { opacity: .42; }
+.fchip.off .sw { background: transparent !important; outline: 1.5px solid var(--muted); }
+.search { position: relative; flex: 1 1 220px; max-width: 340px; }
+.search input { width: 100%; height: 32px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); padding: 0 10px 0 30px; }
+.search svg { position: absolute; left: 9px; top: 8px; width: 16px; height: 16px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { border: 0; background: none; height: 30px; padding: 0 11px; font-size: 13px; }
+.seg button.on { background: var(--panel2); font-weight: 600; box-shadow: inset 0 -2px 0 var(--brand2); }
+.ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ctl select { height: 30px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); padding: 0 6px; }
+.ctl input[type=range] { width: 110px; accent-color: var(--brand); }
+
+/* timeline */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; }
+.panel-h { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.panel-h h2 { margin: 0; font-size: 15px; }
+.panel-h .muted { color: var(--muted); font-size: 12px; }
+.tl-scroll { overflow: auto; max-height: calc(100vh - 150px); position: relative; }
+.tl { position: relative; min-width: 100%; }
+.tl-row { display: flex; height: var(--rowh, 46px); border-bottom: 1px solid var(--line); }
+.tl-row:nth-child(even) .tl-track { background: color-mix(in srgb, var(--panel2) 45%, transparent); }
+.tl-lab { position: sticky; left: 0; z-index: 4; width: 76px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; font-size: 12px; color: var(--muted); background: var(--panel); border-right: 1px solid var(--line); }
+.tl-track { position: relative; flex: none; }
+.tl-head { position: sticky; top: 0; z-index: 6; background: var(--panel); }
+.tl-head .tl-row { height: 26px; }
+.tl-head .tl-row.gates { height: 38px; }
+.tl-axis span { position: absolute; top: 6px; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tl-axis span::before { content: ""; position: absolute; left: 50%; top: -6px; height: 4px; border-left: 1px solid var(--line2); }
+.gl { position: absolute; bottom: 3px; transform: translateX(-100%); padding-right: 4px; font-size: 11px; font-weight: 700; white-space: nowrap; color: var(--ink2); line-height: 1.15; text-align: right; }
+.gl.red { color: var(--c-err); } .gl.green { color: var(--c-done); }
+.gl small { display: block; font-weight: 500; color: var(--muted); }
+.gline { position: absolute; top: 0; bottom: 0; border-left: 1.5px solid var(--ink2); opacity: .55; z-index: 3; pointer-events: none; }
+.gline.red { border-left: 3px solid var(--c-err); opacity: .9; } .gline.green { border-left-color: var(--c-done); }
+.grid-v { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); opacity: .7; pointer-events: none; }
+.bar { position: absolute; top: 4px; bottom: 4px; border-radius: 5px; overflow: hidden; cursor: pointer; padding: 3px 7px 0 9px; font-size: 11px; line-height: 1.3;
+  background: color-mix(in srgb, var(--c) var(--tint), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 45%, var(--panel)); transition: opacity .15s, transform .1s; }
+.bar::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c); }
+.bar.c-todo { background: color-mix(in srgb, var(--c) var(--tint-todo), var(--panel)); }
+.bar.crit { border: 2px solid var(--ink); }
+.bar:hover { z-index: 5; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.bar .l1 { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; }
+.bar .id { font-weight: 700; color: var(--ink); }
+.bar .sz { margin-left: auto; color: var(--muted); font-size: 10px; }
+.bar .tt { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; }
+.bar.tiny { padding: 3px 2px 0 6px; } .bar.tiny .sz, .bar.tiny .tt { display: none; } .bar.tiny .id { font-size: 9px; }
+.bar.dim { opacity: .14; }
+.bar.hit { outline: 2px solid var(--focus); outline-offset: 1px; z-index: 6; }
+.bar .flag { position: absolute; right: 3px; bottom: 2px; font-size: 10px; }
+.tl-foot { padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
+
+/* utilization */
+.util > summary { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.util > summary::-webkit-details-marker { display: none; }
+.util > summary .muted { color: var(--muted); font-weight: 500; }
+.util-b { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; padding: 4px 14px 14px; }
+.meter { display: grid; gap: 10px; align-content: start; font-size: 13px; }
+.meter .row { display: grid; grid-template-columns: 170px 1fr 96px; gap: 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.meter .bar0 { height: 8px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; }
+.meter .bar0 i { display: block; height: 100%; background: var(--brand2); }
+.meter .bar0 i.over { background: var(--c-qa); }
+.meter .v { text-align: right; font-weight: 600; }
+table.mini, table.grid { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+table.mini th, table.mini td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+table.mini th:first-child, table.mini td:first-child { text-align: left; }
+table.mini th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.assume { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.assume summary { cursor: pointer; color: var(--ink2); }
+.assume ul { margin: 6px 0 0; padding-left: 18px; }
+/* table view */
+.tbl-wrap { overflow: auto; max-height: calc(100vh - 150px); }
+table.grid th, table.grid td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.grid th { position: sticky; top: 0; background: var(--panel); z-index: 2; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+table.grid th[aria-sort="ascending"]::after { content: " ▲"; } table.grid th[aria-sort="descending"]::after { content: " ▼"; }
+table.grid tr.trow { cursor: pointer; } table.grid tr.trow:hover td { background: var(--panel2); }
+table.grid tr.dim { display: none; }
+table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.chipst { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--c); }
+.chipst::before { content: ""; width: 9px; height: 9px; border-radius: 3px; background: var(--c); }
+.clock { margin-left: auto; }
+.nowline { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--c-prog); z-index: 3; pointer-events: none; }
+.tlnote { color: var(--muted); font-size: 12px; }
+@media (max-width: 900px) { .util-b { grid-template-columns: 1fr; } .meter .row { grid-template-columns: 120px 1fr 80px; } }
+
+/* board */
+.lane { margin-bottom: 14px; }
+.lane-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
+.lane-h .chev { transition: transform .15s; color: var(--muted); }
+.lane.closed .chev { transform: rotate(-90deg); }
+.lane.closed .lane-b { display: none; }
+.lane-h h2 { margin: 0; font-size: 15px; }
+.lane-h .gname { color: var(--muted); font-weight: 500; }
+.pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--panel2); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pill.green { background: color-mix(in srgb, var(--c-done) 18%, transparent); color: var(--c-done); }
+.pill.red { background: color-mix(in srgb, var(--c-err) 18%, transparent); color: var(--c-err); }
+.lane-h .stat { margin-left: auto; display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lane-h .stack { width: 140px; }
+.lane-b { padding: 0 14px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 10px; }
+.tcard { position: relative; border-radius: 9px; padding: 9px 11px 9px 14px; background: color-mix(in srgb, var(--c) calc(var(--tint) * .7), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 35%, var(--line)); cursor: pointer; min-width: 0; }
+.tcard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 9px 0 0 9px; background: var(--c); }
+.tcard.crit { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.tcard.dim { display: none; }
+.tcard .l1 { display: flex; gap: 6px; align-items: center; }
+.tcard .id { font-weight: 700; }
+.tcard .badge { font-size: 10.5px; font-weight: 600; border: 1px solid var(--line2); border-radius: 5px; padding: 0 5px; color: var(--ink2); background: var(--panel); }
+.tcard .st { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--c); white-space: nowrap; }
+.tcard .tt { margin: 4px 0 6px; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 35px; }
+.tcard .l3 { display: flex; gap: 10px; font-size: 12px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+.tcard .l3 a { font-weight: 600; }
+.tcard .alarm { margin-top: 6px; font-size: 12px; color: var(--c-err); font-weight: 600; }
+.empty-lane { color: var(--muted); font-size: 13px; padding: 4px 0 6px; }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(5,10,12,.35); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 50; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 51; transform: translateX(100%); transition: transform .18s ease; display: flex; flex-direction: column; }
+body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+body.drawer-open .drawer { transform: none; }
+.drawer-h { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); position: relative; }
+.drawer-h::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--c); }
+.drawer-h .id { font-size: 18px; font-weight: 700; }
+.drawer-h .tt { margin-top: 2px; font-size: 14px; color: var(--ink2); }
+.drawer-h .x { position: absolute; right: 12px; top: 12px; }
+.drawer-b { padding: 12px 18px 24px; overflow: auto; }
+.kv { display: grid; grid-template-columns: 128px 1fr; gap: 6px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.drawer h4 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ev { font-size: 12px; display: grid; grid-template-columns: 112px 1fr; gap: 3px 10px; }
+.ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.tag { font-size: 11.5px; padding: 1px 7px; border-radius: 5px; background: var(--panel2); border: 1px solid var(--line); }
+
+/* empty + drop */
+.empty { margin: 40px auto; max-width: 720px; text-align: center; padding: 48px 28px; border: 2px dashed var(--line2); border-radius: 16px; background: var(--panel); }
+.empty h2 { margin: 12px 0 6px; font-size: 20px; }
+.empty p { color: var(--muted); margin: 6px 0; }
+.empty .row { display: flex; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+.empty code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+.drop { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--brand) 22%, transparent); backdrop-filter: blur(2px); }
+.drop div { background: var(--panel); border: 2px dashed var(--brand); border-radius: 16px; padding: 30px 40px; font-size: 18px; font-weight: 600; }
+body.dragging .drop { display: flex; }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 70; display: grid; gap: 8px; }
+.toast { background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: 420px; }
+.toast.err { background: var(--c-err); color: #fff; }
+.tip { position: fixed; z-index: 45; pointer-events: none; background: var(--ink); color: var(--bg); border-radius: 8px; padding: 8px 10px; font-size: 12px; max-width: 320px; box-shadow: 0 8px 24px rgba(0,0,0,.25); display: none; }
+.tip b { font-size: 13px; }
+.tip .m { opacity: .75; }
+.hidden { display: none !important; }
+.foot-note { color: var(--muted); font-size: 12px; padding: 4px 0 30px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+@media (max-width: 1100px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  .metrics { grid-template-columns: 1fr; }
+  .actions .lbl { display: none; }
+  .lane-h .stack { display: none; }
+  .tl-lab { width: 54px; }
+  .top { position: static; }
+  .top .wrap { gap: 8px; }
+  .brand { order: 1; }
+  .actions { order: 2; }
+  .meta { order: 3; flex-basis: 100%; }
+  .hide-sm { display: none; }
+}
+
+@media print {
+  @page { size: landscape; margin: 10mm; }
+  :root, :root[data-theme="dark"] { --bg: #fff; --panel: #fff; --panel2: #f1f4f5; --ink: #0e1719; --ink2: #2b3a3e; --muted: #5d6d72; --line: #dbe2e4; --line2: #c6d0d3;
+    --c-done: #1f9d55; --c-err: #d64545; --c-prog: #2f6fde; --c-rev: #8b5cf6; --c-qa: #d99a00; --c-todo: #8c99a5; --tint: 18%; --tint-todo: 10%; color-scheme: light; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { background: #fff; font-size: 12px; }
+  .util > summary, .clock, .top .actions, .controls .search, .controls .ctl, .controls .seg, .tabs, .drawer, .scrim, .toasts, .drop, .tip { display: none !important; }
+  .top { position: static; backdrop-filter: none; }
+  .wrap { max-width: none; padding: 0; }
+  .card, .panel { box-shadow: none; break-inside: avoid; }
+  .tl-scroll { overflow: visible; max-height: none; }
+  .tl-head, .tl-lab { position: static; }
+  .lane { break-inside: auto; } .lane.closed .lane-b { display: grid; }
+  .tcard { break-inside: avoid; }
+  .bar:hover { box-shadow: none; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="#0E1719"/><path d="M14 12v40M24 12v40M40 12v40M50 12v40" stroke="#43B3AD" stroke-width="3"/><path d="M14 20h36M14 32h36M14 44h36" stroke="#F7FAFA" stroke-width="2.4" opacity=".85"/><circle cx="32" cy="32" r="4" fill="#0B6E6E"/></svg>
+      Warp <small>Run dashboard</small>
+    </div>
+    <div class="meta" id="meta"></div>
+    <div class="actions">
+      <div class="menu" id="fileMenu">
+        <button class="btn primary" id="fileBtn" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span class="lbl">File</span>
+        </button>
+        <div class="menu-list" role="menu">
+          <button data-act="open-files" role="menuitem">Open status files… <kbd>O</kbd></button>
+          <button data-act="open-folder" role="menuitem">Open .warp folder… <kbd>⇧O</kbd></button>
+          <hr>
+          <button data-act="reload" role="menuitem">Reload <kbd>R</kbd></button>
+          <label><input type="checkbox" id="autoRefresh"> Auto-reload every 30s</label>
+          <hr>
+          <button data-act="print" role="menuitem">Print… <kbd>P</kbd></button>
+          <button data-act="clear" role="menuitem">Close all files</button>
+        </div>
+      </div>
+      <button class="btn icon" id="reloadBtn" title="Reload (R)" aria-label="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+      <button class="btn icon" id="themeBtn" title="Light or dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <button class="btn icon" id="printBtn" title="Print (P)" aria-label="Print"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <section id="emptyState" class="empty">
+    <svg width="54" height="54" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="#0E1719"/><path d="M14 12v40M24 12v40M40 12v40M50 12v40" stroke="#43B3AD" stroke-width="3"/><path d="M14 20h36M14 32h36M14 44h36" stroke="#F7FAFA" stroke-width="2.4" opacity=".85"/></svg>
+    <h2>Open a Warp run</h2>
+    <p>Open <code>.warp/beam.json</code>, or <code>status.json</code>, or the whole <code>.warp</code> folder. Ticket <code>state.json</code> files are read too. A named run's <code>.warp/runs/&lt;name&gt;/</code> works the same way, and several runs open side by side.</p>
+    <p>You can also drop files or a folder anywhere on this page. Nothing is uploaded: the files are read in this browser.</p>
+    <div class="row">
+      <button class="btn primary" data-act="open-files">Open status files…</button>
+      <button class="btn" data-act="open-folder">Open .warp folder…</button>
+    </div>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="headline">
+      <h1 id="title">Warp run</h1>
+      <div class="sub" id="subline"></div>
+      <div class="chain" id="chainline"></div>
+      <div class="tabs" id="tabs"></div>
+    </section>
+    <section class="metrics" id="metrics"></section>
+    <details class="panel util" id="util"></details>
+    <section class="controls">
+      <div class="legend" id="legend"></div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Search tickets, Jira keys, modules  /" autocomplete="off">
+      </div>
+      <div class="seg" id="viewSeg"><button data-view="timeline" class="on">Swimlane</button><button data-view="board">Board</button><button data-view="table">Table</button></div>
+      <label class="ctl" id="groupCtl">Lanes
+        <select id="groupBy"><option value="block">Gate block</option><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option><option value="repo">Repo</option><option value="size">Size</option></select>
+      </label>
+      <label class="ctl" id="colorCtl">Color
+        <select id="colorBy"><option value="status">Status</option><option value="module">Module</option><option value="lane">Lane</option></select>
+      </label>
+      <label class="ctl" id="zoomCtl">Zoom <input id="zoom" type="range" min="0" max="100" value="0"></label>
+    </section>
+    <main id="view"></main>
+    <div class="foot-note"><span id="sources"></span><span id="generated"></span></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+<div class="drop"><div>Drop beam.json, status.json, state.json, or a .warp folder</div></div>
+<div class="tip" id="tip"></div>
+<div class="toasts" id="toasts"></div>
+<input type="file" id="fileInput" accept=".json,application/json" multiple class="hidden">
+<input type="file" id="dirInput" webkitdirectory directory multiple class="hidden">
+
+<!-- /warp-dashboard (scripts/dashboard.py) replaces the null below with the run's files, so the page opens with data. -->
+<script id="warp-data" type="application/json">null</script>
+<script>
+"use strict";
+// ---- Warp status model --------------------------------------------------------
+// Six display categories. Every Warp status maps to one (beam.py STATUSES).
+const CATS = [
+  { key: "done", label: "Completed" },
+  { key: "err", label: "Errored / Parked" },
+  { key: "prog", label: "In Progress" },
+  { key: "rev", label: "In Review" },
+  { key: "qa", label: "QA Ready" },
+  { key: "todo", label: "To Do" },
+];
+const STATUS_CAT = {"queued": "todo", "claimed": "prog", "recovering": "prog", "planning": "prog", "coding": "prog", "fix": "prog", "review": "rev", "bugbot_running": "rev", "merging": "rev", "awaiting_approval": "qa", "merged": "done", "done": "done", "skipped": "done", "blocked": "err", "alarm": "err", "parked": "err"};
+const STATUS_ALIAS = { in_progress: "coding", inprogress: "coding", in_review: "review", qa_ready: "awaiting_approval", qa: "awaiting_approval", to_do: "queued", todo: "queued", completed: "done", complete: "done", errored: "alarm", error: "alarm", failed: "alarm", bugbot: "bugbot_running", ready: "queued" };
+// Ticket state.json (ticket_state.py STATES) -> beam status. heartbeat and done do not move it.
+const STATE_STATUS = { started: "claimed", planning: "planning", coding: "coding", review: "review", bugbot: "bugbot_running", fix: "fix", "pr-opened": "review", "check-red": "fix", "check-green": "review", "lock-escape": "alarm", alarm: "alarm", failed: "alarm" };
+const TERMINAL = new Set(["merged", "done", "skipped"]);
+// scan.py: agent hours are S=4, M=7, L=11, XL=16 unless the ticket has hours. Approval waits are 0.5h.
+const SIZE_HOURS = { S: 4, M: 7, L: 11, XL: 16 };
+const DEFAULT_APPROVAL = 0.5;
+const DEFAULT_CAP = 18;
+const BUCKETS = [
+  { key: "done", label: "Completed", color: "var(--c-done)" },
+  { key: "prog", label: "In progress", color: "var(--c-prog)" },
+  { key: "err", label: "Errored / parked", color: "var(--c-err)" },
+  { key: "todo", label: "To do", color: "var(--c-todo)" },
+];
+const bucketOf = (cat) => (cat === "rev" || cat === "qa" ? "prog" : cat);
+const catColor = (cat) => `var(--c-${cat})`;
+
+// ---- small helpers --------------------------------------------------------------
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const num = (v) => { const n = typeof v === "string" ? parseFloat(v) : v; return typeof n === "number" && isFinite(n) ? n : null; };
+const sum = (a) => a.reduce((x, y) => x + (y || 0), 0);
+const fmtH = (h, dp) => (h == null ? "—" : (Math.abs(h) >= 100 ? Math.round(h).toLocaleString() : (+h.toFixed(dp == null ? 1 : dp)).toLocaleString()) + "h");
+const fmtN = (n) => (n == null ? "—" : Math.round(n).toLocaleString());
+const pct = (a, b) => (b > 0 && a != null ? Math.round((100 * a) / b) + "%" : "");
+const parseTime = (s) => { if (!s) return null; const t = Date.parse(s); return isNaN(t) ? null : t; };
+function ago(ms) {
+  if (ms == null) return "—";
+  const d = (Date.now() - ms) / 1000;
+  if (d < 45) return "just now";
+  if (d < 3600) return Math.round(d / 60) + "m ago";
+  if (d < 86400) return Math.round(d / 3600) + "h ago";
+  return Math.round(d / 86400) + "d ago";
+}
+const stamp = (ms) => (ms == null ? "—" : new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }));
+function natKey(id) { return String(id).split(/(\d+)/).map((p, i) => (i % 2 ? p.padStart(8, "0") : p.toLowerCase())).join(""); }
+const natCmp = (a, b) => (natKey(a) < natKey(b) ? -1 : natKey(a) > natKey(b) ? 1 : 0);
+function hashHue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; }
+function store(k, v) { try { if (v === undefined) return localStorage.getItem("warp-dash:" + k); localStorage.setItem("warp-dash:" + k, v); } catch (e) { return null; } }
+function toast(msg, err) {
+  const el = document.createElement("div");
+  el.className = "toast" + (err ? " err" : "");
+  el.textContent = msg;
+  $("#toasts").appendChild(el);
+  setTimeout(() => el.remove(), err ? 6000 : 3200);
+}
+
+function normStatus(raw) {
+  if (raw == null || raw === "") return "queued";
+  const s = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (STATUS_CAT[s]) return s;
+  return STATUS_ALIAS[s] || s;
+}
+function catOf(status) { return STATUS_CAT[status] || "todo"; }
+function sizeOf(raw) { const m = /^(XL|S|M|L)\b/i.exec(String(raw || "").trim()); return m ? m[1].toUpperCase() : null; }
+
+// ---- reading files ------------------------------------------------------------------
+// A source is one JSON document plus where it came from. Files are classified by
+// content, not by name, so a renamed file still works.
+function isScheduleV2(data) {
+  if (!data || !Array.isArray(data.tickets)) return false;
+  if (data.schema === "build-schedule/2") return true;
+  const f = data.tickets[0] || {};
+  return "h" in f && "after" in f && "slot" in f && Array.isArray(data.critical_chain);
+}
+function classify(data) {
+  if (!data || typeof data !== "object") return null;
+  if (isScheduleV2(data)) return "schedule";
+  if (data.tickets && typeof data.tickets === "object" && (data.gates || data.program || data.runState || data.config || data.instance)) return "beam";
+  if (Array.isArray(data.done) || Array.isArray(data.working) || Array.isArray(data.left)) return "status";
+  if (typeof data.state === "string" && data.id && !data.tickets) return "ticket";
+  if (data.tickets && typeof data.tickets === "object") return "beam";
+  return null;
+}
+const dirOf = (p) => { const i = String(p || "").lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); };
+function runDirOf(p) {
+  // .warp/tickets/T-1/state.json -> .warp ; .warp/runs/core/tickets/T-1/state.json -> .warp/runs/core
+  const d = dirOf(p);
+  const i = d.lastIndexOf("/tickets/");
+  if (i >= 0) return d.slice(0, i);
+  if (d.endsWith("/tickets") || d === "tickets") return dirOf(d);
+  return d;
+}
+
+function ticketRow(raw, id) {
+  const t = raw || {};
+  const pr = t.pr && typeof t.pr === "object" ? t.pr : t.pr ? { url: t.pr } : {};
+  const jira = t.jira && typeof t.jira === "object" ? t.jira : {};
+  const usage = t.usage && typeof t.usage === "object" ? t.usage : {};
+  const status = normStatus(t.status);
+  const size = sizeOf(t.size);
+  const own = num(t.hours);
+  const hours = own != null && own > 0 ? own : SIZE_HOURS[size || "M"];
+  return {
+    id: String(t.id || id),
+    title: t.summary || t.title || "",
+    size, status, cat: catOf(status), hours, hoursFrom: own != null && own > 0 ? "ticket" : size ? "size " + size : "default M",
+    autoMerge: t.autoMerge === true ? true : t.autoMerge === false ? false : size ? size === "S" || size === "M" : true,
+    deps: [].concat(t.deps || [], t.after || []).map(String), locks: [].concat(t.locks || []).map(String),
+    gate: t.gate || null, module: t.module || null, layer: t.layer || null, critical: !!t.critical, starred: !!t.starred,
+    rank: num(t.rank), priority: t.priority || null,
+    pr: { url: pr.url || null, ci: pr.ci || null, bugbot: pr.bugbot || null, sha: pr.sha || null, via: pr.via || null,
+      openedAt: pr.openedAt || null, reviewedAt: pr.reviewedAt || null, approvedAt: pr.approvedAt || null, mergedAt: pr.mergedAt || null },
+    jiraKey: t.jiraKey || jira.key || null, jiraStatus: jira.status || null, jiraDone: !!(jira.doneAt || t.jiraDone), jiraCommentAt: jira.lastCommentAt || null,
+    alarm: t.alarm || null, agent: t.agent || null, attempts: num(t.attempts) || 0, recoveries: num(t.recoveries) || 0,
+    minutes: num(t.minutes) || 0, tokens: num(t.tokens) || 0, cost: num(usage.cost),
+    claimedAt: t.claimedAt || null, updatedAt: t.updatedAt || null, events: Array.isArray(t.events) ? t.events : [],
+    stateNote: null,
+    // build-schedule/2 fields (kept on the beam by Warp 1.6.2+)
+    lane: t.lane || null, repo: t.repo || null, wave: num(t.wave), priorityGate: t.priorityGate || t.priority_gate || null,
+    checks: (Array.isArray(t.checks) ? t.checks : []).map((c) => (typeof c === "string" ? { name: "", check: c } : { name: c.name || "", check: c.check || "" })),
+    planned: t.planned && typeof t.planned === "object" ? t.planned : null,
+  };
+}
+
+function runFromBeam(b, path, modified) {
+  const cfg = b.config || {};
+  const program = b.program || {};
+  const raw = Array.isArray(b.tickets) ? b.tickets : Object.entries(b.tickets || {}).map(([k, v]) => Object.assign({ id: k }, v));
+  const tickets = raw.map((t) => ticketRow(t, t.id));
+  const inst = b.instance && typeof b.instance === "object" ? b.instance : b.instance ? { id: b.instance } : {};
+  // A Warp export (scan.py export, kind warp-plan) carries the estimate at the top level.
+  const est = program.estimate && typeof program.estimate === "object" ? program.estimate : b.estimate && typeof b.estimate === "object" ? b.estimate : null;
+  const times = tickets.map((t) => parseTime(t.updatedAt)).filter(Boolean);
+  const updated = Math.max(parseTime(b.checkpointAt) || 0, parseTime(b.exportedAt) || 0, ...times, 0) || modified || null;
+  return {
+    kind: "beam", export: b.kind === "warp-plan", exportedAt: parseTime(b.exportedAt), path, dir: dirOf(path), name: b.run || null, instance: inst.id || null, host: inst.host || null,
+    runState: b.runState || null, paused: !!b.paused, pauseReason: b.pauseReason || null, range: b.range || null, owner: b.owner || null,
+    gateOrder: b.gateOrder || cfg.gateOrder || program.gateOrder || "strict", startAfter: cfg.startAfter || null,
+    schedule: program.schedule || null,
+    gates: (b.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: g.status || "pending", blocking: g.blocking !== false, members: (g.members || []).map(String),
+      greenAt: parseTime(g.greenAt), evidence: g.evidence || null, checks: [].concat(g.checks || []).map((c) => (typeof c === "string" ? c : c.check || c.name || "")), ifRed: g.ifRed || g.if_red || null,
+      scope: g.scope || null, onGreen: g.onGreen || g.on_green || null, priority: !!g.priority, starts: [].concat(g.starts || []).map(String),
+      at: num(g.at), hold: g.hold || null, otherMembers: [].concat(g.otherMembers || []).map(String) })),
+    tickets, critical: (program.criticalPath || b.criticalPath || []).map(String),
+    estimate: est, metrics: b.metrics || null, cap: num(cfg.maxAgents) || DEFAULT_CAP,
+    jiraSite: cfg.jiraSite || "", project: cfg.projectName || cfg.jiraProject || null,
+    runStartedAt: parseTime(b.runStartedAt), runEndedAt: parseTime(b.runEndedAt), updated,
+    folder: (b.source && b.source.folder) || null, repo: null,
+  };
+}
+
+// A build-schedule/2 schedule.json (HOS, HOS-Admin, FORGEQA, WARPDEMO): the plan as written, every ticket To Do.
+function runFromSchedule(d, path, modified) {
+  const model = d.model || {}, n = d.numbers || {};
+  const tickets = (d.tickets || []).map((t) => {
+    const row = ticketRow(Object.assign({}, t, {
+      hours: t.h != null ? t.h : t.hours, deps: [], after: t.after || [], gate: t.gate || null, status: t.status || "queued",
+      priorityGate: t.priority_gate || null, planned: { slot: t.slot, start: t.start, merge: t.merge, ready: t.ready, latest_start: t.latest_start },
+    }), t.id);
+    // locks are written <repo>/<path>; show them as they are
+    return row;
+  });
+  const order = String(model.gate_order || "").toLowerCase() === "strict" ? "strict" : "deps";
+  return {
+    kind: "schedule", export: false, exportedAt: null, path, dir: dirOf(path), name: d.program || null, instance: null, host: null,
+    runState: "plan", paused: false, pauseReason: null, range: null, owner: null, gateOrder: order, startAfter: null,
+    schedule: { program: d.program, repos: d.repos || [], lanes: d.lanes || [], finishHours: num(n.finish_h), agentHours: num(n.agent_hours), priority: model.priority || null, rebuilt: d.rebuilt || null },
+    gates: (d.gates || []).map((g) => ({ key: String(g.key), name: g.name || "", status: "pending", blocking: g.blocking !== false, members: (g.members || []).map(String),
+      greenAt: null, evidence: null, checks: [].concat(g.checks || []).map((c) => (typeof c === "string" ? c : c.check || c.name || "")), ifRed: g.if_red || g.ifRed || null,
+      scope: g.scope || null, onGreen: g.on_green || g.onGreen || null, priority: !!g.priority, starts: [].concat(g.starts || []).map(String), at: num(g.at), hold: order === "strict" ? "green" : "red", otherMembers: [] })),
+    tickets, critical: (d.critical_chain || []).map(String),
+    estimate: { elapsedHours: num(n.finish_h), agentHours: num(n.agent_hours), approvalHours: DEFAULT_APPROVAL, assumptions: [model.clock, model.merge, model.priority].filter(Boolean) },
+    metrics: null, cap: num(model.slots) || DEFAULT_CAP, jiraSite: "", project: d.program || null,
+    runStartedAt: null, runEndedAt: null, updated: parseTime(d.rebuilt) || modified || null, folder: null, repo: (d.repos || []).join(" + ") || null,
+  };
+}
+
+function runFromStatus(s, path, modified) {
+  const rows = [].concat(s.done || [], s.working || [], s.left || []);
+  const inst = s.instance || {};
+  return {
+    kind: "status", path, dir: dirOf(path), name: s.run || null, instance: inst.id || null, host: inst.host || null,
+    runState: s.runState || null, paused: !!s.paused, range: null, owner: null, gateOrder: null, startAfter: null,
+    gates: [], tickets: rows.map((r) => ticketRow(Object.assign({}, r, { pr: { url: r.pr, ci: r.ci, bugbot: r.bugbot, sha: r.sha, via: r.via } }), r.id)),
+    critical: [], estimate: null, metrics: s.metrics || null, cap: DEFAULT_CAP, jiraSite: "", project: null, export: false, exportedAt: null,
+    runStartedAt: null, runEndedAt: null, updated: parseTime(s.updatedAt) || modified || null, folder: null, repo: null,
+  };
+}
+
+function repoFrom(run) {
+  for (const t of run.tickets) {
+    const u = t.pr && t.pr.url;
+    if (!u) continue;
+    const m = /^https?:\/\/[^/]+\/(.+?)\/(?:pull|pulls|merge_requests|-\/merge_requests|pull-requests)\//.exec(u);
+    if (m) return m[1].replace(/\/-$/, "");
+  }
+  return null;
+}
+
+// Build the run list from every source that was read.
+function buildRuns(docs, extra) {
+  const runs = new Map();
+  const statuses = [], states = [];
+  let skipped = 0;
+  const keyOf = (r) => (r.name ? "run:" + r.name : r.instance ? "inst:" + r.instance : "dir:" + r.dir);
+  for (const d of docs) {
+    const kind = classify(d.data);
+    if (kind === "beam") {
+      const r = runFromBeam(d.data, d.path, d.modified);
+      const k = keyOf(r);
+      const prev = runs.get(k);
+      // A run's local beam and its published mirror are the same run. Keep the newer one.
+      if (!prev || (r.updated || 0) > (prev.updated || 0)) runs.set(k, r);
+    } else if (kind === "schedule") {
+      const r = runFromSchedule(d.data, d.path, d.modified);
+      const k = "sched:" + (r.name || r.dir);
+      if (!runs.has(k)) runs.set(k, r);
+    } else if (kind === "status") statuses.push(d);
+    else if (kind === "ticket") states.push(d);
+    else skipped++;
+  }
+  for (const d of statuses) {
+    const s = d.data;
+    const inst = (s.instance || {}).id;
+    const match = [...runs.values()].find((r) => (inst && r.instance === inst) || r.dir === d.dir);
+    if (match) { const u = parseTime(s.updatedAt); if (u && u > (match.updated || 0)) match.updated = u; continue; }
+    const r = runFromStatus(s, d.path, d.modified);
+    runs.set(keyOf(r), r);
+  }
+  let overlaid = 0;
+  for (const d of states) {
+    const st = d.data;
+    const rd = runDirOf(d.path);
+    const list = [...runs.values()];
+    const run = list.find((r) => r.dir === rd && r.tickets.some((t) => t.id === st.id)) || list.find((r) => r.tickets.some((t) => t.id === st.id));
+    if (!run) continue;
+    const t = run.tickets.find((x) => x.id === st.id);
+    if (applyState(t, st)) overlaid++;
+  }
+  const out = [...runs.values()];
+  for (const r of out) {
+    if (r.kind !== "schedule") r.repo = (extra && extra.repo) || repoFrom(r);
+    if (extra && extra.jiraSite && !r.jiraSite) r.jiraSite = extra.jiraSite;
+    plan(r);
+  }
+  out.sort((a, b) => natCmp(a.name || a.instance || a.dir, b.name || b.instance || b.dir));
+  return { runs: out, skipped, overlaid, states: states.length };
+}
+
+// A ticket's state.json is newer than the beam when the Shuttle wrote after the
+// parent's last save. It can only move an open ticket, never undo a merge.
+function applyState(t, st) {
+  if (!t || TERMINAL.has(t.status)) return false;
+  const when = parseTime(st.updatedAt || st.heartbeatAt);
+  if (when && parseTime(t.updatedAt) && when <= parseTime(t.updatedAt)) return false;
+  const to = STATE_STATUS[st.state];
+  let moved = false;
+  if (to && to !== t.status && t.status !== "parked") { t.stateNote = `state.json: ${st.state} (beam said ${t.status})`; t.status = to; t.cat = catOf(to); moved = true; }
+  if (st.pr && st.pr.url && !t.pr.url) { t.pr.url = st.pr.url; moved = true; }
+  if (st.alarm && !t.alarm) { t.alarm = st.alarm; moved = true; }
+  if (st.agent && !t.agent) t.agent = st.agent;
+  if (st.error && to === "alarm") t.alarm = t.alarm || st.error;
+  if (when) t.updatedAt = st.updatedAt || t.updatedAt;
+  return moved;
+}
+
+// ---- blocks and the planned swimlane ------------------------------------------------
+// Same rule as scripts/blocks.py: a ticket's block is its gate, else the lowest gate
+// that lists it, else the highest block among its dependencies, else the first.
+function gateKeys(run) {
+  const ks = run.gates.map((g) => g.key);
+  // build-schedule/2 gates carry `at`: keep the plan's order (G-RBAC between G0 and G1)
+  if (ks.length && run.gates.every((g) => typeof g.at === "number")) {
+    const gnum = (k) => (/^G\d+$/i.test(k) ? parseInt(k.slice(1)) : 1e6);
+    return run.gates.map((g, i) => ({ k: g.key, at: g.at, i })).sort((a, b) => a.at - b.at || gnum(a.k) - gnum(b.k) || a.i - b.i).map((x) => x.k);
+  }
+  const num_ = ks.filter((k) => /^G\d+$/i.test(k)).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+  return num_.concat(ks.filter((k) => !/^G\d+$/i.test(k)));
+}
+function assignBlocks(run) {
+  const order = gateKeys(run);
+  const byId = new Map(run.tickets.map((t) => [t.id, t]));
+  if (!order.length) { run.tickets.forEach((t) => (t.block = null)); return; }
+  const rank = new Map(order.map((k, i) => [k, i]));
+  const members = new Map();
+  for (const g of run.gates) for (const id of g.members) {
+    const held = members.get(id);
+    if (held == null || rank.get(g.key) < rank.get(held)) members.set(id, g.key);
+  }
+  const found = new Map();
+  const block = (id, seen) => {
+    if (found.has(id)) return found.get(id);
+    const t = byId.get(id) || {};
+    let k;
+    if (t.gate && rank.has(String(t.gate))) k = String(t.gate);
+    else if (members.has(id)) k = members.get(id);
+    else {
+      k = order[0];
+      for (const d of t.deps || []) if (byId.has(d) && !seen.has(d)) { const o = block(d, new Set([...seen, id])); if (rank.get(o) > rank.get(k)) k = o; }
+    }
+    found.set(id, k);
+    return k;
+  };
+  run.tickets.forEach((t) => (t.block = block(t.id, new Set())));
+  run.blockRank = rank;
+}
+
+// The planned picture: estimate-hours on a continuous clock, `maxAgents` slots, a ready
+// ticket takes the lowest free slot, critical chain first. Dependencies wait for the merge
+// (plus the approval wait for a size that is not auto-merged). With gateOrder strict a block
+// starts when every earlier block has merged. This is the plan, not a record of the run.
+function plan(run) {
+  assignBlocks(run);
+  const ts = run.tickets;
+  const byId = new Map(ts.map((t) => [t.id, t]));
+  const approval = num(run.estimate && run.estimate.approvalHours) || DEFAULT_APPROVAL;
+  const crit = new Set(run.critical);
+  ts.forEach((t) => { if (crit.has(t.id)) t.critical = true; });
+  const deps = (t) => t.deps.filter((d) => byId.has(d) && d !== t.id);
+  // downstream weight for priority
+  const kids = new Map();
+  ts.forEach((t) => deps(t).forEach((d) => { if (!kids.has(d)) kids.set(d, []); kids.get(d).push(t.id); }));
+  const tail = new Map();
+  const weight = (id, seen) => {
+    if (tail.has(id)) return tail.get(id);
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const w = byId.get(id).hours + Math.max(0, ...(kids.get(id) || []).map((k) => weight(k, seen)));
+    seen.delete(id);
+    tail.set(id, w);
+    return w;
+  };
+  ts.forEach((t) => weight(t.id, new Set()));
+  const depth = new Map();
+  const lvl = (id, seen) => {
+    if (depth.has(id)) return depth.get(id);
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const v = 1 + Math.max(0, ...deps(byId.get(id)).map((d) => lvl(d, seen)));
+    seen.delete(id);
+    depth.set(id, v);
+    return v;
+  };
+  ts.forEach((t) => lvl(t.id, new Set()));
+  run.waves = ts.length ? Math.max(...depth.values()) : 0;
+
+  if (ts.length && ts.every((t) => t.planned && typeof t.planned.slot === "number" && typeof t.planned.start === "number" && typeof t.planned.merge === "number")) {
+    // The schedule's own picture (build-schedule/2): draw it as written.
+    ts.forEach((t) => { t.slot = t.planned.slot - 1; t.start = t.planned.start; t.end = t.planned.start + t.hours; t.mergeAt = Math.max(t.planned.merge, t.end); t.unplaced = false; });
+    const evs = [];
+    ts.forEach((t) => { evs.push([t.start, 1]); evs.push([t.end, -1]); });
+    evs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let cur = 0, pk = 0;
+    evs.forEach((e) => { cur += e[1]; pk = Math.max(pk, cur); });
+    run.planSource = "schedule";
+    run.finish = Math.max(0, ...ts.map((t) => t.mergeAt));
+    run.peak = pk;
+    run.slots = Math.max(...ts.map((t) => t.slot)) + 1;
+    run.critHours = sum(ts.filter((t) => t.critical).map((t) => t.hours));
+    run.critCount = ts.filter((t) => t.critical).length;
+    run.gateAt = new Map();
+    for (const k of gateKeys(run)) {
+      const g = run.gates.find((x) => x.key === k);
+      if (typeof g.at === "number") { run.gateAt.set(k, g.at); continue; }
+      const ids = g.members.filter((m) => byId.has(m));
+      if (ids.length) run.gateAt.set(k, Math.max(...ids.map((id) => byId.get(id).mergeAt)));
+    }
+    return;
+  }
+  run.planSource = "simulated";
+  const strict = run.gateOrder !== "deps" && run.kind === "beam" && run.blockRank && run.blockRank.size > 1;
+  const cap = Math.max(1, Math.min(run.cap || DEFAULT_CAP, 64));
+  const prio = (a, b) => (b.critical - a.critical) || (b.starred - a.starred) || (!!b.priorityGate - !!a.priorityGate) || ((a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank)) || (tail.get(b.id) - tail.get(a.id)) || natCmp(a.id, b.id);
+  const pending = new Set(ts.map((t) => t.id));
+  const mergeAt = new Map();
+  const slotFree = new Array(cap).fill(0);
+  const blockDone = new Map(); // block -> time every ticket in it merged
+  const blockLeft = new Map();
+  ts.forEach((t) => blockLeft.set(t.block, (blockLeft.get(t.block) || 0) + 1));
+  const blockEnd = new Map();
+  const blockOpen = (t, now) => {
+    if (!strict) return true;
+    const r = run.blockRank.get(t.block);
+    for (const [k, i] of run.blockRank) if (i < r && (blockLeft.get(k) || 0) > 0) return false;
+    for (const [k, i] of run.blockRank) if (i < r && blockEnd.has(k) && blockEnd.get(k) > now) return false;
+    return true;
+  };
+  let now = 0, guard = 0, peak = 0;
+  const running = [];
+  while (pending.size && guard++ < 20000) {
+    // release merges up to now
+    for (let i = running.length - 1; i >= 0; i--) if (running[i].merge <= now) {
+      const t = running[i].t;
+      blockLeft.set(t.block, blockLeft.get(t.block) - 1);
+      blockEnd.set(t.block, Math.max(blockEnd.get(t.block) || 0, running[i].merge));
+      running.splice(i, 1);
+    }
+    const ready = [...pending].map((id) => byId.get(id)).filter((t) => deps(t).every((d) => mergeAt.has(d) && mergeAt.get(d) <= now) && blockOpen(t, now)).sort(prio);
+    for (const t of ready) {
+      const slot = slotFree.findIndex((f) => f <= now + 1e-9);
+      if (slot < 0) break;
+      const end = now + t.hours;
+      const merge = end + (t.autoMerge ? 0 : approval);
+      t.slot = slot; t.start = now; t.end = end; t.mergeAt = merge;
+      slotFree[slot] = end;
+      mergeAt.set(t.id, merge);
+      running.push({ t, merge });
+      pending.delete(t.id);
+    }
+    peak = Math.max(peak, slotFree.filter((f) => f > now + 1e-9).length);
+    const next = [...slotFree.filter((f) => f > now + 1e-9), ...running.map((r) => r.merge).filter((m) => m > now + 1e-9)];
+    if (!next.length) {
+      if (!pending.size) break;
+      // a cycle or a dependency that cannot be met: lay the rest out after everything else
+      let t0 = Math.max(now, ...slotFree);
+      for (const id of [...pending].sort(natCmp)) {
+        const t = byId.get(id);
+        const slot = slotFree.indexOf(Math.min(...slotFree));
+        t.slot = slot; t.start = Math.max(t0, slotFree[slot]); t.end = t.start + t.hours; t.mergeAt = t.end; t.unplaced = true;
+        slotFree[slot] = t.end; mergeAt.set(id, t.end); pending.delete(id);
+        blockLeft.set(t.block, blockLeft.get(t.block) - 1);
+      }
+      break;
+    }
+    now = Math.min(...next);
+  }
+  run.finish = Math.max(0, ...ts.map((t) => t.mergeAt || 0));
+  run.peak = peak;
+  run.slots = ts.length ? Math.max(...ts.map((t) => t.slot)) + 1 : 0;
+  run.critHours = sum(ts.filter((t) => t.critical).map((t) => t.hours));
+  run.critCount = ts.filter((t) => t.critical).length;
+  // gate reached: every ticket in the block (or its listed members) merged
+  run.gateAt = new Map();
+  for (const k of gateKeys(run)) {
+    const g = run.gates.find((x) => x.key === k);
+    const ids = new Set(ts.filter((t) => t.block === k).map((t) => t.id).concat(g.members.filter((m) => byId.has(m))));
+    if (!ids.size) continue;
+    run.gateAt.set(k, Math.max(...[...ids].map((id) => byId.get(id).mergeAt || 0)));
+  }
+}
+
+// ---- metrics ---------------------------------------------------------------------------
+function etaOf(run) {
+  if (run.metrics && num(run.metrics.etaHours) != null) return num(run.metrics.etaHours);
+  // beam.py metrics(): max(critical hours left, remaining agent hours / min(cap, 8))
+  const open = run.tickets.filter((t) => !TERMINAL.has(t.status));
+  const crit = sum(open.filter((t) => t.critical).map((t) => t.hours));
+  return Math.round(Math.max(crit, sum(open.map((t) => t.hours)) / Math.max(1, Math.min(run.cap, 8))) * 10) / 10;
+}
+function elapsedOf(run) {
+  if (!run.runStartedAt) return null;
+  const end = run.runEndedAt || (run.runState === "running" ? Date.now() : run.updated || Date.now());
+  return Math.max(0, (end - run.runStartedAt) / 3600000);
+}
+function computeMetrics(runs) {
+  const zero = () => ({ done: 0, prog: 0, err: 0, todo: 0 });
+  const agent = zero(), human = zero(), count = zero(), share = zero();
+  let estTotal = null, sizeDerived = 0, actualMin = 0, tokens = 0, cost = 0, costSeen = false, gatesTotal = 0, gatesGreen = 0;
+  let elapsed = null, eta = null, humanPlan = null;
+  for (const run of runs) {
+    const approval = num(run.estimate && run.estimate.approvalHours) || DEFAULT_APPROVAL;
+    for (const t of run.tickets) {
+      const b = bucketOf(t.cat);
+      count[b]++;
+      agent[b] += t.hours;
+      if (!t.autoMerge) human[b] += approval;
+      if (t.hoursFrom !== "ticket") sizeDerived++;
+      actualMin += t.minutes; tokens += t.tokens;
+      if (t.cost != null) { cost += t.cost; costSeen = true; }
+    }
+    for (const g of run.gates.filter((g) => g.blocking)) {
+      gatesTotal++;
+      const inBlock = run.tickets.filter((t) => t.block === g.key);
+      let b = "todo";
+      if (g.status === "green") { b = "done"; gatesGreen++; }
+      else if (g.status === "red") b = "err";
+      else if (inBlock.some((t) => t.cat !== "todo")) b = "prog";
+      human[b] += approval;
+    }
+    const rs = run.estimate && num(run.estimate.elapsedHours);
+    if (rs != null) estTotal = Math.max(estTotal || 0, rs);
+    const hp = run.estimate && num(run.estimate.humanHours);
+    if (hp != null) humanPlan = (humanPlan || 0) + hp;
+    const el = elapsedOf(run);
+    if (el != null) elapsed = Math.max(elapsed || 0, el);
+    const e = etaOf(run);
+    if (e != null) eta = Math.max(eta || 0, e);
+  }
+  const agentTotal = sum(Object.values(agent));
+  for (const k of Object.keys(share)) share[k] = estTotal != null && agentTotal > 0 ? (estTotal * agent[k]) / agentTotal : null;
+  const finish = Math.max(0, ...runs.map((r) => r.finish || 0)) || null;
+  const assumptions = [...new Set(runs.flatMap((r) => (r.estimate && Array.isArray(r.estimate.assumptions) ? r.estimate.assumptions : [])))];
+  return { finish, assumptions, agent, human, count, share, estTotal, agentTotal, humanTotal: sum(Object.values(human)), ticketTotal: sum(Object.values(count)), humanPlan,
+    sizeDerived, actualH: actualMin / 60, tokens, cost: costSeen ? cost : null, gatesTotal, gatesGreen, elapsed, eta };
+}
+
+// ---- state ----------------------------------------------------------------------------------
+const S = {
+  printing: false, printWidth: 0,
+  docs: [], sources: [], runs: [], tab: "all", view: store("view") || "timeline", groupBy: store("groupBy") || "block", colorBy: store("colorBy") || "status",
+  zoom: num(store("zoom")) || 0, clock: store("clock") || "plan", sort: { key: "start", dir: 1 }, off: new Set(), q: "", closed: new Set(), embedded: null, reloadable: false, timer: null, loadedAt: null,
+};
+
+// ---- rendering --------------------------------------------------------------------------------
+function currentRuns() { return S.tab === "all" ? S.runs : S.runs.filter((r) => runKey(r) === S.tab); }
+const runKey = (r) => r.name || r.instance || r.dir || "run";
+const runLabel = (r) => r.name || (r.instance ? "warp:" + r.instance : r.dir || "run");
+
+function matches(t, run) {
+  if (S.off.has(t.cat)) return false;
+  if (!S.q) return true;
+  const hay = [t.id, t.title, t.jiraKey, t.module, t.layer, t.lane, t.repo, t.priorityGate, t.agent, t.status, t.block, t.size, run.name].join(" ").toLowerCase();
+  return S.q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function render() {
+  const has = S.runs.length > 0;
+  $("#emptyState").classList.toggle("hidden", has);
+  $("#app").classList.toggle("hidden", !has);
+  $("#reloadBtn").disabled = !S.reloadable;
+  renderMeta();
+  if (!has) return;
+  const runs = currentRuns();
+  renderHeadline(runs);
+  renderMetrics(runs);
+  renderLegend(runs);
+  $$("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === S.view));
+  $("#groupCtl").classList.toggle("hidden", S.view !== "board");
+  $("#zoomCtl").classList.toggle("hidden", S.view !== "timeline");
+  renderUtil(runs);
+  $("#groupBy").value = S.groupBy; $("#colorBy").value = S.colorBy; $("#zoom").value = S.zoom;
+  if (S.view === "timeline") renderTimeline(runs); else if (S.view === "table") renderTable(runs); else renderBoard(runs);
+  const files = S.docs.length;
+  $("#sources").textContent = `${files} file${files === 1 ? "" : "s"} read${S.embedded ? " (embedded by /warp-dashboard)" : ""} · ${S.docs.slice(0, 4).map((d) => d.path).join(", ")}${files > 4 ? ", …" : ""}`;
+  $("#generated").textContent = S.loadedAt ? "Loaded " + stamp(S.loadedAt) : "";
+}
+
+function renderMeta() {
+  const el = $("#meta");
+  if (!S.runs.length) { el.innerHTML = '<span class="chip">No run loaded</span>'; return; }
+  const runs = currentRuns();
+  const r = runs[0];
+  const parts = [];
+  const repo = runs.map((x) => x.repo).find(Boolean);
+  if (repo) parts.push(`<span class="chip">repo <b>${esc(repo)}</b></span>`);
+  if (S.tab !== "all" || S.runs.length === 1) {
+    if (r.name) parts.push(`<span class="chip">run <b>${esc(r.name)}</b></span>`);
+    if (r.instance) parts.push(`<span class="chip mono">warp:${esc(r.instance)}</span>`);
+    const st = r.kind === "schedule" ? "plan" : r.runState === "running" && r.paused ? "paused" : r.runState || "unknown";
+    parts.push(`<span class="chip"><i class="dot ${esc(st)}"></i><b>${esc(st)}</b>${r.pauseReason ? " · " + esc(r.pauseReason) : ""}</span>`);
+    if (r.range && r.range.spec) parts.push(`<span class="chip">range <b>${esc(r.range.spec)}</b></span>`);
+    if (r.owner && r.owner.by) parts.push(`<span class="chip">owner <b>${esc(r.owner.by)}</b></span>`);
+  } else {
+    const live = S.runs.filter((x) => x.runState === "running" && !x.paused).length;
+    parts.push(`<span class="chip"><b>${S.runs.length}</b> runs · ${live} running</span>`);
+  }
+  const upd = Math.max(...runs.map((x) => x.updated || 0)) || null;
+  parts.push(`<span class="chip" title="${esc(upd ? new Date(upd).toISOString() : "")}">updated <b>${esc(ago(upd))}</b><span class="hide-sm"> · ${esc(stamp(upd))}</span></span>`);
+  el.innerHTML = parts.join("");
+}
+
+function renderHeadline(runs) {
+  const one = runs.length === 1 ? runs[0] : null;
+  const repo = runs.map((x) => x.repo || x.project).find(Boolean);
+  $("#title").textContent = one ? `${one.name ? one.name + " — " : ""}${repo || "Warp run"} swimlane` : `${repo || "Warp"} — ${runs.length} runs`;
+  const tickets = sum(runs.map((r) => r.tickets.length));
+  const hours = sum(runs.map((r) => sum(r.tickets.map((t) => t.hours))));
+  const cap = one ? one.cap : Math.max(...runs.map((r) => r.cap));
+  const bits = [`${fmtN(tickets)} tickets`];
+  if (one && one.kind !== "status") bits.push(`${one.waves} waves`);
+  bits.push(`${fmtN(hours)} agent-hours`);
+  bits.push(`${one ? "" : "up to "}${cap} agent slots`);
+  const fin = Math.max(...runs.map((r) => r.finish || 0));
+  if (fin) bits.push(`planned finish T+${Math.round(fin)}h${runs.some((r) => r.kind === "status") ? " (status.json has no dependencies; open beam.json for the plan)" : ""}`);
+  if (one && one.peak) bits.push(`peak ${one.peak} in flight`);
+  if (one && one.critCount) bits.push(`critical chain ${fmtH(one.critHours, 0)} over ${one.critCount} tickets`);
+  if (one && one.gateOrder) bits.push(`gate order ${one.gateOrder}`);
+  if (one && one.planSource === "schedule") bits.push("plan as written in schedule.json");
+  if (one && one.startAfter) bits.push(`starts after ${[].concat(one.startAfter).join(", ")}`);
+  $("#subline").textContent = bits.join(" · ");
+  const chain = one ? one.tickets.filter((t) => t.critical).sort((a, b) => (a.start - b.start) || natCmp(a.id, b.id)).map((t) => t.id) : [];
+  $("#chainline").textContent = chain.length ? "★ " + chain.join(" → ") : "";
+  const tabs = $("#tabs");
+  if (S.runs.length < 2) { tabs.innerHTML = ""; return; }
+  tabs.innerHTML = [`<button class="tab ${S.tab === "all" ? "on" : ""}" data-tab="all">All runs (${S.runs.length})</button>`]
+    .concat(S.runs.map((r) => `<button class="tab ${S.tab === runKey(r) ? "on" : ""}" data-tab="${esc(runKey(r))}">${esc(runLabel(r))} · ${r.tickets.filter((t) => t.cat === "done").length}/${r.tickets.length}</button>`)).join("");
+}
+
+function stackBar(values, total) {
+  if (!total) return '<div class="stack"></div>';
+  return '<div class="stack">' + BUCKETS.map((b) => (values[b.key] > 0 ? `<i style="width:${(100 * values[b.key]) / total}%;background:${b.color}" title="${esc(b.label)}"></i>` : "")).join("") + "</div>";
+}
+function rowsFor(values, total, fmt) {
+  return '<div class="rows">' + BUCKETS.filter((b) => b.key !== "err" || values.err > 0).map((b) =>
+    `<div><i class="sw" style="background:${b.color}"></i>${b.label}<span class="v">${values[b.key] == null ? "—" : fmt(values[b.key])}</span><span class="p">${values[b.key] == null ? "" : pct(values[b.key], total)}</span></div>`).join("") + "</div>";
+}
+function renderMetrics(runs) {
+  const m = computeMetrics(runs);
+  const many = runs.length > 1;
+  const run = `<div class="card"><h3>Run estimate <span>${many ? "longest run" : "elapsed, plan"}</span></h3>
+    <div class="big">${fmtH(m.estTotal)}</div>${stackBar(m.share, m.estTotal || 0)}${rowsFor(m.share, m.estTotal || 0, (v) => fmtH(v))}
+    <div class="foot"><span>Elapsed <b>${fmtH(m.elapsed)}</b></span><span>ETA left <b>~${fmtH(m.eta)}</b></span>${m.finish ? `<span title="Planned finish on the swimlane, with blocks in order">Swimlane <b>T+${Math.round(m.finish)}h</b></span>` : ""}<span title="The plan's elapsed estimate, split by agent-hour share">split by agent-hours</span></div>${m.assumptions.length ? `<details class="assume"><summary>Assumptions</summary><ul>${m.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}</div>`;
+  const agent = `<div class="card"><h3>Agent hours <span>estimate</span></h3>
+    <div class="big">${fmtH(m.agentTotal)}</div>${stackBar(m.agent, m.agentTotal)}${rowsFor(m.agent, m.agentTotal, (v) => fmtH(v))}
+    <div class="foot"><span>Actual <b>${m.actualH ? fmtH(m.actualH) : "—"}</b></span><span>Tokens <b>${m.tokens ? fmtN(m.tokens) : "—"}</b></span><span>Cost <b>${m.cost == null ? "—" : "$" + m.cost.toFixed(2)}</b></span>${m.sizeDerived ? `<span title="S=4, M=7, L=11, XL=16 (scan.py)">${m.sizeDerived} from size</span>` : ""}</div></div>`;
+  const human = `<div class="card"><h3>People hours <span>approvals + gates</span></h3>
+    <div class="big">${fmtH(m.humanTotal)}</div>${stackBar(m.human, m.humanTotal)}${rowsFor(m.human, m.humanTotal, (v) => fmtH(v))}
+    <div class="foot"><span>Plan <b>${fmtH(m.humanPlan)}</b></span><span>Gates <b>${m.gatesTotal ? m.gatesGreen + "/" + m.gatesTotal : "—"}</b> green</span><span>0.5h per review or gate</span></div></div>`;
+  const byCat = Object.fromEntries(CATS.map((c) => [c.key, 0]));
+  runs.forEach((r) => r.tickets.forEach((t) => byCat[t.cat]++));
+  const tick = `<div class="card"><h3>Tickets <span>${pct(m.count.done, m.ticketTotal)} complete</span></h3>
+    <div class="big">${fmtN(m.ticketTotal)}</div>${stackBar(m.count, m.ticketTotal)}${rowsFor(m.count, m.ticketTotal, fmtN)}
+    <div class="foot"><span>In review <b>${byCat.rev}</b></span><span>QA ready <b>${byCat.qa}</b></span><span>Coding <b>${byCat.prog}</b></span></div></div>`;
+  $("#metrics").innerHTML = run + agent + human + tick;
+}
+
+const ACTIVE_ST = new Set(["claimed", "recovering", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"]);
+function renderUtil(runs) {
+  const el = $("#util");
+  const tickets = runs.flatMap((r) => r.tickets);
+  const cap = sum(runs.map((r) => r.cap));
+  const active = tickets.filter((t) => ACTIVE_ST.has(t.status)).length;
+  const spentH = sum(tickets.map((t) => t.minutes)) / 60;
+  const estH = sum(runs.map((r) => (r.estimate && num(r.estimate.agentHours)) ?? null).filter((x) => x != null)) || null;
+  const tokens = sum(tickets.map((t) => t.tokens));
+  const by = (keyf) => {
+    const m = new Map();
+    for (const t of tickets) { const k = keyf(t); const row = m.get(k) || { n: 0, tokens: 0, minutes: 0 }; row.n++; row.tokens += t.tokens; row.minutes += t.minutes; m.set(k, row); }
+    return m;
+  };
+  const sizes = by((t) => t.size || "—");
+  const agents = by((t) => t.agent || "unassigned");
+  const table = (m, head, order) => `<table class="mini"><thead><tr><th>${head}</th><th>tickets</th><th>tokens</th><th>minutes</th></tr></thead><tbody>${(order || [...m.keys()].sort(natCmp)).filter((k) => m.has(k)).slice(0, 8).map((k) => { const v = m.get(k); return `<tr><td class="mono">${esc(k)}</td><td>${v.n}</td><td>${fmtN(v.tokens)}</td><td>${fmtN(v.minutes)}</td></tr>`; }).join("")}</tbody></table>${m.size > 8 ? `<div class="tlnote">${m.size - 8} more</div>` : ""}`;
+  const meter = (label, v, max, text) => `<div class="row"><span>${label}</span><span class="bar0"><i class="${max && v > max ? "over" : ""}" style="width:${max ? Math.min(100, (100 * v) / max) : 0}%"></i></span><span class="v">${text}</span></div>`;
+  el.innerHTML = `<summary>Utilization <span class="muted">${active} active of ${cap} agents · ${fmtH(spentH)} spent${estH ? " of " + fmtH(estH) + " estimated" : ""} · ${fmtN(tokens)} tokens</span></summary>
+    <div class="util-b"><div class="meter">
+      ${meter("Active agents / maxAgents", active, cap, `${active} / ${cap}`)}
+      ${meter("Agent hours / estimate", spentH, estH, `${fmtH(spentH)} / ${fmtH(estH)}`)}
+      ${meter("Tickets done", tickets.filter((t) => t.cat === "done").length, tickets.length, `${tickets.filter((t) => t.cat === "done").length} / ${tickets.length}`)}
+      <div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are the minutes Warp recorded per ticket.</div>
+    </div>
+    <div>${table(sizes, "size", ["S", "M", "L", "XL", "—"])}</div>
+    <div>${table(agents, "agent")}</div></div>`;
+}
+
+function renderLegend(runs) {
+  const counts = Object.fromEntries(CATS.map((c) => [c.key, 0]));
+  runs.forEach((r) => r.tickets.forEach((t) => counts[t.cat]++));
+  $("#legend").innerHTML = CATS.map((c) => `<button class="fchip ${S.off.has(c.key) ? "off" : ""}" data-cat="${c.key}" title="Show or hide ${esc(c.label)} (double-click: only this)"><i class="sw" style="background:${catColor(c.key)}"></i>${esc(c.label)}<span class="n">${counts[c.key]}</span></button>`).join("");
+}
+
+function barColor(t) {
+  if (S.colorBy === "module" || S.colorBy === "lane") {
+    const h = hashHue((S.colorBy === "lane" ? t.lane || t.module : t.module) || "none");
+    const ui = /ui|front|web|app|screen/i.test(t.layer || "");
+    return `hsl(${h} 62% ${ui ? 62 : 46}%)`;
+  }
+  return catColor(t.cat);
+}
+function statusText(t) { return t.status.replace(/_/g, " "); }
+
+function renderTimeline(runs) {
+  const view = $("#view");
+  const wide = view.clientWidth || document.documentElement.clientWidth - 40;
+  const actual = S.clock === "actual";
+  view.innerHTML = runs.map((r, i) => {
+    const lay = actual ? layoutActual(r) : layoutPlan(r);
+    r._layout = lay;
+    const note = actual
+      ? `${lay.rows} agents in use · ${lay.items.length} started${lay.unstarted ? ` · ${lay.unstarted} not started` : ""}${lay.now != null ? ` · now +${Math.round(lay.now)}h` : ""}`
+      : `${r.slots} of ${r.cap} slots · planned finish T+${Math.round(r.finish)}h${r.planSource === "schedule" ? " · as written in schedule.json" : r.kind !== "beam" ? "" : r.gateOrder === "deps" ? " · dependency order" : " · blocks finish in order"}`;
+    return `<section class="panel" data-run="${i}">
+    <div class="panel-h"><h2>${esc(runs.length > 1 ? runLabel(r) : "Swimlane")}</h2><span class="muted">${note}</span>
+      <div class="seg clock"><button data-clock="plan" class="${actual ? "" : "on"}" title="Estimate-hours: the plan, colored by status now">Plan</button><button data-clock="actual" class="${actual ? "on" : ""}" title="Hours since the run started, from claimed to merged">Actual</button></div></div>
+    <div class="tl-scroll"></div>
+    <div class="tl-foot">${actual
+      ? "<span>Hours since the run started. A bar runs from claim (or PR opened) to merge; an open ticket runs to now. Gate lines are drawn at greenAt.</span><span>Rows are agents in use at the same time, not agent ids.</span>"
+      : "<span>Estimate-hours on a continuous clock. A bar ends at its merge; the slot is reused at once. Bars are the plan; color is the ticket's status now.</span><span>Slots are interchangeable: the parent gives a ready ticket the next free agent.</span>"}</div></section>`;
+  }).join("");
+  runs.forEach((r, i) => drawTimeline(r, r._layout, $(`[data-run="${i}"] .tl-scroll`, view), wide));
+}
+
+// The planned picture (see plan()).
+function layoutPlan(run) {
+  const gates = gateKeys(run).filter((k) => run.gateAt.has(k)).map((k) => ({ k, at: run.gateAt.get(k), g: run.gates.find((x) => x.key === k) }));
+  return { prefix: "T+", label: "Slot", rows: Math.max(1, run.slots), span: run.finish, now: null, unstarted: 0,
+    items: run.tickets.map((t) => ({ t, row: t.slot, s: t.start, e: t.start + t.hours, sz: true })), gates };
+}
+
+// What happened: hours since the run started, one bar per started ticket, packed into rows.
+function layoutActual(run) {
+  // the first moment work started: a status event into claimed…merging, merged or done
+  const firstEvent = (t) => { const ts = t.events.filter((e) => e.type === "status" && (ACTIVE_ST.has(e.to) || e.to === "merged" || e.to === "done")).map((e) => parseTime(e.at)).filter(Boolean); return ts.length ? Math.min(...ts) : null; };
+  const startOf = (t) => parseTime(t.claimedAt) || parseTime(t.pr.openedAt) || (t.cat !== "todo" ? firstEvent(t) : null);
+  const endNow = run.runEndedAt || (run.runState === "running" && !run.paused ? Date.now() : run.updated || Date.now());
+  const raw = run.tickets.map((t) => {
+    const s0 = startOf(t);
+    if (!s0) return null;
+    let e0 = parseTime(t.pr.mergedAt) || (TERMINAL.has(t.status) ? parseTime(t.updatedAt) : null) || endNow;
+    if (e0 < s0) e0 = s0;
+    return { t, s0, e0 };
+  }).filter(Boolean);
+  const base = run.runStartedAt || (raw.length ? Math.min(...raw.map((x) => x.s0)) : Date.now());
+  const H = (ms) => Math.max(0, (ms - base) / 3600000);
+  raw.sort((a, b) => a.s0 - b.s0 || natCmp(a.t.id, b.t.id));
+  const free = [];
+  const items = raw.map((x) => {
+    const s = H(x.s0), e = Math.max(H(x.e0), s + 0.05);
+    let row = free.findIndex((f) => f <= s + 1e-9);
+    if (row < 0) { row = free.length; free.push(e); } else free[row] = e;
+    return { t: x.t, row, s, e, sz: false };
+  });
+  const gates = run.gates.filter((g) => g.greenAt).map((g) => ({ k: g.key, at: H(g.greenAt), g }));
+  const now = run.runEndedAt ? null : H(endNow);
+  const span = Math.max(1, now || 0, ...items.map((i) => i.e), ...gates.map((g) => g.at));
+  return { prefix: "+", label: "Agent", rows: Math.max(1, free.length), span, now, unstarted: run.tickets.length - items.length, items, gates };
+}
+
+function drawTimeline(run, lay, host, wide) {
+  const lab = window.matchMedia("(max-width:640px)").matches ? 54 : 76;
+  const span = Math.max(1, Math.ceil(lay.span / 5) * 5);
+  const fit = Math.max(wide < 700 ? 7 : 2, (wide - lab - 24) / span);
+  const pph = S.printing ? Math.max(1, (S.printWidth - lab) / span) : fit * Math.pow(6, S.zoom / 100);
+  const W = Math.ceil(span * pph) + 16;
+  const step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find((x) => x * pph >= 56) || 500;
+  const ticks = [];
+  for (let h = 0; h <= span; h += step) ticks.push(h);
+  // gates reached at the same moment share one label, like "G2 · G8"
+  const groups = [];
+  lay.gates.slice().sort((a, b) => a.at - b.at).forEach((x) => { const last = groups[groups.length - 1]; if (last && Math.abs(last.at - x.at) * pph < 6) last.items.push(x); else groups.push({ at: x.at, items: [x] }); });
+  const gateCls = (items) => (items.some((x) => x.g.status === "red") ? "red" : items.every((x) => x.g.status === "green") ? "green" : "");
+  const gateTip = (x) => [`${x.k} ${x.g.name || ""} — ${x.g.status}`, x.g.blocking ? "blocking: a red gate stops everyone" : x.g.scope ? "scope: " + x.g.scope : "",
+    x.g.priority ? "priority gate: its path dispatches ahead of rank" : "", x.g.starts && x.g.starts.length ? "starts: " + x.g.starts.join(", ") : "",
+    x.g.greenAt ? "green " + new Date(x.g.greenAt).toISOString() : "", x.g.evidence || "", ...(x.g.checks || []).map((c) => "check: " + c),
+    x.g.onGreen ? "on green: " + x.g.onGreen : "", x.g.ifRed ? "if red: " + x.g.ifRed : ""].filter(Boolean).join("\n");
+  let html = `<div class="tl" style="width:${W + lab}px">`;
+  html += `<div class="tl-head"><div class="tl-row gates"><div class="tl-lab"></div><div class="tl-track" style="width:${W}px">`;
+  html += groups.map((gr, i) => {
+    const room = (gr.at - (i ? groups[i - 1].at : 0)) * pph;
+    const name = gr.items.length === 1 ? gr.items[0].g.name || "" : "";
+    const label = gr.items.map((x) => x.k).join(" · ");
+    const lift = room < label.length * 7 + 8 && i % 2 ? "bottom:17px" : "";
+    return `<div class="gl ${gateCls(gr.items)}" style="left:${gr.at * pph}px;${lift}" title="${esc(gr.items.map(gateTip).join("\n\n"))}">${esc(label)}${name && !lift && room > name.length * 6 + 12 ? `<small>${esc(name)}</small>` : ""}</div>`;
+  }).join("");
+  html += `</div></div><div class="tl-row tl-axis"><div class="tl-lab">${lay.prefix}</div><div class="tl-track" style="width:${W}px">${ticks.map((h) => `<span style="left:${h * pph}px">${lay.prefix}${h}</span>`).join("")}</div></div></div>`;
+  html += `<div class="tl-body" style="position:relative">`;
+  html += `<div style="position:absolute;left:${lab}px;top:0;bottom:0;width:${W}px;pointer-events:none">${ticks.map((h) => `<i class="grid-v" style="left:${h * pph}px"></i>`).join("")}${groups.map((gr) => `<i class="gline ${gateCls(gr.items)}" style="left:${gr.at * pph}px"></i>`).join("")}${lay.now != null ? `<i class="nowline" style="left:${lay.now * pph}px" title="now"></i>` : ""}</div>`;
+  for (let row = 0; row < lay.rows; row++) {
+    html += `<div class="tl-row"><div class="tl-lab">${lay.label} ${row + 1}</div><div class="tl-track" style="width:${W}px">`;
+    for (const it of lay.items.filter((x) => x.row === row)) {
+      const t = it.t;
+      const w = Math.max(3, (it.e - it.s) * pph - 2);
+      const tiny = w < 70;
+      const hit = matches(t, run);
+      const flag = t.alarm ? "⚠" : t.pr.ci === "red" ? "✗" : "";
+      const meta = it.sz ? `${esc(t.size || "")}·${fmtH(t.hours, 0)}` : `${fmtH(it.e - it.s)}`;
+      html += `<div class="bar c-${t.cat} ${t.critical ? "crit" : ""} ${tiny ? "tiny" : ""} ${hit ? (S.q ? "hit" : "") : "dim"}" style="left:${it.s * pph + 1}px;width:${w}px;--c:${barColor(t)}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}">
+        <div class="l1"><span class="id">${t.critical ? "★ " : ""}${esc(t.id)}</span><span class="sz">${meta}</span></div><div class="tt">${esc(t.title)}</div>${flag ? `<span class="flag">${flag}</span>` : ""}</div>`;
+    }
+    html += `</div></div>`;
+  }
+  html += `</div></div>`;
+  host.innerHTML = html;
+}
+
+// ---- table ----------------------------------------------------------------------------------
+const COLS = [
+  { key: "id", label: "Ticket", val: (t) => natKey(t.id) },
+  { key: "status", label: "Status", val: (t) => CATS.findIndex((c) => c.key === t.cat) * 100 + Object.keys(STATUS_CAT).indexOf(t.status) },
+  { key: "title", label: "Summary", val: (t) => t.title.toLowerCase() },
+  { key: "size", label: "Size", val: (t) => ["S", "M", "L", "XL"].indexOf(t.size) },
+  { key: "block", label: "Block", val: (t) => natKey(t.block || "") },
+  { key: "hours", label: "Est", val: (t) => t.hours },
+  { key: "start", label: "Plan", val: (t) => t.start },
+  { key: "minutes", label: "Spent", val: (t) => t.minutes },
+  { key: "opened", label: "Opened", val: (t) => parseTime(t.pr.openedAt) || 0 },
+  { key: "reviewed", label: "Reviewed", val: (t) => parseTime(t.pr.reviewedAt) || 0 },
+  { key: "approved", label: "Approved", val: (t) => parseTime(t.pr.approvedAt) || 0 },
+  { key: "merged", label: "Merged", val: (t) => parseTime(t.pr.mergedAt) || 0 },
+  { key: "links", label: "Links", val: (t) => (t.pr.url ? 1 : 0) + (t.jiraKey ? 1 : 0) },
+];
+function renderTable(runs) {
+  const rows = runs.flatMap((run) => run.tickets.map((t) => ({ t, run })));
+  const col = COLS.find((c) => c.key === S.sort.key) || COLS[0];
+  rows.sort((a, b) => { const x = col.val(a.t), y = col.val(b.t); return (x < y ? -1 : x > y ? 1 : natCmp(a.t.id, b.t.id)) * S.sort.dir; });
+  const ts = (v) => (v ? `<span title="${esc(v)}">${esc(stamp(parseTime(v)))}</span>` : "—");
+  const body = rows.map(({ t, run }) => {
+    const ju = jiraUrl(run, t.jiraKey);
+    return `<tr class="trow ${matches(t, run) ? "" : "dim"}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}" tabindex="0">
+      <td class="mono"><b>${t.critical ? "★ " : ""}${esc(t.id)}</b>${runs.length > 1 ? ` <span class="tlnote">${esc(runLabel(run))}</span>` : ""}</td>
+      <td><span class="chipst" style="--c:${catColor(t.cat)}">${esc(statusText(t))}</span></td>
+      <td class="t" title="${esc(t.title)}">${esc(t.title)}</td><td>${esc(t.size || "—")}</td><td>${esc(t.block || "—")}</td>
+      <td>${fmtH(t.hours, 0)}</td><td>T+${Math.round(t.start)}</td><td>${t.minutes ? fmtH(t.minutes / 60) : "—"}</td>
+      <td>${ts(t.pr.openedAt)}</td><td>${ts(t.pr.reviewedAt)}</td><td>${ts(t.pr.approvedAt)}</td><td>${ts(t.pr.mergedAt)}</td>
+      <td>${t.pr.url ? `<a href="${esc(t.pr.url)}" target="_blank" rel="noopener">${esc(prLabel(t.pr.url))}</a> ` : ""}${t.jiraKey ? (ju ? `<a href="${esc(ju)}" target="_blank" rel="noopener">${esc(t.jiraKey)}</a>` : esc(t.jiraKey)) : ""}</td></tr>`;
+  }).join("");
+  $("#view").innerHTML = `<section class="panel"><div class="tbl-wrap"><table class="grid"><thead><tr>${COLS.map((c) => `<th data-sort="${c.key}" tabindex="0" ${c.key === col.key ? `aria-sort="${S.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+}
+
+function groupKeyOf(t, run) {
+  if (S.groupBy === "status") return t.cat;
+  if (S.groupBy === "module") return t.module || "No module";
+  if (S.groupBy === "size") return t.size || "No size";
+  if (S.groupBy === "lane") return t.lane || t.module || "No lane";
+  if (S.groupBy === "repo") return t.repo || "No repo";
+  return t.block || "All tickets";
+}
+function lanesFor(runs) {
+  const lanes = new Map();
+  const order = [];
+  for (const run of runs) {
+    let keys;
+    if (S.groupBy === "status") keys = CATS.map((c) => c.key);
+    else if (S.groupBy === "size") keys = ["S", "M", "L", "XL", "No size"];
+    else if (S.groupBy === "block") keys = gateKeys(run).length ? gateKeys(run) : ["All tickets"];
+    else if (S.groupBy === "lane") keys = [...new Set(run.tickets.map((t) => t.lane || t.module || "No lane"))].sort(natCmp);
+    else if (S.groupBy === "repo") keys = [...new Set(run.tickets.map((t) => t.repo || "No repo"))].sort(natCmp);
+    else keys = [...new Set(run.tickets.map((t) => t.module || "No module"))].sort(natCmp);
+    for (const k of keys) {
+      const id = (runs.length > 1 && S.groupBy === "block" ? runLabel(run) + " · " : "") + k;
+      if (!lanes.has(id)) { lanes.set(id, { id, key: k, run, gate: S.groupBy === "block" ? run.gates.find((g) => g.key === k) : null, items: [] }); order.push(id); }
+    }
+    for (const t of run.tickets) {
+      const k = groupKeyOf(t, run);
+      const id = (runs.length > 1 && S.groupBy === "block" ? runLabel(run) + " · " : "") + k;
+      if (!lanes.has(id)) { lanes.set(id, { id, key: k, run, gate: null, items: [] }); order.push(id); }
+      lanes.get(id).items.push({ t, run });
+    }
+  }
+  return order.map((k) => lanes.get(k)).filter((l) => l.items.length);
+}
+
+function renderBoard(runs) {
+  const lanes = lanesFor(runs);
+  const html = lanes.map((lane) => {
+    const items = lane.items.slice().sort((a, b) => (a.t.start - b.t.start) || natCmp(a.t.id, b.t.id));
+    const values = { done: 0, prog: 0, err: 0, todo: 0 };
+    items.forEach(({ t }) => values[bucketOf(t.cat)]++);
+    const doneN = values.done, total = items.length;
+    const hours = sum(items.map(({ t }) => t.hours));
+    const cleared = doneN === total && !(lane.gate && lane.gate.status === "red");
+    const closed = S.closed.has(lane.id) || (!S.closed.has("!" + lane.id) && cleared && S.groupBy === "block" && total > 0 && lanes.length > 1);
+    const title = S.groupBy === "status" ? CATS.find((c) => c.key === lane.key).label : lane.id;
+    const pillCls = lane.gate ? (lane.gate.status === "green" ? "green" : lane.gate.status === "red" ? "red" : "") : "";
+    const visible = items.filter(({ t, run }) => matches(t, run)).length;
+    return `<section class="panel lane ${closed ? "closed" : ""}" data-lane="${esc(lane.id)}">
+      <div class="lane-h" role="button" tabindex="0" aria-expanded="${!closed}"><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        <h2>${S.groupBy === "status" ? `<i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:${catColor(lane.key)}"></i>` : ""}${esc(title)} ${lane.gate && lane.gate.name ? `<span class="gname">${esc(lane.gate.name)}</span>` : ""}</h2>
+        ${lane.gate && lane.gate.priority ? '<span class="pill" title="priority gate: its path dispatches ahead of rank">priority</span>' : ""}${lane.gate && lane.gate.starts && lane.gate.starts.length ? `<span class="pill" title="these programs start at this gate">starts ${esc(lane.gate.starts.join(", "))}</span>` : ""}${lane.gate ? `<span class="pill ${pillCls}" title="${esc([lane.gate.scope && !lane.gate.blocking ? "scope: " + lane.gate.scope : "", lane.gate.starts && lane.gate.starts.length ? "starts: " + lane.gate.starts.join(", ") : "", lane.gate.greenAt ? "green " + new Date(lane.gate.greenAt).toISOString() : "", lane.gate.evidence || "", ...lane.gate.checks.map((c) => "check: " + c), lane.gate.onGreen ? "on green: " + lane.gate.onGreen : "", lane.gate.ifRed ? "if red: " + lane.gate.ifRed : ""].filter(Boolean).join("\n"))}">gate ${esc(lane.gate.status)}${lane.gate.greenAt ? " · " + esc(stamp(lane.gate.greenAt)) : ""}</span>` : ""}${cleared && S.groupBy === "block" ? '<span class="pill green">cleared</span>' : ""}
+        <span class="stat"><span>${doneN}/${total} done</span><span>${fmtH(hours)} agent</span>${visible !== total ? `<span>${visible} shown</span>` : ""}${stackBar(values, total)}</span></div>
+      <div class="lane-b">${items.map(({ t, run }) => card(t, run)).join("") || '<div class="empty-lane">Nothing here.</div>'}</div></section>`;
+  }).join("");
+  $("#view").innerHTML = html || '<div class="empty">No tickets.</div>';
+}
+
+function jiraUrl(run, key) {
+  if (!key || !run.jiraSite) return null;
+  const site = /^https?:\/\//.test(run.jiraSite) ? run.jiraSite : "https://" + run.jiraSite;
+  return site.replace(/\/+$/, "") + "/browse/" + encodeURIComponent(key);
+}
+function prLabel(url) { const m = /(\d+)\/?$/.exec(url || ""); return m ? "PR #" + m[1] : "PR"; }
+
+function card(t, run) {
+  const ju = jiraUrl(run, t.jiraKey);
+  return `<article class="tcard ${t.critical ? "crit" : ""} ${matches(t, run) ? "" : "dim"}" style="--c:${barColor(t)}" data-id="${esc(t.id)}" data-run="${esc(runKey(run))}" tabindex="0">
+    <div class="l1"><span class="id">${t.critical ? "★ " : ""}${esc(t.id)}</span>${t.size ? `<span class="badge">${esc(t.size)}</span>` : ""}<span class="st">${esc(statusText(t))}</span></div>
+    <div class="tt" title="${esc(t.title)}">${esc(t.title) || '<span style="color:var(--muted)">No title</span>'}</div>
+    <div class="l3"><span title="Agent-hour estimate (${esc(t.hoursFrom)})">est ${fmtH(t.hours, 0)}</span>${t.minutes ? `<span title="Agent time spent">spent ${fmtH(t.minutes / 60)}</span>` : ""}
+      ${t.pr.url ? `<a href="${esc(t.pr.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(prLabel(t.pr.url))} ↗</a>` : ""}
+      ${t.jiraKey ? (ju ? `<a href="${esc(ju)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(t.jiraKey)} ↗</a>` : `<span>${esc(t.jiraKey)}</span>`) : ""}
+      ${t.pr.ci ? `<span title="CI">CI ${t.pr.ci === "green" ? "✓" : esc(t.pr.ci)}</span>` : ""}</div>
+    ${t.alarm ? `<div class="alarm">⚠ ${esc(t.alarm)}</div>` : ""}</article>`;
+}
+
+// ---- detail drawer and tooltip ---------------------------------------------------------------
+function findTicket(runId, id) {
+  const run = S.runs.find((r) => runKey(r) === runId) || S.runs[0];
+  return { run, t: run && run.tickets.find((x) => x.id === id) };
+}
+function openDrawer(runId, id) {
+  const { run, t } = findTicket(runId, id);
+  if (!t) return;
+  const ju = jiraUrl(run, t.jiraKey);
+  const kv = [
+    ["Status", `<b style="color:${catColor(t.cat)}">${esc(CATS.find((c) => c.key === t.cat).label)}</b> · ${esc(statusText(t))}`],
+    ["Run", esc(runLabel(run))],
+    ["Block", esc(t.block || "—")],
+    ["Size", esc(t.size || "—") + (t.autoMerge ? " · auto-merge" : " · needs approval")],
+    ["Estimate", `${fmtH(t.hours)} <span style="color:var(--muted)">(${esc(t.hoursFrom)})</span>`],
+    ["Planned", `T+${Math.round(t.start)}h → T+${Math.round(t.mergeAt)}h · slot ${t.slot + 1}${t.unplaced ? " · dependency could not be met" : ""}`],
+    ["Spent", t.minutes ? fmtH(t.minutes / 60) : "—"],
+    ["Tokens / cost", `${t.tokens ? fmtN(t.tokens) : "—"} / ${t.cost == null ? "—" : "$" + t.cost.toFixed(2)}`],
+    ["Pull request", t.pr.url ? `<a href="${esc(t.pr.url)}" target="_blank" rel="noopener">${esc(t.pr.url)}</a>` : "—"],
+    ["CI / Bugbot", `${esc(t.pr.ci || "—")} / ${esc(t.pr.bugbot || "—")}`],
+    ["Jira", t.jiraKey ? (ju ? `<a href="${esc(ju)}" target="_blank" rel="noopener">${esc(t.jiraKey)}</a>` : esc(t.jiraKey)) + (t.jiraStatus ? " · " + esc(t.jiraStatus) : "") + (t.jiraDone ? " · Done" : "") : "—"],
+    ["Merged", t.pr.sha ? `<span class="mono">${esc(String(t.pr.sha).slice(0, 10))}</span> ${esc(t.pr.via || "")} ${esc(t.pr.mergedAt || "")}` : "—"],
+    ["Agent", t.agent ? `<span class="mono">${esc(t.agent)}</span>` : "—"],
+    ["Attempts", `${t.attempts}${t.recoveries ? ` · ${t.recoveries} recoveries` : ""}`],
+    ["Module", esc([t.module, t.layer].filter(Boolean).join(" · ") || "—")],
+    ...(t.lane || t.repo ? [["Lane / repo", esc([t.lane, t.repo].filter(Boolean).join(" · "))]] : []),
+    ...(t.priorityGate ? [["Priority gate", `<b>${esc(t.priorityGate)}</b> · dispatched after the critical chain, ahead of rank`]] : []),
+    ...(t.planned ? [["Schedule", `slot ${esc(t.planned.slot)} · T+${esc(t.planned.start)}h → T+${esc(t.planned.merge)}h${t.planned.latest_start != null ? ` · latest start T+${esc(t.planned.latest_start)}h` : ""}`]] : []),
+    ["Updated", t.updatedAt ? esc(stamp(parseTime(t.updatedAt))) + ` (${esc(ago(parseTime(t.updatedAt)))})` : "—"],
+  ];
+  if (t.alarm) kv.splice(1, 0, ["Alarm", `<b style="color:var(--c-err)">${esc(t.alarm)}</b>`]);
+  if (t.stateNote) kv.push(["Note", esc(t.stateNote)]);
+  const marks = [["Claimed", t.claimedAt], ["PR opened", t.pr.openedAt], ["Reviewed", t.pr.reviewedAt], ["Approved", t.pr.approvedAt], ["Merged", t.pr.mergedAt], ["Jira last comment", t.jiraCommentAt], ["Updated", t.updatedAt]];
+  const ev = t.events.slice(-25).reverse();
+  const dr = $("#drawer");
+  dr.style.setProperty("--c", catColor(t.cat));
+  dr.innerHTML = `<div class="drawer-h"><div class="id">${t.critical ? "★ " : ""}${esc(t.id)}</div><div class="tt">${esc(t.title)}</div><button class="btn icon x" id="drawerClose" aria-label="Close">✕</button></div>
+    <div class="drawer-b"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    <h4>Timestamps</h4><dl class="kv">${marks.map(([k, v]) => `<dt>${k}</dt><dd>${v ? esc(stamp(parseTime(v))) + ` <span style="color:var(--muted)">${esc(v)}</span>` : "—"}</dd>`).join("")}</dl>
+    ${t.checks.length ? `<h4>Checks when it merges</h4><ul style="margin:0;padding-left:18px;font-size:13px">${t.checks.map((c) => `<li>${c.name ? `<b>${esc(c.name)}</b> — ` : ""}${esc(c.check)}</li>`).join("")}</ul>` : ""}
+    ${t.deps.length ? `<h4>Depends on</h4><div class="tags">${t.deps.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
+    ${t.locks.length ? `<h4>Locks</h4><div class="tags">${t.locks.map((d) => `<span class="tag mono">${esc(d)}</span>`).join("")}</div>` : ""}
+    ${ev.length ? `<h4>Events</h4><div class="ev">${ev.map((e) => `<span class="t">${esc(stamp(parseTime(e.at)))}</span><span>${esc(e.type || "")}${e.from || e.to ? ` ${esc(e.from || "")} → ${esc(e.to || "")}` : ""}${e.detail ? " · " + esc(e.detail) : ""}</span>`).join("")}</div>` : ""}</div>`;
+  $("#tip").style.display = "none";
+  document.body.classList.add("drawer-open");
+  dr.setAttribute("aria-hidden", "false");
+  $("#drawerClose").focus();
+}
+function closeDrawer() { document.body.classList.remove("drawer-open"); $("#drawer").setAttribute("aria-hidden", "true"); }
+
+function showTip(e, el) {
+  const { run, t } = findTicket(el.dataset.run, el.dataset.id);
+  if (!t) return;
+  const tip = $("#tip");
+  tip.innerHTML = `<b>${t.critical ? "★ " : ""}${esc(t.id)}</b> · ${esc(statusText(t))}<br>${esc(t.title)}<br><span class="m">${esc(t.size || "")} · est ${fmtH(t.hours, 0)} · T+${Math.round(t.start)}→${Math.round(t.mergeAt)}h${t.block ? " · " + esc(t.block) : ""}${t.pr.url ? " · " + esc(prLabel(t.pr.url)) : ""}${t.jiraKey ? " · " + esc(t.jiraKey) : ""}</span>${t.alarm ? `<br>⚠ ${esc(t.alarm)}` : ""}`;
+  tip.style.display = "block";
+  const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+  const y = e.clientY + 16 + tip.offsetHeight > window.innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+
+// ---- loading ------------------------------------------------------------------------------------
+const WANT = /(^|\/)(beam|status|state)[^/]*\.json$/i;
+const SKIP_DIR = new Set([".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "previous"]);
+async function readText(f) { return typeof f.text === "function" ? f.text() : new Response(f).text(); }
+async function docFromFile(file, path) {
+  try {
+    const text = await readText(file);
+    return { path, data: JSON.parse(text), modified: file.lastModified || null };
+  } catch (e) { return { path, data: null, error: String(e.message || e) }; }
+}
+async function walkHandle(dir, prefix, out, depth) {
+  if (depth > 7) return;
+  for await (const [name, h] of dir.entries()) {
+    const p = prefix ? prefix + "/" + name : name;
+    if (h.kind === "directory") { if (!SKIP_DIR.has(name) && !name.startsWith("previous-")) await walkHandle(h, p, out, depth + 1); }
+    else if (WANT.test(p)) out.push({ handle: h, path: p });
+  }
+}
+async function readSources(sources) {
+  const docs = [];
+  for (const s of sources) {
+    if (s.kind === "embedded") { for (const d of s.docs) docs.push(d); continue; }
+    if (s.kind === "dir") {
+      let root = s.handle;
+      try { root = await s.handle.getDirectoryHandle(".warp"); } catch (e) { /* the folder is .warp itself, or a run folder */ }
+      const found = [];
+      await walkHandle(root, root === s.handle ? s.handle.name : s.handle.name + "/.warp", found, 0);
+      for (const f of found) docs.push(await docFromFile(await f.handle.getFile(), f.path));
+      continue;
+    }
+    const file = s.kind === "handle" ? await s.handle.getFile() : s.file;
+    docs.push(await docFromFile(file, s.path));
+  }
+  return docs;
+}
+async function load(sources, quiet) {
+  try {
+    const docs = await readSources(sources);
+    const bad = docs.filter((d) => d.error);
+    const good = docs.filter((d) => !d.error);
+    const built = buildRuns(good, S.embedded);
+    if (!built.runs.length) { toast(good.length ? "No beam.json or status.json in what was opened." : "Nothing could be read." + (bad[0] ? " " + bad[0].error : ""), true); return false; }
+    S.sources = sources; S.docs = good; S.runs = built.runs; S.loadedAt = Date.now();
+    S.reloadable = sources.some((s) => s.kind !== "file");
+    if (S.tab !== "all" && !S.runs.some((r) => runKey(r) === S.tab)) S.tab = "all";
+    render();
+    if (!quiet) {
+      const bits = [`${built.runs.length} run${built.runs.length === 1 ? "" : "s"}`, `${sum(built.runs.map((r) => r.tickets.length))} tickets`];
+      if (built.states) bits.push(`${built.states} ticket states (${built.overlaid} newer than the beam)`);
+      if (bad.length) bits.push(`${bad.length} unreadable`);
+      toast("Loaded " + bits.join(", "));
+    }
+    return true;
+  } catch (e) { toast("Could not read: " + (e.message || e), true); return false; }
+}
+async function reload() {
+  if (S.embedded && S.sources.every((s) => s.kind === "embedded")) { location.reload(); return; }
+  if (!S.sources.length) return openFiles();
+  if (!S.reloadable) {
+    // A plain file input gives a snapshot. Chrome may still read the new contents.
+    const ok = await load(S.sources, true);
+    if (!ok) toast("This browser cannot re-read those files. Open them again.", true); else toast("Reloaded");
+    return;
+  }
+  if (await load(S.sources, true)) toast("Reloaded");
+}
+async function openFiles() {
+  if (window.showOpenFilePicker) {
+    try {
+      const hs = await window.showOpenFilePicker({ multiple: true, types: [{ description: "Warp status files", accept: { "application/json": [".json"] } }] });
+      return load(hs.map((h) => ({ kind: "handle", handle: h, path: h.name })));
+    } catch (e) { if (e.name === "AbortError") return; }
+  }
+  $("#fileInput").click();
+}
+async function openFolder() {
+  if (window.showDirectoryPicker) {
+    try { const h = await window.showDirectoryPicker({ mode: "read" }); return load([{ kind: "dir", handle: h, path: h.name }]); }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  $("#dirInput").click();
+}
+function fromInput(files) {
+  const list = Array.from(files).map((f) => ({ kind: "file", file: f, path: f.webkitRelativePath || f.name }));
+  let use = list.filter((x) => x.path.endsWith(".json") && (!x.file.webkitRelativePath || WANT.test(x.path)) && !x.path.split("/").some((p) => SKIP_DIR.has(p) || p.startsWith("previous-")));
+  // A repo folder: read only what is under .warp/ when there is one.
+  if (use.some((x) => x.path.includes(".warp/"))) use = use.filter((x) => x.path.includes(".warp/"));
+  if (!use.length) { toast("No .json status files there.", true); return; }
+  load(use);
+}
+async function fromDrop(dt) {
+  const items = Array.from(dt.items || []);
+  const handles = [];
+  if (items.length && items[0].getAsFileSystemHandle) {
+    for (const it of items) { if (it.kind !== "file") continue; try { const h = await it.getAsFileSystemHandle(); if (h) handles.push(h); } catch (e) { /* fall through */ } }
+  }
+  if (handles.length) return load(handles.map((h) => (h.kind === "directory" ? { kind: "dir", handle: h, path: h.name } : { kind: "handle", handle: h, path: h.name })));
+  // Older browsers: walk entries for dropped folders.
+  const out = [];
+  const walk = (entry, path) => new Promise((res) => {
+    if (entry.isFile) { if (path.endsWith(".json")) entry.file((f) => { out.push({ kind: "file", file: f, path }); res(); }, () => res()); else res(); }
+    else if (entry.isDirectory && !SKIP_DIR.has(entry.name)) {
+      const r = entry.createReader(); const all = [];
+      const next = () => r.readEntries(async (es) => { if (!es.length) { for (const e of all) await walk(e, path + "/" + e.name); res(); } else { all.push(...es); next(); } }, () => res());
+      next();
+    } else res();
+  });
+  const entries = items.map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+  if (entries.length) { for (const e of entries) await walk(e, e.name); return out.length ? load(out.filter((x) => !x.path.includes("/") || WANT.test(x.path))) : toast("No .json files in what was dropped.", true); }
+  fromInput(dt.files);
+}
+
+// ---- wiring ------------------------------------------------------------------------------------
+function setTheme(t) {
+  if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
+  store("theme", t || "");
+}
+function act(name) {
+  $("#fileMenu").classList.remove("open");
+  if (name === "open-files") openFiles();
+  else if (name === "open-folder") openFolder();
+  else if (name === "reload") reload();
+  else if (name === "print") window.print();
+  else if (name === "clear") { S.runs = []; S.docs = []; S.sources = []; S.reloadable = false; closeDrawer(); render(); }
+}
+function setAuto(on) {
+  clearInterval(S.timer); S.timer = null;
+  store("auto", on ? "1" : "");
+  $("#autoRefresh").checked = on;
+  if (on) S.timer = setInterval(() => { if (S.runs.length && !document.hidden) reload(); }, 30000);
+}
+
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-act]");
+  if (a) { act(a.dataset.act); return; }
+  if (e.target.closest("#fileBtn")) { const m = $("#fileMenu"); m.classList.toggle("open"); $("#fileBtn").setAttribute("aria-expanded", m.classList.contains("open")); return; }
+  if (!e.target.closest("#fileMenu")) $("#fileMenu").classList.remove("open");
+  const chip = e.target.closest(".fchip");
+  if (chip) { const c = chip.dataset.cat; S.off.has(c) ? S.off.delete(c) : S.off.add(c); render(); return; }
+  const tab = e.target.closest(".tab");
+  if (tab) { S.tab = tab.dataset.tab; render(); return; }
+  const ck = e.target.closest("[data-clock]");
+  if (ck) { S.clock = ck.dataset.clock; store("clock", S.clock); renderTimeline(currentRuns()); return; }
+  const th = e.target.closest("th[data-sort]");
+  if (th) { const k = th.dataset.sort; S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : 1 }; renderTable(currentRuns()); return; }
+  const v = e.target.closest("#viewSeg button");
+  if (v) { S.view = v.dataset.view; store("view", S.view); render(); return; }
+  const lh = e.target.closest(".lane-h");
+  if (lh) { const lane = lh.parentElement; const id = lane.dataset.lane; const closed = lane.classList.toggle("closed"); S.closed.delete(id); S.closed.delete("!" + id); S.closed.add(closed ? id : "!" + id); lh.setAttribute("aria-expanded", !closed); return; }
+  const tk = e.target.closest(".bar, .tcard, .trow");
+  if (tk && !e.target.closest("a")) { openDrawer(tk.dataset.run, tk.dataset.id); return; }
+});
+document.addEventListener("dblclick", (e) => {
+  const chip = e.target.closest(".fchip");
+  if (chip) { const c = chip.dataset.cat; const only = S.off.size === CATS.length - 1 && !S.off.has(c); S.off = only ? new Set() : new Set(CATS.map((x) => x.key).filter((k) => k !== c)); render(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeDrawer(); $("#fileMenu").classList.remove("open"); return; }
+  const typing = /input|select|textarea/i.test((e.target.tagName || "")) ;
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches(".tcard, .lane-h, .trow, th[data-sort]")) { e.preventDefault(); e.target.click(); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+  else if (e.key === "o") openFiles();
+  else if (e.key === "O") openFolder();
+  else if (e.key === "r") reload();
+  else if (e.key === "p") window.print();
+});
+$("#scrim").addEventListener("click", closeDrawer);
+$("#q").addEventListener("input", (e) => { S.q = e.target.value.trim().toLowerCase(); render(); });
+$("#groupBy").addEventListener("change", (e) => { S.groupBy = e.target.value; store("groupBy", S.groupBy); render(); });
+$("#colorBy").addEventListener("change", (e) => { S.colorBy = e.target.value; store("colorBy", S.colorBy); render(); });
+$("#zoom").addEventListener("input", (e) => { S.zoom = +e.target.value; store("zoom", String(S.zoom)); if (S.view === "timeline") renderTimeline(currentRuns()); });
+$("#reloadBtn").addEventListener("click", reload);
+$("#printBtn").addEventListener("click", () => window.print());
+$("#themeBtn").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  setTheme(cur === "dark" ? "light" : "dark");
+});
+$("#autoRefresh").addEventListener("change", (e) => setAuto(e.target.checked));
+$("#fileInput").addEventListener("change", (e) => { fromInput(e.target.files); e.target.value = ""; });
+$("#dirInput").addEventListener("change", (e) => { fromInput(e.target.files); e.target.value = ""; });
+document.addEventListener("mouseover", (e) => { const b = e.target.closest(".bar"); if (b) showTip(e, b); });
+document.addEventListener("mousemove", (e) => { const b = e.target.closest(".bar"); if (b) showTip(e, b); else $("#tip").style.display = "none"; });
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) { dragDepth++; document.body.classList.add("dragging"); e.preventDefault(); } });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("dragleave", () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove("dragging"); });
+window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging"); if (e.dataTransfer) fromDrop(e.dataTransfer); });
+let resizeT;
+window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (S.runs.length && S.view === "timeline") renderTimeline(currentRuns()); }, 120); });
+// Print the swimlane at page width.
+window.addEventListener("beforeprint", () => { const u = $("#util"); S.utilWasOpen = u.open; S.noStore = true; u.open = true; if (S.view === "timeline" && S.runs.length) { S.printing = true; S.printWidth = 1020; renderTimeline(currentRuns()); } });
+window.addEventListener("afterprint", () => { $("#util").open = !!S.utilWasOpen; setTimeout(() => (S.noStore = false), 0); if (S.printing) { S.printing = false; renderTimeline(currentRuns()); } });
+
+(function init() {
+  const theme = store("theme");
+  if (theme) setTheme(theme);
+  let embedded = null;
+  try { embedded = JSON.parse($("#warp-data").textContent); } catch (e) { embedded = null; }
+  if (embedded && Array.isArray(embedded.files) && embedded.files.length) {
+    S.embedded = { repo: embedded.repo || null, jiraSite: embedded.jiraSite || "" };
+    const docs = embedded.files.map((f) => ({ path: f.path, data: f.data, modified: parseTime(embedded.generatedAt) }));
+    load([{ kind: "embedded", docs }], true).then(() => { $("#generated").textContent = "Written by /warp-dashboard " + stamp(parseTime(embedded.generatedAt)); });
+  }
+  if (store("auto") === "1") setAuto(true);
+  $("#util").open = store("util") === "1";
+  $("#util").addEventListener("toggle", () => { if (!S.noStore) store("util", $("#util").open ? "1" : ""); });
+  render();
+})();
+</script>
+</body>
+</html>

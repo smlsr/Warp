@@ -1,0 +1,16 @@
+name: version
+
+on:
+  pull_request:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a newer version than main
+        run: |
+          git fetch origin main
+          python3 scripts/check_version.py --against origin/main

@@ -1,0 +1,3884 @@
+{
+  "version": 1,
+  "name": "warp-beam",
+  "generatedAt": "2026-10-11T11:20:00Z",
+  "run": "core",
+  "instance": {
+    "id": "7f3a2c",
+    "host": "cursor-cloud",
+    "machine": "bc-7f3a2c",
+    "createdAt": "2026-10-11T12:20:00Z"
+  },
+  "owner": {
+    "by": "Dev One",
+    "machine": "bc-7f3a2c",
+    "host": "cursor-cloud",
+    "at": "2026-10-11T12:20:00Z"
+  },
+  "runState": "running",
+  "paused": false,
+  "pauseReason": null,
+  "gateOrder": "strict",
+  "runStartedAt": "2026-10-11T12:20:00Z",
+  "checkpointAt": "2026-10-12T19:37:00Z",
+  "source": {
+    "schedule": ".warp/schedule.json",
+    "folder": "HOS/spec",
+    "module": "hos"
+  },
+  "program": {
+    "tickets": 68,
+    "criticalPath": [
+      "L-01",
+      "M-02",
+      "F-02",
+      "M-04",
+      "L-07",
+      "R-04",
+      "C-05",
+      "X-01"
+    ],
+    "estimate": {
+      "agentHours": 752,
+      "humanHours": 25.0,
+      "elapsedHours": 105.5,
+      "approvalHours": 0.5,
+      "reviewTickets": 44,
+      "gates": 6,
+      "maxAgents": 12,
+      "criticalAgentHours": 99
+    }
+  },
+  "config": {
+    "maxAgents": 12,
+    "autoMergeSizes": [
+      "S",
+      "M"
+    ],
+    "jiraSite": "acme.atlassian.net",
+    "jiraProject": "HOS",
+    "gateOrder": "strict"
+  },
+  "gates": [
+    {
+      "key": "G0",
+      "name": "Skeleton",
+      "blocking": true,
+      "members": [
+        "F-01",
+        "P-01",
+        "D-01"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "green",
+      "evidence": "members merged: F-01, P-01, D-01",
+      "greenAt": "2026-10-12T06:21:00Z"
+    },
+    {
+      "key": "G1",
+      "name": "Contracts",
+      "blocking": true,
+      "members": [
+        "S-01",
+        "M-03",
+        "L-02"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "green",
+      "evidence": "members merged: S-01, M-03, L-02",
+      "greenAt": "2026-10-12T06:21:00Z"
+    },
+    {
+      "key": "G2",
+      "name": "Ingest \u2192 ready",
+      "blocking": true,
+      "members": [
+        "A-04",
+        "L-06",
+        "C-02"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "pending",
+      "evidence": null,
+      "greenAt": null
+    },
+    {
+      "key": "G3",
+      "name": "Query plane + sets",
+      "blocking": true,
+      "members": [
+        "C-04",
+        "A-06",
+        "L-10"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "pending",
+      "evidence": null,
+      "greenAt": null
+    },
+    {
+      "key": "G4",
+      "name": "CORE engines + orchestrator",
+      "blocking": true,
+      "members": [
+        "R-07",
+        "C-08",
+        "C-09"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "pending",
+      "evidence": null,
+      "greenAt": null
+    },
+    {
+      "key": "G5",
+      "name": "Ship (hos-dev)",
+      "blocking": true,
+      "members": [
+        "A-08",
+        "X-03",
+        "C-11"
+      ],
+      "checks": [
+        "make ci"
+      ],
+      "status": "pending",
+      "evidence": null,
+      "greenAt": null
+    }
+  ],
+  "tickets": {
+    "L-01": {
+      "id": "L-01",
+      "summary": "Compose stack",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [],
+      "hours": 7,
+      "locks": [
+        "loom/compose"
+      ],
+      "gate": "G0",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1102",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 212648,
+      "minutes": 76,
+      "alarm": null,
+      "agent": "bc-d37ee9",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/401",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "fc8e80b36f0e228923a5ef88ef02090bbfdefc15",
+        "via": "connected",
+        "openedAt": "2026-10-11T12:26:00Z",
+        "reviewedAt": "2026-10-11T12:44:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T12:56:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T12:56:00Z",
+        "lastCommentAt": "2026-10-11T12:56:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T11:40:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T11:48:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T12:31:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T12:44:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T12:56:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 0.89
+      },
+      "updatedAt": "2026-10-11T12:56:00Z",
+      "claimedAt": "2026-10-11T11:40:00Z"
+    },
+    "M-01": {
+      "id": "M-01",
+      "summary": "Migration 0001",
+      "size": "L",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [],
+      "hours": 11,
+      "locks": [
+        "core/migration"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1104",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 354651,
+      "minutes": 121,
+      "alarm": null,
+      "agent": "bc-8b5ab3",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/403",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "537409029620bf0dc38084a03d93fd4c804c25d6",
+        "via": "connected",
+        "openedAt": "2026-10-11T13:14:00Z",
+        "reviewedAt": "2026-10-11T13:32:00Z",
+        "approvedAt": "2026-10-11T13:39:00Z",
+        "mergedAt": "2026-10-11T13:44:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T13:44:00Z",
+        "lastCommentAt": "2026-10-11T13:44:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T11:43:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T11:51:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T13:19:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T13:32:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T13:44:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 1.49
+      },
+      "updatedAt": "2026-10-11T13:44:00Z",
+      "claimedAt": "2026-10-11T11:43:00Z"
+    },
+    "O-01": {
+      "id": "O-01",
+      "summary": "pkg/lib/obs OTel helpers",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [],
+      "hours": 7,
+      "locks": [
+        "loom/pkg/lib/obs"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1105",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 504556,
+      "minutes": 124,
+      "alarm": null,
+      "agent": "bc-e77ffe",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/404",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "9556585ea997f351754a09cde5cfedfa5a9196f0",
+        "via": "connected",
+        "openedAt": "2026-10-11T14:15:00Z",
+        "reviewedAt": "2026-10-11T14:33:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T14:45:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T14:45:00Z",
+        "lastCommentAt": "2026-10-11T14:45:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T12:41:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T12:49:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T14:20:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T14:33:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T14:45:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.12
+      },
+      "updatedAt": "2026-10-11T14:45:00Z",
+      "claimedAt": "2026-10-11T12:41:00Z"
+    },
+    "U-01": {
+      "id": "U-01",
+      "summary": "UI workspace + shell",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [],
+      "hours": 11,
+      "locks": [
+        "app/ui"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1106",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 518257,
+      "minutes": 157,
+      "alarm": null,
+      "agent": "bc-c6c91b",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/406",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "df70301704c9d78d82b335998604871926debfdb",
+        "via": "connected",
+        "openedAt": "2026-10-11T15:23:00Z",
+        "reviewedAt": "2026-10-11T15:41:00Z",
+        "approvedAt": "2026-10-11T15:48:00Z",
+        "mergedAt": "2026-10-11T15:53:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T15:53:00Z",
+        "lastCommentAt": "2026-10-11T15:53:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T13:16:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T13:24:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T15:28:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T15:41:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T15:53:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.18
+      },
+      "updatedAt": "2026-10-11T15:53:00Z",
+      "claimedAt": "2026-10-11T13:16:00Z"
+    },
+    "Q-01": {
+      "id": "Q-01",
+      "summary": "Quality atoms",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [],
+      "hours": 11,
+      "locks": [
+        "app/quality"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1107",
+      "autoMerge": false,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 619325,
+      "minutes": 175,
+      "alarm": null,
+      "agent": "bc-0fcf31",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/408",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "1ece615db9a6442e9e7d6b377936d536243d3570",
+        "via": "connected",
+        "openedAt": "2026-10-11T16:09:00Z",
+        "reviewedAt": "2026-10-11T16:27:00Z",
+        "approvedAt": "2026-10-11T16:34:00Z",
+        "mergedAt": "2026-10-11T16:39:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T16:39:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T13:44:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T13:52:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T16:14:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T16:27:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T16:39:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 2.6
+      },
+      "updatedAt": "2026-10-11T16:39:00Z",
+      "claimedAt": "2026-10-11T13:44:00Z"
+    },
+    "I-01": {
+      "id": "I-01",
+      "summary": "Terraform root, providers",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [],
+      "hours": 7,
+      "locks": [
+        "loom/terraform"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1108",
+      "autoMerge": true,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 341205,
+      "minutes": 115,
+      "alarm": null,
+      "agent": "bc-0acd8b",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/412",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "30f970583f9d52f90e8bec948f6f915fe21b37ca",
+        "via": "connected",
+        "openedAt": "2026-10-11T17:04:00Z",
+        "reviewedAt": "2026-10-11T17:22:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T17:34:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T17:34:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T15:39:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T15:47:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T17:09:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T17:22:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T17:34:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.43
+      },
+      "updatedAt": "2026-10-11T17:34:00Z",
+      "claimedAt": "2026-10-11T15:39:00Z"
+    },
+    "A-01": {
+      "id": "A-01",
+      "summary": "STUB registry",
+      "size": "M",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "U-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/stub"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1110",
+      "autoMerge": true,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 382305,
+      "minutes": 105,
+      "alarm": null,
+      "agent": "bc-831d03",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/413",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "816bee06f92e23399ccea098535b6a437178ba0a",
+        "via": "connected",
+        "openedAt": "2026-10-11T17:45:00Z",
+        "reviewedAt": "2026-10-11T18:03:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T18:15:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T18:15:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T16:30:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T16:38:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T17:50:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T18:03:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T18:15:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.61
+      },
+      "updatedAt": "2026-10-11T18:15:00Z",
+      "claimedAt": "2026-10-11T16:30:00Z"
+    },
+    "F-01": {
+      "id": "F-01",
+      "summary": "pkg/lib/token",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/pkg/lib/token"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1113",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 337212,
+      "minutes": 116,
+      "alarm": null,
+      "agent": "bc-b2fff1",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/417",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "f10637ce81fc069e7a609683ceaf4915888564e8",
+        "via": "connected",
+        "openedAt": "2026-10-11T18:32:00Z",
+        "reviewedAt": "2026-10-11T18:50:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T19:02:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T19:02:00Z",
+        "lastCommentAt": "2026-10-11T19:02:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T17:06:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T17:14:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T18:37:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T18:50:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T19:02:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 1.42
+      },
+      "updatedAt": "2026-10-11T19:02:00Z",
+      "claimedAt": "2026-10-11T17:06:00Z"
+    },
+    "P-01": {
+      "id": "P-01",
+      "summary": "pkg/lib/objstore",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [],
+      "hours": 7,
+      "locks": [
+        "loom/pkg/lib/objstore"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1116",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 340360,
+      "minutes": 127,
+      "alarm": null,
+      "agent": "bc-6aa8b9",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/420",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "729135bdd70a39d133dcd77ff179f2d2e48b9662",
+        "via": "connected",
+        "openedAt": "2026-10-11T19:40:00Z",
+        "reviewedAt": "2026-10-11T19:58:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T20:10:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T20:10:00Z",
+        "lastCommentAt": "2026-10-11T20:10:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T18:03:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T18:11:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T19:45:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T19:58:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T20:10:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 1.43
+      },
+      "updatedAt": "2026-10-11T20:10:00Z",
+      "claimedAt": "2026-10-11T18:03:00Z"
+    },
+    "D-01": {
+      "id": "D-01",
+      "summary": "pkg/lib/events CloudEvents",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "U-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/pkg/lib/events"
+      ],
+      "gate": "G0",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1119",
+      "autoMerge": true,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 369558,
+      "minutes": 98,
+      "alarm": null,
+      "agent": "bc-4d82fe",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/423",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "3672d6ae12b80aed6da79a873d9a8079abd0d7fb",
+        "via": "connected",
+        "openedAt": "2026-10-11T20:22:00Z",
+        "reviewedAt": "2026-10-11T20:40:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T20:52:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-11T20:52:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T19:14:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T19:22:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T20:27:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T20:40:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T20:52:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.55
+      },
+      "updatedAt": "2026-10-11T20:52:00Z",
+      "claimedAt": "2026-10-11T19:14:00Z"
+    },
+    "M-02": {
+      "id": "M-02",
+      "summary": "Migration 0002+0003",
+      "size": "L",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "D-01",
+        "L-01"
+      ],
+      "hours": 11,
+      "locks": [
+        "core/migration"
+      ],
+      "gate": "G1",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1122",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 538881,
+      "minutes": 201,
+      "alarm": null,
+      "agent": "bc-f7b103",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/425",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "40cbacd0249a45845dbe3023a906922fa4b9a9c4",
+        "via": "connected",
+        "openedAt": "2026-10-11T21:04:00Z",
+        "reviewedAt": "2026-10-11T21:22:00Z",
+        "approvedAt": "2026-10-11T21:29:00Z",
+        "mergedAt": "2026-10-11T21:34:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T21:34:00Z",
+        "lastCommentAt": "2026-10-11T21:34:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T18:13:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T18:21:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T21:09:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T21:22:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T21:34:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.26
+      },
+      "updatedAt": "2026-10-11T21:34:00Z",
+      "claimedAt": "2026-10-11T18:13:00Z"
+    },
+    "F-02": {
+      "id": "F-02",
+      "summary": "pkg/common models+errors+enums",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "A-01",
+        "L-01"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/pkg/common"
+      ],
+      "gate": "G1",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1123",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 577316,
+      "minutes": 202,
+      "alarm": null,
+      "agent": "bc-2955d6",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/426",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "aaf719f3fd68373b29acf1a57cbd1f5ae28af604",
+        "via": "connected",
+        "openedAt": "2026-10-11T22:08:00Z",
+        "reviewedAt": "2026-10-11T22:26:00Z",
+        "approvedAt": "2026-10-11T22:33:00Z",
+        "mergedAt": "2026-10-11T22:38:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T22:38:00Z",
+        "lastCommentAt": "2026-10-11T22:38:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T19:16:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T19:24:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T22:13:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T22:26:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T22:38:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.42
+      },
+      "updatedAt": "2026-10-11T22:38:00Z",
+      "claimedAt": "2026-10-11T19:16:00Z"
+    },
+    "D-02": {
+      "id": "D-02",
+      "summary": "Compose Dapr sidecars",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "O-01",
+        "Q-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/compose"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1126",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 519652,
+      "minutes": 134,
+      "alarm": null,
+      "agent": "bc-5daf10",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/430",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "179a071e518ae4525b4b1b75321c52966bd8c676",
+        "via": "connected",
+        "openedAt": "2026-10-11T23:10:00Z",
+        "reviewedAt": "2026-10-11T23:28:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-11T23:40:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-11T23:40:00Z",
+        "lastCommentAt": "2026-10-11T23:40:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T21:26:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T21:34:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T23:15:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-11T23:28:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-11T23:40:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.18
+      },
+      "updatedAt": "2026-10-11T23:40:00Z",
+      "claimedAt": "2026-10-11T21:26:00Z"
+    },
+    "U-02": {
+      "id": "U-02",
+      "summary": "Item page /d/",
+      "size": "XL",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "D-01",
+        "D-02"
+      ],
+      "hours": 16,
+      "locks": [
+        "app/item"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1127",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 801586,
+      "minutes": 218,
+      "alarm": null,
+      "agent": "bc-4ba2e1",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/434",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "84768b8c54dd0ba5626467ba04a10547b401ba85",
+        "via": "connected",
+        "openedAt": "2026-10-11T23:46:00Z",
+        "reviewedAt": "2026-10-12T00:04:00Z",
+        "approvedAt": "2026-10-12T00:11:00Z",
+        "mergedAt": "2026-10-12T00:16:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T00:16:00Z",
+        "lastCommentAt": "2026-10-12T00:16:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T20:38:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T20:46:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-11T23:51:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T00:04:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T00:16:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 3.37
+      },
+      "updatedAt": "2026-10-12T00:16:00Z",
+      "claimedAt": "2026-10-11T20:38:00Z"
+    },
+    "Q-02": {
+      "id": "Q-02",
+      "summary": "Quality charts",
+      "size": "M",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "D-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/quality"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1128",
+      "autoMerge": true,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 390192,
+      "minutes": 132,
+      "alarm": null,
+      "agent": "bc-0a2273",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/435",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "43fc052715850a031ad2d5f1e05b3e13f8c110fb",
+        "via": "connected",
+        "openedAt": "2026-10-12T00:53:00Z",
+        "reviewedAt": "2026-10-12T01:11:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-12T01:23:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T01:23:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T23:11:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T23:19:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T00:58:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T01:11:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T01:23:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.64
+      },
+      "updatedAt": "2026-10-12T01:23:00Z",
+      "claimedAt": "2026-10-11T23:11:00Z"
+    },
+    "R-01": {
+      "id": "R-01",
+      "summary": "RUBRIC migrations 0022\u20130025",
+      "size": "XL",
+      "module": "RUBRIC",
+      "layer": "backend",
+      "deps": [
+        "M-01"
+      ],
+      "hours": 16,
+      "locks": [
+        "rubric/rubric"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1129",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 612161,
+      "minutes": 209,
+      "alarm": null,
+      "agent": "bc-67ec32",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/437",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "f22d2882d1a89b37ad0c9bb6e9526a69d97e967b",
+        "via": "connected",
+        "openedAt": "2026-10-12T01:39:00Z",
+        "reviewedAt": "2026-10-12T01:57:00Z",
+        "approvedAt": "2026-10-12T02:04:00Z",
+        "mergedAt": "2026-10-12T02:09:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T02:09:00Z",
+        "lastCommentAt": "2026-10-12T02:09:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T22:40:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T22:48:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T01:44:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T01:57:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T02:09:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.57
+      },
+      "updatedAt": "2026-10-12T02:09:00Z",
+      "claimedAt": "2026-10-11T22:40:00Z"
+    },
+    "I-02": {
+      "id": "I-02",
+      "summary": "VPC, subnets, NAT",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-01",
+        "U-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/vpc,"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1132",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 407563,
+      "minutes": 107,
+      "alarm": null,
+      "agent": "bc-2eefa2",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/441",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "ccb1c51d0eba0ea84770a08716e6fec353b97377",
+        "via": "connected",
+        "openedAt": "2026-10-12T02:23:00Z",
+        "reviewedAt": "2026-10-12T02:41:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-12T02:53:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T02:53:00Z",
+        "lastCommentAt": "2026-10-12T02:53:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T01:06:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T01:14:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T02:28:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T02:41:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T02:53:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 1.71
+      },
+      "updatedAt": "2026-10-12T02:53:00Z",
+      "claimedAt": "2026-10-12T01:06:00Z"
+    },
+    "A-02": {
+      "id": "A-02",
+      "summary": "Adapters",
+      "size": "XL",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "I-01"
+      ],
+      "hours": 16,
+      "locks": [
+        "app/adapters"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1134",
+      "autoMerge": false,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 1067985,
+      "minutes": 293,
+      "alarm": null,
+      "agent": "bc-db31cc",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/444",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "1570266b42b38755cd37880e16ac4191a26aa0ae",
+        "via": "connected",
+        "openedAt": "2026-10-12T03:25:00Z",
+        "reviewedAt": "2026-10-12T03:43:00Z",
+        "approvedAt": "2026-10-12T03:50:00Z",
+        "mergedAt": "2026-10-12T03:55:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T03:55:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-11T23:02:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-11T23:10:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T03:30:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T03:43:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T03:55:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 4.49
+      },
+      "updatedAt": "2026-10-12T03:55:00Z",
+      "claimedAt": "2026-10-11T23:02:00Z"
+    },
+    "S-01": {
+      "id": "S-01",
+      "summary": "Swatch page /swatch",
+      "size": "XL",
+      "module": "SWATCH",
+      "layer": "ui",
+      "deps": [
+        "D-02",
+        "Q-01"
+      ],
+      "hours": 16,
+      "locks": [
+        "swatch/swatch"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1137",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 533588,
+      "minutes": 181,
+      "alarm": null,
+      "agent": "bc-9f27f5",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/445",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "6af257488d959c31fe8ad4a156d2a68c02f4b342",
+        "via": "connected",
+        "openedAt": "2026-10-12T04:14:00Z",
+        "reviewedAt": "2026-10-12T04:32:00Z",
+        "approvedAt": "2026-10-12T04:39:00Z",
+        "mergedAt": "2026-10-12T04:44:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T04:44:00Z",
+        "lastCommentAt": "2026-10-12T04:44:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T01:43:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T01:51:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T04:19:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T04:32:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T04:44:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.24
+      },
+      "updatedAt": "2026-10-12T04:44:00Z",
+      "claimedAt": "2026-10-12T01:43:00Z"
+    },
+    "M-03": {
+      "id": "M-03",
+      "summary": "Migration 0004",
+      "size": "M",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "M-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "core/migration"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1140",
+      "autoMerge": true,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 219414,
+      "minutes": 78,
+      "alarm": null,
+      "agent": "bc-eea7bb",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/447",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "2e5f950c0ce5af69430b91ed2954ba5cf81e54dd",
+        "via": "connected",
+        "openedAt": "2026-10-12T04:57:00Z",
+        "reviewedAt": "2026-10-12T05:15:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-12T05:27:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T05:27:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T04:09:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T04:17:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T05:02:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T05:15:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T05:27:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 0.92
+      },
+      "updatedAt": "2026-10-12T05:27:00Z",
+      "claimedAt": "2026-10-12T04:09:00Z"
+    },
+    "L-02": {
+      "id": "L-02",
+      "summary": "pkg/lib/auth Bearer + scopes",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "I-01"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/pkg/lib/auth"
+      ],
+      "gate": "G1",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1142",
+      "autoMerge": false,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 799270,
+      "minutes": 257,
+      "alarm": null,
+      "agent": "bc-cdbde7",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/449",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "4540f4262d8ad8c0ac127e938005ce74721888ff",
+        "via": "connected",
+        "openedAt": "2026-10-12T05:51:00Z",
+        "reviewedAt": "2026-10-12T06:09:00Z",
+        "approvedAt": "2026-10-12T06:16:00Z",
+        "mergedAt": "2026-10-12T06:21:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T06:21:00Z",
+        "lastCommentAt": "2026-10-12T06:21:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T02:04:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T02:12:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T05:56:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T06:09:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T06:21:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 3.36
+      },
+      "updatedAt": "2026-10-12T06:21:00Z",
+      "claimedAt": "2026-10-12T02:04:00Z"
+    },
+    "M-04": {
+      "id": "M-04",
+      "summary": "Migration 0009",
+      "size": "L",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "F-02",
+        "L-02"
+      ],
+      "hours": 11,
+      "locks": [
+        "core/migration"
+      ],
+      "gate": "G2",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1145",
+      "autoMerge": false,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 340136,
+      "minutes": 122,
+      "alarm": null,
+      "agent": "bc-83a4e6",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/450",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "fa6197748d118e3781728a07bbab27f604b8157d",
+        "via": "connected",
+        "openedAt": "2026-10-12T06:21:00Z",
+        "reviewedAt": "2026-10-12T06:39:00Z",
+        "approvedAt": "2026-10-12T06:46:00Z",
+        "mergedAt": "2026-10-12T06:51:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T06:51:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T04:49:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T04:57:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T06:26:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T06:39:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T06:51:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.43
+      },
+      "updatedAt": "2026-10-12T06:51:00Z",
+      "claimedAt": "2026-10-12T04:49:00Z"
+    },
+    "C-01": {
+      "id": "C-01",
+      "summary": "CORE migrations 0012\u20130016",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "D-02"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/core"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1146",
+      "autoMerge": false,
+      "status": "merged",
+      "attempts": 1,
+      "tokens": 412973,
+      "minutes": 121,
+      "alarm": null,
+      "agent": "bc-8bc083",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/454",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "a81100a16ea330a1a66d58b5d1a4c01ea887ae22",
+        "via": "connected",
+        "openedAt": "2026-10-12T07:06:00Z",
+        "reviewedAt": "2026-10-12T07:24:00Z",
+        "approvedAt": "2026-10-12T07:31:00Z",
+        "mergedAt": "2026-10-12T07:36:00Z"
+      },
+      "jira": {
+        "status": "QA Ready",
+        "doneAt": null,
+        "lastCommentAt": "2026-10-12T07:36:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T05:35:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T05:43:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T07:11:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T07:24:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T07:36:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "merged"
+        }
+      ],
+      "usage": {
+        "cost": 1.73
+      },
+      "updatedAt": "2026-10-12T07:36:00Z",
+      "claimedAt": "2026-10-12T05:35:00Z"
+    },
+    "L-03": {
+      "id": "L-03",
+      "summary": "Wire the default gateway",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "I-02",
+        "M-04"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/wire"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1149",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 538580,
+      "minutes": 140,
+      "alarm": null,
+      "agent": "bc-ba9588",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/457",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "32d90dcd57bb7d973ac4da9afb81392137161c16",
+        "via": "connected",
+        "openedAt": "2026-10-12T08:02:00Z",
+        "reviewedAt": "2026-10-12T08:20:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-12T08:32:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T08:32:00Z",
+        "lastCommentAt": "2026-10-12T08:32:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T06:12:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T06:20:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T08:07:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T08:20:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T08:32:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 2.26
+      },
+      "updatedAt": "2026-10-12T08:32:00Z",
+      "claimedAt": "2026-10-12T06:12:00Z"
+    },
+    "L-04": {
+      "id": "L-04",
+      "summary": "vertical-registry /v1/verticals",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-02",
+        "R-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/vertical-registry"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1152",
+      "autoMerge": true,
+      "status": "done",
+      "attempts": 1,
+      "tokens": 272208,
+      "minutes": 107,
+      "alarm": null,
+      "agent": "bc-a01d61",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/461",
+        "ci": "green",
+        "bugbot": "pass",
+        "sha": "03a63966213bca7fd644de2f0dec6823fb5c9d56",
+        "via": "connected",
+        "openedAt": "2026-10-12T08:52:00Z",
+        "reviewedAt": "2026-10-12T09:10:00Z",
+        "approvedAt": null,
+        "mergedAt": "2026-10-12T09:22:00Z"
+      },
+      "jira": {
+        "status": "Done",
+        "doneAt": "2026-10-12T09:22:00Z",
+        "lastCommentAt": "2026-10-12T09:22:00Z"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T07:35:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T07:43:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        },
+        {
+          "at": "2026-10-12T08:57:00Z",
+          "type": "status",
+          "from": "coding",
+          "to": "review"
+        },
+        {
+          "at": "2026-10-12T09:10:00Z",
+          "type": "bugbot",
+          "detail": "pass"
+        },
+        {
+          "at": "2026-10-12T09:22:00Z",
+          "type": "status",
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "usage": {
+        "cost": 1.14
+      },
+      "updatedAt": "2026-10-12T09:22:00Z",
+      "claimedAt": "2026-10-12T07:35:00Z"
+    },
+    "U-03": {
+      "id": "U-03",
+      "summary": "QA page /qa",
+      "size": "XL",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "M-03"
+      ],
+      "hours": 16,
+      "locks": [
+        "app/qa"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1153",
+      "autoMerge": false,
+      "status": "coding",
+      "attempts": 1,
+      "tokens": 263500,
+      "minutes": 85,
+      "alarm": null,
+      "agent": "bc-bdaaea",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T18:10:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:11:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        }
+      ],
+      "usage": {
+        "cost": 1.11
+      },
+      "updatedAt": "2026-10-12T19:11:00Z",
+      "claimedAt": "2026-10-12T18:10:00Z"
+    },
+    "R-02": {
+      "id": "R-02",
+      "summary": "pkg/common rubric types",
+      "size": "L",
+      "module": "RUBRIC",
+      "layer": "backend",
+      "deps": [
+        "Q-02"
+      ],
+      "hours": 11,
+      "locks": [
+        "rubric/pkg/common"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1156",
+      "autoMerge": false,
+      "status": "coding",
+      "attempts": 1,
+      "tokens": 105400,
+      "minutes": 34,
+      "alarm": null,
+      "agent": "bc-29ca86",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T19:01:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:33:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "coding"
+        }
+      ],
+      "usage": {
+        "cost": 0.44
+      },
+      "updatedAt": "2026-10-12T19:33:00Z",
+      "claimedAt": "2026-10-12T19:01:00Z"
+    },
+    "D-03": {
+      "id": "D-03",
+      "summary": "Dapr components",
+      "size": "L",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "M-02"
+      ],
+      "hours": 11,
+      "locks": [
+        "loom/dapr"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1158",
+      "autoMerge": false,
+      "status": "planning",
+      "attempts": 1,
+      "tokens": 362700,
+      "minutes": 117,
+      "alarm": null,
+      "agent": "bc-aa4c5c",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:38:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:06:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "planning"
+        }
+      ],
+      "usage": {
+        "cost": 1.52
+      },
+      "updatedAt": "2026-10-12T19:06:00Z",
+      "claimedAt": "2026-10-12T17:38:00Z"
+    },
+    "Q-03": {
+      "id": "Q-03",
+      "summary": "InteractionModal family",
+      "size": "XL",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "A-02",
+        "L-04",
+        "M-03"
+      ],
+      "hours": 16,
+      "locks": [
+        "app/interactionmodal"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1161",
+      "autoMerge": false,
+      "status": "fix",
+      "attempts": 2,
+      "tokens": 285200,
+      "minutes": 92,
+      "alarm": null,
+      "agent": "bc-aba8b9",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/464",
+        "ci": "red",
+        "bugbot": null,
+        "openedAt": "2026-10-12T18:54:00Z",
+        "reviewedAt": null
+      },
+      "jira": {
+        "status": "In Review"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T18:03:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:00:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "fix"
+        }
+      ],
+      "usage": {
+        "cost": 1.2
+      },
+      "updatedAt": "2026-10-12T19:00:00Z",
+      "claimedAt": "2026-10-12T18:03:00Z"
+    },
+    "A-03": {
+      "id": "A-03",
+      "summary": "VoC overview resolver",
+      "size": "M",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "M-02"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/voc"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1163",
+      "autoMerge": true,
+      "status": "review",
+      "attempts": 1,
+      "tokens": 294500,
+      "minutes": 95,
+      "alarm": null,
+      "agent": "bc-3e01aa",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/467",
+        "ci": "green",
+        "bugbot": null,
+        "openedAt": "2026-10-12T18:53:00Z",
+        "reviewedAt": null
+      },
+      "jira": {
+        "status": "In Review"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T18:00:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:36:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "review"
+        }
+      ],
+      "usage": {
+        "cost": 1.24
+      },
+      "updatedAt": "2026-10-12T19:36:00Z",
+      "claimedAt": "2026-10-12T18:00:00Z"
+    },
+    "L-05": {
+      "id": "L-05",
+      "summary": "Pass 1 deterministic",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "M-03",
+        "M-04"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/pass"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1164",
+      "autoMerge": false,
+      "status": "bugbot_running",
+      "attempts": 1,
+      "tokens": 207700,
+      "minutes": 67,
+      "alarm": null,
+      "agent": "bc-759eb5",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/470",
+        "ci": "green",
+        "bugbot": null,
+        "openedAt": "2026-10-12T19:07:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
+      },
+      "jira": {
+        "status": "In Review"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T18:28:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:28:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "bugbot_running"
+        }
+      ],
+      "usage": {
+        "cost": 0.87
+      },
+      "updatedAt": "2026-10-12T19:28:00Z",
+      "claimedAt": "2026-10-12T18:28:00Z"
+    },
+    "F-03": {
+      "id": "F-03",
+      "summary": "Makefile conventions, health probe",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "D-02"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/makefile"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1166",
+      "autoMerge": false,
+      "status": "awaiting_approval",
+      "attempts": 1,
+      "tokens": 415400,
+      "minutes": 134,
+      "alarm": null,
+      "agent": "bc-44df96",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/473",
+        "ci": "green",
+        "bugbot": "pass",
+        "openedAt": "2026-10-12T18:33:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
+      },
+      "jira": {
+        "status": "QA Ready"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:21:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:38:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "awaiting_approval"
+        }
+      ],
+      "usage": {
+        "cost": 1.74
+      },
+      "updatedAt": "2026-10-12T19:38:00Z",
+      "claimedAt": "2026-10-12T17:21:00Z"
+    },
+    "U-04": {
+      "id": "U-04",
+      "summary": "Watchers page /watchers",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "A-02",
+        "Q-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/watchers"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1168",
+      "autoMerge": false,
+      "status": "awaiting_approval",
+      "attempts": 1,
+      "tokens": 350300,
+      "minutes": 113,
+      "alarm": null,
+      "agent": "bc-4363e5",
+      "pr": {
+        "url": "https://github.com/acme/hos-platform/pull/476",
+        "ci": "green",
+        "bugbot": "pass",
+        "openedAt": "2026-10-12T18:44:00Z",
+        "reviewedAt": "2026-10-12T19:30:00Z"
+      },
+      "jira": {
+        "status": "QA Ready"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:42:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:17:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "awaiting_approval"
+        }
+      ],
+      "usage": {
+        "cost": 1.47
+      },
+      "updatedAt": "2026-10-12T19:17:00Z",
+      "claimedAt": "2026-10-12T17:42:00Z"
+    },
+    "R-03": {
+      "id": "R-03",
+      "summary": "internal/rubric/store",
+      "size": "L",
+      "module": "RUBRIC",
+      "layer": "backend",
+      "deps": [
+        "D-02",
+        "Q-02"
+      ],
+      "hours": 11,
+      "locks": [
+        "rubric/internal/rubric/store"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1171",
+      "autoMerge": false,
+      "status": "alarm",
+      "attempts": 1,
+      "tokens": 496000,
+      "minutes": 160,
+      "alarm": "lock-escape: wrote loom/ingest outside its lock",
+      "agent": "bc-f8fdd2",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T16:55:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:18:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "alarm"
+        }
+      ],
+      "usage": {
+        "cost": 2.08
+      },
+      "updatedAt": "2026-10-12T19:18:00Z",
+      "claimedAt": "2026-10-12T16:55:00Z"
+    },
+    "S-02": {
+      "id": "S-02",
+      "summary": "POST /v1/swatch/compose",
+      "size": "M",
+      "module": "SWATCH",
+      "layer": "backend",
+      "deps": [
+        "I-02"
+      ],
+      "hours": 7,
+      "locks": [
+        "swatch/post"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1174",
+      "autoMerge": true,
+      "status": "parked",
+      "attempts": 1,
+      "tokens": 86800,
+      "minutes": 28,
+      "alarm": "worker-died",
+      "agent": "bc-3e940b",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T19:07:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:19:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "parked"
+        }
+      ],
+      "usage": {
+        "cost": 0.36
+      },
+      "updatedAt": "2026-10-12T19:19:00Z",
+      "claimedAt": "2026-10-12T19:07:00Z",
+      "recoveries": 5
+    },
+    "A-04": {
+      "id": "A-04",
+      "summary": "Program dashboard",
+      "size": "M",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "L-03",
+        "U-02"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/program"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1175",
+      "autoMerge": true,
+      "status": "claimed",
+      "attempts": 1,
+      "tokens": 344100,
+      "minutes": 111,
+      "alarm": null,
+      "agent": "bc-37c60e",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:44:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:27:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "claimed"
+        }
+      ],
+      "usage": {
+        "cost": 1.45
+      },
+      "updatedAt": "2026-10-12T19:27:00Z",
+      "claimedAt": "2026-10-12T17:44:00Z"
+    },
+    "L-06": {
+      "id": "L-06",
+      "summary": "spine-writer",
+      "size": "L",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-02",
+        "Q-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "loom/spine-writer"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1178",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 1,
+      "tokens": 325500,
+      "minutes": 105,
+      "alarm": null,
+      "agent": "bc-00460d",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:50:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:14:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "queued"
+        }
+      ],
+      "usage": {
+        "cost": 1.37
+      },
+      "updatedAt": "2026-10-12T19:14:00Z",
+      "claimedAt": "2026-10-12T17:50:00Z"
+    },
+    "C-02": {
+      "id": "C-02",
+      "summary": "pkg/common/core",
+      "size": "L",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "Q-02",
+        "U-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "core/pkg/common/core"
+      ],
+      "gate": "G2",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1180",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 1,
+      "tokens": 437100,
+      "minutes": 141,
+      "alarm": null,
+      "agent": "bc-1579da",
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "In Progress"
+      },
+      "events": [
+        {
+          "at": "2026-10-12T17:14:00Z",
+          "type": "status",
+          "from": "queued",
+          "to": "claimed"
+        },
+        {
+          "at": "2026-10-12T19:21:00Z",
+          "type": "status",
+          "from": "claimed",
+          "to": "queued"
+        }
+      ],
+      "usage": {
+        "cost": 1.84
+      },
+      "updatedAt": "2026-10-12T19:21:00Z",
+      "claimedAt": "2026-10-12T17:14:00Z"
+    },
+    "L-07": {
+      "id": "L-07",
+      "summary": "Pass 2 schema-guided LLM",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "F-03",
+        "M-04",
+        "U-04"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/pass"
+      ],
+      "gate": "G3",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1181",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "R-04": {
+      "id": "R-04",
+      "summary": "Query API /v1/rubric/query",
+      "size": "L",
+      "module": "RUBRIC",
+      "layer": "backend",
+      "deps": [
+        "C-01",
+        "C-02"
+      ],
+      "hours": 11,
+      "locks": [
+        "rubric/query"
+      ],
+      "gate": "G3",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1184",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-03": {
+      "id": "C-03",
+      "summary": "internal/core/store",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "C-02",
+        "R-03"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/internal/core/store"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1185",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "U-05": {
+      "id": "U-05",
+      "summary": "Graph page /graph",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "L-07",
+        "R-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/graph"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1186",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "L-08": {
+      "id": "L-08",
+      "summary": "star-projector",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-07",
+        "R-02"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/star-projector"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1187",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "A-05": {
+      "id": "A-05",
+      "summary": "Agent dashboard resolver",
+      "size": "L",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "U-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/agent"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1189",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "S-03": {
+      "id": "S-03",
+      "summary": "identity service",
+      "size": "L",
+      "module": "SWATCH",
+      "layer": "backend",
+      "deps": [
+        "L-03",
+        "M-04"
+      ],
+      "hours": 11,
+      "locks": [
+        "swatch/identity"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1192",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "Q-04": {
+      "id": "Q-04",
+      "summary": "Supervisor program overview",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "U-03"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/supervisor"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1194",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "L-09": {
+      "id": "L-09",
+      "summary": "pkg/lib/graph GraphQuery",
+      "size": "L",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "L-06",
+        "Q-04",
+        "U-04"
+      ],
+      "hours": 11,
+      "locks": [
+        "loom/pkg/lib/graph"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1196",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "R-05": {
+      "id": "R-05",
+      "summary": "internal/rubric/authz",
+      "size": "L",
+      "module": "RUBRIC",
+      "layer": "backend",
+      "deps": [
+        "C-03",
+        "L-06"
+      ],
+      "hours": 11,
+      "locks": [
+        "rubric/internal/rubric/authz"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1197",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-04": {
+      "id": "C-04",
+      "summary": "apps/core/core-api skeleton",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "A-03",
+        "F-03"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/apps/core/core-api"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1200",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "A-06": {
+      "id": "A-06",
+      "summary": "Interaction detail resolver",
+      "size": "XL",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "C-02",
+        "L-09"
+      ],
+      "hours": 16,
+      "locks": [
+        "app/interaction"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1202",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "L-10": {
+      "id": "L-10",
+      "summary": "dataset-svc",
+      "size": "XL",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "M-04"
+      ],
+      "hours": 16,
+      "locks": [
+        "loom/dataset-svc"
+      ],
+      "gate": "G3",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1204",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-05": {
+      "id": "C-05",
+      "summary": "score-engine",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "A-06",
+        "R-04"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/score-engine"
+      ],
+      "gate": "G4",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1206",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-06": {
+      "id": "C-06",
+      "summary": "fact-engine",
+      "size": "M",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "A-05",
+        "C-03"
+      ],
+      "hours": 7,
+      "locks": [
+        "core/fact-engine"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1207",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "R-06": {
+      "id": "R-06",
+      "summary": "Screen 1 Rubric Library",
+      "size": "L",
+      "module": "RUBRIC",
+      "layer": "ui",
+      "deps": [
+        "C-05",
+        "L-09",
+        "L-10"
+      ],
+      "hours": 11,
+      "locks": [
+        "rubric/screen"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1210",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "A-07": {
+      "id": "A-07",
+      "summary": "Supervisor review queue",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "C-06",
+        "L-10"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/supervisor"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1213",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "L-11": {
+      "id": "L-11",
+      "summary": "rank leg (signal.churn_risk)",
+      "size": "L",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "U-05"
+      ],
+      "hours": 11,
+      "locks": [
+        "loom/rank"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1215",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "S-04": {
+      "id": "S-04",
+      "summary": "Selector",
+      "size": "M",
+      "module": "SWATCH",
+      "layer": "backend",
+      "deps": [
+        "L-07",
+        "L-10"
+      ],
+      "hours": 7,
+      "locks": [
+        "swatch/selector"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1217",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-07": {
+      "id": "C-07",
+      "summary": "apps/core/qa-orchestrator",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "U-05"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/apps/core/qa-orchestrator"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1219",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "Q-05": {
+      "id": "Q-05",
+      "summary": "Rubric builder \u2014 Construct",
+      "size": "L",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "L-10"
+      ],
+      "hours": 11,
+      "locks": [
+        "app/rubric"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1221",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "R-07": {
+      "id": "R-07",
+      "summary": "Screen 7 Assignment wizard",
+      "size": "XL",
+      "module": "RUBRIC",
+      "layer": "ui",
+      "deps": [
+        "A-07",
+        "R-04"
+      ],
+      "hours": 16,
+      "locks": [
+        "rubric/screen"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1223",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-08": {
+      "id": "C-08",
+      "summary": "CARES profiles",
+      "size": "M",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "A-05",
+        "C-05"
+      ],
+      "hours": 7,
+      "locks": [
+        "core/cares"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1225",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-09": {
+      "id": "C-09",
+      "summary": "CARES assignments",
+      "size": "M",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "A-05",
+        "C-04",
+        "C-06"
+      ],
+      "hours": 7,
+      "locks": [
+        "core/cares"
+      ],
+      "gate": "G4",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1227",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "X-01": {
+      "id": "X-01",
+      "summary": "Security hardening",
+      "size": "L",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "A-07",
+        "C-05",
+        "Q-05"
+      ],
+      "hours": 11,
+      "locks": [
+        "loom/security"
+      ],
+      "gate": "G5",
+      "critical": true,
+      "starred": false,
+      "jiraKey": "HOS-1228",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "X-02": {
+      "id": "X-02",
+      "summary": "CI additions",
+      "size": "M",
+      "module": "LOOM",
+      "layer": "backend",
+      "deps": [
+        "C-09",
+        "X-01"
+      ],
+      "hours": 7,
+      "locks": [
+        "loom/ci"
+      ],
+      "gate": "G5",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1230",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-10": {
+      "id": "C-10",
+      "summary": "Packaging",
+      "size": "XL",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "C-06"
+      ],
+      "hours": 16,
+      "locks": [
+        "core/packaging"
+      ],
+      "gate": "G5",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1231",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "A-08": {
+      "id": "A-08",
+      "summary": "Helm charts on hos-dev",
+      "size": "M",
+      "module": "APP",
+      "layer": "backend",
+      "deps": [
+        "C-05",
+        "X-02"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/helm"
+      ],
+      "gate": "G5",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1234",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "X-03": {
+      "id": "X-03",
+      "summary": "Playwright e2e for the Quality app",
+      "size": "M",
+      "module": "APP",
+      "layer": "ui",
+      "deps": [
+        "C-08"
+      ],
+      "hours": 7,
+      "locks": [
+        "app/playwright"
+      ],
+      "gate": "G5",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1236",
+      "autoMerge": true,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    },
+    "C-11": {
+      "id": "C-11",
+      "summary": "docs",
+      "size": "L",
+      "module": "CORE",
+      "layer": "backend",
+      "deps": [
+        "R-06",
+        "S-04"
+      ],
+      "hours": 11,
+      "locks": [
+        "core/docs"
+      ],
+      "gate": "G5",
+      "critical": false,
+      "starred": false,
+      "jiraKey": "HOS-1237",
+      "autoMerge": false,
+      "status": "queued",
+      "attempts": 0,
+      "tokens": 0,
+      "minutes": 0,
+      "alarm": null,
+      "agent": null,
+      "pr": {
+        "url": null,
+        "ci": null,
+        "bugbot": null
+      },
+      "jira": {
+        "status": "To Do"
+      },
+      "events": [],
+      "usage": {},
+      "updatedAt": null
+    }
+  }
+}

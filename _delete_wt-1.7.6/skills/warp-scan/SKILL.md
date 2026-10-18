@@ -1,0 +1,101 @@
+---
+name: warp-scan
+description: "Scan any repo, or one folder of it, for CURSOR_PLAN.md, schedule.json, a build map, or a Jira ticket export and build the Warp plan. Use as the first step on a project, or to rebuild after the spec changes."
+---
+
+# Warp scan
+
+First step on every repo. Do not assume HumanifyOS paths.
+
+## Run
+
+```bash
+python3 <plugin>/scripts/scan.py scan --root . --out .warp/beam.json
+```
+
+`scan.py ?` prints every subcommand and flag (`help`, `-h`, and `--help` do the same). Quote `?` if the shell expands it.
+
+## Scope to a folder
+
+`/warp-scan` takes an optional folder, as a path or a name. Without it the folder saved by the last scan is used, or the whole repo when none is saved.
+
+```bash
+python3 <plugin>/scripts/scan.py scan --root . --folder HOS/spec --out .warp/beam.json
+```
+
+Only that folder is searched for plans, schedules, and exports. `.warp/` stays at the repo root, and `scan.json` and the beam record the folder. The folder is saved as `scanFolder` and reused by the next bare `/warp-scan` (`folder: <path> (saved by an earlier scan). /warp-scan / scans the whole repo.`). `/warp-scan /` clears it and scans the whole repo (`folder: was X, now whole repo`).
+
+| Argument | Result |
+|---|---|
+| An existing path under the repo, such as `HOS/spec` | Used as given. |
+| A name or trailing path, such as `spec`, matching one folder | That folder. |
+| A name matching several folders, only one with plan files | That folder, with a note listing the others. |
+| A name matching several folders, none or more than one with plan files | Nothing is scanned. The script lists the matches (exit 3). Ask the user which one, then run again with the full path. |
+| No such folder, or a path outside the repo | Error. Nothing is written. |
+| A folder with no plan files | "no plan found in <folder>" (exit 2). |
+
+With no argument, if plans sit in more than one folder, the scan prints which folders and still uses the richest plan. Suggest `/warp-scan <folder>` if that is not the one the user wants.
+
+The scan writes `.warp/scan.json` (what it found) and `.warp/beam.json` (the plan). `runState` is `stopped`. Nothing dispatches until `/warp-start`.
+
+## Named runs
+
+On a named run (`run:` in the config) a ticket id belongs to one run. If another run owns an id the scan refuses and writes nothing (exit 4). `--skip-owned` leaves those ids out. After the scan the run folder is published to the repo. `/warp-start` is refused until a scan has run. Details: `docs/RUNS.md`.
+
+## What it looks for
+
+| File | How it is read |
+|---|---|
+| `WARP_PLAN.json` | Warp exchange format. Wins if present. |
+| `schedule.json` with a `tickets` array | Deps, locks, gates, size. Preferred when there is no Warp plan. |
+| `schedule.json` with `schema: "build-schedule/2"` | Hours (`h`), `after` blockers, `critical_chain` first, milestone gates, `priority_gate`. A schedule that spans several repos is split by repo (`repo`, `repoRuns`, `externalRepos` in `.warp/config.yaml`). `python3 <plugin>/scripts/buildsched.py show <file> --repo <name>` prints the split without scanning. |
+| `CURSOR_PLAN.md`, `CURSOR_PLAN_FAST.md` | Wave headings, ticket ids, `after` blockers, `Gates before` checks. |
+| `*tickets*.json`, `jira/*.json` | Jira export: `blockedBy`, `blockedByTempIds`, or Blocks links. |
+| Markdown table | Columns `id` and `deps` or `blockers`. |
+
+A connected Jira plugin is the live source after the scan. If the scan prints `no plan found`, relay its `next:` line: `/warp-from-jira <label>[,<label>]` writes a plan folder from the Jira issues with those labels; then run `/warp-scan <folder>`. Do not invent tickets.
+
+## Message to Slack or Teams
+
+A successful scan writes `.warp/notify-post.json`, headed `Warp | <repo> / <project>` (the channel is shared across repos), with format, ticket count, gate count, estimate, and links to the plan used and the other plan, schedule, and export files found. Links use the `origin` remote and the current branch when it is GitHub, GitLab, or bitbucket.org, and work once the branch is pushed. Otherwise the relative path is used. Follow the `herald:` line the scan prints and post as `agents/herald.md` describes. `notify: quiet` posts nothing. With no channel set, or no connected server, the text goes to `.warp/outbox.md`. Tell the user and carry on. A failed scan (no plan found) posts nothing.
+
+## Jira project
+
+If the scan prints `jira: PROJECT`, or `jiraProject` in `.warp/config.yaml` is still empty, resolve the project before the external-id lookup:
+
+1. Call `getAccessibleAtlassianResources` and `getVisibleJiraProjects` on `jiraMcp`.
+2. Save the transcript and run `python3 <plugin>/scripts/jira_sync.py project --apply results.json`.
+3. If several projects come back, run the JQL in `.warp/jira-project-probe.json` (`project --probe` reprints it). Save the searches and run `python3 <plugin>/scripts/jira_sync.py project --record probe.json`. Exactly one project with a hit is stored. If several projects match, or none do, the command lists them and the `project --set` lines. Do not guess. Do not pass a plan id to Jira.
+4. If `getVisibleJiraProjects` is not on the connector, do not stop and do not tell the user to run `project --set`. Continue the external-id lookup. Put the issue keys in the `project --apply` transcript (`searches`) or record them with `resolve --apply`. When every stored key is in one project, Warp writes `jiraProject` itself. Read that line to the user: `jira: set jiraProject to WAR (every stored key is in project WAR)`. Jira moves are not off. Do not add a `project --set` command.
+
+A missing project list is not a reason to leave `jiraProject` empty once the matched issues agree. If the keys span more than one project, the line names them (`jira: jiraProject left empty. Stored keys are in ABC, WAR.`) and nothing is written. Do not guess. If `jiraProject` is already a different key, the line says so and the value stays. If it is already the matched project, the line is `jira: jiraProject is WAR; left as is`. Do not tell the user to set it.
+
+A `jiraProject` that already has a value is left alone.
+
+## Jira keys
+
+The scan stores a key that is already on the plan, in a Jira export, or in `.warp/jira-map.json`. It prints `N tickets: K keyed, U need mapping`.
+
+If `.warp/jira-resolve.json` lists tickets, and the Atlassian MCP is connected, resolve them before you tell the user the summary and before you post Herald. Order for each ticket: external-id field, then label `warp:<id>`, then a remote link. Stop at the first single match. Two matches are ambiguous: do not try the next step and do not pick one.
+
+1. Call `getJiraProjectIssueTypesMetadata` once. Keep each field `name`, `id`, and `clauseNames`.
+2. Call `searchJiraIssuesUsingJql` on `jiraMcp` for each `queries` entry whose `kind` is `external` or `label`. Prefer a field the catalog actually has. `jql` on the ticket is the configured `jiraExternalIdField` (a name or `cf[NNNNN]`).
+3. For remote links, call `getJiraIssueRemoteIssueLinks` only when you already have a candidate issue. Record `{key, ids}`.
+4. Save one transcript, not one file per ticket:
+
+```json
+{"fields":[{"name":"External ID","id":"customfield_10050","clauseNames":["cf[10050]"]}],"searches":[{"jql":"project = WAR AND cf[10050] = \"WV-01\"","issues":[{"key":"WAR-1","fields":{"customfield_10050":"WV-01"}}]},{"jql":"project = WAR AND labels = \"warp:WV-01\"","issues":[]}],"remoteLinks":[]}
+```
+
+A search that fails because the field does not exist is `{"jql":"...","error":"field not found","field":"External ID"}`. One issue and no echoed field value is still a hit, because the JQL was exact. Two issue keys are ambiguous.
+
+5. Record each hit before any transition: `python3 <plugin>/scripts/jira_sync.py resolve --ticket <id> --key <WAR-1> --issue-id <issue id> --cloud-id <cloudId>`. That writes the beam and `.warp/jira-map.json` together. `resolve --apply results.json` does the same from a saved transcript. An exact single match is stored with its source (`external`, `label`, or `link`) and confidence. A summary match is not stored here. Nothing asks the user to confirm an external-id, label, or link hit. Do not pass the plan id to `transitionJiraIssue`.
+6. If Jira is not connected, save `{"WV-01": []}` and run the same `--apply`. Do not pass the plan id to `transitionJiraIssue`.
+7. If tickets stay unmapped and have summaries, run `/warp-jira-match`. `jira_match.py` writes the JQL. Search with `searchJiraIssuesUsingJql` (50 issues, at most 2 pages) and match locally. `--apply` stores one exact or 60-character prefix hit. A fuzzy proposal is not stored unless the user passed `--yes`. Two matches, or one issue claimed by two tickets, are listed and not stored.
+8. If the scan output contains `MUST DO write External ID`, do that block in this turn. `jiraWriteExternalId: true` is the consent. `--yes` is not required. Call `getJiraProjectIssueTypesMetadata` once. If the External ID field exists, run only the FIELD LINES (`editJiraIssue KEY field FIELD = PLANID`). If it is missing, do not edit the field on each ticket. Run only the FALLBACK LINES. The default fallback is `editJiraIssue KEY update.labels add warp:PLANID`. Do not set `fields.labels`. Do not remove other labels. A `remote-link` fallback calls `createJiraIssueRemoteIssueLink`. Skip a key whose source is `external` and any ticket with no confirmed key. Leave a different non-empty field value unless `--force-external-id`. Do not create a field unless the block says `MUST DO ensure field`. The Rovo catalog has no create-field tool; if the probe fails, do not fail the scan, use the fallback. Do not post a comment. Save the transcript and run `python3 <plugin>/scripts/jira_sync.py record-external-id --results edits.json`. If `jiraWriteExternalId` is false, that block is absent.
+
+Read the `N tickets: K keyed, U need mapping` line from that command to the user. Mention `/warp-jira-match` when a ticket is still unmapped and a summary candidate exists, and `/warp-jira-map` only to set one by hand. Do not post the scan Herald payload until this step has finished. The payload the scan wrote still has the counts from before the lookup, so when any key was recorded (the command prints `jira: N keyed now (+K)`), run `python3 <plugin>/scripts/notify.py scan --root .` and post what it writes. It rebuilds the whole scan message from `.warp/beam.json` (format, tickets, gates, estimate, plan files) with the Jira counts as they are now. Do not build the message yourself, and do not pass the details on the command line: `notify.py scan` takes none. With no beam it writes nothing and says so. `notify: quiet` posts nothing.
+
+## After the scan
+
+Tell the user the format, ticket count, gate count, the Jira line `N tickets: K keyed, U need mapping`, and that the plan is stopped. On a build-schedule/2 scan, read the `schedule:`, `repo:` (or `repos:`) and `deps:` lines to the user. A `deps: set externalRepos …` line needs a config change: until then those tickets wait. A `schedule:` line that ends `— gateOrder: <order> in .warp/config.yaml overrides the schedule's <order>; delete that line to use the schedule's` means `gateOrder` in `.warp/config.yaml` decides the gate order, not the schedule. Offer `/warp-export` if they want another model to critique the order before `/warp-start`.
