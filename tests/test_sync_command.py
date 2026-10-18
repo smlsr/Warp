@@ -58,5 +58,28 @@ class SyncTest(Origin):
         self.assertEqual(lines[-1], "herald: warp:sync could not push the run state: not published (WARP_PUBLISH=0).")
 
 
+class RecordedMergeTest(Origin):
+    """1.7.7: `orchestrator.py merge` publishes the run state, like a merge supervise makes."""
+
+    def setUp(self):
+        super().setUp()
+        tickets = [dict(self.ticket("WE-01", status="review", pr={"url": "https://github.com/smlsr/WarpDemo/pull/24"}), summary="Editor scaffold", hours=1)]
+        self.path = self.beam(tickets, baseBranch="main")
+
+    def test_a_merge_recorded_outside_supervise_publishes_the_run_state(self):
+        with mock.patch.dict(os.environ, {"WARP_PUBLISH": "1"}):
+            code = orchestrator.main(["merge", "--beam", str(self.path), "--id", "WE-01", "--outcome", "merged", "--sha", "abc1234"])
+        self.assertEqual(code, 0)
+        published = json.loads(git(self.bare, "show", "main:.warp/beam.json").stdout)
+        self.assertEqual(published["tickets"]["WE-01"]["status"], "merged")
+
+    def test_publish_off_leaves_main_alone(self):
+        before = git(self.bare, "rev-parse", "main").stdout.strip()
+        with mock.patch.dict(os.environ, {"WARP_PUBLISH": "0"}):
+            code = orchestrator.main(["merge", "--beam", str(self.path), "--id", "WE-01", "--outcome", "merged", "--sha", "abc1234"])
+        self.assertEqual(code, 0)
+        self.assertEqual(git(self.bare, "rev-parse", "main").stdout.strip(), before)
+
+
 if __name__ == "__main__":
     unittest.main()

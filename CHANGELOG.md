@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.7
+
+- Fixed: a merge recorded with `orchestrator.py merge --id <id> --outcome merged` (for a pull request merged outside a pass, with the GitHub MCP or by hand) now publishes the run state to the base branch, the same as a merge supervise makes (`state: published (merged <id>)`), so main shows the ticket merged at once. Before, the beam on main kept it in review until the next publish. `publishOnChange: false` and `WARP_PUBLISH=0` still turn it off.
+- Fixed: `tests/test_py39_syntax.py` errored on Python 3.9 and 3.10, which have no `ast.Match` / `ast.TryStar` (3.10 and 3.11); it now looks the node types up.
+
 ## 1.7.6
 
 - New: a live upgrade. While a run is running, `/warp-upgrade` (`upgrade.py`; `--live` forces it, `--no-live` turns it off) upgrades without stopping the run. Run it between passes. It holds the run lock, so supervise, launches, and Slack commands wait for it, while every Shuttle and the listener keep working; nothing is paused, reaped, or restarted. It replaces each plugin file atomically, so a Shuttle that runs a script mid-upgrade gets the old file or the new one, never half of one. Then it runs the new `install.py init --live` (new config keys, rules, the allowlist, `.warp/version`; the run is kept), syncs `.warp/config.yaml` and the new defaults into the beam, records `upgrade` and `pluginVersion` on the beam and an `upgrade` journal line, posts `Warp upgraded live from vA to vB. N Shuttles kept working`, and releases the lock. The parent then re-reads the new skill and rules and runs its next pass. Shuttles already out keep their prompts and run the new scripts; new ones get the new prompts. Do not reload Cursor while Shuttles are out (a reload ends the subagents); a plain upgrade during a running run now warns about it.
