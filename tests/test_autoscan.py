@@ -60,7 +60,7 @@ class IntervalTest(Beam):
         self.assertEqual(autoscan.interval(data, self.path), 600)
         self.assertTrue(autoscan.due(data, self.path, NOW))
         data["autoScan"] = {"at": NOW}
-        self.assertFalse(autoscan.due(data, self.path, "2026-10-16T11:09:00Z"))
+        self.assertFalse(autoscan.due(data, self.path, "2026-10-16T11:08:59Z"))  # 1.7.9: up to 60s early is on time
         self.assertTrue(autoscan.due(data, self.path, LATER))
         (self.path.parent / "config.yaml").write_text("autoScan: 0\n")
         self.assertEqual(autoscan.interval(data, self.path), 0)

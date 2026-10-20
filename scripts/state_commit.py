@@ -548,6 +548,12 @@ def publish_base(root: Path, beam_name: str = ".warp/beam.json", push: bool = Tr
     beam_path = Path(beam_name)
     if not beam_path.is_absolute():
         beam_path = root / beam_path
+    if runs.is_published_copy(beam_path):
+        print("refuse: %s is a run's published copy, not a live beam" % beam_path)
+        return 2
+    top = _git(root, "rev-parse", "--show-toplevel")
+    if top.returncode == 0 and top.stdout.strip():
+        root = Path(top.stdout.strip()).resolve()
     if not beam_path.is_file():
         return 0
     try:

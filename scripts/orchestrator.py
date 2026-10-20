@@ -1927,6 +1927,7 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
 
             # Every autoScan seconds (600): capped alarms get a fresh budget, stuck merges and pull requests are
             # asked again, and the repair sweep runs now; this pass then refills every free slot.
+            lines.extend(autoscan.unposted_lines(path))
             lines.extend(autoscan.run_on_disk(path, now=now))
         except Exception as exc:
             lines.append("autoscan: skipped (%s)" % exc)
@@ -2316,9 +2317,32 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
     if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
+    churned = _churn_lines(data, now_dt, now_s)
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
-    return lost + ["listener: poll"]
+    return lost + churned + ["listener: poll"]
+
+
+CHURN_POST_MINUTES = 60
+
+
+def _churn_lines(data: dict, now_dt, now_s: str) -> list:
+    """`listener: churn …` when the last listeners each ended within minutes, with the likely cause (1.7.9). Posted to
+    Slack at most once an hour; the caller writes the beam."""
+    import beam as beam_mod
+    import inbound
+
+    line = inbound.churn_line(data)
+    if not line:
+        return []
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    posted = beam_mod.parse_ts(str(raw.get("churnPostedAt") or ""))
+    out = [line]
+    if posted is None or (now_dt - posted).total_seconds() >= CHURN_POST_MINUTES * 60:
+        raw["churnPostedAt"] = now_s
+        data["listener"] = raw
+        out.append("herald: Listener churn: %s" % line[len("listener: churn. "):])
+    return out
 
 
 def _wait_window(data: dict, beam_path: Path) -> int:
@@ -2862,6 +2886,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     if args.cmd == "queue":
         data = _load(Path(args.beam))
         nxt = next_merge(data, stacked_red=bool(args.stacked_red))

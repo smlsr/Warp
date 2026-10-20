@@ -20,9 +20,11 @@ python3 .cursor/plugins/warp/scripts/update_state.py ?
 
 1. Fetch origin/main and load that beam.
 2. Fetch each in-flight ticket branch and patch from `.warp/tickets/<id>/` only. Do not replace the beam with a ticket branch's `beam.json`.
-3. Apply local parent state on top: pause, stop, claims, and runState the parent has that the remote beam does not.
+3. Apply local parent state on top: pause, stop, claims, and runState the parent has that the remote beam does not, and keep the live beam's own state (the listener's lease, the parent session, the pass number, the auto-scan and sweep clocks, the config). Since 1.7.9 a live listener keeps listening through the sync.
 4. Write the reconciled beam, journal, and board. Strip tokens, cost, API keys, and webhook URLs. Do not commit `.warp/config.yaml`.
 5. Push that beam to main.
 6. Read the short summary: `pulled:`, `local won:`, and `commit:`.
 
 The listener is a Subagent of the parent. Each ticket is a subagent in its own git worktree, or on its own VM when `subagentVm` is true. This command does not start a listener and does not dispatch.
+
+Pass the live beam, `.warp/beam.json`. A run's published copy, `.warp/runs/<run>/beam.json`, is refused (`refuse: … is a run's published copy`).

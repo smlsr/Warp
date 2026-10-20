@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.9
+
+The listener kept dying within minutes, and the repairs that keep a run moving waited on passes that did not come.
+
+- Fixed: `/warp-update-state` killed the live listener. It loads the run's beam from main over the live one, and main's copy is a snapshot from the last publish: the listener's lease went back to that generation, and the live listener exited `superseded` at its next poll. The pass number, the parent session, the auto-scan and repair-sweep clocks, the config, and the Slack cursor went back too. It now keeps the live beam's own state (`listener`, `parentSession`, `pass`, `autoScan`, `repairSweep`, `config`, and the other keys only the live parent writes; `local won: live state …; listener generation N kept`) and takes only tickets from main, under the run lock so a poll never reads the moment between.
+- Fixed: a run's published copy (`.warp/runs/<run>/beam.json`) worked as a live beam. Its repo root resolved to the run folder, and a publish wrote the folder again inside itself (`.warp/runs/core/.warp/runs/core/`). `runs.is_published_copy` names it; `state_commit.publish_base` and `update_state.py` refuse it, and the publish uses the checkout's top level as its root. `orchestrator.py`, `inbound.py`, `checkout.py`, `ticket_state.py`, and `autoscan.py` given the copy as `--beam` work on the checkout's live beam instead and say so on stderr, so a listener or parent started with the wrong path keeps the right lease.
+- New: every listener's end is kept: why (`rotated`, `orphaned`, `lost`, `cut-off`, `stopped`, `superseded`), how long it lived, and how many reads (`listener.history`, the last 30, and a `listener-end` journal line). A copy whose lease was taken over now records that too. `inbound.py history --beam .warp/beam.json` lists them with the median life and the count per reason.
+- New: churn is named. When the last three listeners each lived under three minutes, the supervise pass that starts the next one prints `listener: churn. The last 3 listeners lived … (<reason> <n>): <likely cause>` and posts it to Slack at most once an hour.
+- New: the auto-scan runs on its own clock, not only inside a pass. When no pass has run for longer than `autoScan` and the parent is not waiting (its turn ended, or one step hangs), the listener runs it at its next poll (`listen: no parent pass for 14m; the auto-scan ran here (scan 9: …). Keep cycling.`): capped alarms get their fresh budget, stuck merges and unopened pull requests are asked again, and the repair sweep is due in the next pass. That pass launches what it freed and posts its summary (`autoscan: scan 9 ran from the listener at …`).
+- Fixed: a parent woken by a 10-minute timer ran the 10-minute auto-scan only every second wake. Each wake came a few seconds short of 600, so the scan was not due until the wake after. A wake up to a tenth of the interval early (at most a minute) now counts.
+
 ## 1.7.8
 
 - Fixed: scratch files committed by mistake in `1f9d6ca` (`_delete_main-check.bundle`, `_delete_test-1.7.6.log`, and a full copy of the plugin in `_delete_wt-1.7.6/`, 246 files) are removed, and `.gitignore` now ignores anything named `_delete*`, so files marked for deletion are never committed again.

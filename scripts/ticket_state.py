@@ -1333,6 +1333,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     if args.cmd == "append":
         return append_status(
             Path(args.root),

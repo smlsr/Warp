@@ -236,6 +236,26 @@ That line is a clean stop, not a failure. `<agent>` is the registry id or the cl
 
 `inbound.py poll` or `inbound.py wait` printed `reap: exit orphaned` and `listen: stopped`. The parent's stamp, `listener.parentSeenAt`, is older than `listenerOrphanMinutes` (default 5), so the listener stopped reading and wrote the return stamp (`returnReason: orphaned`). Nothing replaces it until a parent is alive. Usually the parent's turn died. Run `/warp-resume` or `/warp-start`. The next `supervise` sees the stamp and prints `listener: poll`. `reap: exit superseded` is the same exit for a copy whose lease another holder took. Start nothing for it.
 
+## The listener keeps dying: `listener: churn`
+
+Every listener's end is on the beam. List them:
+
+```bash
+python3 <plugin>/scripts/inbound.py history --beam .warp/beam.json
+```
+
+Each line is `listener: generation <n> ended <reason> at <time>Z, lived <m>m<s>s, <reads> reads`, then the median life and the count per reason. When the last three each lived under three minutes, supervise prints `listener: churn. …` with the likely cause, and posts it once an hour.
+
+| Reason | What ended it | What to do |
+|---|---|---|
+| `rotated` | `listenerMaxReads` (4) reads or `listenerMaxMinutes` with the parent waiting. Normal: the parent starts the next one within seconds. | To keep each one longer, raise `listenerSlowSeconds` or `listenerMaxReads`. |
+| `superseded` | Its lease was replaced. Before 1.7.9, `/warp-update-state` did it every time; also a second parent on the run (`/warp-start` in another window), or a command given `.warp/runs/<run>/beam.json`. | Upgrade to 1.7.9. Run one parent per run. Pass `.warp/beam.json`, never the run folder's copy. |
+| `orphaned` | No parent heartbeat for `listenerOrphanMinutes` (15), or the timer gap plus 3 minutes. | A parent woken by a timer runs `orchestrator.py parent-alive --every <seconds>` first. |
+| `lost` | It stopped calling poll and wait for `listenerSilentMinutes`: Cursor ended it, or it was not started in the background. | Start it exactly as the `listener: poll` prompt says (`background: true`). |
+| `cut-off` | Cursor flagged its cycle as a loop and it handed back. | Nothing; the next pass starts one. |
+
+The repairs do not depend on the listener. The auto-scan runs in a pass every `autoScan` seconds, and when no pass has run for longer than that and the parent is not waiting, the listener runs it at its next poll (`listen: no parent pass for <m>m; the auto-scan ran here`). The next pass launches what it freed.
+
 ## `listener: hold reason=await-return` does not clear
 
 The lease was bumped because the holder passed `listenerMaxMinutes`, or a generation ended without a return stamp, and the old listener has not written that stamp yet. It writes it at its next `poll` or `wait`, which wakes about every 2 seconds. If it stays, that listener is gone without a stamp, for example the window closed. Open a chat and run `/warp-listen`. It runs `inbound.py take --holder chat`, which prints `listener: lease generation=<n> holder=chat` and holds the lease in that chat. To clear the stamp by hand instead, run `inbound.py returned --beam .warp/beam.json --reason stopped`. It prints `listener: returned stopped`, and the next `supervise` prints `listener: poll`.

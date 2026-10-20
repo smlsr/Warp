@@ -521,6 +521,127 @@ def _finish_row(data: dict, beam_path: Path, now_s: str, reason: str) -> None:
         pass
 
 
+HISTORY_KEEP = 30
+CHURN_SECONDS = 180
+CHURN_COUNT = 3
+
+
+def _lived_seconds(raw: dict, now_s: str) -> Optional[int]:
+    started = beam.parse_ts(raw.get("generationStartedAt") or raw.get("pollStartedAt") or raw.get("startedAt"))
+    ended = beam.parse_ts(now_s)
+    if started is None or ended is None:
+        return None
+    return max(0, int((ended - started).total_seconds()))
+
+
+def note_end(data: dict, beam_path: Optional[Path], reason: str, now_s: str, generation=None, lived=None, reads=None) -> None:
+    """Keep why each listener ended (`listener.history`, the last 30) and journal it (`listener-end`), so a run whose
+    listeners keep ending says why (`inbound.py history`, `listener: churn`). The caller writes the beam (1.7.9)."""
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    gen = generation_of(data) if generation is None else int(generation)
+    history = [row for row in raw.get("history") or [] if isinstance(row, dict)]
+    if any(row.get("g") == gen and row.get("reason") == reason for row in history[-5:]):
+        return
+    row = {"g": gen, "reason": reason, "at": now_s,
+           "lived": _lived_seconds(raw, now_s) if lived is None else lived,
+           "reads": _int_field(raw, "reads") if reads is None else reads}
+    raw["history"] = (history + [row])[-HISTORY_KEEP:]
+    data["listener"] = raw
+    if beam_path is not None:
+        try:
+            beam.journal(Path(beam_path), {"type": "listener-end", "generation": gen, "reason": reason,
+                                           "lived": row["lived"], "reads": row["reads"]})
+        except OSError:
+            pass
+
+
+def _note_superseded(data: dict, beam_path: Path, lease, now_s: str) -> bool:
+    """A copy whose lease was taken over exits without a stamp. Record that it ended, once. True when written."""
+    try:
+        mine = int(lease)
+    except (TypeError, ValueError):
+        return False
+    if mine >= generation_of(data):
+        return False
+    before = len((_raw(data).get("history") or []))
+    note_end(data, beam_path, "superseded", now_s, generation=mine, lived=None, reads=None)
+    raw = _raw(data)
+    rows = raw.get("history") or []
+    if len(rows) != before and rows:
+        rows[-1]["lived"] = None  # its own start is not on the beam any more
+        rows[-1]["reads"] = None
+        rows[-1]["by"] = generation_of(data)
+        data["listener"] = raw
+        return True
+    return False
+
+
+def _life(seconds) -> str:
+    if seconds is None:
+        return "?"
+    minutes, secs = divmod(int(seconds), 60)
+    return "%dm%02ds" % (minutes, secs) if minutes else "%ds" % secs
+
+
+CHURN_HINTS = {
+    "superseded": "something replaced the live lease: /warp-update-state before 1.7.9, a second parent on this run "
+                  "(/warp-start in another window), or a command given .warp/runs/<run>/beam.json",
+    "orphaned": "the parent's heartbeat went stale: a parent woken by a timer runs orchestrator.py parent-alive --every "
+                "<seconds> first; a long pass with no heartbeat ends it too",
+    "lost": "the listener stopped calling poll and wait (Cursor ended it, or it was not started with background: true)",
+    "cut-off": "Cursor flagged the listener's poll-and-wait cycle as a loop",
+    "rotated": "each one rotates after listenerMaxReads reads or listenerMaxMinutes; raise listenerSlowSeconds or "
+               "listenerMaxReads to keep each one longer",
+    "stopped": "the run halted, or the listener read a stop",
+}
+
+
+def churn(data: dict, count: int = CHURN_COUNT, under: int = CHURN_SECONDS) -> Optional[dict]:
+    """{lives, reasons, top} when the last `count` listeners each lived under `under` seconds, else None."""
+    rows = [row for row in (_raw(data).get("history") or []) if isinstance(row, dict)][-count:]
+    if len(rows) < count:
+        return None
+    if any(row.get("lived") is not None and int(row["lived"]) >= under for row in rows):
+        return None
+    reasons: dict = {}
+    for row in rows:
+        reasons[str(row.get("reason") or "?")] = reasons.get(str(row.get("reason") or "?"), 0) + 1
+    top = sorted(reasons, key=lambda k: (-reasons[k], k))[0]
+    return {"lives": [row.get("lived") for row in rows], "reasons": reasons, "top": top}
+
+
+def churn_line(data: dict) -> str:
+    found = churn(data)
+    if not found:
+        return ""
+    reasons = ", ".join("%s %d" % (k, v) for k, v in sorted(found["reasons"].items(), key=lambda kv: (-kv[1], kv[0])))
+    return "listener: churn. The last %d listeners lived %s (%s): %s. `inbound.py history --beam <beam>` lists them." % (
+        len(found["lives"]), ", ".join(_life(s) for s in found["lives"]), reasons, CHURN_HINTS.get(found["top"], found["top"]))
+
+
+def history_lines(data: dict, last: int = 20) -> list:
+    rows = [row for row in (_raw(data).get("history") or []) if isinstance(row, dict)][-last:]
+    if not rows:
+        return ["listener: no ended listeners recorded yet (1.7.9 records them)"]
+    out = []
+    reasons: dict = {}
+    for row in rows:
+        reason = str(row.get("reason") or "?")
+        reasons[reason] = reasons.get(reason, 0) + 1
+        extra = " (taken over by generation %s)" % row["by"] if row.get("by") else ""
+        out.append("listener: generation %s ended %s at %sZ, lived %s, %s reads%s" % (
+            row.get("g"), reason, str(row.get("at") or "")[11:19], _life(row.get("lived")),
+            "?" if row.get("reads") is None else row.get("reads"), extra))
+    lives = sorted(int(row["lived"]) for row in rows if row.get("lived") is not None)
+    median = _life(lives[len(lives) // 2]) if lives else "?"
+    out.append("listener: %d ended, median life %s; %s" % (
+        len(rows), median, ", ".join("%s %d" % (k, v) for k, v in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0])))))
+    line = churn_line(data)
+    if line:
+        out.append(line)
+    return out
+
+
 def stamp_return(data: dict, beam_path: Path, reason: str, now_s: str, holder: Optional[str] = None) -> dict:
     """Record that this generation exited. The caller writes the beam.
 
@@ -529,6 +650,7 @@ def stamp_return(data: dict, beam_path: Path, reason: str, now_s: str, holder: O
     """
     if reason not in EXIT_REASONS:
         reason = "stopped"
+    note_end(data, beam_path, reason, now_s)
     raw = _raw(data)
     if holder and not str(raw.get("previousHolder") or "") and str(raw.get("holder") or "") == str(holder):
         raw["previousHolder"] = str(holder)
@@ -797,6 +919,8 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
             if _may_stamp(data, holder, lease):
                 stamp_return(data, beam_path, "stopped", now_s, holder=holder)
                 beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
+            elif _note_superseded(data, beam_path, lease, now_s):
+                beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return _stop_lines("superseded", lease)
         if parent_orphaned(data, beam_path, now_dt):
             stamp_return(data, beam_path, "orphaned", now_s, holder=holder)
@@ -828,6 +952,10 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
                 reads, now_s[11:19], generation_of(data), most))
         else:
             lines.append("listen: cycle %d of %d at %sZ (generation %s)" % (reads, most, now_s[11:19], generation_of(data)))
+        import autoscan
+
+        # The repairs run on their own clock: with no parent pass for longer than autoScan, this poll runs them (1.7.9).
+        lines.extend(autoscan.from_listener(beam_path, now=now))
         for kind, channel in channels(beam_path):
             lines.append("listen: %s channel=%s since=%s" % (kind, channel, since))
         return lines
@@ -851,6 +979,8 @@ def _wait_check(beam_path: Path, lease, holder: Optional[str], now) -> Optional[
     if not lease_matches(data, lease, holder):
         if _may_stamp(data, holder, lease):
             stamp_return(data, beam_path, "stopped", now_s, holder=holder)
+            beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
+        elif _note_superseded(data, beam_path, lease, now_s):
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return _stop_lines("superseded", lease)
     if parent_orphaned(data, beam_path, now_dt):
@@ -1751,6 +1881,10 @@ def main(argv: Optional[list] = None) -> int:
     ps = sub.add_parser("status")
     ps.add_argument("--beam", default=".warp/beam.json")
 
+    phi = sub.add_parser("history", help="why the last listeners ended, how long each lived, and churn (1.7.9)")
+    phi.add_argument("--beam", default=".warp/beam.json")
+    phi.add_argument("--last", type=int, default=20)
+
     pp = sub.add_parser("parse")
     pp.add_argument("--text", required=True)
 
@@ -1789,6 +1923,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     beam_path = Path(getattr(args, "beam", ".warp/beam.json"))
     if args.cmd == "claim":
         line = claim(beam_path, args.agent_id, args.pid, turn=args.turn)
@@ -1802,6 +1939,13 @@ def main(argv: Optional[list] = None) -> int:
         line = heartbeat(beam_path, args.agent_id, pid=args.pid, reason=args.reason)
         print(line)
         return 0 if line.startswith("listener: heartbeat ") and "refused" not in line and "needs" not in line else 1
+    if args.cmd == "history":
+        if not beam_path.is_file():
+            print("listener: no beam at %s" % beam_path)
+            return 1
+        for line in history_lines(beam.load_json(beam_path), last=max(1, args.last)):
+            print(line)
+        return 0
     if args.cmd == "interval":
         print(poll_seconds(beam_path))
         return 0

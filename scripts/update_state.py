@@ -35,6 +35,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import beam  # noqa: E402
+import runs  # noqa: E402
 import state_commit  # noqa: E402
 import ticket_state  # noqa: E402
 
@@ -63,7 +64,39 @@ def _has_claim(ticket) -> bool:
 
 
 def _root(beam_path: Path) -> Path:
-    return beam_path.parent.parent if beam_path.parent.name == ".warp" else beam_path.parent
+    return runs.repo_root(beam_path)
+
+
+# What only this checkout's live parent and listener write. main's copy of these is a snapshot from the last publish,
+# so loading it over the live beam rewound them: the listener's lease went back a generation or more, and the live
+# listener exited `superseded` at its next poll; the pass number, the auto-scan and sweep clocks, the parent session,
+# and the Slack cursor went back too (1.7.9).
+LIVE_KEYS = (
+    "listener", "parentSession", "pass", "rush", "stall", "autoScan", "repairSweep", "watch", "statusDigest",
+    "capacityAnnounced", "postedAlarms", "bugbotSeen", "config", "configSync", "instance", "runStartedAt",
+    "checkpointAt", "upgrade", "pluginVersion",
+)
+
+
+def keep_live(local, patched: dict) -> list:
+    """Put the live beam's own state (LIVE_KEYS) back over main's copy. Returns what was kept, for `local won:`."""
+    if not isinstance(local, dict) or not isinstance(patched, dict):
+        return []
+    if str(local.get("run") or "") != str(patched.get("run") or "") and patched.get("run"):
+        return []  # another run's beam: nothing of this one belongs in it
+    kept = []
+    for key in LIVE_KEYS:
+        if key in local:
+            if patched.get(key) != local[key]:
+                kept.append(key)
+            patched[key] = copy.deepcopy(local[key])
+    if not kept:
+        return []
+    raw = local.get("listener") if isinstance(local.get("listener"), dict) else {}
+    what = "live state %s" % ", ".join(kept[:6]) + (" (+%d)" % (len(kept) - 6) if len(kept) > 6 else "")
+    if "listener" in kept:
+        what += "; listener generation %s kept" % (raw.get("generation") or 0)
+    return [what]
 
 
 def _summary(pulled: list, won: list, sha: Optional[str], base: Optional[str]) -> None:
@@ -91,6 +124,19 @@ def update_state(beam_path: Path, push: bool = True, finalize=None) -> int:
     beam_path = Path(beam_path)
     if not beam_path.is_absolute():
         beam_path = Path.cwd() / beam_path
+    if runs.is_published_copy(beam_path):
+        print("refuse: %s is a run's published copy on the base branch. Pass this checkout's live beam, .warp/beam.json." % beam_path)
+        _summary(["refused published copy"], [], None, None)
+        return 2
+    import beamlock
+
+    # Under the run lock: the listener's poll and wait take it too, so they never read main's copy in the moment
+    # between loading it and putting the live state back.
+    with beamlock.run_lock(beam_path):
+        return _update_state(beam_path, push, finalize)
+
+
+def _update_state(beam_path: Path, push: bool, finalize) -> int:
     local = _read(beam_path)
     root = _root(beam_path)
     if state_commit._git(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
@@ -158,6 +204,8 @@ def update_state(beam_path: Path, push: bool = True, finalize=None) -> int:
                 continue
             remote_tickets[tid] = copy.deepcopy(row)
             won.append("claim %s" % tid)
+    if loaded_ref:
+        won.extend(keep_live(local, patched))
     if finalize is not None:
         finalize(patched)
     patched["metrics"] = beam.metrics(patched)
