@@ -616,6 +616,63 @@ def _bugbot_from_checks(checks: list) -> str:
     return "pending"
 
 
+_FAILED_CONCLUSIONS = {"failure", "failed", "cancelled", "canceled", "timed_out", "action_required", "error", "startup_failure"}
+
+
+def failed_check_names(checks: list) -> list:
+    """Names of the CI checks that failed, without Cursor Bugbot (1.7.9: compared with main's)."""
+    out = []
+    for item in checks or []:
+        if not isinstance(item, dict) or _bugbot_check(item):
+            continue
+        conclusion = str(item.get("conclusion") or item.get("state") or "").strip().casefold()
+        if conclusion in _FAILED_CONCLUSIONS:
+            name = str(item.get("name") or item.get("context") or item.get("workflowName") or "").strip()
+            if name and name not in out:
+                out.append(name)
+    return sorted(out)
+
+
+def base_checks(root: Path, base: str, runner=None) -> Optional[dict]:
+    """The checks on the base branch's head on GitHub: {sha, state, failed, count}. None when it cannot be asked.
+
+    One call for the head commit, one for its check runs, one for its commit statuses (1.7.9). state is green, red,
+    pending, or absent (no checks ran on it).
+    """
+    run = runner or (lambda cmd: _run(cmd, root))
+    if runner is None and not shutil.which("gh"):
+        return None
+    remote = _run(["git", "remote", "get-url", "origin"], root) if runner is None else None
+    slug = github_slug((remote.stdout or "").strip()) if remote is not None and remote.returncode == 0 else None
+    if runner is not None:
+        slug = slug or "owner/repo"
+    if not slug:
+        return None
+    head = run(["gh", "api", "repos/%s/commits/%s" % (slug, base), "--jq", ".sha"])
+    sha = (head.stdout or "").strip() if head.returncode == 0 else ""
+    if not sha:
+        return None
+    rows: list = []
+    runs = run(["gh", "api", "repos/%s/commits/%s/check-runs?per_page=100" % (slug, sha)])
+    if runs.returncode == 0:
+        try:
+            doc = json.loads(runs.stdout or "{}")
+            rows.extend(item for item in doc.get("check_runs") or [] if isinstance(item, dict))
+        except json.JSONDecodeError:
+            pass
+    status = run(["gh", "api", "repos/%s/commits/%s/status" % (slug, sha)])
+    if status.returncode == 0:
+        try:
+            doc = json.loads(status.stdout or "{}")
+            rows.extend({"context": s.get("context"), "state": s.get("state")} for s in doc.get("statuses") or [] if isinstance(s, dict))
+        except json.JSONDecodeError:
+            pass
+    if runs.returncode != 0 and status.returncode != 0:
+        return None
+    ci = [item for item in rows if not _bugbot_check(item)]
+    return {"sha": sha, "state": interpret_rollup(ci), "failed": failed_check_names(ci), "count": len(ci)}
+
+
 def _ci_from_checks(checks: list) -> str:
     rows = [item for item in checks if isinstance(item, dict) and not _bugbot_check(item)]
     if not checks:
@@ -733,6 +790,7 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         "headAt": _head_committed_at(doc),
         "rollup": interpret_rollup(checks),
         "ci": _ci_from_checks(checks),
+        "failedChecks": failed_check_names(checks),
         "checks": checks,
         "checkCount": len(checks),
         "mergeable": mergeable,

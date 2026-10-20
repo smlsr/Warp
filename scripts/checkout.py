@@ -927,6 +927,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     root = Path(args.root).resolve()
     if args.cmd == "implement":
         print("refuse: the orchestrator does not implement tickets in this checkout")

@@ -471,7 +471,7 @@ def _apply_acs(ticket: dict, event: dict, lines: list, heralded: set) -> bool:
     if not isinstance(raw, dict) or not raw:
         return False
     pr = _pr(ticket)
-    head = str(pr.get("headSha") or "")
+    head = str(event.get("acSha") or pr.get("headSha") or "")
     current = pr.get("acResults") if isinstance(pr.get("acResults"), dict) and str(pr.get("acSha") or head) == head else {}
     merged = dict(current)
     merged.update({str(k): str(v) for k, v in raw.items()})
@@ -1072,6 +1072,22 @@ def observe(beam_path: Path, **kwargs) -> list:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def _worktree_head(root: Path) -> str:
+    """HEAD of the Shuttle's worktree when this runs in one (not the parent checkout itself), else ''."""
+    import subprocess
+
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10)
+        if top.returncode != 0 or not top.stdout.strip():
+            return ""
+        if Path(top.stdout.strip()).resolve() == Path(root).resolve():
+            return ""
+        head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return head.stdout.strip() if head.returncode == 0 else ""
+
+
 def append_status(
     root: Path,
     tid: str,
@@ -1184,6 +1200,11 @@ def append_status(
         line["alarm"] = alarm
     if acs:
         line["acs"] = dict(acs)
+        checked = str(sha or "").strip() or _worktree_head(root)
+        if checked:
+            # The commit the results were checked on. A push after this does not drop them silently (1.7.9).
+            line["acSha"] = checked
+            body["acSha"] = checked
     if state in REVIEW_STATES:
         line["sha"] = body["review"]["sha"]
         line["findings"] = body["review"]["findings"]
@@ -1197,6 +1218,15 @@ def append_status(
     code = 0 if not push else _push_dir(root, tid, state)
     for line in _reap_lines(root, tid, agent or _current_agent(root, tid) or str(body.get("agent") or ""), remote=bool(push)):
         print(line)
+    if not push:
+        # Every Shuttle state write looks at the listener too: one that stopped polling between passes is handed
+        # back now, so the parent's wait wakes and the next pass replaces it (1.7.9). It never waits on a pass.
+        try:
+            import inbound
+
+            inbound.watch_listener(root / ".warp" / "beam.json")
+        except Exception:
+            pass
     return code
 
 
@@ -1333,6 +1363,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     if args.cmd == "append":
         return append_status(
             Path(args.root),

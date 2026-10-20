@@ -480,6 +480,7 @@ def note_pr_opened(ticket: dict, url: str, when: Optional[str] = None) -> None:
         pr["openedAt"] = when
     pr["agentFinished"] = True
     pr["opened"] = True
+    pr.pop("openFailed", None)
 
 
 def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
@@ -1039,11 +1040,11 @@ def in_merge_queue(ticket: dict, config: Optional[dict]) -> bool:
 
 
 def merge_queue(beam: dict) -> list:
-    """Serial merge order: starred first, then lowest rank. Empty when the base is red."""
-    if not base_is_green(beam):
-        return []
+    """Serial merge order: starred first, then lowest rank. While the base is red only the base fix merges (a ticket
+    marked `baseFix`): before 1.7.9 the base was never seen red, and a red base would have held its own fix."""
     cfg = beam.get("config") or {}
-    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg)]
+    red = not base_is_green(beam)
+    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg) and (not red or t.get("baseFix"))]
     rows.sort(key=lambda t: sort_key(t, base_red=False))
     return rows
 
@@ -1062,9 +1063,7 @@ def stack_groups(queue: list, red: bool = False) -> list:
 
 
 def next_merge(beam: dict, stacked_red: bool = False) -> Optional[dict]:
-    """One merge candidate. None when the base is red or the queue is empty."""
-    if not base_is_green(beam):
-        return None
+    """One merge candidate. None when the queue is empty (while the base is red it holds only the base fix)."""
     groups = stack_groups(merge_queue(beam), red=stacked_red)
     if not groups:
         return None
@@ -1578,7 +1577,16 @@ def step_lines(ticket: dict) -> list:
         lines.append("%s ONLY %s: %s" % (step.upper(), tid, detail))
     elif detail:
         lines.append("detail: %s" % detail)
+    if step not in {"review", "verify"}:
+        lines.append(PROGRESS_LINE)
     return lines
+
+
+PROGRESS_LINE = (
+    "Commit as you go: a commit at least every 20 minutes of work (a work-in-progress commit is fine). While the branch has "
+    "no pull request open, push each commit too. The parent reads the branch and flags a Shuttle with no new commit for "
+    "stallNoPushMinutes (default 30) as stalled."
+)
 
 
 def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False, instance: str = "") -> str:
@@ -1927,9 +1935,24 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
 
             # Every autoScan seconds (600): capped alarms get a fresh budget, stuck merges and pull requests are
             # asked again, and the repair sweep runs now; this pass then refills every free slot.
+            lines.extend(autoscan.unposted_lines(path))
             lines.extend(autoscan.run_on_disk(path, now=now))
         except Exception as exc:
             lines.append("autoscan: skipped (%s)" % exc)
+        try:
+            import basecheck
+
+            # Is main itself green? A red main makes every pull request red; this pass sees it and says so (1.7.9).
+            lines.extend(basecheck.observe(path, now=now))
+        except Exception as exc:
+            lines.append("base: not checked (%s)" % exc)
+        try:
+            import progress
+
+            # A Shuttle with no new commit for stallNoPushMinutes is flagged stalled (1.7.9).
+            lines.extend(progress.observe(path, now=now))
+        except Exception as exc:
+            lines.append("progress: not read (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
         state = str(data.get("runState") or "")
@@ -1982,6 +2005,12 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
         lines.extend(pipeline.run_pr_opens(data, path, lines))
     # A merged ticket's branch is deleted when deleteBranchOnMerge is on (off by default).
     lines.extend(pipeline.after_merges(data, path, lines))
+    if live:
+        # Every merged ticket's Jira move to Done, in full, and asked again until it is recorded (1.7.9).
+        try:
+            lines.extend(pipeline.jira_done_lines(data, path, lines))
+        except Exception as exc:
+            lines.append("jira: Done moves not checked (%s)" % exc)
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
@@ -2316,9 +2345,32 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
     if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
+    churned = inbound.down_lines(data, now_dt, now_s) + _churn_lines(data, now_dt, now_s)
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
-    return lost + ["listener: poll"]
+    return lost + churned + ["listener: poll"]
+
+
+CHURN_POST_MINUTES = 60
+
+
+def _churn_lines(data: dict, now_dt, now_s: str) -> list:
+    """`listener: churn …` when the last listeners each ended within minutes, with the likely cause (1.7.9). Posted to
+    Slack at most once an hour; the caller writes the beam."""
+    import beam as beam_mod
+    import inbound
+
+    line = inbound.churn_line(data)
+    if not line:
+        return []
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    posted = beam_mod.parse_ts(str(raw.get("churnPostedAt") or ""))
+    out = [line]
+    if posted is None or (now_dt - posted).total_seconds() >= CHURN_POST_MINUTES * 60:
+        raw["churnPostedAt"] = now_s
+        data["listener"] = raw
+        out.append("herald: Listener churn: %s" % line[len("listener: churn. "):])
+    return out
 
 
 def _wait_window(data: dict, beam_path: Path) -> int:
@@ -2596,6 +2648,11 @@ def parent_alive(beam_path: Path, every: Optional[int] = None, now=None) -> list
     head = "parent: alive at %sZ%s; the listener waits up to %dm for the next one" % (
         now_s[11:19], (" (woken every %ds)" % every_now) if every_now else "", limit)
     if holder:
+        silent = inbound.holder_silent(data, path, beam_mod.coerce_now(now)[0])
+        if silent is not None:
+            # The lease is held but nothing has polled for minutes: it is gone (1.7.9).
+            return [head, "listener: generation %s has not polled for %dm; it is gone. Run a supervise pass now: it hands the "
+                          "slot back and starts a new one" % (inbound.generation_of(data), silent)]
         return [head, "listener: generation %s is up" % inbound.generation_of(data)]
     return [head, "listener: none is up; run a supervise pass now to start one"]
 
@@ -2862,6 +2919,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     if args.cmd == "queue":
         data = _load(Path(args.beam))
         nxt = next_merge(data, stacked_red=bool(args.stacked_red))

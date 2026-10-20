@@ -18,7 +18,10 @@ cap or a lost step left standing, then makes room for new work:
   5. The pass that runs it then refills every free Shuttle slot from the ready queue, as every pass does.
 
 It runs inside a supervise pass (after reconcile, before the pipeline), and `parent-exit --wait` returns
-`pass: work autoscan` when it is due, so an idle run still gets it. `autoScan: 0` (or an empty value) turns it
+`pass: work autoscan` when it is due, so an idle run still gets it. When no pass has run for longer than the interval
+and the parent is not waiting (its turn ended, or one step hangs), the listener runs it at its next poll, so the resets
+do not wait for the parent; the next pass launches what they freed and posts their summary (1.7.9). A wake up to a
+tenth of the interval early (at most a minute) counts as on time, so a 10-minute timer runs it every wake. `autoScan: 0` (or an empty value) turns it
 off. Every action prints an `autoscan:` line; when it did anything, Slack gets one summary line.
 
   python3 scripts/autoscan.py --beam .warp/beam.json            run it now, due or not
@@ -78,7 +81,91 @@ def due(data: dict, beam_path: Optional[Path], now=None) -> bool:
     if last is None:
         return True
     now_dt = beam_mod.coerce_now(now)[0]
-    return (now_dt - last).total_seconds() >= every
+    # A wake a few seconds early is on time. A parent woken by a 600-second timer was a hair short of 600 at
+    # every wake and ran the scan every second wake, 20 minutes apart (1.7.9).
+    return (now_dt - last).total_seconds() >= every - early_seconds(every)
+
+
+def early_seconds(every: int) -> int:
+    """How early a wake may come and still run the scan: a tenth of the interval, at most a minute."""
+    return min(60, max(0, int(every) // 10))
+
+
+def parent_away(data: dict, beam_path: Optional[Path], now=None) -> Optional[int]:
+    """Minutes since the parent's last pass when it is not waiting and that is longer than the scan interval, else None.
+
+    A parent inside `parent-exit --wait` runs the scan itself (`pass: work autoscan`). One whose turn ended, or that is
+    stuck in a long step, does not; the listener runs it then (1.7.9).
+    """
+    import beam as beam_mod
+    import inbound
+
+    every = interval(data, beam_path)
+    if not every:
+        return None
+    now_dt = beam_mod.coerce_now(now)[0]
+    if inbound.parent_waiting(data, now_dt):
+        return None
+    mark = data.get("pass") if isinstance(data.get("pass"), dict) else {}
+    started = beam_mod.parse_ts(str(mark.get("startedAt") or ""))
+    if started is None:
+        return None
+    quiet = (now_dt - started).total_seconds()
+    if quiet < every:
+        return None
+    return int(quiet // 60)
+
+
+def from_listener(beam_path: Path, now=None) -> list:
+    """The listener's turn at the scan: when it is due and the parent is away, run it here. Lines for the listener;
+    the herald lines wait on the beam for the next pass (`autoScan.unposted`). Never raises. The caller holds the run
+    lock (the listener's poll does)."""
+    import beam as beam_mod
+
+    path = Path(beam_path)
+    try:
+        data = beam_mod.load_json(path)
+        if not due(data, path, now):
+            return []
+        away = parent_away(data, path, now)
+        if away is None:
+            return []
+        lines = run_on_disk(path, now=now)
+        if not lines:
+            return []
+        after = beam_mod.load_json(path)
+        record = after.get("autoScan") if isinstance(after.get("autoScan"), dict) else {}
+        record["by"] = "listener"
+        heralds = [line[len("herald: "):] for line in lines if line.startswith("herald: ")]
+        if heralds:
+            record["unposted"] = list(record.get("unposted") or []) + heralds
+        after["autoScan"] = record
+        beam_mod.atomic_write(path, json.dumps(after, indent=2) + "\n", data=after)
+        head = next((line for line in lines if line.startswith("autoscan: scan ")), lines[0])
+        return ["listen: no parent pass for %dm; the auto-scan ran here (%s). Keep cycling." % (away, head[len("autoscan: "):])]
+    except Exception as exc:
+        return ["listen: auto-scan skipped (%s). Keep cycling." % exc]
+
+
+def unposted_lines(beam_path: Path) -> list:
+    """What a scan the listener ran left for Slack: herald lines for this pass, then cleared. Never raises."""
+    import beam as beam_mod
+
+    path = Path(beam_path)
+    try:
+        data = beam_mod.load_json(path)
+        record = data.get("autoScan") if isinstance(data.get("autoScan"), dict) else {}
+        waiting = list(record.get("unposted") or [])
+        if not waiting:
+            return []
+        record["unposted"] = []
+        data["autoScan"] = record
+        beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+        at = str(record.get("at") or "")[11:19]
+        return ["autoscan: scan %s ran from the listener at %sZ while no pass ran; its resets are in this pass"
+                % (record.get("count") or "?", at)] + ["herald: %s" % text for text in waiting]
+    except Exception:
+        return []
 
 
 def _resets_cap(data: dict, beam_path: Optional[Path]) -> int:
@@ -294,6 +381,9 @@ def main(argv: Optional[list] = None) -> int:
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)
     path = Path(args.beam)
     if not path.is_file():
         print("autoscan: no beam at %s" % path)

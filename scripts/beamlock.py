@@ -81,6 +81,30 @@ def _flock(path: Path):
 
 
 @contextlib.contextmanager
+def try_run_lock(beam_path):
+    """The run lock when it is free, without waiting: yields True when held, False when another process has it (1.7.9:
+    a Shuttle's state write looks at the listener, and never waits on a pass)."""
+    key = str((Path(beam_path).parent / RUN_LOCK_NAME).resolve())
+    if _held.get(key):
+        with run_lock(beam_path):
+            yield True
+        return
+    Path(key).parent.mkdir(parents=True, exist_ok=True)
+    with open(key, "a") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        _held[key] = 1
+        try:
+            yield True
+        finally:
+            _held.pop(key, None)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
 def run_lock(beam_path):
     """The run's decision lock, re-entrant inside one process."""
     key = str((Path(beam_path).parent / RUN_LOCK_NAME).resolve())

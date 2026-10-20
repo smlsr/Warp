@@ -348,7 +348,11 @@ def _drop_stale_results(pr: dict, new_sha: str) -> None:
                 pr[field] = pending
                 pr[sha_field] = ""
         if str(pr.get("acSha") or "").strip() != new_sha and pr.get("acResults"):
-            # Acceptance results belong to the commit that was checked.
+            # Acceptance results belong to the commit that was checked. They are kept as carried results: the next
+            # step carries them to this head when nothing but the base (or Warp state) changed, and otherwise asks
+            # for them again on this head. Before 1.7.9 they were dropped and the gate shut without a word.
+            pr["acCarried"] = {"from": str(pr.get("acSha") or old), "to": new_sha,
+                               "results": dict(pr.get("acResults") or {})}
             pr["acResults"] = {}
             pr["acSha"] = ""
         tied_findings = str(pr.get("bugbotFindingsSha") or "").strip()
@@ -458,6 +462,9 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
                 pr[sha_field] = new_sha
     if "checkLog" in snap and snap["checkLog"] is not None:
         pr["checkLog"] = snap["checkLog"]
+    if isinstance(snap.get("failedChecks"), list):
+        pr["failedChecks"] = list(snap["failedChecks"])
+        pr["failedChecksSha"] = new_sha or head_now
     if "findings" in snap and not (by_hand and not snap.get("findings")):
         pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
         if new_sha:
@@ -658,12 +665,30 @@ def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
         chosen.append(item)
     chosen.sort(key=lambda item: (item["rank"], item["sub"], item["id"]))
     for item in chosen:
-        if beam_mod.fix_worker_room(data) < 1:
-            break
         ticket = tickets.get(item["id"])
         if not isinstance(ticket, dict):
             continue
+        if beam_mod.fix_worker_room(data) < 1:
+            if not scan:
+                _fix_waits(data, ticket, lines)
+            continue
+        ticket.pop("fixWaits", None)
         _launch_fix(data, ticket, item, lines)
+
+
+def _fix_waits(data: dict, ticket: dict, lines: list) -> None:
+    """A ticket that needs a fix and gets no Shuttle because every slot is taken. Said each pass; an alarm once, the
+    second pass it waits (1.7.9)."""
+    if pending(ticket):
+        return
+    waits = int(ticket.get("fixWaits") or 0) + 1
+    ticket["fixWaits"] = waits
+    cfg = data.get("config") or {}
+    lines.append("fix: %s needs a fix and waits for a free Shuttle slot (%d pass%s, maxAgents %s)"
+                 % (ticket.get("id"), waits, "" if waits == 1 else "es", cfg.get("maxAgents") or "?"))
+    if waits == 2:
+        lines.append("herald: ALARM %s needs a fix and no Shuttle has started for it: every slot (maxAgents %s) is taken. "
+                     "It starts when one frees; raise maxAgents to start it sooner." % (ticket.get("id"), cfg.get("maxAgents") or "?"))
 
 
 def _was_shuttle(ticket: dict) -> bool:
@@ -1013,6 +1038,36 @@ def _assign_auto(ticket: dict, config: Optional[dict]) -> None:
 def _phase(ticket: dict, name: str, lines: list) -> None:
     ticket["phase"] = name
     lines.append("phase: %s %s" % (ticket.get("id"), name))
+
+
+_BASE_RED_ONLY = {"ci red", "rollup red", "check red"}
+
+
+def _waits_for_base(data: dict, ticket: dict, reasons: list, lines: list) -> bool:
+    """True when the base branch is red and this pull request's only red is the checks the base fails too: it waits for
+    the base instead of spending a fix attempt on a failure that is not its own (1.7.9)."""
+    import basecheck
+
+    if ticket.get("waitsForBase") and data.get("baseGreen") is True:
+        # It waited for a red base that is green now: take the base and push, so its checks run on the fixed base.
+        waited = str(ticket.pop("waitsForBase") or "")
+        if not all(reason in _BASE_RED_ONLY for reason in reasons):
+            return False
+        lines.append("ci: %s waited for the base (red at %s); it is green now, so the branch takes it and its checks run again"
+                     % (ticket.get("id"), waited[:12]))
+        start_rebase(data, ticket, lines)
+        return True
+    if not all(reason in _BASE_RED_ONLY for reason in reasons):
+        return False
+    same = basecheck.same_as_base(data, ticket)
+    if not same:
+        return False
+    record = data.get("baseCheck") if isinstance(data.get("baseCheck"), dict) else {}
+    base = str(record.get("base") or "main")
+    lines.append("ci: %s fails the same checks as %s (%s); %s is red at %s, so it waits for %s instead of a fix"
+                 % (ticket.get("id"), base, ", ".join(same[:4]), base, str(record.get("sha") or "")[:12], base))
+    ticket["waitsForBase"] = str(record.get("sha") or "")
+    return True
 
 
 def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
@@ -1612,6 +1667,49 @@ def _ensure_acs(data: dict, ticket: dict) -> None:
     pr["acResults"] = loaded
 
 
+def _carry_acs(data: dict, ticket: dict, lines: list, check=None) -> None:
+    """Acceptance results recorded on an earlier head, after a push (1.7.9).
+
+    Carried to the new head when the new commits only merge the base branch in (or only change `.warp/`): the code
+    that was checked did not change. Otherwise they are not counted, and the pass says so once for the head, with
+    the command to record them on it; the verify Shuttle then checks them when the rest of the work is done.
+    """
+    import acceptance
+
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    carried = pr.get("acCarried") if isinstance(pr.get("acCarried"), dict) else None
+    if not carried:
+        return
+    head = str(pr.get("headSha") or "")
+    if not head or str(carried.get("to") or "") != head or ac_map(ticket):
+        if ac_map(ticket) and str(pr.get("acSha") or "") == head:
+            pr.pop("acCarried", None)  # recorded on this head since
+        return
+    if carried.get("decided") == head:
+        return
+    carried["decided"] = head
+    old = str(carried.get("from") or "")
+    results = carried.get("results") if isinstance(carried.get("results"), dict) else {}
+    tid = ticket.get("id")
+    cfg = data.get("config") or {}
+    base = str(cfg.get("baseBranch") or "main")
+    ok, why = (check or acceptance.carry_check)(data.get("_repoRoot"), old, head, base, str(ticket.get("branch") or ""))
+    if ok:
+        pr["acResults"] = dict(results)
+        pr["acSha"] = head
+        pr["acCarriedFrom"] = old
+        pr.pop("acCarried", None)
+        lines.append("acceptance: %s results from %s carried to %s (%s)" % (tid, old[:12] or "the last head", head[:12], why))
+        return
+    failed = sorted(k for k, v in results.items() if str(v).strip().casefold() not in _PASS)
+    beam_file = str(_beam_path(data) or ".warp/beam.json")
+    record = acceptance.record_command(ticket, beam_file, head)
+    lines.append("acceptance: %s head moved from %s to %s after its results were recorded (%s); they are not carried (%s). "
+                 "Record them on %s: %s" % (tid, old[:12] or "an earlier head", head[:12],
+                                            "all pass" if not failed else "%s failed" % ", ".join(failed), why, head[:12], record))
+    lines.append("herald: %s acceptance results from %s need recording again on %s (%s)." % (tid, old[:12] or "an earlier head", head[:12], why))
+
+
 def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
     cfg = data.get("config") or {}
     phase = ticket.get("phase")
@@ -1661,6 +1759,8 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         if rollup in _GREEN_ROLLUP:
             ticket["status"] = "review"
         reasons = red_reasons(ticket, cfg)
+        if reasons and _waits_for_base(data, ticket, reasons, lines):
+            return
         if reasons:
             _defer_fix(data, ticket)
             return
@@ -1769,6 +1869,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
 
     agents.finish_bugbot(data, ticket, now=now, beam_path=_beam_path(data))
     _ensure_acs(data, ticket)
+    _carry_acs(data, ticket, lines)
     if _recover_alarm(data, ticket, lines, deferred):
         return
     _ensure_phase(ticket, data)
@@ -1782,6 +1883,7 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     elif pending(ticket) and shuttle_now.get("launching") and not shuttle_now.get("startedAt") and shuttle_now.get("launchLines"):
         # Marked and printed, never launched: say it again instead of holding a Shuttle that is not out.
         lines.append("shuttle: not launched %s. Launch it now with checkout.py launch and the line below." % ticket.get("id"))
+        lines.extend(_unlaunched_alarm(data, ticket, now))
         lines.extend(shuttle_now["launchLines"])
         return
     elif pending(ticket) and not orchestrator.shuttle_is_live(ticket, data, now=now):
@@ -1790,6 +1892,38 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
         lines.append("shuttle: hold %s" % ticket.get("id"))
         return
     _follow(data, ticket, lines, now=now)
+
+
+_FIX_STEPS = {"fix", "restart", "rebase", "repair"}
+
+
+def _unlaunched_alarm(data: dict, ticket: dict, now=None) -> list:
+    """A Shuttle marked in one pass and still not launched in the next is an alarm, once per mark (1.7.9). Before, the
+    pass only printed `shuttle: not launched` again, and a ticket flagged for a fix sat with no Shuttle."""
+    import beam as beam_mod
+
+    shuttle = _shuttle(ticket)
+    shuttle["notLaunchedPasses"] = int(shuttle.get("notLaunchedPasses") or 0) + 1
+    mark = str(shuttle.get("markedAt") or "")
+    key = "unlaunched:%s:%s" % (ticket.get("id"), mark)
+    posted = data.setdefault("postedAlarms", [])
+    if key in posted:
+        return []
+    posted.append(key)
+    # Old marks are not kept forever.
+    keep = [item for item in posted if not str(item).startswith("unlaunched:")][-200:]
+    data["postedAlarms"] = keep + [item for item in posted if str(item).startswith("unlaunched:")][-50:]
+    step = str(shuttle.get("step") or "the next")
+    marked = beam_mod.parse_ts(mark) if mark else None
+    age = ""
+    if marked is not None:
+        minutes = int((beam_mod.coerce_now(now)[0] - marked).total_seconds() // 60)
+        age = " %dm ago" % minutes
+    kind = "a fix" if step in _FIX_STEPS else "its %s step" % step
+    return [
+        "alarm: %s %s step was flagged%s and no Shuttle started; it is launched in this pass" % (ticket.get("id"), step, age),
+        "herald: ALARM %s was flagged for %s%s and no Shuttle started. Warp is launching it now." % (ticket.get("id"), kind, age),
+    ]
 
 
 def _refill(data: dict, lines: list) -> None:
@@ -1844,24 +1978,66 @@ def _queue_claim(data: dict, ticket: dict, lines: list) -> None:
         lines.extend(text.splitlines())
 
 
-def _merge_one(data: dict, provider: Optional[dict], lines: list) -> None:
-    """One candidate from the serial merge queue."""
-    if not orchestrator.base_is_green(data):
-        return
+DEFAULT_MERGES_PER_PASS = 3
+
+
+def merges_per_pass(data: dict) -> int:
+    """`maxMergesPerPass` (default 3, at least 1): how many ready pull requests one pass merges, in queue order (1.7.9;
+    before, one)."""
+    import beam as beam_mod
+
+    path = _beam_path(data)
+    try:
+        if path is not None:
+            return max(1, int(beam_mod.config_int(data, path, "maxMergesPerPass", DEFAULT_MERGES_PER_PASS)))
+        raw = (data.get("config") or {}).get("maxMergesPerPass")
+        return max(1, int(raw)) if raw not in (None, "") else DEFAULT_MERGES_PER_PASS
+    except Exception:
+        return DEFAULT_MERGES_PER_PASS
+
+
+def _merge_ready(data: dict, provider: Optional[dict], lines: list) -> int:
+    """Up to maxMergesPerPass candidates from the serial merge queue, in its order. Returns how many were taken."""
     nxt = orchestrator.next_merge(data)
     if not nxt or not nxt.get("ids"):
-        return
+        return 0
     cfg = data.get("config") or {}
-    ticket = None
-    tid = None
+    cap = merges_per_pass(data)
+    taken = 0
     for candidate in nxt["ids"]:
-        row = (data.get("tickets") or {}).get(candidate)
-        if isinstance(row, dict) and gate_open(row, cfg):
-            ticket = row
-            tid = candidate
+        if taken >= cap:
             break
+        row = (data.get("tickets") or {}).get(candidate)
+        if not isinstance(row, dict) or not gate_open(row, cfg):
+            continue
+        if row.get("status") == "merging" and str((row.get("pr") or {}).get("mergeRequestedSha") or "") == \
+                str((row.get("pr") or {}).get("headSha") or "") and data.get("_live"):
+            # Asked already for this head: the wait line comes from the merge itself; it does not use a place.
+            _merge_one(data, provider, lines, row)
+            continue
+        _merge_one(data, provider, lines, row)
+        taken += 1
+    if taken > 1:
+        lines.append("merge: %d pull requests taken this pass (maxMergesPerPass %d)" % (taken, cap))
+    return taken
+
+
+def _merge_one(data: dict, provider: Optional[dict], lines: list, ticket: Optional[dict] = None) -> None:
+    """One candidate from the serial merge queue (the first whose gate is open when none is given)."""
     if ticket is None:
-        return
+        nxt = orchestrator.next_merge(data)
+        if not nxt or not nxt.get("ids"):
+            return
+        cfg = data.get("config") or {}
+        for candidate in nxt["ids"]:
+            row = (data.get("tickets") or {}).get(candidate)
+            if isinstance(row, dict) and gate_open(row, cfg):
+                ticket = row
+                break
+        if ticket is None:
+            return
+    cfg = data.get("config") or {}
+    tid = ticket.get("id")
     _ensure_records(ticket)
     snap = (provider or {}).get(tid) or {}
     if data.get("_live") and "merge" not in snap:
@@ -1928,8 +2104,11 @@ def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
             "\n".join("- %s: %s" % pair for pair in __import__("acceptance").items(ticket)) or "- (none listed)")
         outcome, detail = (opener or provider_mod.open_pr)(repo, branch, ticket_base, title, body)
         if outcome in {"opened", "found"}:
+            failed_before = (ticket.get("pr") or {}).get("openFailed")
             orchestrator.note_pr_opened(ticket, detail, beam_mod.utcnow())
             ticket["pr"].pop("openRequested", None)
+            if isinstance(failed_before, dict) and failed_before.get("alarmed"):
+                out.append("herald: %s pull request opened after %d failed tries: %s" % (tid, int(failed_before.get("count") or 0), detail))
             if ticket.get("status") in {"claimed", "recovering", "planning", "coding", "fix"}:
                 ticket["status"] = "review"
             ticket["phase"] = "pr-open"
@@ -1940,6 +2119,7 @@ def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
             ticket["pr"].pop("openRequested", None)
             begin_fix(data, ticket, ["the Shuttle returned without a pull request and %s; push it and open the pull request" % detail], out)
             continue
+        out.extend(_pr_open_failed(data, ticket, branch, ticket_base, detail))
         scripts = orchestrator.scripts_dir()
         out.append(
             "pr: MUST DO %s: open a pull request from %s into %s%s with the GitHub MCP create_pull_request tool (title %r), "
@@ -1947,6 +2127,53 @@ def run_pr_opens(data: dict, beam_path, lines: list, opener=None) -> list:
             % (tid, branch, ticket_base, (" in %s" % (multirepo.slug(multirepo.url_for(data, ticket)) or multirepo.ticket_repo(data, ticket)))
                if multirepo.is_sibling(data, ticket) else "", title, scripts, Path(beam_path).resolve(), tid, detail)
         )
+    return out
+
+
+_PERMISSION = ("403", "401", "resource not accessible", "permission", "not authorized", "must have", "forbidden",
+               "access denied", "requires authentication", "saml", "insufficient")
+
+
+def pr_open_kind(detail: str) -> str:
+    """`permission` for a refused token, `gh` when gh is missing or not signed in, else `error`."""
+    low = str(detail or "").casefold()
+    if any(word in low for word in _PERMISSION):
+        return "permission"
+    if "gh is not installed" in low or "gh auth login" in low or "not logged" in low:
+        return "gh"
+    return "error"
+
+
+def _pr_open_failed(data: dict, ticket: dict, branch: str, base: str, detail: str) -> list:
+    """Opening the pull request failed. Count it, and alarm: once per ticket and kind, and once for the run when the
+    token is refused (1.7.9). Before, the pass printed a MUST DO line every pass and nothing else."""
+    import beam as beam_mod
+
+    tid = str(ticket.get("id") or "")
+    pr = ticket.setdefault("pr", {})
+    kind = pr_open_kind(detail)
+    info = pr.get("openFailed") if isinstance(pr.get("openFailed"), dict) else {}
+    now_s = beam_mod.utcnow()
+    info.setdefault("firstAt", now_s)
+    info.update({"count": int(info.get("count") or 0) + 1, "kind": kind, "detail": str(detail)[:300], "lastAt": now_s})
+    pr["openFailed"] = info
+    out = ["pr: open failed %s (%s, try %d): %s" % (tid, kind, info["count"], str(detail)[:200])]
+    if info.get("alarmed") == kind:
+        return out
+    info["alarmed"] = kind
+    out.append("alarm: %s pull request not opened (%s)" % (tid, kind))
+    if kind == "permission":
+        out.append("herald: ALARM %s: the pull request from %s into %s could not be opened: the token was refused (%s). "
+                   "The parent opens it with the GitHub MCP; give the token pull-request write access to stop this." % (
+                       tid, branch, base, str(detail)[:160]))
+        posted = data.setdefault("postedAlarms", [])
+        if "pr-open:permission" not in posted:
+            posted.append("pr-open:permission")
+            out.append("herald: ALARM Warp's GitHub token cannot open pull requests here (%s). Every ticket's pull "
+                       "request now waits for the parent to open it with the GitHub MCP." % str(detail)[:160])
+    else:
+        out.append("herald: ALARM %s: the pull request from %s into %s could not be opened (%s). The parent opens it with "
+                   "the GitHub MCP." % (tid, branch, base, str(detail)[:160]))
     return out
 
 
@@ -2015,12 +2242,15 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             except Exception:
                 modes[repo] = ""
         return modes[repo]
+    merged_here = 0
     for line in list(lines):
         match = _MERGE_LINE.match(line)
         if not match or match.group(1) not in tickets:
             continue
         tid, url = match.group(1), match.group(2)
         ticket = tickets[tid]
+        if any(_MERGED_LINE.match(row) for row in out):
+            merged_here = sum(1 for row in out if _MERGED_LINE.match(row))
         scripts = orchestrator.scripts_dir()
         # A sibling ticket (multi-repo) is checked and merged in its own repo; checkCommand is the parent's.
         repo = multirepo.root_for(data, ticket, root)
@@ -2082,6 +2312,17 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             out.append("merge: %s enqueued (%s). Marked merged when the provider shows it merged." % (tid, detail))
             continue
         ticket["pr"]["mergeError"] = detail
+        if merged_here:
+            # An earlier merge in this pass moved the base under it (behind, or a conflict on a shared file): ask
+            # again next pass, after its checks run on the new base, instead of a MUST DO (1.7.9).
+            pr = ticket["pr"]
+            pr.pop("mergeRequestedSha", None)
+            pr.pop("mergeRequestedAt", None)
+            ticket["status"] = "review"
+            ticket["phase"] = "ready"
+            out.append("merge: %s not merged after %d merge%s in this pass (%s); it is asked again next pass" % (
+                tid, merged_here, "" if merged_here == 1 else "s", (detail or "rejected").splitlines()[0]))
+            continue
         out.append("merge: not merged %s: %s" % (tid, (detail or "rejected").splitlines()[0]))
         out.append(
             "merge: MUST DO %s: merge %s (%s) with the GitHub MCP merge tool (merge_pull_request, merge_method %s) or `gh pr merge %s --%s`, "
@@ -2089,6 +2330,66 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             "Do not mark it merged by hand. If the tool is not allowed, add it with /warp-allow-notify --with-git." % (tid, url, method, method, url if sibling else number, method)
         )
         out.append("herald: %s is ready to merge, but Warp could not merge it here: %s" % (tid, (detail or "rejected").splitlines()[0]))
+    return out
+
+
+DONE_ASKS = 3
+OLDER_PER_PASS = 5
+_FINAL_DONE = {"no-transition", "not-found"}
+_BARE_DONE = re.compile(r"^jira: MUST DO (\S+)( \([^)]*\))? transition to Done\.$")
+
+
+def jira_done_lines(data: dict, beam_path, lines: list) -> list:
+    """The Jira move to Done for every merged ticket that has not recorded it (1.7.9).
+
+    A ticket merged in this pass gets the full MUST DO (server, tools, transition, record command) in place of the bare
+    `jira: MUST DO <id> transition to Done.`. One merged earlier and still not Done is asked again each pass, up to
+    DONE_ASKS times; then one Slack alarm, and a one-line reminder each pass with the catch-up command. A recorded
+    `no-transition` or `not-found` ends it (the outbox already says Jira was not updated). Mutates `lines`.
+    """
+    import jira_sync
+
+    path = Path(beam_path)
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    just = {m.group(1) for m in (_MERGED_LINE.match(line) for line in lines) if m}
+    out = []
+    older = 0
+    for tid, ticket in sorted(tickets.items(), key=lambda kv: str(kv[0])):
+        if not isinstance(ticket, dict) or ticket.get("status") != "merged" or ticket.get("followUpOf"):
+            continue
+        jira = ticket.get("jira") if isinstance(ticket.get("jira"), dict) else {}
+        if jira.get("doneAt"):
+            continue
+        last = jira.get("lastAttempt") if isinstance(jira.get("lastAttempt"), dict) else {}
+        if last.get("event") == "done" and last.get("result") in _FINAL_DONE:
+            continue
+        asks = int(jira.get("doneAsks") or 0)
+        if tid not in just and asks == 0 and not ticket.get("jiraKey"):
+            continue
+        if tid not in just and asks < DONE_ASKS:
+            # Older merges are asked a few per pass, so a run upgraded with many unrecorded ones is not flooded.
+            if older >= OLDER_PER_PASS:
+                continue
+            older += 1
+        if asks < DONE_ASKS:
+            text = jira_sync.queue_done(path, data, ticket)
+            if not text or text.startswith("jira: skipped"):
+                continue
+            ticket.setdefault("jira", jira)
+            jira["doneAsks"] = asks + 1
+            if tid in just:
+                lines[:] = [line for line in lines if not (_BARE_DONE.match(line) and _BARE_DONE.match(line).group(1) == tid)]
+            else:
+                out.append("jira: %s merged and Jira is not Done yet (ask %d of %d)" % (tid, asks + 1, DONE_ASKS))
+            out.extend(text.splitlines())
+            continue
+        if not jira.get("doneAlarmed"):
+            ticket.setdefault("jira", jira)
+            jira["doneAlarmed"] = True
+            out.append("herald: ALARM %s (%s) merged, and its Jira issue was not moved to Done after %d asks." % (
+                tid, ticket.get("jiraKey") or "no key", DONE_ASKS))
+        out.append("jira: %s merged, Jira still not Done. python3 %s/jira_sync.py catchup --beam %s --id %s" % (
+            tid, orchestrator.scripts_dir(), path.resolve(), tid))
     return out
 
 
@@ -2395,7 +2696,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         elif deferred:
             lines.append("alarm-repair: no beam")
         _refill(data, lines)
-        _merge_one(data, provider, lines)
+        _merge_ready(data, provider, lines)
         _refill(data, lines)
         import watch
 

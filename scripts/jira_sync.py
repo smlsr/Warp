@@ -3004,6 +3004,45 @@ def queue_claim(beam_path: Path, beam: dict, ticket: dict) -> str:
         return f"jira: skipped ({e})"
 
 
+def queue_done(beam_path: Path, beam: dict, ticket: dict) -> str:
+    """MUST DO text for a merged ticket: the move to Done and the merged comments, with the tools and the record command
+    (1.7.9). A supervise merge printed only `jira: MUST DO <id> transition to Done.`, with no tools and no record
+    command, and nothing asked again, so issues stayed In Review. Empty when Done is already recorded, the move is off,
+    or a manual merge leaves Jira at QA Ready (jiraDoneOnManualMerge false)."""
+    try:
+        if (ticket.get("jira") or {}).get("doneAt") or ticket.get("followUpOf"):
+            return ""
+        cfg = settings(beam_path, beam)
+        if not cfg.get("jiraTransition", True) or not moves_to_done(ticket, cfg):
+            return ""
+        prefixes = prefixes_from(cfg)
+        if not jira_key(ticket, prefixes):
+            return prepare_resolve(beam_path, only_ids=[str(ticket.get("id") or "")])
+        pr = ticket.get("pr") or {}
+        before = {
+            "status": "merging",
+            "pr_url": pr.get("url"),
+            "bugbot": pr.get("bugbot"),
+            "bugbotRequested": True,
+            "ci": pr.get("ci"),
+            "alarm": ticket.get("alarm"),
+        }
+        merged = dict(ticket, status="merged")
+        mode = _mode(beam_path)
+        actions = [
+            action
+            for action in actions_for(merged, before, cfg, mode, _root(beam_path))
+            if (action.get("plan") or {}).get("event", action.get("event")) in {"done", "merged"}
+        ]
+        if not actions:
+            return ""
+        _merge_todo(beam_path, _todo_payload(merged, actions, cfg, mode))
+        _journal(beam_path, {"type": "jira-intent", "id": ticket.get("id"), "actions": ["done"]})
+        return render(merged, actions, cfg)
+    except Exception as e:
+        return f"jira: skipped ({e})"
+
+
 _SYNC_RANK = {"queued": 0, "shuttle": 1, "reviewing": 2, "awaiting_approval": 3, "merged": 4}
 _SYNC_HELD = {"parked", "skipped", "alarm"}
 _SYNC_TO = {

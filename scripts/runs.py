@@ -135,7 +135,44 @@ def git_rel(name: str, rel: str) -> str:
 
 def repo_root(beam_path) -> Path:
     path = Path(beam_path)
+    if is_published_copy(path):
+        return path.parent.parent.parent.parent
     return path.parent.parent if path.parent.name == ".warp" else path.parent
+
+
+def live_beam(beam_path) -> tuple:
+    """(the beam to use, a note or None). A run's published copy is never worked as a live beam: when the checkout
+    has its live beam, `.warp/beam.json`, that one is used instead and the note says so (1.7.9)."""
+    if beam_path in (None, ""):
+        return beam_path, None
+    path = Path(beam_path)
+    if not is_published_copy(path):
+        return beam_path, None
+    live = repo_root(path) / ".warp" / "beam.json"
+    if not live.is_file():
+        return beam_path, None
+    return str(live), ("beam: %s is the run's published copy on the base branch; using this checkout's live beam, %s"
+                       % (beam_path, live))
+
+
+def use_live_beam(args) -> None:
+    """Point `args.beam` at the live beam when it names a published copy. Prints the note to stderr."""
+    if not getattr(args, "beam", None):
+        return
+    chosen, note = live_beam(args.beam)
+    if note:
+        args.beam = chosen
+        print(note, file=sys.stderr)
+
+
+def is_published_copy(beam_path) -> bool:
+    """True for `<repo>/.warp/runs/<run>/beam.json`: a run's copy on the base branch, never a live beam.
+
+    Run as a live beam, its repo root resolves to the run folder and a publish writes the folder again
+    inside itself (`.warp/runs/core/.warp/runs/core/`).
+    """
+    parts = Path(beam_path).parts
+    return len(parts) >= 4 and parts[-4] == ".warp" and parts[-3] == "runs"
 
 
 def config_path(root) -> Path:
