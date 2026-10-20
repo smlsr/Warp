@@ -480,6 +480,7 @@ def note_pr_opened(ticket: dict, url: str, when: Optional[str] = None) -> None:
         pr["openedAt"] = when
     pr["agentFinished"] = True
     pr["opened"] = True
+    pr.pop("openFailed", None)
 
 
 def holds_slot(ticket: dict, config: Optional[dict] = None) -> bool:
@@ -1578,7 +1579,16 @@ def step_lines(ticket: dict) -> list:
         lines.append("%s ONLY %s: %s" % (step.upper(), tid, detail))
     elif detail:
         lines.append("detail: %s" % detail)
+    if step not in {"review", "verify"}:
+        lines.append(PROGRESS_LINE)
     return lines
+
+
+PROGRESS_LINE = (
+    "Commit as you go: a commit at least every 20 minutes of work (a work-in-progress commit is fine). While the branch has "
+    "no pull request open, push each commit too. The parent reads the branch and flags a Shuttle with no new commit for "
+    "stallNoPushMinutes (default 30) as stalled."
+)
 
 
 def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused: bool = False, instance: str = "") -> str:
@@ -1931,6 +1941,20 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
             lines.extend(autoscan.run_on_disk(path, now=now))
         except Exception as exc:
             lines.append("autoscan: skipped (%s)" % exc)
+        try:
+            import basecheck
+
+            # Is main itself green? A red main makes every pull request red; this pass sees it and says so (1.7.9).
+            lines.extend(basecheck.observe(path, now=now))
+        except Exception as exc:
+            lines.append("base: not checked (%s)" % exc)
+        try:
+            import progress
+
+            # A Shuttle with no new commit for stallNoPushMinutes is flagged stalled (1.7.9).
+            lines.extend(progress.observe(path, now=now))
+        except Exception as exc:
+            lines.append("progress: not read (%s)" % exc)
     data = _load(path)
     if not listener_should_run(data):
         state = str(data.get("runState") or "")
@@ -2317,7 +2341,7 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
     if inbound.generation_of(data) > 0 and not inbound.return_ready(data):
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
-    churned = _churn_lines(data, now_dt, now_s)
+    churned = inbound.down_lines(data, now_dt, now_s) + _churn_lines(data, now_dt, now_s)
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return lost + churned + ["listener: poll"]
@@ -2620,6 +2644,11 @@ def parent_alive(beam_path: Path, every: Optional[int] = None, now=None) -> list
     head = "parent: alive at %sZ%s; the listener waits up to %dm for the next one" % (
         now_s[11:19], (" (woken every %ds)" % every_now) if every_now else "", limit)
     if holder:
+        silent = inbound.holder_silent(data, path, beam_mod.coerce_now(now)[0])
+        if silent is not None:
+            # The lease is held but nothing has polled for minutes: it is gone (1.7.9).
+            return [head, "listener: generation %s has not polled for %dm; it is gone. Run a supervise pass now: it hands the "
+                          "slot back and starts a new one" % (inbound.generation_of(data), silent)]
         return [head, "listener: generation %s is up" % inbound.generation_of(data)]
     return [head, "listener: none is up; run a supervise pass now to start one"]
 

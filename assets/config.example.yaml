@@ -354,6 +354,13 @@ autoScan: 600
 # repair sweep, and then fills every free Shuttle slot. 0 turns it off.
 autoScanResets: 5
 # Fresh budgets the auto-scan gives one ticket before it leaves it for a person (warp:retry).
+baseCheckSeconds: 300
+# Seconds between reads of the checks on the base branch's head (main) on GitHub. A red main is an
+# alarm, starts the base fix, and a pull request that fails only the checks main fails waits for
+# main instead of going to fix. 0 turns it off.
+stallNoPushMinutes: 30
+# A working Shuttle with no new commit on its branch for this long is flagged stalled, with one
+# alarm per step. Review and verify steps are not judged. 0 turns it off.
 reviewPollSeconds: 60
 # While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every
 # open pull request (one gh call) this often during its wait, and runs the next pass at

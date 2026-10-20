@@ -437,12 +437,77 @@ def touch_parent(beam_path: Path, now_s: str, waiting: bool = False, every: Opti
     return _locked(beam_path, run)
 
 
+DOWN_ALARM_MINUTES = 10
+
+
+def watch_listener(beam_path, now=None) -> Optional[str]:
+    """Look at the listener from any Warp command between passes (a Shuttle's state write, a launch): a holder silent
+    past listenerSilentMinutes is handed back now (`lost`), so the parent's wait wakes at once (`pass: return`) and the
+    next pass starts a new one, and the time with no listener starts counting (`listener.downSince`). Never waits on
+    the run lock and never raises. Returns a line when it changed something (1.7.9)."""
+    try:
+        import beamlock
+        import orchestrator
+
+        path = Path(beam_path)
+        if not path.is_file():
+            return None
+        with beamlock.try_run_lock(path) as held:
+            if not held:
+                return None
+            data = beam.load_json(path)
+            if not isinstance(data, dict) or not orchestrator.listener_should_run(data) or not channels(path):
+                return None
+            now_dt, now_s = _moment(now)
+            raw = _raw(data)
+            holder = str(raw.get("holder") or "")
+            if holder:
+                silent = holder_silent(data, path, now_dt)
+                if silent is None:
+                    return None
+                stamp_return(data, path, "lost", now_s, holder=holder)
+                raw = _raw(data)
+                raw["downSince"] = now_s
+                data["listener"] = raw
+                beam.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+                return "listener: generation %s silent for %dm; handed back (lost). The next pass starts a new one." % (
+                    generation_of(data), silent)
+            if not raw.get("downSince") and str(raw.get("returnReason") or "") and generation_of(data) > 0:
+                raw["downSince"] = str(raw.get("stoppedAt") or now_s)
+                data["listener"] = raw
+                beam.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+            return None
+    except Exception:
+        return None
+
+
+def down_lines(data: dict, now_dt, now_s: str) -> list:
+    """When a new listener starts after a gap with none: how long, and once an alarm when it was 10 minutes or more.
+    The caller writes the beam (1.7.9)."""
+    raw = _raw(data)
+    since = beam.parse_ts(str(raw.get("downSince") or raw.get("stoppedAt") or ""))
+    raw.pop("downSince", None)
+    data["listener"] = raw
+    if since is None or not str(raw.get("returnReason") or ""):
+        return []
+    minutes = int((now_dt - since).total_seconds() // 60)
+    if minutes < 2:
+        return []
+    out = ["listener: none was up for %dm (since %sZ, the last one ended %s); starting one now" % (
+        minutes, str(raw.get("stoppedAt") or "")[11:19], raw.get("returnReason") or "?")]
+    if minutes >= DOWN_ALARM_MINUTES:
+        out.append("herald: ALARM no Warp listener for %dm (the last one ended %s at %sZ): Slack commands were not read in "
+                   "that time. A new listener is starting." % (minutes, raw.get("returnReason") or "?", str(raw.get("stoppedAt") or "")[11:19]))
+    return out
+
+
 def parent_alive_quiet(beam_path) -> None:
     """A parent command ran (checkout.py, apply-pending, the auto-scan, …): that is a heartbeat too. Never raises."""
     try:
         touch_parent(Path(beam_path), beam.utcnow())
     except Exception:
         pass
+    watch_listener(beam_path)
 
 
 PARENT_WAITING_SECONDS = 90

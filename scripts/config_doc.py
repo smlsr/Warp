@@ -41,7 +41,8 @@ SECTIONS = [
     ("Stalls and repair", "When a ticket counts as stalled or stuck, and how often Warp tries to repair it.", [
         "stuckAfterMinutes", "stallImplementingMinutes", "stallPrOpenMinutes", "stallReviewingMinutes",
         "stallFixingMinutes", "stallReadyMinutes", "stallMergingMinutes", "stallQueuedMinutes", "stallApprovalMinutes",
-        "stallMinutes", "ciStartGraceMinutes", "maxStallFixes", "repairSweepMinutes", "launchGraceMinutes", "autoScan", "autoScanResets", "alarmRepairMinutes",
+        "stallMinutes", "ciStartGraceMinutes", "maxStallFixes", "repairSweepMinutes", "launchGraceMinutes", "autoScan", "autoScanResets", "baseCheckSeconds",
+        "stallNoPushMinutes", "alarmRepairMinutes",
         "maxAlarmRepairs"]),
     ("Slack, Teams and the listener", "Where Herald posts, what it posts, and how the channel listener paces itself.", [
         "messenger", "notify", "slackChannel", "teamsChannel", "slackMcp", "teamsMcp", "projectName",

@@ -1845,6 +1845,8 @@ def default_config() -> dict:
         "statusDigestMinutes": 60,
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,
+        "baseCheckSeconds": 300,
+        "stallNoPushMinutes": 30,
         "launchGraceMinutes": 10,
         "autoScan": 600,
         "autoScanResets": 5,

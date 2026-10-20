@@ -256,6 +256,22 @@ Each line is `listener: generation <n> ended <reason> at <time>Z, lived <m>m<s>s
 
 The repairs do not depend on the listener. The auto-scan runs in a pass every `autoScan` seconds, and when no pass has run for longer than that and the parent is not waiting, the listener runs it at its next poll (`listen: no parent pass for <m>m; the auto-scan ran here`). The next pass launches what it freed.
 
+## `base: main is red`
+
+Every `baseCheckSeconds` (300) a pass reads the checks on main's head on GitHub. When main fails, every pull request fails too, so Warp says it once per red commit (Slack `ALARM main is red at <sha>`), starts the base fix (`dispatch-base-fix`), and holds the pull requests whose only red is the checks main fails (`ci: <id> fails the same checks as main …`) so they do not spend fix attempts. When main is green (`base: main is green again`), each one that waited takes main and its checks run again. `python3 <plugin>/scripts/basecheck.py --beam .warp/beam.json` reads main now. A pull request that fails a check main passes still goes to fix.
+
+## `stall: <id> … Shuttle has no new commit`
+
+That Shuttle has written no commit on its branch for `stallNoPushMinutes` (30). It may be looping on a test or waiting on something. It keeps its slot; `warp:retry <id>` restarts it. `python3 <plugin>/scripts/progress.py --beam .warp/beam.json` lists every working Shuttle's last commit. Review and verify steps are not judged. Raise the key for steps that legitimately run long without a commit, or set 0 to turn it off.
+
+## Acceptance results and a new head
+
+Results belong to the commit that was checked. When the branch moves after they were recorded, Warp carries them to the new head if the new commits only merge main in or only touch `.warp/`; otherwise it prints `acceptance: <id> head moved from <a> to <b> … Record them on <b>: <command>` once, and the verify Shuttle checks them again when the rest of the work is done. A Shuttle records with `--sha <commit>`, or its worktree's HEAD is taken.
+
+## `pr: open failed <id> (permission …)`
+
+Warp's GitHub token was refused when it opened the pull request. Each ticket alarms once, the run alarms once, and the parent opens the pull request with the GitHub MCP (`pr: MUST DO`). Give the token pull-request write access to stop it.
+
 ## `listener: hold reason=await-return` does not clear
 
 The lease was bumped because the holder passed `listenerMaxMinutes`, or a generation ended without a return stamp, and the old listener has not written that stamp yet. It writes it at its next `poll` or `wait`, which wakes about every 2 seconds. If it stays, that listener is gone without a stamp, for example the window closed. Open a chat and run `/warp-listen`. It runs `inbound.py take --holder chat`, which prints `listener: lease generation=<n> holder=chat` and holds the lease in that chat. To clear the stamp by hand instead, run `inbound.py returned --beam .warp/beam.json --reason stopped`. It prints `listener: returned stopped`, and the next `supervise` prints `listener: poll`.

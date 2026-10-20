@@ -259,6 +259,65 @@ def prompt_lines(ticket: dict, record: str) -> list:
     ]
 
 
+def _git(root, *args):
+    import subprocess
+
+    try:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def carry_check(root, old: str, new: str, base: str = "main", branch: str = "") -> tuple:
+    """(True, why) when the commits from `old` to `new` only merge `base` in or only change `.warp/`, else (False, why).
+    `old` must be an ancestor of `new` (1.7.9)."""
+    if not root or not old or not new:
+        return False, "the commit it was recorded on is not known"
+    for sha in (old, new):
+        seen = _git(root, "cat-file", "-e", "%s^{commit}" % sha)
+        if seen is None or seen.returncode != 0:
+            if branch:
+                _git(root, "fetch", "-q", "origin", branch)
+            seen = _git(root, "cat-file", "-e", "%s^{commit}" % sha)
+            if seen is None or seen.returncode != 0:
+                return False, "%s is not in this checkout" % sha[:12]
+    ancestor = _git(root, "merge-base", "--is-ancestor", old, new)
+    if ancestor is None or ancestor.returncode != 0:
+        return False, "the branch was rewritten"
+    excludes = ["^%s" % old]
+    for ref in ("origin/%s" % base, base):
+        known = _git(root, "rev-parse", "--verify", "-q", ref)
+        if known is not None and known.returncode == 0:
+            excludes.append("^%s" % ref)
+            break
+    own = _git(root, "rev-list", "--no-merges", new, *excludes)
+    if own is None or own.returncode != 0:
+        return False, "the commits could not be read"
+    commits = [line for line in (own.stdout or "").split() if line]
+    if not commits:
+        return True, "only %s was merged in" % base
+    touched = set()
+    for sha in commits:
+        files = _git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+        if files is None or files.returncode != 0:
+            return False, "the commits could not be read"
+        touched.update(line for line in (files.stdout or "").splitlines() if line)
+    if touched and all(path.startswith(".warp/") for path in touched):
+        return True, "only Warp state changed"
+    return False, "%d new commit%s changed code" % (len(commits), "" if len(commits) == 1 else "s")
+
+
+def record_command(ticket: dict, beam_file: str, head: str = "") -> str:
+    """The command that records every criterion for one head, by hand or from a Shuttle."""
+    import orchestrator
+
+    listed = items(ticket)
+    root = str(Path(beam_file).resolve().parent.parent)
+    acs = " ".join("--ac %s=pass|fail" % ident for ident, _body in listed) or "--ac AC-1=pass|fail"
+    return "python3 %s/ticket_state.py append --id %s --state acceptance --root %s%s %s" % (
+        orchestrator.scripts_dir(), ticket.get("id"), root, " --sha %s" % head if head else "", acs)
+
+
 def verify_detail(ticket: dict, scripts: str, parent: str) -> str:
     listed = items(ticket)
     want = " ".join("--ac %s=pass|fail" % ident for ident, _body in listed)
