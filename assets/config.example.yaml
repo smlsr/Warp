@@ -111,6 +111,10 @@ mergeCheck: auto
 # `make ci` from a root Makefile. off: run nothing before a merge.
 mergeCheckMinutes: 10
 # The merge check's time limit. Past it, the check counts as red.
+maxMergesPerPass: 3
+# Ready pull requests one pass merges, in merge-queue order (at least 1). Before 1.7.9 a pass
+# merged one. A later one refused because an earlier merge in the same pass moved the base is
+# asked again next pass.
 mergeMethod: merge
 # merge: a merge commit, so each ticket branch joins the base in a git graph. squash:
 # one commit on the base (the branch's own commits never join it). rebase: the

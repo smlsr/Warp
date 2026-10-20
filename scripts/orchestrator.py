@@ -1040,11 +1040,11 @@ def in_merge_queue(ticket: dict, config: Optional[dict]) -> bool:
 
 
 def merge_queue(beam: dict) -> list:
-    """Serial merge order: starred first, then lowest rank. Empty when the base is red."""
-    if not base_is_green(beam):
-        return []
+    """Serial merge order: starred first, then lowest rank. While the base is red only the base fix merges (a ticket
+    marked `baseFix`): before 1.7.9 the base was never seen red, and a red base would have held its own fix."""
     cfg = beam.get("config") or {}
-    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg)]
+    red = not base_is_green(beam)
+    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg) and (not red or t.get("baseFix"))]
     rows.sort(key=lambda t: sort_key(t, base_red=False))
     return rows
 
@@ -1063,9 +1063,7 @@ def stack_groups(queue: list, red: bool = False) -> list:
 
 
 def next_merge(beam: dict, stacked_red: bool = False) -> Optional[dict]:
-    """One merge candidate. None when the base is red or the queue is empty."""
-    if not base_is_green(beam):
-        return None
+    """One merge candidate. None when the queue is empty (while the base is red it holds only the base fix)."""
     groups = stack_groups(merge_queue(beam), red=stacked_red)
     if not groups:
         return None
@@ -2007,6 +2005,12 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
         lines.extend(pipeline.run_pr_opens(data, path, lines))
     # A merged ticket's branch is deleted when deleteBranchOnMerge is on (off by default).
     lines.extend(pipeline.after_merges(data, path, lines))
+    if live:
+        # Every merged ticket's Jira move to Done, in full, and asked again until it is recorded (1.7.9).
+        try:
+            lines.extend(pipeline.jira_done_lines(data, path, lines))
+        except Exception as exc:
+            lines.append("jira: Done moves not checked (%s)" % exc)
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}

@@ -1846,6 +1846,7 @@ def default_config() -> dict:
         "maxStallFixes": 5,
         "repairSweepMinutes": 15,
         "baseCheckSeconds": 300,
+        "maxMergesPerPass": 3,
         "stallNoPushMinutes": 30,
         "launchGraceMinutes": 10,
         "autoScan": 600,
