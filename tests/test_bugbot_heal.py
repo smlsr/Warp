@@ -179,6 +179,19 @@ class BugbotTriggerTest(Repo):
         pipeline._apply_snapshot(ticket, {"headSha": "c" * 40, "bugbot": ""})
         self.assertEqual(pipeline.bugbot_state(ticket), "")
 
+    def test_a_bugbot_pass_clears_findings_a_hand_record_kept(self):
+        stale = ["Cursor Bugbot found issues on 579fb1873f14 (see its review comments on the pull request)"]
+        ticket = {"id": "WV-01", "status": "review", "pr": {
+            "headSha": SHA, "bugbot": "fail", "bugbotSource": "provider", "bugbotProviderSha": SHA,
+            "bugbotRecordedSha": SHA, "bugbotFindings": stale, "bugbotFindingsSha": SHA}}
+        pipeline._apply_snapshot(ticket, {"headSha": SHA, "bugbot": "pass", "findings": [], "rollup": "green"})
+        self.assertEqual(pipeline.bugbot_state(ticket), "pass")
+        self.assertEqual(pipeline.findings_of(ticket), [])
+        # With no Bugbot verdict, a finding recorded by hand still stands.
+        ticket["pr"].update(bugbotFindings=stale, bugbot="fail")
+        pipeline._apply_snapshot(ticket, {"headSha": SHA, "bugbot": "", "findings": []})
+        self.assertEqual(pipeline.findings_of(ticket), stale)
+
     def test_record_fail_sends_findings_to_fix(self):
         self.write([row()])
         out = subprocess.run([sys.executable, "-B", str(SCRIPTS / "bugbot.py"), "record", "--beam", str(self.beam_path),

@@ -633,6 +633,28 @@ def failed_check_names(checks: list) -> list:
     return sorted(out)
 
 
+PR_EVENTS = {"push", "pull_request", "pull_request_target", "merge_group"}
+
+
+def _after_merge_suites(run, slug: str, sha: str) -> set:
+    """Check suite ids of the Actions runs on this commit started by something a pull request never runs: a
+    `workflow_run` release or deploy, a schedule, a dispatch. Their result says nothing about the code a pull
+    request shares with main, and no code fix makes them green (a missing secret, a cloud login)."""
+    done = run(["gh", "api", "repos/%s/actions/runs?head_sha=%s&per_page=100" % (slug, sha)])
+    if done.returncode != 0:
+        return set()
+    try:
+        doc = json.loads(done.stdout or "{}")
+    except json.JSONDecodeError:
+        return set()
+    out = set()
+    for item in doc.get("workflow_runs") or [] if isinstance(doc, dict) else []:
+        if isinstance(item, dict) and item.get("check_suite_id") is not None \
+                and str(item.get("event") or "") not in PR_EVENTS:
+            out.add(item["check_suite_id"])
+    return out
+
+
 def base_checks(root: Path, base: str, runner=None) -> Optional[dict]:
     """The checks on the base branch's head on GitHub: {sha, state, failed, count}. None when it cannot be asked.
 
@@ -653,11 +675,13 @@ def base_checks(root: Path, base: str, runner=None) -> Optional[dict]:
     if not sha:
         return None
     rows: list = []
+    after_merge = _after_merge_suites(run, slug, sha)
     runs = run(["gh", "api", "repos/%s/commits/%s/check-runs?per_page=100" % (slug, sha)])
     if runs.returncode == 0:
         try:
             doc = json.loads(runs.stdout or "{}")
-            rows.extend(item for item in doc.get("check_runs") or [] if isinstance(item, dict))
+            rows.extend(item for item in doc.get("check_runs") or [] if isinstance(item, dict)
+                        and ((item.get("check_suite") or {}).get("id") not in after_merge))
         except json.JSONDecodeError:
             pass
     status = run(["gh", "api", "repos/%s/commits/%s/status" % (slug, sha)])
@@ -762,7 +786,7 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
             "view",
             text,
             "--json",
-            "headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits,state,mergeCommit,createdAt,mergedAt,latestReviews",
+            "url,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,commits,state,mergeCommit,createdAt,mergedAt,latestReviews",
         ],
         root,
     )
@@ -810,7 +834,8 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
     snap.update(pr_times(doc, checks))
     snap["bugbotCheck"] = bugbot
     if bugbot == "fail" and sha:
-        found = current_bugbot_findings(root, text, sha)
+        # A pull request opened as a bare number ("374") has no owner/repo to read comments with; gh's url does.
+        found = current_bugbot_findings(root, str(doc.get("url") or text), sha)
         if found == [] and _bugbot_neutral(checks):
             # 1.7.3: Bugbot's check stays `neutral` while older threads are open, even when it found nothing on this
             # commit. With no finding on the head (only outdated threads), that is a pass: before, it was red,
@@ -904,9 +929,40 @@ def _outdated(row: dict) -> bool:
     return row.get("position") is None and row.get("line") is None and ("position" in row or "line" in row)
 
 
+RESOLVED_THREADS_QUERY = (
+    "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number)"
+    "{reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}"
+)
+
+
+def resolved_thread_comment_ids(owner: str, repo: str, number: str, run) -> set:
+    """Ids of the first comment of each resolved review thread. Empty when gh cannot read them, so an unreadable
+    answer never clears a finding."""
+    done = run(["gh", "api", "graphql", "-f", "query=" + RESOLVED_THREADS_QUERY, "-F", "owner=" + owner,
+                "-F", "repo=" + repo, "-F", "number=" + str(number)])
+    if done.returncode != 0:
+        return set()
+    try:
+        doc = json.loads(done.stdout or "")
+        threads = doc["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return set()
+    out = set()
+    for thread in threads if isinstance(threads, list) else []:
+        if not isinstance(thread, dict) or not thread.get("isResolved"):
+            continue
+        for comment in ((thread.get("comments") or {}).get("nodes") or []):
+            if isinstance(comment, dict) and comment.get("databaseId") is not None:
+                out.add(int(comment["databaseId"]))
+    return out
+
+
 def current_bugbot_findings(root: Path, url: str, head: str, runner=None) -> Optional[list]:
     """Bugbot's findings that still stand on this head: top-level review comments on the head commit that are not
-    outdated. None when gh cannot read them (unknown, not clean)."""
+    outdated and whose thread is not resolved. None when gh cannot read them (unknown, not clean).
+
+    GitHub carries a thread to a new head when that commit leaves its lines alone (a merge of main), so a finding
+    fixed earlier still sits on the head until someone resolves it."""
     owner, repo, number = _repo_and_number(url)
     if not number:
         return None
@@ -919,7 +975,7 @@ def current_bugbot_findings(root: Path, url: str, head: str, runner=None) -> Opt
         rows = json.loads(text) if text.startswith("[") and text.count("][") == 0 else json.loads("[" + text.replace("][", ",")[1:-1] + "]")
     except json.JSONDecodeError:
         return None
-    out = []
+    standing = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or not is_bugbot_comment(row):
             continue
@@ -927,6 +983,12 @@ def current_bugbot_findings(root: Path, url: str, head: str, runner=None) -> Opt
             continue  # a reply in a thread, or a thread on code the latest commit replaced
         commit = str(row.get("commit_id") or row.get("original_commit_id") or "")
         if head and commit and not (commit.startswith(head) or head.startswith(commit)):
+            continue
+        standing.append(row)
+    resolved = resolved_thread_comment_ids(owner, repo, number, run) if standing else set()
+    out = []
+    for row in standing:
+        if row.get("id") is not None and int(row["id"]) in resolved:
             continue
         line = finding_line(row)
         if line and line not in out:

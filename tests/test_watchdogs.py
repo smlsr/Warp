@@ -92,6 +92,27 @@ class RedMainTest(unittest.TestCase):
         got = provider.base_checks(Path("."), "main", runner=runner)
         self.assertEqual(got, {"sha": "f" * 40, "state": "red", "failed": ["unit"], "count": 3})
 
+    def test_a_release_after_merge_does_not_make_main_red(self):
+        import provider
+
+        def runner(cmd):
+            url = cmd[2]
+            if url.endswith("/commits/main"):
+                out = "f" * 40 + "\n"
+            elif "actions/runs" in url:
+                out = json.dumps({"workflow_runs": [{"event": "push", "check_suite_id": 1},
+                                                    {"event": "workflow_run", "check_suite_id": 2}]})
+            elif "check-runs" in url:
+                out = json.dumps({"check_runs": [
+                    {"name": "go-test", "status": "completed", "conclusion": "success", "check_suite": {"id": 1}},
+                    {"name": "release", "status": "completed", "conclusion": "failure", "check_suite": {"id": 2}}]})
+            else:
+                out = json.dumps({"statuses": []})
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+        got = provider.base_checks(Path("."), "main", runner=runner)
+        self.assertEqual(got, {"sha": "f" * 40, "state": "green", "failed": [], "count": 1})
+
     def test_pending_keeps_what_it_was(self):
         data = beam([])
         basecheck.apply(data, {"sha": "a" * 40, "state": "red", "failed": ["unit"]}, NOW)

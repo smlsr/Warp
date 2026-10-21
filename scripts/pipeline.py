@@ -465,7 +465,8 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     if isinstance(snap.get("failedChecks"), list):
         pr["failedChecks"] = list(snap["failedChecks"])
         pr["failedChecksSha"] = new_sha or head_now
-    if "findings" in snap and not (by_hand and not snap.get("findings")):
+    passed = str(snap.get("bugbot") or "").strip().casefold() == "pass"
+    if "findings" in snap and (passed or not (by_hand and not snap.get("findings"))):
         pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
         if new_sha:
             pr["bugbotFindingsSha"] = new_sha
