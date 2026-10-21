@@ -165,13 +165,17 @@ class BugbotNeutralTest(unittest.TestCase):
     URL = "https://github.com/acme/app/pull/77"
     HEAD = "f" * 40
 
-    def fake(self, comments, comments_ok=True, conclusion="NEUTRAL"):
-        view = {"headRefOid": self.HEAD, "statusCheckRollup": checks(conclusion), "mergeable": "MERGEABLE",
+    def fake(self, comments, comments_ok=True, conclusion="NEUTRAL", resolved=(), threads_ok=True, pr=None):
+        view = {"url": self.URL, "headRefOid": self.HEAD, "statusCheckRollup": checks(conclusion), "mergeable": "MERGEABLE",
                 "mergeStateStatus": "CLEAN", "commits": [], "state": "OPEN"}
+        threads = {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
+            {"isResolved": True, "comments": {"nodes": [{"databaseId": cid}]}} for cid in resolved]}}}}}
 
         def run(cmd, cwd=None, timeout=20):
             if cmd[:3] == ["gh", "pr", "view"]:
                 return SimpleNamespace(returncode=0, stdout=json.dumps(view), stderr="")
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return SimpleNamespace(returncode=0 if threads_ok else 1, stdout=json.dumps(threads), stderr="")
             if cmd[:2] == ["gh", "api"]:
                 return SimpleNamespace(returncode=0 if comments_ok else 1, stdout=json.dumps(comments), stderr="")
             return SimpleNamespace(returncode=1, stdout="", stderr="")
@@ -181,7 +185,7 @@ class BugbotNeutralTest(unittest.TestCase):
         provider.shutil.which = lambda name: "/usr/bin/gh"
         self.addCleanup(setattr, provider, "_run", real_run)
         self.addCleanup(setattr, provider.shutil, "which", real_which)
-        return provider.fetch_pr_state(Path("."), self.URL)
+        return provider.fetch_pr_state(Path("."), pr or self.URL)
 
     def comment(self, **kw):
         row = {"user": {"login": "cursor[bot]"}, "body": "### Null check\n**High Severity**", "path": "app/x.ts",
@@ -200,6 +204,22 @@ class BugbotNeutralTest(unittest.TestCase):
 
     def test_a_finding_on_the_head_is_still_a_fail(self):
         snap = self.fake([self.comment()])
+        self.assertEqual(snap["bugbot"], "fail")
+        self.assertEqual(snap["findings"], ["app/x.ts:12 Null check (High)"])
+
+    def test_a_resolved_thread_carried_to_the_head_is_a_pass(self):
+        # A merge of main leaves the thread's lines alone, so GitHub moves the fixed finding to the new head.
+        snap = self.fake([self.comment(id=4330706640, original_commit_id="d" * 40)], resolved=[4330706640])
+        self.assertEqual((snap["bugbot"], snap["rollup"], snap["findings"]), ("pass", "green", []))
+        self.assertTrue(snap["bugbotNeutralClean"])
+
+    def test_a_pull_request_recorded_by_number_reads_its_comments(self):
+        old = self.comment(line=None, position=None, commit_id="a" * 40, original_commit_id="a" * 40)
+        self.assertEqual(self.fake([old], pr="77")["bugbot"], "pass")
+        self.assertEqual(self.fake([self.comment()], pr="77")["findings"], ["app/x.ts:12 Null check (High)"])
+
+    def test_unreadable_threads_keep_the_finding(self):
+        snap = self.fake([self.comment(id=7)], resolved=[7], threads_ok=False)
         self.assertEqual(snap["bugbot"], "fail")
         self.assertEqual(snap["findings"], ["app/x.ts:12 Null check (High)"])
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.10
+
+Three faults kept a green pull request out of the merge, and one false alarm held a run on a red `main` that was not red. All three came up on run `warp:bce0ae`.
+
+- Fixed: Bugbot could never pass on a pull request recorded by number. `orchestrator.py opened --pr 374` stores the pull request as `"374"`. `current_bugbot_findings` reads owner, repo, and number from a URL, so it got nothing back and returned "unknown". A neutral Bugbot check then always read as a fail, and the ticket went back to fix on every pass. `fetch_pr_state` now asks `gh pr view` for `url` and passes that URL to the lookup (`provider.py`).
+- Fixed: a resolved Bugbot thread still counted as a finding. When a merge of `main` leaves a thread's lines alone, GitHub moves the thread to the new head, so a finding fixed earlier still looked current. `current_bugbot_findings` now reads the pull request's review threads through GitHub GraphQL (`reviewThreads`: `isResolved` and the first comment's id), and only when findings stand. It skips findings whose thread is resolved. If the threads cannot be read, the finding stands (`provider.py`).
+- Fixed: a Bugbot pass kept the old findings. `_apply_snapshot` kept the recorded finding text whenever a hand-recorded review matched the head, so `findings_of` stayed non-empty after Bugbot passed and the ticket went back to fix. A Bugbot pass from the provider now clears those findings. With no Bugbot verdict, a hand-recorded finding still stands (`pipeline.py`).
+- Fixed: a failed release after a merge turned `main` red. `base_checks` counted every check on `main`'s head, including a `release` workflow that a green `ci` push starts through `workflow_run`. When that release failed (here at cloud login, because its repository variables were not set), Warp raised `base: main is red` and asked for a base fix that no code change could satisfy. `base_checks` now leaves out check runs whose suite belongs to an Actions run started by anything other than `push`, `pull_request`, `pull_request_target`, or `merge_group`. It reads those runs once per head (`actions/runs?head_sha=`); if that read fails, nothing is left out (`provider.py`).
+
 ## 1.7.9
 
 The listener kept dying within minutes, and the repairs that keep a run moving waited on passes that did not come.
