@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.11
+
+- New: the watch timer. Warp now sets up and keeps one recurring timer (a subscription) per run, `warp-<run>-<instance>-watch`, every `watchSeconds` (300; 0 is off), and does on each wake what a parent woken by a 5-minute timer used to do by hand. `/warp-start` and `/warp-resume` print `timer: MUST DO keep one recurring timer …` with the command that prints its prompt (`wake.py prompt`) and the one that records it (`wake.py armed`); `/warp-watch` creates, checks, or re-creates it. The prompt is self-contained: run the wake, act on every line (starts and resumes with `checkout.py launch` and the agent bind, alarm repairs, fixes, the base fix, pull requests the Shuttle could not open, Bugbot re-runs and records only on a finished check for that head, every Jira move recorded, the Slack payload), close with `session_note.py --type session-stop`, and reply with only what changed.
+- New: `wake.py run`, one wake in one call, in order: the heartbeat (`parent-alive --every`), pending commands (`inbound.py apply-pending`), the unstick step, the supervise pass, and new work. Unstick forces the auto-scan (capped and parked tickets get a fresh budget, merges and pull requests that never happened are asked again), widens a lock-escape whose escaped paths nobody holds (in the beam and in `_ingested_schedule.json`, so a later restore from the plan keeps them), and puts a `stuck`, `stalled`, `stale`, or `worker-died` alarm on a ticket with an open pull request back to reviewing. A fire while a pass runs, or within 40% of the interval of the last wake (stacked fires), does nothing.
+- New: new work for blockers nobody owns. A dependency that is no ticket in this run and no other run's held a ticket back forever without a word. Each wake names it (`wake: new work: <id> blocks …, and no ticket or run owns it`) with `wake.py add-ticket`, which adds the ticket to the beam (queued), to the pack's `tickets/tickets.json` when there is one, and to `.warp/added-tickets.json`, and prints the Jira create and `jira_sync.py resolve` lines.
+- New: the timer is watched. A live pass with no wake for three intervals says `timer: <name> has not woken for <m>m … MUST DO create it again` (every 30 minutes) and posts one alarm; a paused, stopped, or finished run says to delete it, once. `wake.py status` shows the name, the interval, and the last wake.
+- Changed: the parent rules now allow exactly one timer, the watch timer (they said not to set any).
+
 ## 1.7.10
 
 Three faults kept a green pull request out of the merge, and one false alarm held a run on a red `main` that was not red. All three came up on run `warp:bce0ae`.

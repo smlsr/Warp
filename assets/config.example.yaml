@@ -365,6 +365,11 @@ baseCheckSeconds: 300
 stallNoPushMinutes: 30
 # A working Shuttle with no new commit on its branch for this long is flagged stalled, with one
 # alarm per step. Review and verify steps are not judged. 0 turns it off.
+watchSeconds: 300
+# The watch timer: one recurring timer (a subscription) per run that wakes the parent this often.
+# /warp-start and /warp-resume print its name and prompt (timer: MUST DO); each fire runs one
+# wake.py run: the heartbeat, pending commands, the unstick step, the supervise pass, and new
+# work for blockers no ticket owns. At least 60. 0 turns it off.
 reviewPollSeconds: 60
 # While a ticket waits on review, CI, Bugbot, approval, or its merge, the parent reads every
 # open pull request (one gh call) this often during its wait, and runs the next pass at

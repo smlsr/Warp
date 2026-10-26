@@ -618,6 +618,7 @@ class ScriptHelpTests(unittest.TestCase):
             "reconcile.py",
             "autoscan.py",
             "config_sync.py",
+            "wake.py",
         ):
             # herald_fmt requires --title, so ask for help explicitly.
             blobs.append(self.help_text(script, "?" if script != "herald_fmt.py" else "--help"))

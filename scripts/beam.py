@@ -1847,6 +1847,7 @@ def default_config() -> dict:
         "repairSweepMinutes": 15,
         "baseCheckSeconds": 300,
         "maxMergesPerPass": 3,
+        "watchSeconds": 300,
         "stallNoPushMinutes": 30,
         "launchGraceMinutes": 10,
         "autoScan": 600,
