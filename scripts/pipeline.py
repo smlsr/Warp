@@ -1732,7 +1732,11 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
             ticket["status"] = "coding"
             _phase(ticket, "implementing", lines)
             mark_shuttle(ticket, "implement", data)
-            lines.extend(_start_lines(data, ticket, "implement"))
+            started = _start_lines(data, ticket, "implement")
+            lines.extend(started)
+            if started and started[0].startswith("start "):
+                # Its Jira move to In Progress too (before 1.7.12 only the refill asked for it).
+                _queue_claim(data, ticket, lines)
             return
         _phase(ticket, "pr-open", lines)
         phase = "pr-open"
@@ -1954,10 +1958,20 @@ def _refill(data: dict, lines: list) -> None:
         ticket = (data.get("tickets") or {}).get(tid)
         if not isinstance(ticket, dict):
             continue
-        if ticket.get("phase") or pending(ticket):
-            continue
         if ticket.get("status") not in {"queued", "blocked"}:
             continue
+        if ticket.get("phase") or pending(ticket):
+            # Queued with a leftover phase or a marked Shuttle (a Jira release, a rebuild, an old requeue). Before
+            # 1.7.12 it was skipped here without a word, every pass, and never started.
+            evidence = _shuttle(ticket).get("startedAt") or ticket.get("lastSeenAt") or ticket.get("workerStartedAt")
+            if pending(ticket) and evidence and orchestrator.shuttle_still_out(ticket, data):
+                lines.append("dispatch: %s is queued but its %s Shuttle is still out; it is not started twice" % (
+                    tid, _shuttle(ticket).get("step") or ""))
+                continue
+            lines.append("dispatch: %s was queued with a leftover %s; cleared, and it starts now" % (
+                tid, "phase %s" % ticket.get("phase") if ticket.get("phase") else "Shuttle mark"))
+            ticket.pop("phase", None)
+            clear_shuttle(ticket)
         ticket["status"] = "coding"
         _phase(ticket, "implementing", lines)
         mark_shuttle(ticket, "implement", data)
@@ -1965,6 +1979,49 @@ def _refill(data: dict, lines: list) -> None:
         lines.extend(started)
         if started and started[0].startswith("start "):
             _queue_claim(data, ticket, lines)
+        elif started and not started[0].startswith(("start ", "resume ", "spawn: cap")):
+            # Held (the hourly spawn cap, a closed spawn, a Shuttle still out): back to queued, so a later pass starts
+            # it. Before 1.7.12 it stayed `coding` with no Shuttle and nothing started it again.
+            ticket["status"] = "queued"
+            ticket.pop("phase", None)
+            clear_shuttle(ticket)
+            for key in ("launching", "launchLines", "markedAt", "step"):
+                _shuttle(ticket).pop(key, None)
+            lines.append("dispatch: %s not started (%s); it stays queued and the next pass tries again" % (
+                tid, started[0]))
+
+
+def refill_after_merges(data: dict, beam_path, lines: list, now=None) -> list:
+    """Start what this pass's merges freed, in this same pass (1.7.12).
+
+    A live pass merges after `advance` (run_merges), and `advance` had already refilled. A merge that freed a slot,
+    released locks, met a dependency, or closed a gate printed no `start` line until a later pass, and a parent that
+    did the Jira move and stopped there stalled the run.
+    """
+    import beam as beam_mod
+
+    merged = [m.group(1) for m in (_MERGED_LINE.match(line) for line in lines) if m]
+    opened = [line for line in lines if line.startswith("pr: opened ")]
+    if not merged and not opened:
+        return []
+    out: list = []
+    owned = "_repoRoot" not in data
+    if owned and beam_path is not None:
+        data["_repoRoot"] = str(Path(beam_path).resolve().parent.parent)
+    try:
+        flipped = beam_mod.advance_pending_gates(data, beam_mod.coerce_now(now)[1])
+        if flipped:
+            out.extend(beam_mod.gate_flip_lines(flipped, data, run_dispatch=False))
+        _refill(data, out)
+    finally:
+        if owned:
+            data.pop("_repoRoot", None)
+    started = [line.split()[1] for line in out if line.startswith(("start ", "resume "))]
+    if merged:
+        head = "dispatch: after merging %s in this pass: %s" % (", ".join(merged), (
+            "started %s" % ", ".join(started)) if started else "nothing new could start (see capacity: and stall: below)")
+        out.insert(0, head)
+    return out
 
 
 def _queue_claim(data: dict, ticket: dict, lines: list) -> None:

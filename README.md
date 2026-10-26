@@ -160,6 +160,7 @@ Every chat command. Common flags only. The full list, including `jira_sync.py` s
 | `/warp-list` | Show what this run still has out, running or idle: the instance, every registry row, each tagged cloud agent with its status, and `out: tag [warp:<instance>] running=<n> idle=<n> kept=<n>`. Changes nothing. `--scan` lists word matches in any repo | `--beam`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-cleanup` | Cancel the run of each agent `/warp-list` shows as running, and archive all of them. Leave `--apply` off for a dry run. While the run is running it archives the idle ones and refuses the running ones unless `--force`. `--scan` archives idle word matches and leaves running ones unless `--force` | `--beam`, `--cloud`, `--apply`, `--running`, `--force`, `--tag`, `--untagged`, `--all-idle`, `--any-repo`, `--scan` |
 | `/warp-update-state` | Load main and ticket folders, keep parent pause, stop, and claims, push the beam | `--beam` |
+| `/warp-watch` | Create, check, or re-create the watch timer that wakes the run every `watchSeconds` (one `wake.py run` a wake) | `wake.py setup`, `prompt`, `armed`, `run`, `status` |
 | `/warp-sync` | Read Jira into the beam. Dry-run unless `--apply`. Does not dispatch | `--jira`, `--prs`, `--apply`, `--force` |
 | `/warp` | One tick of the master loop, including the watchdog | |
 | `/warp-status` | List open tickets, alarms and stalls first, and rewrite `.warp/STATUS.md` and the board | |

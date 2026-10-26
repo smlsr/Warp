@@ -46,7 +46,7 @@ SECTIONS = [
         "maxAlarmRepairs"]),
     ("Slack, Teams and the listener", "Where Herald posts, what it posts, and how the channel listener paces itself.", [
         "messenger", "notify", "slackChannel", "teamsChannel", "slackMcp", "teamsMcp", "projectName",
-        "statusDigestMinutes", "pollSeconds", "reviewPollSeconds", "listenerFastSeconds", "listenerSlowSeconds", "listenerOrphanMinutes",
+        "statusDigestMinutes", "pollSeconds", "watchSeconds", "reviewPollSeconds", "listenerFastSeconds", "listenerSlowSeconds", "listenerOrphanMinutes",
         "listenerSilentMinutes", "listenerMaxMinutes", "listenerMaxReads", "listenerModel", "notifyAllow",
         "autoAllowTools"]),
     ("Jira", "How tickets are matched to Jira issues, and which statuses Warp moves them through.", [

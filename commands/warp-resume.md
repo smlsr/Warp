@@ -44,7 +44,7 @@ End every pass with the one wait:
 python3 <plugin>/scripts/orchestrator.py parent-exit --beam .warp/beam.json --wait --session <session>
 ```
 
-Do not end the turn while it prints `parent: stay`. That is while any ticket is not merged or parked. Do not sleep, set a timer, or subscribe to a pull request anywhere else. `parent: exit` is when every ticket is merged or parked, or the run is paused or stopped. Then run `session_note.py --type session-stop`, which commits the live beam onto main and pushes it, and start nothing.
+Do not end the turn while it prints `parent: stay`. That is while any ticket is not merged or parked. Do not sleep, set any other timer, or subscribe to a pull request anywhere else. The one timer is the Warp watch timer that `/warp-start` and `/warp-resume` name (`timer: MUST DO`). `parent: exit` is when every ticket is merged or parked, or the run is paused or stopped. Then run `session_note.py --type session-stop`, which commits the live beam onto main and pushes it, and start nothing.
 
 Plugin hooks do not run on cloud runners. Every check above is a script you run. The listener must not keep reading while paused or stopped. A dead turn does not notify Warp. Cursor does not restart it. You do, with this command.
 

@@ -1229,6 +1229,14 @@ def set_run(beam_path: Path, state: str, reason: Optional[str], announce_report:
         print(agents.instance_line(beam))
         print("parent: session %s" % beam.get("parentSession"))
         print("listener: not started. The next supervise issues it.")
+        try:
+            import wake
+
+            # The watch timer keeps the run moving between passes (1.7.11).
+            for line in wake.setup_lines(beam_path, beam):
+                print(line)
+        except Exception as e:
+            print("timer: not set up (%s)" % e)
         if config_line:
             print(config_line)
         for line in heal_lines:

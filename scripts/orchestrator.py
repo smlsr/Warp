@@ -1844,10 +1844,28 @@ def parent_may_exit(beam: dict) -> bool:
     return not listener_should_run(beam)
 
 
+def _timer_lines(path: Path, now=None) -> list:
+    """The watch timer, from every live pass: gone for three intervals means create it again; a halted run means
+    delete it (1.7.11). Never raises."""
+    try:
+        import beam as beam_mod
+        import wake
+
+        data = beam_mod.load_json(path)
+        found = wake.check_lines(data, path, now=now) if listener_should_run(data) else wake.halt_lines(data)
+        if found:
+            beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+        return found
+    except Exception as exc:
+        return ["timer: not checked (%s)" % exc]
+
+
 def supervise(beam_path: Path, returned: Optional[str] = None, now=None, provider: Optional[dict] = None) -> list:
     """One parent pass, then its `herald:` lines written as one Slack and Teams payload to post."""
     lines = _supervise_pass(beam_path, returned=returned, now=now, provider=provider)
     path = Path(beam_path)
+    if path.is_file() and provider is None:
+        lines.extend(_timer_lines(path, now))
     if path.is_file() and lines and not lines[0].startswith("pass: aborted"):
         import notify
 
@@ -2011,6 +2029,11 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
             lines.extend(pipeline.jira_done_lines(data, path, lines))
         except Exception as exc:
             lines.append("jira: Done moves not checked (%s)" % exc)
+        # What this pass's merges freed starts now, in this pass (1.7.12).
+        try:
+            lines.extend(pipeline.refill_after_merges(data, path, lines, now=now))
+        except Exception as exc:
+            lines.append("dispatch: not refilled after the merges (%s)" % exc)
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}
