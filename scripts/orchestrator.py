@@ -2029,6 +2029,11 @@ def _supervise_pass(beam_path: Path, returned: Optional[str] = None, now=None, p
             lines.extend(pipeline.jira_done_lines(data, path, lines))
         except Exception as exc:
             lines.append("jira: Done moves not checked (%s)" % exc)
+        # What this pass's merges freed starts now, in this pass (1.7.12).
+        try:
+            lines.extend(pipeline.refill_after_merges(data, path, lines, now=now))
+        except Exception as exc:
+            lines.append("dispatch: not refilled after the merges (%s)" % exc)
     # parent-exit --wait returns as soon as a ticket folder is newer than this.
     prior = data.get("pass") if isinstance(data.get("pass"), dict) else {}
     data["pass"] = {"startedAt": started, "count": int(prior.get("count") or 0) + 1}

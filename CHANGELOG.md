@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.12
+
+Work stopped flowing after a merge on run `ui`: the pass merged a done ticket, printed its Jira move, and no `start` line.
+
+- Fixed: a merge did not start what it freed in the same pass. A live pass merges in `run_merges`, after `advance` had already refilled, so a ticket the merge unblocked (a dependency met, locks released, a slot freed, a gate closed) got no `start` line until some later pass, and a parent that did the Jira move and stopped there stalled the run. The pass now refills after its merges (`pipeline.refill_after_merges`): pending gates are rechecked, every ticket that can start gets its `start` line and its Jira move to In Progress, and `dispatch: after merging <ids> in this pass: started <ids>` says so (or that nothing could start, with the `capacity:` and `stall:` lines that say why).
+- Fixed: a queued ticket with a leftover phase or Shuttle mark (left by the Jira unlink release, a rebuild, or an older requeue) was skipped by the refill without a word, every pass, and never started. It is cleared and started (`dispatch: <id> was queued with a leftover …; cleared, and it starts now`), unless its Shuttle is really still out.
+- Fixed: a start the launch held (`spawn: hour`, `spawn: closed`, `shuttle: hold`) left the ticket `coding` with no Shuttle. It goes back to queued and the next pass tries again (`dispatch: <id> not started (…); it stays queued`).
+- Fixed: a `coding` ticket restarted with no Shuttle out (a held or lost start) asked for no Jira move to In Progress. It does now.
+
 ## 1.7.11
 
 - New: the watch timer. Warp now sets up and keeps one recurring timer (a subscription) per run, `warp-<run>-<instance>-watch`, every `watchSeconds` (300; 0 is off), and does on each wake what a parent woken by a 5-minute timer used to do by hand. `/warp-start` and `/warp-resume` print `timer: MUST DO keep one recurring timer …` with the command that prints its prompt (`wake.py prompt`) and the one that records it (`wake.py armed`); `/warp-watch` creates, checks, or re-creates it. The prompt is self-contained: run the wake, act on every line (starts and resumes with `checkout.py launch` and the agent bind, alarm repairs, fixes, the base fix, pull requests the Shuttle could not open, Bugbot re-runs and records only on a finished check for that head, every Jira move recorded, the Slack payload), close with `session_note.py --type session-stop`, and reply with only what changed.
