@@ -93,6 +93,7 @@ def apply(data: dict, found: Optional[dict], now_s: str, base: str = "main") -> 
             lines.append("herald: ALARM %s is red at %s: %s failing. Pull requests that fail the same checks are failing on "
                          "%s, not on their own change: they wait for %s instead of going to fix, and Warp starts a fix for %s."
                          % (base, sha[:12], names, base, base, base))
+        lines.extend(queue_fix(data, sha, failed, base, now_s))
         return lines
     if state == "green":
         data["baseGreen"] = True
@@ -106,12 +107,45 @@ def apply(data: dict, found: Optional[dict], now_s: str, base: str = "main") -> 
             if ALARM_KEY in posted:
                 posted.remove(ALARM_KEY)
             lines.append("base: %s is green again at %s%s" % (base, sha[:12], " (red since %sZ)" % since[11:19] if since else ""))
+            for tid, row in (data.get("tickets") or {}).items():
+                if isinstance(row, dict) and row.get("baseFix") and row.get("status") in {"queued", "blocked"}:
+                    row["status"] = "skipped"
+                    row["skipReason"] = "%s went green before it started" % base
+                    lines.append("base: %s skipped; %s is green without it" % (tid, base))
             lines.append("herald: %s is green again at %s. Pull requests that waited on it go on." % (base, sha[:12]))
         else:
             record.pop("redSince", None)
         return lines
     # pending or absent: a red base stays red until it is green; otherwise nothing changes.
     return lines
+
+
+def queue_fix(data: dict, sha: str, failed: list, base: str, now_s: str) -> list:
+    """A red base gets a real ticket for its fix (1.7.12): `BASE-<sha>`, queued ahead of every rank, so the refill prints
+    a normal `start` line for it. Before, the run printed `dispatch-base-fix checkout=…` with no ticket, branch, or
+    prompt, kept a Shuttle slot for it for good, and nothing set `baseFix`, so the run never got past it."""
+    import orchestrator
+
+    if not orchestrator.needs_base_fix(data):
+        return []
+    tickets = data.setdefault("tickets", {})
+    tid = "BASE-%s" % (sha[:7] or "red")
+    if tid in tickets:
+        return []
+    names = ", ".join(failed[:6]) or "its checks"
+    tickets[tid] = {
+        "id": tid, "status": "queued", "baseFix": True, "priority": "highest", "rank": 0, "size": "S", "hours": 1,
+        "summary": "Fix %s: %s failing at %s" % (base, names, sha[:12]),
+        "locks": [], "deps": [], "autoMerge": True, "module": None,
+        "acs": [{"id": "AC-1", "kind": "fix", "text": "%s passes on %s with this change merged" % (names, base)},
+                {"id": "AC-2", "kind": "fix", "text": "No unrelated change: only what makes %s green" % names}],
+        "plan": {"body": "%s is red at %s: %s fail. Find why on a branch from %s, make the smallest change that makes them "
+                         "pass, and open a pull request. Any path may change; touch only what the fix needs." % (base, sha[:12], names, base)},
+        "jiraKey": None, "jiraKeySource": "manual", "jiraMapping": "base-fix",
+        "jira": {"startedAt": now_s, "inReviewAt": now_s, "status": None, "lastCommentAt": None},
+        "pr": {}, "attempts": 0, "alarm": None, "addedAt": now_s, "updatedAt": now_s,
+    }
+    return ["base: fix ticket %s queued ahead of every rank (%s); the refill starts it" % (tid, names)]
 
 
 def observe(beam_path: Path, now=None, reader: Optional[Callable] = None, force: bool = False) -> list:

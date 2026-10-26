@@ -97,12 +97,12 @@ class PerPassTest(unittest.TestCase):
         self.assertEqual((b["status"], b["phase"]), ("review", "ready"))
         self.assertNotIn("mergeRequestedSha", b["pr"])
 
-    def test_while_main_is_red_only_the_base_fix_merges(self):
+    def test_while_main_is_red_the_base_fix_merges_first_and_green_prs_still_merge(self):
         fix = ready("FIX", 2, baseFix=True)
         data = beam([ready("A", 1), fix])
         data["baseGreen"] = False
-        self.assertEqual([t["id"] for t in orchestrator.merge_queue(data)], ["FIX"])
-        self.assertEqual(merged_ids(pipeline.advance(data, {}, now=NOW)), ["FIX"])
+        self.assertEqual([t["id"] for t in orchestrator.merge_queue(data)], ["FIX", "A"])
+        self.assertEqual(merged_ids(pipeline.advance(data, {}, now=NOW)), ["FIX", "A"])
 
 
 class JiraDoneTest(unittest.TestCase):

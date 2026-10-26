@@ -24,13 +24,15 @@ import pipeline  # noqa: E402
 NOW = "2026-10-26T13:30:00Z"
 
 
-def done_ticket(tid, rank=1):
-    return {"id": tid, "status": "review", "phase": "ready", "locks": ["src/%s" % tid.lower()], "size": "S",
+def done_ticket(tid, rank=1, **extra):
+    row = {"id": tid, "status": "review", "phase": "ready", "locks": ["src/%s" % tid.lower()], "size": "S",
             "module": "UI", "autoMerge": True, "jiraKey": "HOS-%d" % rank, "branch": "warp/ui/%s" % tid, "rank": rank,
             "summary": tid, "plan": "p", "result": "r", "deps": [],
             "pr": {"url": "https://github.com/o/r/pull/%d" % rank, "headSha": "h%d" % rank, "rollup": "green",
                    "rollupSha": "h%d" % rank, "ci": "green", "ciSha": "h%d" % rank, "bugbot": "pass",
                    "bugbotSha": "h%d" % rank, "acResults": {"AC-1": "pass"}, "acSha": "h%d" % rank}}
+    row.update(extra)
+    return row
 
 
 def queued(tid, deps=(), rank=5, **extra):

@@ -532,6 +532,9 @@ def ticket_in_progress(ticket: dict) -> bool:
     status = ticket.get("status")
     if status in _SETTLED_PROGRESS:
         return False
+    if status in _NOT_STARTED and not (ticket.get("pr") or {}).get("url"):
+        # A leftover phase on a queued ticket held maxInProgress shut before 1.7.12.
+        return False
     phase = ticket.get("phase")
     if phase in _IN_PROGRESS_PHASES:
         return True

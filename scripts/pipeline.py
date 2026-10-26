@@ -919,7 +919,7 @@ def live_provider(data: dict, beam_path) -> dict:
     for ticket in tickets.values():
         if not isinstance(ticket, dict):
             continue
-        if ticket.get("status") in {"merged", "done", "parked", "skipped"}:
+        if ticket.get("status") in {"merged", "done", "skipped"}:
             continue
         url = (ticket.get("pr") or {}).get("url") if isinstance(ticket.get("pr"), dict) else ""
         if not url:
@@ -1724,6 +1724,19 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
     if (ticket.get("pr") or {}).get("ciAbsent"):
         _defer_fix(data, ticket)
         return
+    if phase in {"ready", "merging"}:
+        why = _left_ready(data, ticket, cfg)
+        if why:
+            # Ready or asked to merge, and the head is not mergeable any more (a check went red, a new head is still
+            # pending, Bugbot or acceptance has not reported on it). Before 1.7.12 `ready` never looked again: the
+            # watch re-queued it every pass and parked it, and a red one never went to fix.
+            pr = ticket.setdefault("pr", {})
+            pr.pop("mergeRequestedSha", None)
+            pr.pop("mergeRequestedAt", None)
+            ticket["status"] = "review"
+            ticket["phase"] = "reviewing"
+            lines.append("review: %s left %s: %s; back to review" % (ticket.get("id"), phase, why))
+            phase = "reviewing"
     if phase == "implementing":
         if pending(ticket):
             lines.append("shuttle: hold %s" % ticket.get("id"))
@@ -1824,6 +1837,31 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         _hold_or_queue(ticket, lines)
 
 
+def _left_ready(data: dict, ticket: dict, cfg: dict) -> str:
+    """Why a ready or merging ticket's head is not mergeable now, or ''."""
+    if ticket.get("status") in orchestrator.SETTLED:
+        return ""
+    reasons = red_reasons(ticket, cfg)
+    if reasons:
+        return "; ".join(reasons[:3])
+    head = str((ticket.get("pr") or {}).get("headSha") or "")[:12]
+    if not orchestrator.checks_green(ticket, cfg):
+        return "its checks are not green on %s" % (head or "the head")
+    if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
+        return "Cursor Bugbot has not reported on %s" % (head or "the head")
+    if not acs_pass(ticket, data.get("_repoRoot")):
+        return "its acceptance criteria are not recorded as passing on %s" % (head or "the head")
+    return ""
+
+
+def _repair_unlaunched(ticket: dict) -> bool:
+    """A lock-escape repair alarm_repair started (claimed, locks widened) whose Shuttle is not launched yet, phantom or
+    not: its own launch line is printed again, never turned into a plain implement start."""
+    info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+    return bool(ticket.get("status") == "claimed" and ticket.get("alarm") == "lock-escape" and info.get("state") == "working"
+                and not info.get("launchedAt") and not _shuttle(ticket).get("pending") and not ticket.get("lastSeenAt"))
+
+
 def _hold_or_queue(ticket: dict, lines: list) -> None:
     import beam as beam_mod
 
@@ -1853,6 +1891,11 @@ def _hold_or_queue(ticket: dict, lines: list) -> None:
 
 def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list, now=None) -> None:
     status = ticket.get("status")
+    if status == "parked" and str((snap or {}).get("prState") or "").upper() == "MERGED":
+        # Parked, and a person merged its pull request by hand: it is merged (1.7.12; before, never recorded, and its
+        # dependents waited for good).
+        finish_merge(data, ticket, lines, sha=str((snap or {}).get("mergeSha") or ""), how="merged on the provider while parked")
+        return
     if status in orchestrator.SETTLED:
         if status == "parked":
             ticket["phase"] = "parked"
@@ -1876,6 +1919,23 @@ def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, de
     _ensure_acs(data, ticket)
     _carry_acs(data, ticket, lines)
     if _recover_alarm(data, ticket, lines, deferred):
+        return
+    if _repair_unlaunched(ticket) and _beam_path(data) is not None:
+        # A lock-escape repair was started and its Shuttle never launched: say it again, every pass, until the launch
+        # records it (1.7.12). Before, the line was printed once and the next pass turned the ticket into a plain
+        # implement start, with the alarm still set.
+        import alarm_repair
+
+        lines.append("alarm-repair: not launched %s. Launch it now:" % ticket.get("id"))
+        lines.append(alarm_repair.launch_line(str(ticket.get("id")), Path(_beam_path(data))))
+        return
+    if status in {"queued", "blocked"} and not (ticket.get("pr") or {}).get("url") and not pending(ticket):
+        # Not started: the refill starts it, under its deps, locks, gate, and caps. A leftover phase drove it here
+        # before 1.7.12 (`ready` made it review with no pull request, `implementing` started it past its deps).
+        if ticket.get("phase"):
+            lines.append("dispatch: %s is %s with a leftover phase %s; cleared, so the refill starts it" % (
+                ticket.get("id"), status, ticket.get("phase")))
+            ticket.pop("phase", None)
         return
     _ensure_phase(ticket, data)
     if not ticket.get("phase"):
@@ -1989,6 +2049,32 @@ def _refill(data: dict, lines: list) -> None:
                 _shuttle(ticket).pop(key, None)
             lines.append("dispatch: %s not started (%s); it stays queued and the next pass tries again" % (
                 tid, started[0]))
+
+
+def _dead_deps(data: dict, lines: list) -> None:
+    """A queued ticket waiting on a dependency that will never merge on its own (parked, skipped, or no such ticket)
+    says so every pass, with what to do, and posts it once (1.7.12). Before, it was one of `N on dependencies`, and the
+    run could never finish."""
+    import runs
+
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    posted = data.setdefault("postedAlarms", [])
+    for tid, ticket in sorted(tickets.items(), key=lambda kv: str(kv[0])):
+        if not isinstance(ticket, dict) or ticket.get("status") not in {"queued", "blocked"}:
+            continue
+        for dep in orchestrator.blockers(ticket):
+            state = runs.external_status(data, dep)
+            if state in {"parked", "skipped"}:
+                why, todo = state, "warp:retry %s to work it again, or drop it from %s's dependencies" % (dep, tid)
+            elif state is None and dep not in tickets and ":" not in dep:
+                why, todo = "no ticket has that id", "add it (wake.py add-ticket --id %s), or drop it from %s's dependencies" % (dep, tid)
+            else:
+                continue
+            lines.append("deps: %s waits on %s (%s); it will not merge on its own: %s" % (tid, dep, why, todo))
+            key = "deadDep:%s:%s:%s" % (tid, dep, why)
+            if key not in posted:
+                posted.append(key)
+                lines.append("herald: ALARM %s waits on %s, which will not merge on its own (%s): %s." % (tid, dep, why, todo))
 
 
 def refill_after_merges(data: dict, beam_path, lines: list, now=None) -> list:
@@ -2248,6 +2334,15 @@ def request_merge(data: dict, ticket: dict, snap: dict, lines: list) -> None:
     ticket["status"] = "merging"
     ticket["phase"] = "merging"
     if head and str(pr.get("mergeRequestedSha") or "") == head:
+        refused = pr.get("mergeError") and str(pr.get("mergeAttempt") or "") not in {"", "enqueue", "pushed", "merged"}
+        if refused:
+            # Refused here and not merged since: the MUST DO is the parent's every pass until the provider shows it
+            # merged (1.7.12; before, it was printed once and then only `merge: wait`).
+            method = __import__("provider").merge_method(data.get("config") or {})
+            lines.append("merge: MUST DO %s: merge %s with the GitHub MCP merge tool (merge_pull_request, merge_method %s); "
+                         "Warp could not merge it here (%s). The next pass confirms it." % (
+                             tid, pr.get("url") or "its pull request", method, str(pr.get("mergeError")).splitlines()[0][:160]))
+            return
         lines.append("merge: wait %s (asked; the provider does not show it merged yet)" % tid)
         return
     pr["mergeRequestedSha"] = head
@@ -2740,6 +2835,15 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         data["_repoRoot"] = str(Path(beam_path).resolve().parent.parent)
         owned_root = True
     try:
+        if orchestrator.needs_base_fix(data):
+            # A red base with no fix ticket gets one first, so this pass's refill starts it (1.7.12).
+            import basecheck
+            import beam as beam_mod
+
+            record = data.get("baseCheck") if isinstance(data.get("baseCheck"), dict) else {}
+            lines.extend(basecheck.queue_fix(data, str(record.get("sha") or "red"), list(record.get("failed") or []),
+                                             str(record.get("base") or (data.get("config") or {}).get("baseBranch") or "main"),
+                                             beam_mod.coerce_now(now)[1]))
         tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
         for ticket in list(tickets.values()):
             if not isinstance(ticket, dict):
@@ -2759,6 +2863,10 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
         import watch
 
         lines.extend(watch.apply(data, provider=provider, beam_path=beam_path, now=now))
+        # What the watch freed late in the pass (a gate it closed, a lock it dropped, a park that made room) starts in
+        # this pass too, not after the parent's next wait (1.7.12).
+        _refill(data, lines)
+        _dead_deps(data, lines)
         import agents
 
         try:

@@ -1040,6 +1040,20 @@ def _active_locks(beam: dict, other: str) -> list:
     return rows
 
 
+STALE_RUN_HOURS = 6
+
+
+def _run_gone(published: dict, now: datetime) -> str:
+    """Why another run's published locks no longer hold anything here, or ''."""
+    state = str(published.get("runState") or "")
+    if state in {"stopped", "done"} or published.get("runComplete"):
+        return "the run is %s" % (state or "finished")
+    seen = _parse_time(published.get("checkpointAt") or (published.get("pass") or {}).get("startedAt"))
+    if seen is not None and (now - seen).total_seconds() > STALE_RUN_HOURS * 3600:
+        return "no checkpoint for %dh" % int((now - seen).total_seconds() // 3600)
+    return ""
+
+
 def refresh_external(root, beam: dict, force: bool = False, now: Optional[datetime] = None) -> bool:
     """Record what other runs hold, on the live beam: statuses of tickets this run depends on, and active locks.
 
@@ -1063,6 +1077,7 @@ def refresh_external(root, beam: dict, force: bool = False, now: Optional[dateti
                 wanted.setdefault(other, set()).add(tid)
     status: dict = {}
     locks: list = []
+    skipped: list = []
     here = list_runs(root, ref)
     for other in here:
         if other == me:
@@ -1072,6 +1087,12 @@ def refresh_external(root, beam: dict, force: bool = False, now: Optional[dateti
         for tid in wanted.get(other, ()):
             if tid in rows:
                 status["%s:%s" % (other, tid)] = (rows[tid] or {}).get("status")
+        gone = _run_gone(published, now)
+        if gone:
+            # A stopped, finished, or silent run's tickets hold nothing (1.7.12): before, an abandoned run's in-flight
+            # tickets blocked every overlapping ticket here for good.
+            skipped.append({"run": other, "why": gone})
+            continue
         locks.extend(_active_locks(published, other))
     # Runs in another repo (a build-schedule/2 program across repos): externalRepos names where.
     remote = {}
@@ -1094,6 +1115,8 @@ def refresh_external(root, beam: dict, force: bool = False, now: Optional[dateti
                     status["%s:%s" % (other, tid)] = (rows[tid] or {}).get("status")
             # Locks in another repo never overlap this repo's paths, so they are not held here.
     beam["external"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "ref": ref, "status": status, "locks": locks}
+    if skipped:
+        beam["external"]["ignored"] = skipped
     if remote:
         beam["external"]["repos"] = remote
     return True

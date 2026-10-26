@@ -175,8 +175,9 @@ class MergeQueueTests(unittest.TestCase):
         queued = [t["id"] for t in orchestrator.merge_queue(data)]
         self.assertEqual(queued, ["S", "L"])
         data["baseGreen"] = False
-        self.assertEqual(orchestrator.merge_queue(data), [])
-        self.assertIsNone(orchestrator.next_merge(data))
+        # 1.7.12: a red base no longer stops green pull requests from merging (a base fix would merge first).
+        self.assertEqual([t["id"] for t in orchestrator.merge_queue(data)], ["S", "L"])
+        self.assertEqual(orchestrator.next_merge(data)["ids"], ["S", "L"])
 
     def test_stack_falls_back_one_by_one_on_red(self):
         first = ticket("A", status="review", pr=green(), plan="p", result="r", rank=1)

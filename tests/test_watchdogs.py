@@ -67,7 +67,10 @@ class RedMainTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("herald: ALARM main is red at aaaaaaaaaaaa: unit, lint failing") for line in lines))
         again = basecheck.apply(data, {"sha": "a" * 40, "state": "red", "failed": ["unit", "lint"]}, plus(NOW, 5))
         self.assertFalse(any(line.startswith("herald:") for line in again))  # one alarm per red commit
-        self.assertTrue(orchestrator.needs_base_fix(data))
+        # 1.7.12: the red base gets a real fix ticket, so the base fix is no longer "needed" with nothing behind it.
+        self.assertTrue(data["tickets"]["BASE-aaaaaaa"]["baseFix"])
+        self.assertIn("base: fix ticket BASE-aaaaaaa queued ahead of every rank (unit, lint); the refill starts it", lines)
+        self.assertFalse(orchestrator.needs_base_fix(data))
         data["watch"] = {"baseFixes": 2}
         green = basecheck.apply(data, {"sha": "b" * 40, "state": "green", "failed": []}, plus(NOW, 10))
         self.assertIs(data["baseGreen"], True)

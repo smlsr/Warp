@@ -97,11 +97,11 @@ class MergeTest(Repo):
         saved = self.load()
         self.assertEqual(saved["tickets"]["WV-01"]["status"], "merging")
         self.assertEqual(saved["gates"][0]["status"], "pending")
-        # Not merged yet: wait, do not ask again.
+        # Not merged yet: do not ask the provider again, but the MUST DO stays the parent's every pass (1.7.12).
         with Live(OPEN) as live:
             lines = orchestrator.supervise(self.beam_path, now="2026-10-13T22:05:00Z")
         self.assertEqual(live.calls, [])
-        self.assertIn("merge: wait WV-01 (asked; the provider does not show it merged yet)", lines)
+        self.assertTrue(any(line.startswith("merge: MUST DO WV-01: merge %s with the GitHub MCP merge tool" % URL) for line in lines), lines)
         # Someone merged it on GitHub: the next pass records it.
         with Live(MERGED) as live:
             lines = orchestrator.supervise(self.beam_path, now="2026-10-13T22:10:00Z")

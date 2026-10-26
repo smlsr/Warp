@@ -1040,12 +1040,13 @@ def in_merge_queue(ticket: dict, config: Optional[dict]) -> bool:
 
 
 def merge_queue(beam: dict) -> list:
-    """Serial merge order: starred first, then lowest rank. While the base is red only the base fix merges (a ticket
-    marked `baseFix`): before 1.7.9 the base was never seen red, and a red base would have held its own fix."""
+    """Serial merge order: the base fix while the base is red, then starred, then lowest rank."""
     cfg = beam.get("config") or {}
     red = not base_is_green(beam)
-    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg) and (not red or t.get("baseFix"))]
-    rows.sort(key=lambda t: sort_key(t, base_red=False))
+    # 1.7.12: a pull request whose own checks are green merges while the base is red (its checks ran on the merge with
+    # the base); the base fix merges first. Before, a red base stopped every merge until it was green.
+    rows = [t for t in (beam.get("tickets") or {}).values() if in_merge_queue(t, cfg)]
+    rows.sort(key=lambda t: sort_key(t, base_red=red))
     return rows
 
 
@@ -1548,6 +1549,8 @@ def locks_text(ticket: dict) -> str:
     import alarm_repair
 
     locks = [str(lock) for lock in ticket.get("locks") or [] if str(lock).strip()]
+    if ticket.get("baseFix") and not locks:
+        return "any path the fix of the base branch needs (a base fix: touch only what makes it green)"
     text = _joined(locks)
     implied = alarm_repair.implied_locks(locks)
     if implied:

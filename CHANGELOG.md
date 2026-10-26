@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.7.13
+
+A flow audit traced every ticket state and path through a pass, looking for places a run could sit still with no line telling the parent what to do. Each finding below was reproduced against the real pass code first.
+
+- Fixed: the watch fixer parked tickets that were still working. It counted an attempt on every pass, even when the action was a no-op (`shuttle: hold`, `bugbot: hold`), and took a Shuttle past its phase timer as silent even with a fresh heartbeat. A ticket whose CI was slow, or whose Shuttle was still coding, was parked after `maxStallFixes` passes (about 15 minutes). The fixer now tries one action per stall window (the phase's stall minutes), counts an attempt only when it started, asked, or queued something, and leaves a Shuttle with a fresh heartbeat alone.
+- Fixed: a red base froze the run. `dispatch-base-fix` named no ticket, branch, or prompt, nothing ever set `baseFix`, so a Shuttle slot was kept for it for good and every merge stopped. A red base now gets a real ticket, `BASE-<sha>`, queued ahead of every rank with the failing checks as its acceptance criteria and any path open to it (`base: fix ticket … queued`), and the refill prints a normal `start` line for it. A pull request whose own checks are green merges while the base is red (the base fix merges first), and a base fix that never started is skipped when the base goes green.
+- Fixed: a queued ticket with a leftover phase (from a rebuild or a Jira release) was driven by its old phase. `ready` turned it into a review with no pull request, `implementing` started it past its dependencies, and either way it counted toward `maxInProgress` and could hold that cap shut. A queued or blocked ticket without a pull request is now left to the refill (`dispatch: <id> is queued with a leftover phase …; cleared`) and counts as not started.
+- Fixed: a merge Warp could not make here printed `merge: MUST DO` once, then only `merge: wait`. The MUST DO now repeats every pass until the provider shows the pull request merged, and a `merge:` key wakes the parent for it.
+- Fixed: a `ready` or `merging` ticket never looked at its head again. When a check went red, a new head was pending, or Bugbot or acceptance had not reported on it, the watch put it back in the merge queue every pass and parked it, and a red one never went to fix. It now goes back to review (`review: <id> left ready: …; back to review`), which sends a red one to fix.
+- Fixed: a lock-escape repair waited on its own slot. The ticket's repair mark took the one free Shuttle slot, so the repair could not start until the mark went phantom. That mark now counts as room. A started repair whose Shuttle was never launched prints its launch again every pass (`alarm-repair: not launched <id>`), instead of turning into a plain implement start with the alarm still set, and the watch no longer parks it while it waits.
+- Fixed: what the watch freed late in a pass (a gate it closed, a lock it dropped, room a park made) started only after the parent's next wait. The pass refills again after the watch.
+- New: a dependency that will never merge on its own (parked, skipped, or no ticket with that id) is named every pass, with what to do (`deps: <id> waits on <dep> (parked); … warp:retry <dep>`), and alarms once. A parked ticket whose pull request a person merged by hand is recorded merged, so its dependents start.
+- Fixed: another run's locks held forever after it stopped. A run that is stopped or finished, or has not checkpointed for 6 hours, no longer holds locks here (`external.ignored` names it).
+
 ## 1.7.12
 
 Work stopped flowing after a merge on run `ui`: the pass merged a done ticket, printed its Jira move, and no `start` line.

@@ -312,6 +312,10 @@ def _needs_queue(ticket: dict) -> bool:
         return False
     if not _approved(ticket):
         return False
+    import pipeline
+
+    if pipeline.red_reasons(ticket, {}):
+        return False  # red goes to fix, not back to the merge queue (1.7.12)
     return not orchestrator.in_merge_queue(ticket, {})
 
 
@@ -365,9 +369,19 @@ def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
     phase = _state_of(ticket)
     if shuttle.get("pending") and ticket.get("status") != "alarm":
         silent = stalled and (shuttle.get("step") == "repair" or phase in _SHUTTLE_PHASES or alarm in {"worker-died", "stuck"})
+        if silent and alarm not in {"worker-died", "stuck"}:
+            import orchestrator
+
+            # Past its phase timer is not silent: a Shuttle with a fresh heartbeat is working (1.7.12). Before, the fixer
+            # restarted it every pass (a no-op `shuttle: hold`), counted each one, and parked the ticket under it.
+            if orchestrator.shuttle_is_live(ticket, data) and (ticket.get("lastSeenAt") or shuttle.get("startedAt")):
+                silent = False
         if not silent:
             return ""
     if alarm == "lock-escape" or snap.get("lockEscape"):
+        info = ticket.get("alarmRepair") if isinstance(ticket.get("alarmRepair"), dict) else {}
+        if info.get("state") == "working":
+            return ""  # its repair is started; the pipeline prints its launch until it runs (1.7.12)
         return "lock-escape"
     if _merge_conflict(ticket, snap) or snap.get("behind") or pr.get("behind"):
         return "rebase"
@@ -530,6 +544,12 @@ def _fix_globals(data: dict, lines: list, now: str) -> None:
     lines.append("dispatch-base-fix checkout=%s" % checkout)
 
 
+import re as _re
+
+_ACTED = _re.compile(r"^(start |resume |ci: (rerun|start) |bugbot: (request|comment|commented|MUST DO) |merge: queue |"
+                     r"alarm-repair: (start|launch) |acceptance: verify-shuttle )")
+
+
 def _fix_tickets(data: dict, provider: Optional[dict], lines: list, beam_path: Optional[Path], now: str) -> None:
     """One action per stalled or alarmed ticket, in id order."""
     provider = provider or {}
@@ -541,6 +561,11 @@ def _fix_tickets(data: dict, provider: Optional[dict], lines: list, beam_path: O
         if not action:
             continue
         watch = _watch(ticket)
+        if action != "lock-escape" and watch.get("lastFix") == action and watch.get("lastFixAt") \
+                and _minutes_between(str(watch.get("lastFixAt")), now) < limit_minutes(data, _state_of(ticket)):
+            # One try per stall window (1.7.12). Before, the same action ran and was counted every pass, so a ticket
+            # whose CI was slow, or whose Shuttle was still working, was parked within 15 minutes.
+            continue
         if int(watch.get("fixerAttempts") or 0) >= _cap(data):
             _escalate(data, ticket, action, lines)
             continue
@@ -549,7 +574,16 @@ def _fix_tickets(data: dict, provider: Optional[dict], lines: list, beam_path: O
 
             if beam_mod.fix_worker_room(data) < 1:
                 continue
+        before = len(lines)
+        tried = (int(watch.get("fixerAttempts") or 0), watch.get("lastFix"), watch.get("lastFixAt"))
         _run_action(data, ticket, action, lines, beam_path, now)
+        if not any(_ACTED.match(str(line)) for line in lines[before:]):
+            # Nothing was started, asked, or queued (`shuttle: hold`, `bugbot: hold`): not an attempt.
+            watch["fixerAttempts"], watch["lastFix"], watch["lastFixAt"] = tried
+            if tried[1] is None:
+                watch.pop("lastFix", None)
+            if tried[2] is None:
+                watch.pop("lastFixAt", None)
 
 
 def _digest(data: dict, lines: list, now: str) -> None:

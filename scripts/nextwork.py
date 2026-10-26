@@ -53,6 +53,8 @@ def keys(data: dict, now=None) -> list:
             out.append("fix:%s" % tid)
         elif t.get("phase") == "ready" and status not in {"merged", "done", "awaiting_approval"}:
             out.append("merge:%s" % tid)
+        elif status == "merging" and (t.get("pr") or {}).get("mergeError"):
+            out.append("merge:%s" % tid)  # refused here: the MUST DO is the parent's
         if len(out) >= LIMIT:
             return out
     try:

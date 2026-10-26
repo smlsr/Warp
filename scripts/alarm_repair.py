@@ -479,6 +479,12 @@ def _room(data: dict) -> int:
         return 1
 
 
+def _own_mark(ticket: dict) -> bool:
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    return bool(ticket.get("status") == "alarm" and ticket.get("alarm") == REASON and shuttle.get("pending")
+                and shuttle.get("step") == "repair" and not shuttle.get("startedAt"))
+
+
 def start_ready(data: dict, beam_path: Path, now_dt, now_s: str, cap: int, minutes: int, lines: list) -> list:
     """Start every lock-escape repair that can start now. Returns the ids started.
 
@@ -490,7 +496,10 @@ def start_ready(data: dict, beam_path: Path, now_dt, now_s: str, cap: int, minut
     repair = _repair_state(data)
     active = _active(repair)
     naming = _naming(repair)
-    budget = _room(data)
+    # A lock-escape ticket's own repair mark (set by the pipeline when it saw the escape) holds a slot for this
+    # repair: count it as room, or with one free slot the repair waited on itself until the mark went phantom (1.7.12).
+    own = sum(1 for t in _plan_order(data) if _own_mark(t) and t.get("id") not in active)
+    budget = _room(data) + own
     started = []
     for ticket in _plan_order(data):
         tid = ticket.get("id")
@@ -519,7 +528,7 @@ def start_ready(data: dict, beam_path: Path, now_dt, now_s: str, cap: int, minut
         if busy:
             lines.append("alarm-repair: locked %s by %s" % (tid, busy))
             continue
-        if min(budget, _room(data) + len(started)) - len(started) <= 0:
+        if budget - len(started) <= 0:
             lines.append("alarm-repair: queued %s (no free Shuttle slot; maxAgents)" % tid)
             continue
         _start(data, ticket, now_s, beam_path, lines)
