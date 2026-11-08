@@ -569,6 +569,10 @@ def rebase_detail(ticket: dict) -> str:
 def start_rebase(data: dict, ticket: dict, lines: list) -> None:
     """Start a rebase Shuttle in this pass. A conflict does not wait for the stall timer."""
     import agents
+    import ownership
+
+    if ownership.delegate(data, ticket, "rebase", [rebase_detail(ticket)], lines, _beam_path(data)):
+        return
 
     if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
         lines.append("shuttle: hold %s" % ticket.get("id"))
@@ -583,6 +587,10 @@ def start_rebase(data: dict, ticket: dict, lines: list) -> None:
 def start_ci(data: dict, ticket: dict, lines: list) -> None:
     """The head has no check runs past the grace period. Ask for the workflow now."""
     import agents
+    import ownership
+
+    if ownership.delegate(data, ticket, "ci-start", [], lines, _beam_path(data)):
+        return
 
     tid = ticket.get("id")
     if agents.shuttle_busy(data, ticket, beam_path=_beam_path(data)):
@@ -1220,6 +1228,13 @@ def _waits_for_base(data: dict, ticket: dict, reasons: list, lines: list) -> boo
 
 def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     """One red round. Past maxFixAttempts (default 5) the ticket parks and does not start a Shuttle."""
+    import ownership
+
+    if ownership.hands_off(data, ticket, _beam_path(data)):
+        # 1.7.18: never a fix round, an attempt, or a park on a pull request someone else owns: tell its owner.
+        bugbot = any(str(r).startswith("bugbot") for r in reasons)
+        ownership.delegate(data, ticket, "bugbot" if bugbot else "ci", list(reasons), lines, _beam_path(data))
+        return
     if pending(ticket) and _shuttle(ticket).get("step") == "fix":
         lines.append("shuttle: hold %s" % ticket.get("id"))
         return

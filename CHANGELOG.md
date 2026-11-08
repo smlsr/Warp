@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.18
+
+- Fixed: the repair sweep (`sweep.py`) sent coordinator-owned pull requests back to `fix`. On Forge-QA that was 43 of them, among them #517, #1418 and #1442, and the next wake would have started a second agent on each. Its ticket loop skipped only parked tickets, and it never asked who owned the pull request. It now skips `external` tickets, and it skips any pull request `ownership.py` says someone else owns. That owner gets the instruction once per head, in place of a fix round.
+- Fixed: the same rule now holds on every other path that could start a second pusher. One predicate, `ownership.hands_off`, guards all of these, and none of them counts an attempt, parks the ticket, or starts an agent on an owned pull request:
+  - the watch fixer (`watch.choose_fix`);
+  - `pipeline.begin_fix`, `start_rebase` and `start_ci`;
+  - the auto-scan's resets;
+  - heal on `/warp-resume`.
+  An explicit `warp: retry <id>` from a person still does what it says.
+- With this, Warp can staff on its own. It works its own and unowned pull requests, tells owners about theirs, and leaves coordinators' pull requests to them.
+
 ## 1.7.17
 
 - Fixed: supervise crashed after the 1.7.16 upgrade with `beam.metrics` KeyError 'module' on tickets a coordinator or a gap added without that field (C-100, C-103, A-205, A-176, ONSPEK-235, ONSPEK-236, ONSPEK-240). `metrics`, the board table and `beam.py check` now read a missing module, size, status, summary, hours or deps as empty.

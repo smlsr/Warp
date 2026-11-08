@@ -348,10 +348,21 @@ def _tickets(data: dict, provider: Optional[dict], beam_path: Optional[Path], no
     cap = watch._cap(data)
     rows = [ticket for ticket in (data.get("tickets") or {}).values() if isinstance(ticket, dict)]
     rows.sort(key=lambda ticket: str(ticket.get("id")))
+    import ownership
+
     for ticket in rows:
-        if ticket.get("status") in _ORPHAN | {"parked"}:
+        if ticket.get("status") in _ORPHAN | {"parked", "external"}:
             continue
         tid = ticket.get("id")
+        held_by = ownership.hands_off(data, ticket, beam_path)
+        if held_by:
+            # 1.7.18: a coordinator's pull request is never sent back to fix here; it gets the instruction instead.
+            action = _ticket_action(data, ticket, provider.get(tid) or {}) if isinstance(provider.get(tid) or {}, dict) else ""
+            if action:
+                skipped.append({"kind": action, "id": tid, "reason": "owned by %s" % held_by})
+                ownership.delegate(data, ticket, "rebase" if action == "rebase" else "bugbot" if action == "fix" else "ci",
+                                   [_detail(ticket, action, provider.get(tid) or {})], lines, beam_path)
+            continue
         snap = provider.get(tid) or {}
         if not isinstance(snap, dict):
             snap = {}

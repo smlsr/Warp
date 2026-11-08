@@ -338,7 +338,14 @@ def _run(path: Path, data: dict, now=None) -> list:
     data["repairSweep"] = sweep
     data["autoScan"] = record
     beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+    import ownership
+
+    current = beam_mod.load_json(path)
     for tid, why in retry:
+        held_by = ownership.hands_off(current, (current.get("tickets") or {}).get(tid) or {}, path)
+        if held_by:
+            lines.append("autoscan: %s %s: owned by %s; not reset (its owner fixes it)" % (tid, why, held_by))
+            continue
         text = inbound._requeue(path, tid, by="autoscan")
         lines.append("autoscan: %s %s: %s" % (tid, why, text.splitlines()[0]))
     after = beam_mod.load_json(path)
