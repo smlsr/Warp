@@ -1074,26 +1074,29 @@ def metrics(beam: dict) -> dict:
     minutes = 0
     by_size = defaultdict(int)
     by_mod = defaultdict(int)
-    for t in beam["tickets"].values():
-        by[t["status"]] += 1
+    # 1.7.17: a ticket added by a coordinator, a gap, or a hand edit can lack module, size, status or hours.
+    # Before, beam.metrics raised KeyError 'module' and the whole supervise pass crashed.
+    rows = [t for t in (beam.get("tickets") or {}).values() if isinstance(t, dict)]
+    for t in rows:
+        by[str(t.get("status") or "queued")] += 1
         tokens += int(t.get("tokens") or 0)
         minutes += int(t.get("minutes") or 0)
-        by_size[t["size"]] += 1
-        by_mod[t["module"]] += 1
+        by_size[str(t.get("size") or "")] += 1
+        by_mod[str(t.get("module") or "")] += 1
     done = by["merged"] + by["done"]
-    total = len(beam["tickets"]) or 1
+    total = len(rows) or 1
     remaining_hours = sum(
-        (t.get("hours") or 0)
-        for t in beam["tickets"].values()
-        if t["status"] not in TERMINAL
+        float(t.get("hours") or 0)
+        for t in rows
+        if t.get("status") not in TERMINAL
     )
     cap = configured_cap(beam.get("config") or {})
     # rough: remaining agent-hours / parallelism, critical path still bounds it
     crit = beam.get("program", {}).get("criticalPath") or []
     crit_left = [
-        beam["tickets"][i]["hours"]
+        float((beam["tickets"][i] or {}).get("hours") or 0)
         for i in crit
-        if i in beam["tickets"] and beam["tickets"][i]["status"] not in TERMINAL
+        if isinstance(beam["tickets"].get(i), dict) and beam["tickets"][i].get("status") not in TERMINAL
     ]
     crit_hours = sum(crit_left)
     parallel_hours = remaining_hours / max(1, min(cap, 8))
@@ -1425,16 +1428,16 @@ def render_html(beam: dict) -> str:
     by = m.get("byStatus") or {}
     rows = []
     order = {"alarm": 0, "awaiting_approval": 1, "fix": 2, "bugbot_running": 3, "review": 4, "coding": 5, "claimed": 6}
-    shown = [t for t in beam["tickets"].values() if t["status"] != "queued"]
-    shown.sort(key=lambda t: (order.get(t["status"], 9), t["id"]))
+    shown = [t for t in beam["tickets"].values() if isinstance(t, dict) and t.get("status") != "queued"]
+    shown.sort(key=lambda t: (order.get(t.get("status"), 9), str(t.get("id") or "")))
     for t in shown[:80]:
         rows.append(
             "<tr><td>{id}</td><td>{st}</td><td>{sz}</td><td>{mod}</td><td>{sum}</td></tr>".format(
-                id=t["id"],
-                st=t["status"],
-                sz=t["size"],
-                mod=t["module"],
-                sum=(t["summary"] or "").replace("<", "<")[:80],
+                id=t.get("id") or "",
+                st=t.get("status") or "",
+                sz=t.get("size") or "",
+                mod=t.get("module") or "",
+                sum=(t.get("summary") or "").replace("<", "<")[:80],
             )
         )
     gates = "".join(
@@ -1753,15 +1756,37 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
         pass
 
 
+def park(beam_path: Path, tid: str, reason: str, by: str = "beam.py park") -> list:
+    """Park one ticket by hand, under the run lock: status and phase parked, the reason, the alarm cleared, its agents
+    released. `parkedBy: hand` keeps the auto-scan and the parked-ticket reconsider from reopening it; its merge on
+    the provider, or `warp: unpark <id>` / `wake.py unpark <id>`, still does (1.7.17)."""
+    import agents as agents_mod
+    import beamlock
+
+    with beamlock.run_lock(Path(beam_path)):
+        data = load_json(Path(beam_path))
+        ticket = (data.get("tickets") or {}).get(tid)
+        if not isinstance(ticket, dict):
+            return ["park: no ticket %s" % tid]
+        prev = ticket.get("status")
+        ticket.update(status="parked", phase="parked", parkReason=str(reason), parkedBy="hand", alarm=None,
+                      parkedAt=utcnow())
+        ticket.pop("triage", None)
+        lines = agents_mod.release_ticket(data, ticket, "parked", beam_path=Path(beam_path), key="")
+        atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
+    journal(Path(beam_path), {"type": "park", "id": tid, "from": prev, "reason": reason, "by": by})
+    return ["park: %s parked (was %s): %s" % (tid, prev, reason)] + [l for l in lines if l]
+
+
 def cmd_check(beam: dict) -> int:
     errors = []
     ids = set(beam["tickets"])
-    for t in beam["tickets"].values():
-        for d in t["deps"]:
+    for tid, t in beam["tickets"].items():
+        for d in t.get("deps") or []:
             if d not in ids and not runs.split_dep(d)[0]:
-                errors.append(f"{t['id']} dep missing {d}")
-        if t["status"] not in STATUSES:
-            errors.append(f"{t['id']} bad status {t['status']}")
+                errors.append(f"{t.get('id') or tid} dep missing {d}")
+        if t.get("status") not in STATUSES:
+            errors.append(f"{t.get('id') or tid} bad status {t.get('status')}")
     # cycle check
     color = {}
 
@@ -2042,6 +2067,11 @@ def main() -> None:
     pc = sub.add_parser("check")
     pc.add_argument("--beam", required=True)
 
+    ppk = sub.add_parser("park", help="park one ticket by hand (1.7.17): nothing reopens it but its merge or warp: unpark <id>")
+    ppk.add_argument("--beam", required=True)
+    ppk.add_argument("--id", required=True)
+    ppk.add_argument("--reason", required=True)
+
     pe = sub.add_parser("eta")
     pe.add_argument("--beam", required=True)
 
@@ -2103,6 +2133,9 @@ def main() -> None:
         atomic_write(md_path, md)
         atomic_write(html_path, html)
         print(f"wrote {md_path} and {html_path}")
+    elif args.cmd == "park":
+        for line in park(Path(args.beam), args.id, args.reason):
+            print(line)
     elif args.cmd == "check":
         sys.exit(cmd_check(load_json(Path(args.beam))))
     elif args.cmd == "eta":

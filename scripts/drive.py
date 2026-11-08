@@ -147,18 +147,20 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
     try:
         method = provider.merge_method(data.get("config") or {})
         cap = beam_mod.config_int(data, path, "maxMergesPerPass", 3)
+        writes = Writes(path, data, root, slug, env, now)
         lines.extend(lane.run_lane(
             path, data,
-            merge=lambda e: ghrest.merge(root, e.get("url") or _url(slug, e["pr"]), sha=e["sha"],
-                                         method=method if method in {"squash", "rebase"} else "squash", runner=env.rest),
+            merge=lambda e: writes.merge(e, method if method in {"squash", "rebase"} else "squash"),
             list_children=lambda branch: _children(root, slug, branch, data, env),
-            retarget=lambda url, to: ghrest.retarget(root, url, to, runner=env.rest),
+            retarget=writes.retarget,
             rebuild=lambda child, head: lane.rebuild_child(root, child, head, base=base, run=env.git),
             send=send, max_merges=cap, now=now, push_failed=_push_failed(path, data, root, env, now)))
     except Exception as exc:
         lines.append("tick: lane skipped (%s)" % exc)
     # Stale pull requests: one REFRESH per head; union-only conflicts are merged by the lane.
     try:
+        lines.extend(writes.lines)
+        writes.lines = []
         lines.extend(lane.refresh_stale(path, data, _dirty(root, data, env, base), lambda b, onto: lane.merge_into(
             root, b, onto, run=env.git), send, cfg, now=now, push_failed=_push_failed(path, data, root, env, now)))
     except Exception as exc:
@@ -177,15 +179,23 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
                  and (t.get("pr") or {}).get("headSha")]
         if heads and slug:
             lines.extend(waivers.hung(path, data, root, slug, heads, runner=env.rest, now=now,
-                                      minutes=selfdrive.num(cfg, "ci", "hungMinutes")))
+                                      minutes=selfdrive.num(cfg, "ci", "hungMinutes"), cancel=writes.cancel))
     except Exception as exc:
         lines.append("tick: hung CI not checked (%s)" % exc)
     # Bugbot: too large -> `bugbot run`; findings after GAPPR -> back to the owner, all at once.
     try:
         lines.extend(waivers.bugbot_actions(path, data, root, _bugbot_rows(path, data),
-                                            lambda url, body: ghrest.comment(root, url, body, runner=env.rest), send))
+                                            writes.comment, send))
     except Exception as exc:
         lines.append("tick: Bugbot actions skipped (%s)" % exc)
+    lines.extend(writes.lines)
+    # What the parent's GitHub tools were asked to do: done, or its coordinator does it (1.7.17).
+    try:
+        import attempt
+
+        lines.extend(attempt.check(path, writes.happened, send, now=now))
+    except Exception as exc:
+        lines.append("tick: handed-off writes not checked (%s)" % exc)
     try:
         import relay
 
@@ -197,6 +207,116 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
     took = env.clock() - began
     lines.append("tick: done in %.1fs" % took)
     return lines
+
+
+class Writes:
+    """GitHub writes down the ladder (attempt.py): REST, then gh, then the parent's Cursor GitHub tools, then the
+    coordinator. `lines` collects what a handoff printed."""
+
+    def __init__(self, path: Path, data: dict, root: Path, slug: str, env: Env, now=None):
+        self.path, self.data, self.root, self.slug, self.env, self.now = path, data, root, slug, env, now
+        self.lines: list = []
+
+    def _gh(self, *args) -> tuple:
+        done = self.env.rest(["gh", *args], self.root)
+        text = ((getattr(done, "stderr", "") or "") + (getattr(done, "stdout", "") or "")).strip()
+        return getattr(done, "returncode", 1) == 0, text
+
+    def _owner(self, pr: str) -> dict:
+        import relay
+
+        return relay.owner_of(self.data, str(pr))
+
+    def _handoff(self, kind: str, pr: str, why: str, **fields) -> None:
+        import attempt
+        import beam as beam_mod
+
+        row = self._owner(pr)
+        self.lines.extend(attempt.handoff(self.path, kind, str(pr), why, owner=row.get("owner") or "",
+                                          coordinator=row.get("coordinator") if row.get("coordinator") not in {"", "warp"} else "",
+                                          agent=row.get("agent") or "", now_s=beam_mod.coerce_now(self.now)[1], **fields))
+
+    def merge(self, entry: dict, method: str) -> tuple:
+        import attempt
+        import ghrest
+
+        url = entry.get("url") or _url(self.slug, entry["pr"])
+        number = ghrest.number_of(url)
+
+        def rest():
+            outcome, detail = ghrest.merge(self.root, url, sha=entry["sha"], method=method, runner=self.env.rest)
+            return outcome == "merged", detail, ghrest.refused(detail)
+
+        def gh():
+            ok, text = self._gh("pr", "merge", number, "--%s" % method, "--match-head-commit", entry["sha"])
+            return ok, text or "gh pr merge refused", "match-head-commit" in text.lower() or "not mergeable" in text.lower()
+
+        ok, how, detail, tried = attempt.chain([("REST", rest), ("gh", gh)])
+        if ok:
+            return "merged", detail if how == "REST" else (entry["sha"] if not detail else "merged")
+        if tried and len(tried) == 2:
+            self._handoff("merge", number, "; ".join(tried), sha=entry["sha"], method=method)
+            return "rejected", "handed to the parent's GitHub tools (%s)" % "; ".join(tried)
+        return "rejected", detail
+
+    def retarget(self, url: str, base: str) -> tuple:
+        import attempt
+        import ghrest
+
+        number = ghrest.number_of(url)
+        ok, how, detail, tried = attempt.chain([
+            ("REST", lambda: ghrest.retarget(self.root, url, base, runner=self.env.rest) + (False,)),
+            ("gh", lambda: self._gh("pr", "edit", number, "--base", base) + (False,))])
+        if ok:
+            return True, ""
+        self._handoff("retarget", number, "; ".join(tried), base=base)
+        return False, "handed to the parent's GitHub tools"
+
+    def comment(self, url: str, body: str) -> bool:
+        import attempt
+        import ghrest
+
+        number = ghrest.number_of(url)
+        ok, how, detail, tried = attempt.chain([
+            ("REST", lambda: (ghrest.comment(self.root, url, body, runner=self.env.rest), "refused", False)),
+            ("gh", lambda: self._gh("pr", "comment", number, "--body", body) + (False,))])
+        if ok:
+            return True
+        self._handoff("comment", number, "; ".join(tried), body=body)
+        return True  # handed off: the next tick checks it, so it is not asked again here
+
+    def cancel(self, run_id: str, pr: str = "") -> bool:
+        import attempt
+        import ghrest
+
+        ok, how, detail, tried = attempt.chain([
+            ("REST", lambda: (ghrest.cancel_run(self.root, self.slug, run_id, runner=self.env.rest), "refused", False)),
+            ("gh", lambda: self._gh("run", "cancel", str(run_id)) + (False,))])
+        if ok:
+            return True
+        self._handoff("cancel", pr or "?", "; ".join(tried), run=str(run_id))
+        return False
+
+    def happened(self, row: dict) -> bool:
+        import ghrest
+
+        kind, number = row.get("kind"), str(row.get("pr") or "")
+        if kind == "cancel":
+            ok, doc, _ = ghrest.call(self.root, "GET", "repos/%s/actions/runs/%s" % (self.slug, row.get("run")), runner=self.env.rest)
+            return ok and isinstance(doc, dict) and str(doc.get("status") or "") == "completed"
+        ok, pull, _ = ghrest.call(self.root, "GET", "repos/%s/pulls/%s" % (self.slug, number), runner=self.env.rest)
+        if not ok or not isinstance(pull, dict):
+            return False
+        if kind == "merge":
+            return bool(pull.get("merged") or pull.get("merged_at")) or str(pull.get("state")) == "closed"
+        if kind == "retarget":
+            return str((pull.get("base") or {}).get("ref") or "") == str(row.get("base") or "main")
+        if kind == "comment":
+            ok, rows, _ = ghrest.call(self.root, "GET", "repos/%s/issues/%s/comments?per_page=100" % (self.slug, number),
+                                      runner=self.env.rest)
+            return ok and any(str(c.get("body") or "").strip() == str(row.get("body") or "").strip()
+                              for c in rows if isinstance(c, dict)) if isinstance(rows, list) else False
+        return False
 
 
 def _push_failed(path: Path, data: dict, root: Path, env: Env, now=None) -> Callable:
@@ -236,10 +356,16 @@ def _children(root: Path, slug: str, branch: str, data: dict, env: Env) -> list:
     for pull in rows if ok and isinstance(rows, list) else []:
         number = str(pull.get("number"))
         owner = _owner_row(data, number)
+        ticket = next((t for t in (data.get("tickets") or {}).values() if isinstance(t, dict)
+                       and str((t.get("pr") or {}).get("url") or "").rstrip("/").endswith("/pull/%s" % number)), None)
+        import ownership
+
+        owned_by = ownership.owner(data, ticket, Path(root) / ".warp" / "beam.json")[0] if ticket else (
+            owner.get("coordinator") if owner.get("coordinator") not in {"", "warp", None} else "")
         out.append({"number": number, "url": pull.get("html_url") or _url(slug, number),
                     "branch": (pull.get("head") or {}).get("ref") or "", "mergeable": pull.get("mergeable_state") or "",
                     "owner": owner.get("owner") or ((pull.get("user") or {}).get("login") or ""), "agent": owner.get("agent") or "",
-                    "stacked": True})
+                    "stacked": True, "ownedBy": owned_by})
     return out
 
 
@@ -261,8 +387,11 @@ def _dirty(root: Path, data: dict, env: Env, base: str) -> list:
                         "origin/%s" % branch], root)
         rows = [r for r in (getattr(done, "stdout", "") or "").splitlines() if r.strip()][1:]
         owner = _owner_row(data, number)
-        out.append({"number": number, "branch": branch, "base": onto, "dirty": True, "conflicts": rows,
-                    "owner": owner.get("owner") or t.get("externalOwner") or tid, "agent": owner.get("agent") or t.get("agent") or "",
+        import ownership
+
+        owned_by = ownership.owner(data, t, root / ".warp" / "beam.json")[0]
+        out.append({"number": number, "branch": branch, "base": onto, "dirty": True, "conflicts": rows, "ownedBy": owned_by,
+                    "owner": owned_by or owner.get("owner") or t.get("externalOwner") or tid, "agent": owner.get("agent") or t.get("agent") or "",
                     "head": pr.get("headSha")})
     return out
 
@@ -307,8 +436,10 @@ def sweep(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
         if not ok:
             return ["sweep: Cloud Agents API not read (%s); nothing classified" % error]
     registry = agents._rows(agents.registry(data, path))
-    rows = fleet.inventory(items, registry, data)
     pulls, _newest = ghrest.changed_pulls(root, slug, "", runner=env.rest, pages=3) if slug else ({}, "")
+    heads = {str((p.get("head") or {}).get("ref") or ""): n for n, p in (pulls or {}).items()
+             if str(p.get("state") or "").lower() == "open" and (p.get("head") or {}).get("ref")}
+    rows = fleet.inventory(items, registry, data, heads=heads)
     prs = {n: {"state": "MERGED" if p.get("merged_at") else str(p.get("state") or "").upper(), "mergedAt": p.get("merged_at"),
                "updatedAt": p.get("updated_at"), "head": (p.get("head") or {}).get("sha")} for n, p in (pulls or {}).items()}
     fleet.classify(rows, prs, data, cfg, now=now)
@@ -431,7 +562,7 @@ def audit(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
     actions.extend(audit_mod.coordinators_step(path, data, coords, table, unowned, cfg, now=now))
     actions.extend(_coordinator_agents(path, data, coords, root, env, now=now))
     audit_mod.save_coordinators(path, coords)
-    found = audit_mod.discover(root, data, red_by_check)
+    found = audit_mod.discover(root, data, red_by_check, report_files=(cfg.get("gaps") or {}).get("reportPaths"))
     made = 0
     ranks = {n: i for i, (n, _s, _d) in enumerate(blockgraph.ranked(data, now=now))}
     for gap in found[:5]:
@@ -439,7 +570,7 @@ def audit(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
             break
         gid, lines = gaps.create(path, lambda: beam_mod.load_json(path), gap["area"], gap["short"], gap["summary"],
                                  source=gap["source"], row=gap.get("row") or "", score_rank=None,
-                                 top_n=int(selfdrive.num(cfg, "gaps", "autoStaffTopN")), now=now)
+                                 top_n=int(selfdrive.num(cfg, "gaps", "autoStaffTopN")), now=now, gid=gap.get("gid") or "")
         actions.extend(lines)
         made += 1
     data = _reload_keep(path, data)

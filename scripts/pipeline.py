@@ -314,10 +314,13 @@ def _record_owners(data: dict, now=None) -> None:
         match = re.search(r"/pull/(\d+)", str((ticket.get("pr") or {}).get("url") or ""))
         if not match or match.group(1) in owners:
             continue
-        if ticket.get("status") == "external":
-            relay.set_owner(data, match.group(1), str(ticket.get("externalOwner") or "outside Warp"),
-                            coordinator=str(ticket.get("externalOwner") or ""), now_s=now_s)
-        else:
+        import ownership
+
+        who, agent, _why = ownership.owner(data, ticket, _beam_path(data))
+        if who:
+            # 1.7.17: someone else opened or holds it; Warp never records itself as its pusher.
+            relay.set_owner(data, match.group(1), who, agent=agent, coordinator=who, now_s=now_s)
+        elif ownership.warp_started(ticket):
             relay.set_owner(data, match.group(1), str(tid), agent=str(ticket.get("agent") or ""), coordinator="warp",
                             now_s=now_s)
         owners = data.get("prOwners") or {}
@@ -729,6 +732,12 @@ def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
             lines.append("fix: %s waits for the whole batch (%s), so one fix round covers every failure with one push"
                          % (ticket.get("id"), item.get("why")))
         return
+    if kind in {"rebase", "ci-start", "ci", "bugbot", "continue"}:
+        # 1.7.17: a pull request someone else owns gets the instruction, never a second pusher.
+        import ownership
+
+        if ownership.delegate(data, ticket, kind, list(item.get("reasons") or []), lines, _beam_path(data)):
+            return
     if kind == "rebase":
         start_rebase(data, ticket, lines)
         return

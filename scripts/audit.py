@@ -255,33 +255,77 @@ def coordinators_step(beam_path: Path, data: dict, coords: dict, table: list, un
 
 
 _GAP_ROW = re.compile(r"^\|\s*(?P<id>[A-Z][A-Z0-9-]+)\s*\|(?P<rest>.*)\|\s*$")
+_CLOSED = re.compile(r"^[\W_]*(closed|done|fixed|resolved|merged|landed|won'?t[ -]?do|duplicate)\b", re.I)
+_TICKET_ID = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[A-Z]?\d+[A-Z0-9]*\b")
+# The living report only (1.7.17). A pack folder's spec/GAP-REPORT.md is a read-only baseline: reading it as well made
+# every row twice, and resolved baseline rows became tickets again.
+REPORT_PATHS = ("docs/spec/GAP-REPORT.md", "docs/GAP-REPORT.md", "GAP-REPORT.md")
 
 
-def discover(root: Path, data: dict, red_by_check: dict) -> list:
-    """[{area, short, summary, source, row}] for causes nobody owns."""
+def report_paths(root: Path, configured=None) -> list:
+    for rel in list(configured or []) or list(REPORT_PATHS):
+        path = Path(root) / str(rel)
+        if path.is_file():
+            return [path]
+    return []
+
+
+def _lands_column(header: list) -> int:
+    for index, cell in enumerate(header):
+        low = cell.strip().lower()
+        if low.startswith("lands") or low.startswith("landed") or low in {"landing", "fixed by", "tickets", "fix"}:
+            return index
+    return -1
+
+
+def row_closed(cells: list, lands: int, tickets: dict) -> bool:
+    """Closed when any cell starts with closed/done/fixed/resolved/merged (`closed (E27-S06)` counts), or every
+    ticket id in its lands-in column is merged or done in the beam."""
+    import terminal
+
+    if any(_CLOSED.match(c) for c in cells):
+        return True
+    if 0 <= lands < len(cells):
+        ids = _TICKET_ID.findall(cells[lands])
+        rows = [tickets.get(i) for i in ids]
+        if ids and all(isinstance(r, dict) and terminal.is_terminal(r) for r in rows):
+            return True
+    return False
+
+
+def discover(root: Path, data: dict, red_by_check: dict, report_files=None) -> list:
+    """[{area, short, summary, source, row, gid}] for causes nobody owns."""
     import gaps
 
     found = []
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    for name in glob.glob(str(Path(root) / "**" / "GAP-REPORT.md"), recursive=True):
-        if "/node_modules/" in name:
-            continue
+    for path in report_paths(root, report_files):
         try:
-            text = Path(name).read_text(errors="replace")
+            text = path.read_text(errors="replace")
         except OSError:
             continue
+        lands = -1
         for line in text.splitlines():
+            if line.startswith("|") and not _GAP_ROW.match(line):
+                cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                if cells and not set("".join(cells)) <= set("-: "):
+                    lands = _lands_column(cells[1:])
+                continue
             match = _GAP_ROW.match(line)
             if not match or match.group("id") in {"ID", "GAP"}:
+                if match and match.group("id") in {"ID", "GAP"}:
+                    lands = _lands_column([c.strip() for c in match.group("rest").split("|")])
                 continue
             cells = [c.strip() for c in match.group("rest").split("|")]
-            if any(c.lower() in {"closed", "done", "fixed", "merged"} for c in cells):
+            if row_closed(cells, lands, tickets):
                 continue
-            summary = next((c for c in cells if len(c) > 12), cells[0] if cells else match.group("id"))
-            if gaps.find(data, match.group("id"), summary, match.group("id")):
+            rid = match.group("id")
+            summary = next((c for c in cells if len(c) > 12), cells[0] if cells else rid)
+            if gaps.find(data, rid, summary, rid):
                 continue
-            found.append({"area": match.group("id").split("-")[0], "short": match.group("id"), "summary": summary,
-                          "source": "GAP-REPORT", "row": match.group("id")})
+            # The row id is the gap id (1.7.17): G-001 stays G-001, not G-G-G-001.
+            found.append({"area": rid.split("-")[0], "short": rid, "summary": summary, "source": "GAP-REPORT",
+                          "row": rid, "gid": rid if rid.startswith("G-") else gaps.gap_id(rid.split("-")[0], rid)})
     for name in glob.glob(str(Path(root) / ".warp" / "tickets" / "*" / "RESULT.json")):
         try:
             doc = json.loads(Path(name).read_text())

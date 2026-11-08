@@ -208,6 +208,12 @@ def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callab
                 out.append("lane: child #%s not retargeted to main: %s" % (child["number"], why))
                 continue
             out.append("lane: child #%s retargeted to main" % child["number"])
+            if child.get("ownedBy"):
+                # 1.7.17: someone else owns the child; it rebuilds it, Warp does not push to it.
+                out.extend(send(child["ownedBy"], "#%s merged and #%s is retargeted to main. Rebuild it once: merge the "
+                                "pre-squash head %s, then origin/main; keep only your own files; push once; re-send READY."
+                                % (entry["pr"], child["number"], entry["sha"][:12]), child.get("agent") or ""))
+                continue
             if str(child.get("mergeable") or "").upper() in {"CONFLICTING", "DIRTY"} or child.get("stacked", True):
                 result, info = rebuild(child["branch"], entry["sha"])
                 if result == "rebuilt":
@@ -254,7 +260,7 @@ def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable,
             continue
         row = book.get(str(pr["number"])) if isinstance(book.get(str(pr["number"])), dict) else {"sent": 0}
         conflicts = list(pr.get("conflicts") or [])
-        if conflicts and all(is_union(p) for p in conflicts):
+        if conflicts and all(is_union(p) for p in conflicts) and not pr.get("ownedBy"):
             outcome, detail = union_merge(pr["branch"], "origin/%s" % (pr.get("base") or "main"))
             if outcome == "merged":
                 out.append("lane: #%s conflicted only in union files (%s); merged %s into it keeping both sides, one "

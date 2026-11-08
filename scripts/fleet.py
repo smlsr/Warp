@@ -40,7 +40,7 @@ def _pr(text: str) -> str:
     return (match.group(1) or match.group(2)) if match else ""
 
 
-def inventory(items: list, registry: list, data: dict, repo_key: str = "") -> list:
+def inventory(items: list, registry: list, data: dict, repo_key: str = "", heads: Optional[dict] = None) -> list:
     """One row per agent: {id, status, lastActivity, createdAt, parent, ticket, pr, summary, lastPush}."""
     by_id = {}
     for row in registry:
@@ -64,6 +64,13 @@ def inventory(items: list, registry: list, data: dict, repo_key: str = "") -> li
         tid = ticket_by_agent.get(aid) or str(reg.get("ticket") or "")
         if not pr and tid and isinstance(tickets.get(tid), dict):
             pr = _pr(((tickets[tid].get("pr") or {}).get("url")) or "")
+        branch = str(target.get("branchName") or reg.get("branch") or "")
+        if not pr and branch and heads:
+            # 1.7.17: a coordinator's worker started without a target PR: its branch names the open pull request.
+            pr = str(heads.get(branch) or "")
+        if not pr:
+            named = re.search(r"#(\d+)\b", str(item.get("name") or ""))
+            pr = named.group(1) if named else ""
         out.append({
             "id": aid, "status": str(item.get("status") or "").upper(), "name": item.get("name") or "",
             "lastActivity": str(item.get("updatedAt") or item.get("lastActivityAt") or item.get("createdAt") or ""),
@@ -161,9 +168,9 @@ def act(beam_path: Path, data: dict, rows: list, orphan_prs: list, cfg: dict, st
         elif cls == "stalled":
             if not mark.get("nudgedAt"):
                 mark["nudgedAt"] = now_s
-                out.extend(send(row.get("parent") or row["id"], "You have not pushed or reported for a while on #%s. "
+                out.extend(send(row.get("parent") or row["id"], "You have not pushed or reported for a while on %s. "
                                 "Push what you have (one push covering every open check and finding) or report what "
-                                "blocks you." % (row.get("pr") or row.get("ticket") or "?"), row["id"]))
+                                "blocks you." % where(row), row["id"]))
                 continue
             nudged = beam_mod.parse_ts(mark["nudgedAt"])
             if nudged is not None and (now_dt - nudged).total_seconds() >= restaff_m * 60 and not mark.get("restaffedAt"):
@@ -177,7 +184,7 @@ def act(beam_path: Path, data: dict, rows: list, orphan_prs: list, cfg: dict, st
             if mark.get("toldWait") == row["why"]:
                 continue
             mark["toldWait"] = row["why"]
-            out.extend(send(row.get("parent") or row["id"], "Stop waiting: %s." % row["why"], row["id"]))
+            out.extend(send(row.get("parent") or row["id"], "Stop waiting on %s: %s." % (where(row), row["why"]), row["id"]))
     for number in orphan_prs:
         mark = book.setdefault("pr:%s" % number, {})
         if mark.get("assigned"):
@@ -187,6 +194,18 @@ def act(beam_path: Path, data: dict, rows: list, orphan_prs: list, cfg: dict, st
             mark["assigned"] = now_s
             out.extend(lines)
     return out
+
+
+def where(row: dict) -> str:
+    """What the agent is on, for a message: `#<pr>`, else `your branch <branch>`, else its ticket by name (never
+    `#<ticket id>` and never `#?`)."""
+    if str(row.get("pr") or "").isdigit():
+        return "#%s" % row["pr"]
+    if row.get("branch"):
+        return "your branch %s" % row["branch"]
+    if row.get("ticket"):
+        return "ticket %s" % row["ticket"]
+    return "your current work"
 
 
 def _stop(stop: Callable, row: dict) -> tuple:

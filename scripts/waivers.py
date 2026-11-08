@@ -201,7 +201,8 @@ def main_red(beam_path: Path, data: dict, base: Optional[dict], history: Callabl
     owner = author_of(bad)
     gid, made = gaps.create(beam_path, lambda: beam_mod.load_json(beam_path), "MAIN", "RED-%s" % bad[:7],
                             "Main is red since %s: %s" % (bad[:12], ", ".join(new[:4]) + (" …" if len(new) > 4 else "")),
-                            acs=["%s passes on main" % t for t in new], source="main-red", score_rank=0, top_n=top_n)
+                            acs=["%s passes on main" % t for t in new], source="main-red", score_rank=0, top_n=top_n,
+                            triage=False)
     lines.extend(made)
     doc[wid] = {"name": "main red since %s" % bad[:12], "tests": sorted(new), "sha": bad, "scope": "heads-containing",
                 "owner": owner, "gap": gid, "createdAt": now_s, "expires": "fix-merge"}
@@ -297,8 +298,9 @@ def _last_progress(job: dict) -> str:
 
 
 def hung(beam_path: Path, data: dict, root: Path, slug: str, heads: list, runner: Optional[Callable] = None,
-         now=None, minutes: float = 60) -> list:
-    """Cancel, once, every in-progress run on these heads whose jobs show no step progress for `minutes`."""
+         now=None, minutes: float = 60, cancel: Optional[Callable] = None) -> list:
+    """Cancel, once, every in-progress run on these heads whose jobs show no step progress for `minutes`.
+    `cancel(run_id, pr)` is the ladder (drive.Writes.cancel: REST, gh, the parent, the coordinator)."""
     import beam as beam_mod
     import ghrest
 
@@ -315,7 +317,7 @@ def hung(beam_path: Path, data: dict, root: Path, slug: str, heads: list, runner
             last = beam_mod.parse_ts(max(stamps)) if stamps and max(stamps) else beam_mod.parse_ts(str(run.get("run_started_at") or run.get("created_at") or ""))
             if last is None or (now_dt - last).total_seconds() < minutes * 60:
                 continue
-            ok = ghrest.cancel_run(root, slug, rid, runner=runner)
+            ok = cancel(rid, label) if cancel is not None else ghrest.cancel_run(root, slug, rid, runner=runner)
             done[rid] = {"sha": sha, "at": beam_mod.coerce_now(now)[1], "ok": ok}
             silent = int((now_dt - last).total_seconds() // 60)
             out.append("ci: cancelled run %s on %s (%s): no step progress for %dm. Not rerun; the next real push makes a "

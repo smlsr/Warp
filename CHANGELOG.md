@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.7.17
+
+- Fixed: supervise crashed after the 1.7.16 upgrade with `beam.metrics` KeyError 'module' on tickets a coordinator or a gap added without that field (C-100, C-103, A-205, A-176, ONSPEK-235, ONSPEK-236, ONSPEK-240). `metrics`, the board table and `beam.py check` now read a missing module, size, status, summary, hours or deps as empty.
+- Fixed: Warp started a second pusher on pull requests other coordinators already owned. The first wake on 1.7.16 wanted about 28 fix agents to rebase PRs the coordinators held (#685, #548, #1418, #1442). Before any fix, rebase or CI start, Warp now asks who owns the pull request (`ownership.py`):
+  - `prOwners` naming another coordinator;
+  - an `external` ticket, `externalOwner` or `coordinator`;
+  - a coordinator outbox line (`WORKER <agent> <pr>`, `READY`/`GAPPR <pr> …`, `OWNS <pr>`);
+  - a running cloud agent Warp did not start, from the last sweep or read live from the Cloud Agents API when that sweep is older than 20 minutes;
+  - park or hold notes that name an outside owner.
+  When someone else owns it, that owner gets the instruction, once per head and kind, as one round and one push: `fix: <id> #n is owned by <owner>; told it to <kind>, and no Warp agent starts`. Warp starts its own agent only on pull requests it owns or nobody owns.
+- Fixed: `prOwners` no longer records Warp as the pusher of a pull request it never started.
+- Changed: the lane follows the same rule. A stacked child owned elsewhere is told to rebuild itself, and a dirty pull request owned elsewhere gets the REFRESH, even for union-only conflicts. Warp no longer pushes to them.
+- Fixed (Forge-QA run b8f371): GAP-REPORT gap ids got a doubled prefix, so row G-001 became G-G-G-001. The row id is now the gap id, and `gaps.gap_id` never prefixes a short id that already carries the prefix.
+- Fixed: resolved GAP-REPORT rows were imported as open gaps. A row is now closed when:
+  - any cell starts with closed, done, fixed, resolved, merged, landed, won't do or duplicate (`closed (E27-S06)` counts);
+  - or every ticket in its lands-in column is merged or done in the beam.
+  Only the living report is read: `docs/spec/GAP-REPORT.md`, then `docs/GAP-REPORT.md`, then `GAP-REPORT.md`, or `gaps.reportPaths`. A pack's read-only baseline (`PROOFLINE/spec/GAP-REPORT.md`) is never read.
+- Fixed: the audit created up to 5 gap tickets from those rows on every pass, and they were claimed within minutes with no locks, acceptance criteria, deps or Jira key. An imported gap with no locks or no acceptance criteria is now created parked as `needs triage`. Nothing claims it, and the next pass queues it once it has both. Main-red gaps carry their failures as acceptance criteria and are still staffed at once.
+- Fixed: the sweep's nudge said `#?`, or `#<ticket id>`, instead of the pull request. The agent's pull request is now found from:
+  - its branch, through the open-PR head map;
+  - else a `#NNN` in its name.
+  The stalled and stale-wait texts both name it (`#1418`), or `your branch <branch>` or `ticket <id>` when no pull request is known. They never print `#?`.
+- New: `beam.py park --beam … --id X --reason "…"` parks one ticket by hand under the run lock. It sets status and phase to parked, records the reason, clears the alarm, and releases the ticket's agents. `parkedBy: hand` keeps the auto-scan and the parked-ticket reconsider away from it. Only its merge, or `warp: unpark <id>`, reopens it.
+- New: no write fails without trying the other ways (`attempt.py`). Merge, retarget, comment and cancel each try, in order:
+  1. REST;
+  2. the gh CLI (`gh pr merge --match-head-commit`, `gh pr edit --base`, `gh pr comment`, `gh run cancel`);
+  3. the parent's Cursor GitHub tools, through a `<kind>: MUST DO` line with the MCP tool and its arguments;
+  4. on the next tick, if it still has not happened, the pull request's coordinator, told to do it with its permissions.
+  A definite refusal (the head moved past the sha guard, not mergeable) is an answer and is not retried. Pushes already follow this ladder (`pusher.py`, 1.7.16).
+
 ## 1.7.16
 
 - Fixed: Warp's messages to agents never reached them. 1.7.15 sent them to `POST /v1/agents/{id}/followup`, which v1 of the Cloud Agents API does not have, so every REFRESH, nudge, handoff and stale-wait fact fell back to the outbox and a `relay: MUST DO` line. A message is now a follow-up run, `POST /v1/agents/{id}/runs {"prompt": {"text": …}}`. An agent that is mid-run (409) has the message queued, and the tick sends it again until it lands (for up to an hour; after that it goes to the outbox). A message to a named coordinator (`coord-ui`) goes to that coordinator's agent.
