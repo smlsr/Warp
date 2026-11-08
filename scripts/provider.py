@@ -1230,10 +1230,12 @@ def merge_with_state(root: Path, beam_path: Path, data: dict, ticket: dict, numb
     code, sha = state_commit._build_commit(root, onto, payload, message, tree=tree, parents=(onto, head))
     if code != 0 or not sha:
         return "fallback", "could not write the merge commit"
-    pushed = _run(["git", "push", "origin", "%s:refs/heads/%s" % (sha, base)], root, timeout=120)
-    if pushed.returncode != 0:
-        text = (pushed.stderr or pushed.stdout or "").strip()
-        return "fallback", "the push to %s was refused: %s" % (base, (text.splitlines() or ["?"])[-1])
+    import pusher
+
+    # GITHUB_TOKEN first, then the checkout's own credentials (1.7.16). A refusal falls back to the provider merge.
+    ok, _how, why = pusher.push(root, sha, base)
+    if not ok:
+        return "fallback", "the push to %s was refused: %s" % (base, why)
     look = confirm or (lambda: _pr_state(root, number))
     nap = wait or time.sleep
     for attempt in range(6):

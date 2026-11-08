@@ -233,9 +233,10 @@ def coordinators_step(beam_path: Path, data: dict, coords: dict, table: list, un
             continue
         room -= max_agents
         rows[name] = {"area": area, "createdAt": now_s, "emptyAudits": 0, "maxAgents": max_agents}
-        out.append("coordinator: MUST DO start %s for area %s (open work per coordinator %.0f > %d, or %d unowned in %s). "
-                   "Give it .warp/rules (the shared rules file) and .warp/waivers.json; maxAgents %d is its own cap." % (
-                       name, area, per, selfdrive.num(cfg, "load", "spawnAt"), unowned_by_area.get(area, 0), area, max_agents))
+        rows[name]["start"] = True
+        out.append("coordinator: start %s for area %s (open work per coordinator %.0f > %d, or %d unowned in %s); "
+                   "maxAgents %d is its own cap" % (name, area, per, selfdrive.num(cfg, "load", "spawnAt"),
+                                                     unowned_by_area.get(area, 0), area, max_agents))
     by_name = {r["name"]: r for r in table}
     for name, info in rows.items():
         if info.get("retiredAt") or name not in by_name and info.get("createdAt") == now_s:
@@ -245,7 +246,8 @@ def coordinators_step(beam_path: Path, data: dict, coords: dict, table: list, un
         info["emptyAudits"] = int(info.get("emptyAudits") or 0) + 1 if empty else 0
         if info["emptyAudits"] >= selfdrive.num(cfg, "load", "retireAfter"):
             info["retiredAt"] = now_s
-            out.append("coordinator: retire %s (no owned items for %d audits); stop it and its workers" % (name, info["emptyAudits"]))
+            info["stop"] = True
+            out.append("coordinator: retire %s (no owned items for %d audits)" % (name, info["emptyAudits"]))
     return out
 
 

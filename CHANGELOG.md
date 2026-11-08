@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.7.16
+
+- Fixed: Warp's messages to agents never reached them. 1.7.15 sent them to `POST /v1/agents/{id}/followup`, which v1 of the Cloud Agents API does not have, so every REFRESH, nudge, handoff and stale-wait fact fell back to the outbox and a `relay: MUST DO` line. A message is now a follow-up run, `POST /v1/agents/{id}/runs {"prompt": {"text": …}}`. An agent that is mid-run (409) has the message queued, and the tick sends it again until it lands (for up to an hour; after that it goes to the outbox). A message to a named coordinator (`coord-ui`) goes to that coordinator's agent.
+- New: Warp starts and stops coordinators itself. The audit's `coordinator: start …` now creates the agent with `POST /v1/agents`: the coordinator brief from `agents/coordinator.md` for its area and the pull requests it owns, the repo at `baseBranch`, and `coordinatorModel` when set. It records the agent id in `.warp/coordinators.json` and the registry (role `coordinator`, parent `warp`), and writes the shared rules to `.warp/rules.md`. A retired coordinator is cancelled and archived. `coordinator: MUST DO start …` comes only without CURSOR_API_KEY.
+- New: the sweep restaffs by itself. A stalled agent on a pull request with no Warp ticket goes to its coordinator. When no coordinator can take it, a new worker is started on that pull request (`repos[0].prUrl`), told to fetch the remote head first and push once, and recorded as the pull request's sole pusher.
+- New: how Warp pushes (`pusher.py`), for the lane's rebuilt children, its union-file merges, and the merge commit with the run state. It tries, in order:
+  1. `GITHUB_TOKEN` (or `GH_TOKEN`) when the environment has that secret;
+  2. the checkout's own credentials (`git push origin`);
+  3. the parent's Cursor GitHub tools: `push: MUST DO <branch>` with the exact command (the commit is kept under `refs/warp/pending/<branch>`);
+  4. the pull request's coordinator, told on the next tick to redo the change and push it once, if the branch is still not at that commit.
+  A token is never printed.
+- Jira and Slack are still moved by the parent agent through its MCP servers (Warp's scripts hold no Jira or Slack credentials). Those `jira: MUST DO` and `herald:` lines are done by the parent in the same wake; no person is involved.
+
 ## 1.7.15
 
 Two parts. Part 1 fixes a run with live work that read as finished (seen on Forge-QA run core, 8 Nov 2026: 1202 merged, 163 parked, 147 skipped, 7 done). Part 2 makes Warp a self-driving supervisor: it now does on each tick what a human coordinator used to do by hand. There is no 1.7.14; this follows 1.7.13.

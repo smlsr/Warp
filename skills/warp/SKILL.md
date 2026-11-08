@@ -117,7 +117,7 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
 - Tick lines:
   - `intake: READY|GAPPR … verified; queued for the lane`: the lane merges it.
   - `lane: … merged`, `lane: child #n retargeted|rebuilt`, `hold: lifted …`, `lane: … union files … no owner push`, `waiver: … registered|retired`, `gap: … created`, `ci: cancelled run … Not rerun`, `bugbot: … posted bugbot run`: these need nothing.
-  - `relay: MUST DO tell <owner>: <text>`: send that text to that agent or coordinator (`.warp/outbox/<owner>.md` has it too).
+  - `relay: sent to <owner> (<agent url>)`: Warp sent it itself as a follow-up run on that agent (1.7.16); nothing to do. `relay: … is mid-run; … queued` is sent when that run ends. `relay: MUST DO tell <owner>: <text>` comes only when the owner has no cloud agent Warp can reach (a person, or no CURSOR_API_KEY): send it over Slack or to that agent (`.warp/outbox/<owner>.md` has it too).
   - `restaff: #n …`: start the replacement from the remote head.
 - Sweep lines:
   - `sweep: stopped <agent> (duplicate|finished-running)` needs nothing.
@@ -125,8 +125,9 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
   - `sweep: orphan #n assigned to <coordinator>` needs nothing.
 - Audit lines:
   - `rebalance: chain … moves from A to B`: the relay lines carry the HANDED-OFF protocol, and B pushes only after it sees `HANDED-OFF B <head>`.
-  - `coordinator: MUST DO start coord-<area> …`: start it with the shared rules and `.warp/waivers.json`.
-  - `coordinator: retire …`: stop it.
+  - `coordinator: started coord-<area> (<agent id>) …` and `coordinator: stopped …`: Warp started or stopped it itself through the Cloud Agents API with CURSOR_API_KEY (1.7.16), with the brief in `agents/coordinator.md` and `.warp/rules.md`; nothing to do. `coordinator: MUST DO start …` comes only without a key.
+  - `restaff: started <agent> on <pr>`: Warp started the replacement worker itself; nothing to do.
+  - `push: MUST DO <branch> …`: Warp could not push with `GITHUB_TOKEN` or the checkout's credentials. Push it with your Cursor GitHub tools: the command it prints, or the GitHub MCP. The next tick checks, and tells the pull request's coordinator to redo it if the branch is still not there. `push: <branch> is at <sha>; pushed by the parent` needs nothing.
   - Post the audit's `herald:` summary. The report is `.warp/audit/<ts>.md`.
 - `ask: ASK-xxxxxx <kind>: <question> Options: …`: post it once. Only what it names waits. `warp: decide <id> <option>` or `wake.py decide` records the answer in `.warp/decisions.md`.
 - `dispatch: <id> launch hit the agent cap; queued` needs nothing. The next tick retries it.

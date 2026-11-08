@@ -108,9 +108,11 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
         if after == before:
             return "unchanged", after
         if push:
-            pushed = _git(run, tmp, "push", "-q", "origin", "HEAD:refs/heads/%s" % branch)
-            if not _ok(pushed):
-                return "failed", "push refused: %s" % ((getattr(pushed, "stderr", "") or "").strip()[:200])
+            import pusher
+
+            ok, _how, why = pusher.push(root, after, branch, run=run)
+            if not ok:
+                return "push-failed", "%s %s" % (after, why)
         return "merged", after
     finally:
         _git(run, root, "worktree", "remove", "--force", str(tmp))
@@ -144,9 +146,11 @@ def rebuild_child(root: Path, child: str, parent_head: str, base: str = "main", 
         return "foreign", ", ".join(foreign[:8])
     if outcome == "unchanged":
         return "unchanged", tmp_head
-    pushed = _git(run, root, "push", "-q", "origin", "%s:refs/heads/%s" % (tmp_head, child))
-    if not _ok(pushed):
-        return "failed", "push refused: %s" % ((getattr(pushed, "stderr", "") or "").strip()[:200])
+    import pusher
+
+    ok, _how, why = pusher.push(root, tmp_head, child, run=run)
+    if not ok:
+        return "push-failed", "%s %s" % (tmp_head, why)
     return "rebuilt", tmp_head
 
 
@@ -154,7 +158,7 @@ def rebuild_child(root: Path, child: str, parent_head: str, base: str = "main", 
 
 
 def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callable, retarget: Callable,
-             rebuild: Callable, send: Callable, max_merges: int = 3, now=None) -> list:
+             rebuild: Callable, send: Callable, max_merges: int = 3, now=None, push_failed: Optional[Callable] = None) -> list:
     """Merge the queue in score order. merge(entry) -> (outcome, detail); list_children(branch) -> [{number, url,
     branch, owner, agent, mergeable}]; retarget(url, base) -> (ok, why); rebuild(child_branch, parent_head) ->
     (outcome, detail); send(owner, text, agent) -> lines."""
@@ -213,6 +217,12 @@ def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callab
                     out.extend(send(child.get("owner") or "", "#%s merged; Warp rebuilt #%s on main (%s, one push). Pull "
                                     "it before you push again; CI runs once on it." % (entry["pr"], child["number"], info[:12]),
                                     child.get("agent") or ""))
+                elif result == "push-failed" and push_failed is not None:
+                    sha, _, why = info.partition(" ")
+                    out.extend(push_failed(child["branch"], sha, why, child["number"], child.get("owner") or "",
+                                           child.get("agent") or "", "after #%s merged, merge its pre-squash head %s and "
+                                           "then origin/main into %s (only your own files stay in the diff), and push "
+                                           "once" % (entry["pr"], entry["sha"][:12], child["branch"])))
                 elif result == "foreign":
                     out.extend(send(child.get("owner") or "", "REFRESH #%s: after #%s merged, a rebuild would carry files "
                                     "that are not yours (%s). Merge main once, run the gate, push once, re-send READY." % (
@@ -226,7 +236,7 @@ def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callab
 
 
 def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable, send: Callable, cfg: dict,
-                  now=None) -> list:
+                  now=None, push_failed: Optional[Callable] = None) -> list:
     """prs: [{number, branch, base, dirty, conflicts, owner, agent, head}]. Union-only conflicts: the lane merges the
     base into the branch itself (one push). Otherwise one REFRESH per head, within the budget; past refresh.timeout
     with no new head the pull request is due for restaffing (returned as `restaff:` lines the sweep acts on)."""
@@ -249,6 +259,13 @@ def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable,
             if outcome == "merged":
                 out.append("lane: #%s conflicted only in union files (%s); merged %s into it keeping both sides, one "
                            "push (%s), no owner push" % (pr["number"], ", ".join(conflicts), pr.get("base") or "main", detail[:12]))
+                book.pop(str(pr["number"]), None)
+                continue
+            if outcome == "push-failed" and push_failed is not None:
+                sha, _, why = detail.partition(" ")
+                out.extend(push_failed(pr["branch"], sha, why, pr["number"], pr.get("owner") or "", pr.get("agent") or "",
+                                       "merge origin/%s into %s keeping both sides of %s, and push once" % (
+                                           pr.get("base") or "main", pr["branch"], ", ".join(conflicts))))
                 book.pop(str(pr["number"]), None)
                 continue
         if row.get("head") == pr.get("head") and row.get("sentAt"):

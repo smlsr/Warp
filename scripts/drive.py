@@ -154,15 +154,22 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
             list_children=lambda branch: _children(root, slug, branch, data, env),
             retarget=lambda url, to: ghrest.retarget(root, url, to, runner=env.rest),
             rebuild=lambda child, head: lane.rebuild_child(root, child, head, base=base, run=env.git),
-            send=send, max_merges=cap, now=now))
+            send=send, max_merges=cap, now=now, push_failed=_push_failed(path, data, root, env, now)))
     except Exception as exc:
         lines.append("tick: lane skipped (%s)" % exc)
     # Stale pull requests: one REFRESH per head; union-only conflicts are merged by the lane.
     try:
         lines.extend(lane.refresh_stale(path, data, _dirty(root, data, env, base), lambda b, onto: lane.merge_into(
-            root, b, onto, run=env.git), send, cfg, now=now))
+            root, b, onto, run=env.git), send, cfg, now=now, push_failed=_push_failed(path, data, root, env, now)))
     except Exception as exc:
         lines.append("tick: refresh skipped (%s)" % exc)
+    # Pushes the parent was asked to make: done, or its coordinator redoes it (1.7.16).
+    try:
+        import pusher
+
+        lines.extend(pusher.check_pending(path, root, send, runner=env.rest, now=now))
+    except Exception as exc:
+        lines.append("tick: pending pushes not checked (%s)" % exc)
     # Hung CI: cancel once, never rerun.
     try:
         heads = [(str((t.get("pr") or {}).get("headSha") or ""), tid) for tid, t in (data.get("tickets") or {}).items()
@@ -179,11 +186,34 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
                                             lambda url, body: ghrest.comment(root, url, body, runner=env.rest), send))
     except Exception as exc:
         lines.append("tick: Bugbot actions skipped (%s)" % exc)
+    try:
+        import relay
+
+        lines.extend(relay.retry_pending(path, transport=env.agents, env=env.env))
+    except Exception as exc:
+        lines.append("tick: queued messages not sent (%s)" % exc)
     lines.extend(selfdrive.say_once(data, "blockers", blockgraph.lines(data, top_n, now=now)[0]))
     commit(path, data, before)
     took = env.clock() - began
     lines.append("tick: done in %.1fs" % took)
     return lines
+
+
+def _push_failed(path: Path, data: dict, root: Path, env: Env, now=None) -> Callable:
+    """GITHUB_TOKEN and the checkout's credentials both refused: the parent's Cursor GitHub tools next, then the
+    pull request's coordinator (pusher.py)."""
+    import beam as beam_mod
+    import pusher
+    import relay
+
+    def failed(branch, sha, why, pr, owner, agent, redo):
+        owner_row = relay.owner_of(data, str(pr))
+        files = [p for p in (getattr(env.git(["git", "diff", "--name-only", "origin/%s" % branch, sha], root), "stdout", "")
+                             or "").splitlines() if p]
+        return pusher.fallback(path, root, sha, branch, why, pr=str(pr), owner=owner or owner_row.get("owner") or "",
+                               coordinator=owner_row.get("coordinator") or "", agent=agent or owner_row.get("agent") or "",
+                               redo=redo, files=files, run=env.git, now_s=beam_mod.coerce_now(now)[1])
+    return failed
 
 
 def _url(slug: str, pr) -> str:
@@ -308,8 +338,22 @@ def sweep(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
             ticket.pop("phase", None)
             return ["restaff: %s goes back to %s; the next pass starts a new Shuttle that checks the remote head first" % (
                 tid, ticket["status"])]
-        return send(row.get("parent") or "warp", "Restaff #%s: start a new agent that fetches the remote head first and "
-                    "builds on it; stop %s." % (row.get("pr") or "?", row["id"]), "")
+        parent = row.get("parent") or ""
+        if parent and parent != "warp":
+            lines = send(parent, "Restaff #%s: start a new agent that fetches the remote head first and builds on it; "
+                         "stop %s." % (row.get("pr") or "?", row["id"]), "")
+            if lines and not lines[0].startswith("relay: MUST DO"):
+                return lines
+        import coordinators
+
+        aid, lines = coordinators.worker(path, data, _url(slug, row.get("pr") or ""), "Take over pull request #%s from a "
+                                         "stalled agent (%s)." % (row.get("pr") or "?", row["id"]), key, root,
+                                         parent=parent or "warp", transport=env.agents)
+        if aid:
+            relay.set_owner(data, str(row.get("pr")), "restaff", agent=aid, coordinator=parent or "warp")
+            return lines
+        return lines + send(parent or "warp", "Restaff #%s: start a new agent that fetches the remote head first and "
+                            "builds on it; stop %s." % (row.get("pr") or "?", row["id"]), "")
 
     def assign(number):
         import audit
@@ -385,6 +429,7 @@ def audit(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
             area = str(t.get("module") or "general")
             unowned[area] = unowned.get(area, 0) + 1
     actions.extend(audit_mod.coordinators_step(path, data, coords, table, unowned, cfg, now=now))
+    actions.extend(_coordinator_agents(path, data, coords, root, env, now=now))
     audit_mod.save_coordinators(path, coords)
     found = audit_mod.discover(root, data, red_by_check)
     made = 0
@@ -407,6 +452,34 @@ def audit(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
     report, slack = audit_mod.report(path, headline, through, table, top, actions, decisions, now=now)
     commit(path, data, before)
     return actions + ["audit: report %s" % report.relative_to(path.parent.parent)] + ["herald: " + " | ".join(slack)]
+
+
+def _coordinator_agents(path: Path, data: dict, coords: dict, root: Path, env: Env, now=None) -> list:
+    """Start the coordinators the audit asked for, and stop the retired ones, through the Cloud Agents API (1.7.16)."""
+    import agents
+    import beam as beam_mod
+    import coordinators
+
+    key = str(env.env.get(agents.ENV_KEY) or "")
+    now_s = beam_mod.coerce_now(now)[1]
+    owners = data.get("prOwners") if isinstance(data.get("prOwners"), dict) else {}
+    out = []
+    for name, info in (coords.get("coordinators") or {}).items():
+        if info.pop("start", False) and not info.get("agentId"):
+            owned = sorted("#%s" % n for n, v in owners.items() if isinstance(v, dict) and v.get("coordinator") == name)
+            aid, lines = coordinators.start(path, data, name, info.get("area") or "", owned, key, root,
+                                            transport=env.agents, now_s=now_s)
+            out.extend(lines)
+            if aid:
+                info["agentId"] = aid
+            else:
+                info["start"] = True  # asked again next audit
+        if info.pop("stop", False) and info.get("agentId"):
+            ok, detail = coordinators.stop(info["agentId"], key, transport=env.agents)
+            out.append("coordinator: %s %s (%s)" % ("stopped" if ok else "could not stop", name, info["agentId"])
+                       if ok or key else "needs-human-stop %s (retired coordinator %s; no CURSOR_API_KEY here)" % (
+                           coordinators.agents_url(info["agentId"]), name))
+    return out
 
 
 def _reload_keep(path: Path, data: dict) -> dict:
