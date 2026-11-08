@@ -51,16 +51,16 @@ import runs  # noqa: E402
 
 ACCEPTED_FORMS = (
     "warp:pause, warp:resume, warp:stop, warp:start, "
-    "warp:proceed <id>, warp:retry <id>, warp:status, warp:sync"
+    "warp:proceed <id>, warp:retry <id>, warp:unpark <id|all-runnable>, warp:decide <ask-id> <option>, warp:status, warp:sync"
 )
-VERB_RE = re.compile(r"^warp:\s*(pause|resume|stop|start|proceed|retry|status|sync)\b\s*(.*?)\s*$", re.I)
+VERB_RE = re.compile(r"^warp:\s*(pause|resume|stop|start|proceed|retry|unpark|decide|status|sync)\b\s*(.*?)\s*$", re.I)
 ACK_NAME = "inbound-ack.json"
 PENDING_NAME = "pending-commands.jsonl"
 LISTENER_FILE = "listener.json"
-NEEDS_ID = {"proceed", "retry"}
+NEEDS_ID = {"proceed", "retry", "unpark", "decide"}
 ADDRESSABLE = {"pause", "resume", "stop", "start", "status", "sync"}
 STATE_VERBS = {"pause", "resume", "stop", "start"}
-EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost", "cut-off")
+EXIT_REASONS = ("polled", "rotated", "orphaned", "stopped", "lost", "cut-off", "done")
 KEEP_CYCLING = "listen: keep cycling. Run poll again now with the same lease and holder. Do not return."
 
 
@@ -648,6 +648,8 @@ def _life(seconds) -> str:
     return "%dm%02ds" % (minutes, secs) if minutes else "%ds" % secs
 
 
+NOT_CHURN = {"done", "idle"}
+
 CHURN_HINTS = {
     "superseded": "something replaced the live lease: /warp-update-state before 1.7.9, a second parent on this run "
                   "(/warp-start in another window), or a command given .warp/runs/<run>/beam.json",
@@ -663,7 +665,9 @@ CHURN_HINTS = {
 
 def churn(data: dict, count: int = CHURN_COUNT, under: int = CHURN_SECONDS) -> Optional[dict]:
     """{lives, reasons, top} when the last `count` listeners each lived under `under` seconds, else None."""
-    rows = [row for row in (_raw(data).get("history") or []) if isinstance(row, dict)][-count:]
+    # A listener that ended because the run closed (`done`) is not churn (1.7.15).
+    rows = [row for row in (_raw(data).get("history") or [])
+            if isinstance(row, dict) and str(row.get("reason") or "") not in NOT_CHURN][-count:]
     if len(rows) < count:
         return None
     if any(row.get("lived") is not None and int(row["lived"]) >= under for row in rows):
@@ -970,7 +974,8 @@ def poll_lines(beam_path: Path, lease=None, holder: Optional[str] = None, now=No
         now_dt, now_s = _moment(now)
         if lines and lines[0].startswith("reap: exit"):
             if checked and _may_stamp(data, holder, lease):
-                reason = "stopped"
+                # A closed run's reap is `done`: not churn (1.7.15).
+                reason = "done" if lines[0].split()[-1] == "done" else "stopped"
                 stamp_return(data, beam_path, reason, now_s, holder=holder)
                 beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
             return lines
@@ -1037,7 +1042,7 @@ def _wait_check(beam_path: Path, lease, holder: Optional[str], now) -> Optional[
     lines = agents.reap_from(_root(beam_path), str(holder or LISTENER_ID), "", "listener", beam_path=beam_path)
     if lines and lines[0].startswith("reap: exit"):
         if _may_stamp(data, holder, lease):
-            stamp_return(data, beam_path, "stopped", now_s, holder=holder)
+            stamp_return(data, beam_path, "done" if lines[0].split()[-1] == "done" else "stopped", now_s, holder=holder)
             beam.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         reason = lines[0].split()[-1]
         return _stop_lines(reason)
@@ -1386,6 +1391,25 @@ def plan_command(data: dict, parsed: dict, cfg: Optional[dict] = None) -> dict:
             "action": "sync",
             "ok": True,
         }
+    if verb == "decide":
+        # 1.7.15: the answer to a human ask (asks.py), kept as a durable rule in .warp/decisions.md.
+        aid, _, option = str(parsed.get("token") or "").partition(" ")
+        return {"ack": "Received warp:decide %s %s. Recording it." % (aid, option.strip() or "default"), "verb": verb,
+                "ticket": "%s %s" % (aid, option.strip() or "default"), "action": "decide", "ok": True}
+    if verb == "unpark":
+        # 1.7.15: reopen one parked ticket, or every one that can run (no outside owner on an open pull request, every
+        # named blocker merged).
+        token = str(parsed.get("token") or "").strip()
+        if token.casefold() not in {"all-runnable", "all", "runnable"}:
+            found = proceed.resolve_token(data, token)
+            if len(found) != 1:
+                return {"ack": "Received warp:unpark %s. %s" % (_token_shown(parsed), "That id matches more than one ticket."
+                                if found else "No ticket matches that id."), "verb": verb, "ticket": None,
+                        "action": "none", "ok": False}
+            token = found[0][0]
+        return {"ack": "Received warp:unpark %s. Reopening %s." % (token, "every runnable parked ticket"
+                                                                    if token.casefold() in {"all-runnable", "all", "runnable"} else token),
+                "verb": verb, "ticket": token, "action": "unpark", "ok": True}
     hits = proceed.resolve_token(data, parsed.get("token") or parsed.get("raw") or "")
     if verb == "retry":
         shown = _token_shown(parsed)
@@ -1493,6 +1517,20 @@ def retry_mode(ticket: dict) -> str:
     """`fix` when the ticket has an open pull request, else `queued`."""
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     return "fix" if pr.get("url") and not pr.get("mergedAt") else "queued"
+
+
+def unpark_now(beam_path: Path, which: str, by: Optional[str] = None) -> list:
+    """`warp: unpark` and `wake.py unpark`: reopen under the run lock and journal it (1.7.15)."""
+    import unpark
+
+    def run() -> list:
+        data = beam.load_json(Path(beam_path))
+        lines = unpark.unpark(data, which, beam.utcnow())
+        beam.atomic_write(Path(beam_path), json.dumps(data, indent=2) + "\n", data=data)
+        beam.journal(Path(beam_path), {"type": "unpark", "which": which, "by": by or "", "result": lines[:3]})
+        return lines
+
+    return _locked(Path(beam_path), run)
 
 
 def _requeue(beam_path: Path, tid: str, by: Optional[str] = None) -> str:
@@ -1608,6 +1646,13 @@ def _apply(beam_path: Path, decision: dict, by: Optional[str]) -> str:
         return "action: %s%s" % (action, extra)
     if action == "retry":
         return "action: retry %s\n%s" % (decision["ticket"], _requeue(beam_path, decision["ticket"], by))
+    if action == "decide":
+        import asks
+
+        aid, _, option = str(decision["ticket"]).partition(" ")
+        return "action: decide %s\n%s" % (aid, "\n".join(asks.decide(Path(beam_path), aid, option.strip() or "default", by=by or "")))
+    if action == "unpark":
+        return "action: unpark %s\n%s" % (decision["ticket"], "\n".join(unpark_now(beam_path, decision["ticket"], by)))
     if action == "sync":
         import orchestrator
 

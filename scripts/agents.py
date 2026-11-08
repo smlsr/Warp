@@ -136,7 +136,9 @@ HOUR_MINUTES = 60
 DEFAULT_MAX_SPAWNS_PER_TICKET = 8
 DEFAULT_MAX_SPAWNS_PER_HOUR = 200
 _LIVE = {"starting", "running"}
-_SETTLED = {"merged", "done", "parked", "skipped"}
+import terminal as _terminal  # noqa: E402
+
+_SETTLED = set(_terminal.INACTIVE)  # nothing starts for these; run_open decides whether the run is open
 
 
 def registry_path(beam_path: Path) -> Path:
@@ -217,6 +219,11 @@ def flush(data: dict, beam_path: Optional[Path] = None) -> None:
         path = Path(data["_agentBeam"])
     doc = data.get("agentRegistry")
     if isinstance(doc, dict):
+        # 1.7.15: every agent Warp starts records its parent, so a message can be routed to any grandchild (relay.py).
+        parent = str(data.get("coordinator") or data.get("parentSession") or "warp")
+        for row in _rows(doc):
+            if isinstance(row, dict) and not row.get("parent"):
+                row["parent"] = str(row.get("session") or parent)
         save_file(path, doc)
         if path is not None:
             data["_agentSig"] = _signature(Path(path))
@@ -232,18 +239,22 @@ def _cfg(data: dict, key: str, default: int) -> int:
 
 
 def spawns_open(data: dict) -> bool:
-    """False when paused, stopped, or every ticket is merged or parked."""
+    """False when paused or stopped, or when every ticket is terminal (merged, done, or skipped as won't-do or
+    duplicate). Parked and external tickets keep it open (1.7.15)."""
     if not isinstance(data, dict):
         return False
     if data.get("paused") or (data.get("runState") or "running") in {"paused", "stopped"}:
         return False
-    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    if not tickets:
+    # Open while any ticket is not terminal (1.7.15): parked and external tickets keep it open. The late-Bugbot
+    # window counts too, so the reaper, listener_should_run and parent_may_exit give one answer.
+    if _terminal.run_open(data):
         return True
-    for ticket in tickets.values():
-        if isinstance(ticket, dict) and ticket.get("status") not in _SETTLED:
-            return True
-    return False
+    try:
+        import orchestrator
+
+        return bool(orchestrator.pipeline_unfinished(data))
+    except Exception:
+        return False
 
 
 def stale_minutes(data: dict) -> int:

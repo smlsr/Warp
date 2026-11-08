@@ -552,8 +552,11 @@ class ParentExitTests(unittest.TestCase):
         self.assertTrue(orchestrator.parent_may_exit(stopped))
         idle = {"runState": "running", "tickets": {"T-1": {"id": "T-1", "status": "merged"}}}
         self.assertTrue(orchestrator.parent_may_exit(idle))
+        # 1.7.15: parked is not terminal, so a parked ticket keeps the parent up; a won't-do skip does not.
         parked = {"runState": "running", "tickets": {"T-2": {"id": "T-2", "status": "parked"}}}
-        self.assertTrue(orchestrator.parent_may_exit(parked))
+        self.assertFalse(orchestrator.parent_may_exit(parked))
+        wont = {"runState": "running", "tickets": {"T-2": {"id": "T-2", "status": "skipped", "skipReason": "won't do"}}}
+        self.assertTrue(orchestrator.parent_may_exit(wont))
 
 
 class SlotTests(unittest.TestCase):

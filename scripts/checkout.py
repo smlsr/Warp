@@ -869,6 +869,13 @@ def record_result(
     ticket["subagentResult"] = line
     if root is not None:
         note_host(data, tid, line, root, hostname=hostname, cwd=cwd)
+    import agentcap
+
+    if agentcap.is_cap_error(line):
+        # 1.7.15: the launch hit the account's agent cap. That is a wait, not a failure: the ticket goes back to
+        # queued and the next tick retries it. It never counts toward recoveries and never parks.
+        agentcap.requeue(data, ticket, line)
+        return "queued-cap"
     if _result_failed(line, forced):
         orchestrator.note_subagent_failure(ticket)
         return "worker-died"
@@ -1017,6 +1024,10 @@ def _other(root, path, data, ticket, branch, base, args, cfg) -> int:
             beam_path=path,
         )
         _save(path, data)
+        if outcome == "queued-cap":
+            print("dispatch: %s launch hit the agent cap; queued, and the next tick retries it (not parked, not a "
+                  "recovery)" % args.id)
+            return 0
         if outcome == "worker-died":
             print("shuttle: alarm %s worker-died" % args.id)
             print("herald: %s worker died." % args.id)

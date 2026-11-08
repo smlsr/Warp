@@ -457,7 +457,9 @@ def finished(beam: Optional[dict], registry: Optional[dict] = None) -> bool:
     if beam.get("runComplete") or (isinstance(registry, dict) and registry.get("finishedAt")):
         return True
     tickets = [t for t in (beam.get("tickets") or {}).values() if isinstance(t, dict)]
-    return bool(tickets) and all(str(t.get("status") or "") in SETTLED for t in tickets)
+    import terminal
+
+    return bool(tickets) and all(terminal.is_terminal(t) for t in tickets)
 
 
 def open_names(root) -> set:

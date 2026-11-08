@@ -13,7 +13,9 @@ hand, in this order:
                        open pull request goes back to reviewing
   4. the pass          orchestrator.py supervise: starts, resumes, repairs, pull requests, reviews, merges, Jira, Slack
   5. new work          a blocker no ticket and no run owns is named, with the command that adds it (pack, beam, Jira)
-  6. close             `wake: done …` and what to do with the lines above
+  6. cadences          1.7.15: the tick (merge lane, blockers, holds, main red, hung CI, Bugbot), then each due sweep,
+                       audit and deep job from .warp/cadence.json, in the background under a lease (drive.py)
+  7. close             `wake: done …` and what to do with the lines above
 
 A wake that fires while a pass runs, or within a few seconds of the last wake (stacked fires), does nothing. A pass
 that sees no wake for three intervals says the timer is gone and how to create it again. A run that is paused,
@@ -24,6 +26,10 @@ stopped, or finished says to delete it.
   python3 scripts/wake.py run --beam .warp/beam.json         one wake (what the timer runs)
   python3 scripts/wake.py status --beam .warp/beam.json      the timer's name, interval, and last wake
   python3 scripts/wake.py setup --beam .warp/beam.json       the timer lines /warp-start prints
+  python3 scripts/wake.py tick|sweep|audit|deep --beam .warp/beam.json    one cadence now (wake.py run runs the due ones)
+  python3 scripts/wake.py blockers --beam .warp/beam.json                 the top blockers, by dependents x age
+  python3 scripts/wake.py decide ASK-1A2B3C <option> --beam .warp/beam.json   answer a human ask
+  python3 scripts/wake.py unpark all-runnable --beam .warp/beam.json   reopen parked tickets that can run (or one id)
   python3 scripts/wake.py add-ticket --beam .warp/beam.json --id UI-90 --summary "…" --from UI-12 [--locks a,b]
           [--size S|M|L|XL] [--module UI] [--deps UI-03,UI-04] add a ticket for a blocker nobody owns
 
@@ -125,7 +131,8 @@ def prompt_text(beam_path: Path, data: dict) -> str:
         "Goal: keep the whole lifecycle open, corrected, and moving. Unblock and fix what is stuck, start what can start, "
         "and add work where a blocker has no owner. Never wait for a person when a line below tells you what to do.",
         "",
-        "1. Run the wake (heartbeat, pending commands, unstick, the supervise pass, new work), from %s:" % root,
+        "1. Run the wake (heartbeat, pending commands, unstick, the supervise pass, new work, then the tick and any due "
+        "sweep, audit or deep job), from %s:" % root,
         "   python3 %s/wake.py run --beam %s" % (scripts, beam_file),
         "   `wake: stacked …` or `wake: a pass is running …` means this fire does nothing more: end here with no summary.",
         "   `wake: the run is paused|stopped|finished` means delete this timer (%s) and end." % name,
@@ -144,6 +151,13 @@ def prompt_text(beam_path: Path, data: dict) -> str:
         "line it prints.",
         "   - `wake: new work` lines: create the ticket with the `wake.py add-ticket` command it prints, then its Jira issue, "
         "then record the key with `jira_sync.py resolve`.",
+        "   - The self-driving lines (1.7.15; the tick runs every wake, sweep, audit and deep when due):",
+        "     `relay: MUST DO tell <owner>: …` send that text to that agent or coordinator; `coordinator: MUST DO start …` "
+        "start that coordinator with the shared rules and .warp/waivers.json; `restaff: …` start the replacement from the "
+        "remote head; `gap: … created` and `jira: … MUST DO resolve …` create or find the Jira issue and record it with "
+        "the command printed; `ask: <id> …` post that one question once and keep everything else moving; "
+        "`needs-human-stop <url>` tell the person once, nothing else.",
+        "   - Fixes are batched: one fix round per head covers every red check and every Bugbot finding, with one push.",
         "3. Slack: when the output says `herald: post .warp/notify-pass.json …`, post that payload to %s and run the "
         "`notify.py posted` command it names." % channel,
         "4. Close: python3 %s/session_note.py --type session-stop --root %s" % (scripts, root),
@@ -422,7 +436,7 @@ def _captured(fn, *args) -> list:
     return [line for line in out.getvalue().splitlines() if line.strip()]
 
 
-def run(beam_path: Path, now=None, supervise=None) -> list:
+def run(beam_path: Path, now=None, supervise=None, cadences: Optional[bool] = None) -> list:
     """One wake. Lines for the parent to act on."""
     import beam as beam_mod
     import beamlock
@@ -460,6 +474,15 @@ def run(beam_path: Path, now=None, supervise=None) -> list:
         lines.extend(unstick(path, now=now))
         lines.extend((supervise or orchestrator.supervise)(path, now=now))
         lines.extend(new_work_lines(path, beam_mod.load_json(path)))
+        if cadences if cadences is not None else supervise is None:
+            # 1.7.15: the tick every wake (lane, blockers, holds, main red, hung CI, Bugbot), and each due sweep,
+            # audit or deep job, in the background under a lease.
+            try:
+                import drive
+
+                lines.extend(drive.due_lines(path, now=now))
+            except Exception as exc:
+                lines.append("wake: cadences skipped (%s)" % exc)
         lines.append("wake: done (wake %d). Act on the lines above, post the Slack payload if one is named, then run "
                      "session_note.py --type session-stop. Reply with only what changed." % count)
     return lines
@@ -486,9 +509,17 @@ def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description="The Warp watch timer", epilog=HELP,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("prompt", "armed", "run", "status", "setup", "add-ticket"):
+    for name in ("prompt", "armed", "run", "status", "setup", "add-ticket", "unpark", "tick", "sweep", "audit", "deep",
+                 "decide", "blockers"):
         p = sub.add_parser(name)
         p.add_argument("--beam", default=".warp/beam.json")
+        if name in {"tick", "sweep", "audit", "deep"}:
+            p.add_argument("--lease", default="inline", help="background: a job started by wake.py run")
+        if name == "decide":
+            p.add_argument("ask_id")
+            p.add_argument("option", nargs="?", default="default")
+        if name == "unpark":
+            p.add_argument("which", help="a ticket id, or all-runnable")
         if name == "armed":
             p.add_argument("--name", default="")
         if name == "add-ticket":
@@ -523,6 +554,32 @@ def main(argv: Optional[list] = None) -> int:
         return 0
     if args.cmd == "status":
         for line in status_lines(path):
+            print(line)
+        return 0
+    if args.cmd in {"tick", "sweep", "audit", "deep"}:
+        import drive
+
+        for line in drive.run_one(path, args.cmd, holder=args.lease):
+            print(line)
+        return 0
+    if args.cmd == "decide":
+        import asks
+
+        for line in asks.decide(path, args.ask_id, args.option, by="wake.py decide"):
+            print(line)
+        return 0
+    if args.cmd == "blockers":
+        import blockgraph
+        import selfdrive
+
+        data = beam_mod.load_json(path)
+        for node, score, deps in blockgraph.top(data, int(selfdrive.num(selfdrive.config(data, path), "blockers", "topN"))):
+            print("blocker: %s score %s holds up %d: %s" % (node, score, len(deps), ", ".join(deps)))
+        return 0
+    if args.cmd == "unpark":
+        import inbound
+
+        for line in inbound.unpark_now(path, args.which, by="wake.py unpark"):
             print(line)
         return 0
     if args.cmd == "add-ticket":

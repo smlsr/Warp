@@ -779,7 +779,15 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
     text = str(pr)
     if "github.com" not in text and not text.isdigit():
         return None
-    viewed = _run(
+    doc = pr_doc(root, text)
+    if doc is None:
+        return None
+    return snapshot_from_doc(root, doc, text)
+
+
+def _graphql_doc(root: Path, text: str, runner=None) -> tuple:
+    """(doc, error text) from `gh pr view` (GraphQL)."""
+    viewed = (runner or _run)(
         [
             "gh",
             "pr",
@@ -791,13 +799,40 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         root,
     )
     if viewed.returncode != 0:
-        return None
+        return None, (viewed.stderr or viewed.stdout or "")
     try:
         doc = json.loads(viewed.stdout or "{}")
     except json.JSONDecodeError:
+        return None, "unreadable gh pr view output"
+    return (doc if isinstance(doc, dict) else None), ""
+
+
+def graphql_first() -> bool:
+    """REST first for GitHub (1.7.15). WARP_GITHUB_GRAPHQL_FIRST=1 asks gh pr view first, with REST on a rate limit."""
+    return os.environ.get("WARP_GITHUB_GRAPHQL_FIRST", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def pr_doc(root: Path, text: str, runner=None) -> Optional[dict]:
+    """The pull request JSON. REST first (ghrest.pr_doc); `gh pr view` (GraphQL) only when REST cannot answer, or first
+    under WARP_GITHUB_GRAPHQL_FIRST with REST on a GraphQL rate limit."""
+    import ghrest
+
+    if graphql_first():
+        doc, error = _graphql_doc(root, text, runner)
+        if doc is not None:
+            return doc
+        if ghrest.rate_limited(error):
+            return ghrest.pr_doc(root, text, runner=runner)
         return None
-    if not isinstance(doc, dict):
-        return None
+    doc = ghrest.pr_doc(root, text, runner=runner)
+    if doc is not None:
+        return doc
+    doc, _error = _graphql_doc(root, text, runner)
+    return doc
+
+
+def snapshot_from_doc(root: Path, doc: dict, text: str) -> dict:
+    """The snapshot supervise stores, from a pull request JSON (REST-built or gh pr view)."""
     checks = doc.get("statusCheckRollup") or []
     if not isinstance(checks, list):
         checks = []
@@ -824,8 +859,17 @@ def fetch_pr_state(root: Path, pr: str) -> Optional[dict]:
         "conflictFiles": files,
         # OPEN, MERGED or CLOSED. Only MERGED, read from the provider, marks a ticket merged.
         "prState": str(doc.get("state") or "").upper(),
+        # 1.7.15: the stack (base) and the owner, for the blocker graph and the lane.
+        "base": str(doc.get("baseRefName") or ""),
+        "headRef": str(doc.get("headRefName") or ""),
+        "author": str(doc.get("author") or "") if not isinstance(doc.get("author"), dict) else str(doc["author"].get("login") or ""),
+        "updatedAt": str(doc.get("updatedAt") or ""),
     }
     snap["conflictState"] = _signal_fields(doc)["conflictState"]
+    # 1.7.15: how many CI checks are still running on this head. A fix round waits for them, so one round (one push,
+    # one CI run) covers every failure instead of one per failure.
+    snap["checksPending"] = sum(1 for item in checks if isinstance(item, dict) and not _bugbot_check(item)
+                                and interpret_rollup([item]) == "pending")
     commit = doc.get("mergeCommit") if isinstance(doc.get("mergeCommit"), dict) else {}
     if commit.get("oid"):
         snap["mergeSha"] = str(commit.get("oid"))
@@ -1219,8 +1263,12 @@ def _pr_state(root: Path, number: str) -> str:
         return ""
 
 
-def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tuple[str, str]:
-    """Enqueue, or merge, or reject. Rejected is never a merged pull request."""
+def merge_connected(root: Path, number: str, cfg: Optional[dict] = None, sha: str = "", url: str = "",
+                    runner=None) -> tuple[str, str]:
+    """Enqueue, or merge, or reject. Rejected is never a merged pull request.
+
+    1.7.15: REST first, `PUT /pulls/N/merge` with sha=<reviewed head> as the guard; `gh pr merge` (GraphQL) only when
+    REST cannot be asked, never after REST refused."""
     cfg = cfg or fmt.read_config(root)
     resolved = resolve(root, cfg)
     provider = resolved.get("provider")
@@ -1233,9 +1281,20 @@ def merge_connected(root: Path, number: str, cfg: Optional[dict] = None) -> tupl
         else:
             detail = "merge queue is on; the pull request was not merged from this agent"
         return "enqueue", detail
-    if provider != "github" or not shutil.which("gh"):
+    if provider != "github" or (not shutil.which("gh") and runner is None):
         return "rejected", "no merge command for this provider; not marked merged"
-    merged = _run(["gh", "pr", "merge", str(number), flag], root)
+    import ghrest
+
+    target = url or str(number)
+    if ghrest.slug_of(root, target) and ghrest.number_of(target):
+        outcome, detail = ghrest.merge(root, target, sha=sha, method=merge_method(cfg), runner=runner)
+        if outcome == "merged":
+            return "merged", detail
+        if protection_rejects(detail) or ghrest.refused(detail):
+            # GitHub said no (not mergeable, head moved past the guard, protection): gh pr merge would not do better.
+            return "rejected", detail
+        # Anything else (a rate limit, no answer): gh pr merge below.
+    merged = (runner or _run)(["gh", "pr", "merge", str(number), flag], root)
     text = ((merged.stderr or "") + "\n" + (merged.stdout or "")).strip()
     if merged.returncode != 0 or protection_rejects(text):
         return "rejected", text or "merge rejected"
@@ -1654,8 +1713,9 @@ def main() -> None:
 
                 cfg.update(prompt_gate.effective_config(data, root))
             number = str(args.pr).rstrip("/").split("/")[-1]
-            outcome, detail = merge_connected(root, number, cfg)
             ticket = (data.get("tickets") or {}).get(args.id)
+            outcome, detail = merge_connected(root, number, cfg, sha=str(((ticket or {}).get("pr") or {}).get("headSha") or ""),
+                                              url=str(args.pr))
             if outcome == "merged" and ticket:
                 _mark_merged(beam_path, args.id, detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else "")
                 print("merged %s" % args.id)

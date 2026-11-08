@@ -294,6 +294,9 @@ class RestartTests(unittest.TestCase):
         cloud_actions = orchestrator.dispatch_actions(cloud, beam.ready(cloud), cap=2)
         self.assertEqual(cloud_actions[0]["checkout"], "subagent-vm")
         parked = beam_of([ticket("Z", status="parked")], baseGreen=True)
+        # 1.7.15: parked is not terminal; a won't-do skip is.
+        self.assertFalse(orchestrator.program_done(parked))
+        parked["tickets"]["Z"].update(status="skipped", skipReason="won't do")
         self.assertTrue(orchestrator.program_done(parked))
         parked["baseGreen"] = False
         self.assertFalse(orchestrator.program_done(parked))

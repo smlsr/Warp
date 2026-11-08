@@ -35,6 +35,8 @@ SIZE_CLASS = {"S": "LOW", "M": "MEDIUM", "L": "HIGH", "XL": "CRITICAL"}
 DEFAULT_AUTO_MERGE_SIZES = ["S", "M"]
 _SIZE_TOKEN = re.compile(r"^(XL|S|M|L)\b", re.I)
 TERMINAL = {"merged", "done", "skipped"}
+# 1.7.15: whether a ticket closes the run, and whether Warp works it, come from one place (terminal.py).
+from terminal import dispatchable, is_inactive, is_terminal, open_breakdown, run_open  # noqa: E402,F401
 ACTIVE = {"claimed", "recovering", "planning", "coding", "review", "bugbot_running", "fix", "awaiting_approval", "merging"}
 # Shuttle-owned work. review and later belong to Reed or a person. recovering
 # is the visible status while a replacement Shuttle is being started.
@@ -58,6 +60,7 @@ STATUSES = [
     "alarm",
     "parked",
     "skipped",
+    "external",
 ]
 
 
@@ -517,7 +520,9 @@ def holds_now(ticket: dict, beam: dict, now=None) -> bool:
 
 _IN_PROGRESS_PHASES = {"implementing", "pr-open", "reviewing", "fixing", "ready", "merging"}
 _NOT_STARTED = {"queued", "blocked"}
-_SETTLED_PROGRESS = {"merged", "done", "parked", "skipped"}
+import terminal as _terminal  # noqa: E402
+
+_SETTLED_PROGRESS = _terminal.INACTIVE
 
 
 def ticket_in_progress(ticket: dict) -> bool:
