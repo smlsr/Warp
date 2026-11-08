@@ -288,7 +288,9 @@ class RegistryTests(unittest.TestCase):
         stopped = agents.stop_all(data, now=NOW, beam_path=self.path)
         self.assertTrue(stopped)
         self.assertTrue(all(line.startswith("stop: ") for line in stopped))
-        done = beam_of(ticket(status="merged"), ticket("T-2", status="parked"))
+        # 1.7.15: parked is not terminal (it keeps the run open); a duplicate skip is.
+        self.assertTrue(agents.spawns_open(beam_of(ticket(status="merged"), ticket("T-2", status="parked"))))
+        done = beam_of(ticket(status="merged"), ticket("T-2", status="skipped", skipReason="duplicate"))
         self.assertFalse(agents.spawns_open(done))
         self.assertEqual(
             agents.launch_lines(done, done["tickets"]["T-1"], "implement", now=NOW),

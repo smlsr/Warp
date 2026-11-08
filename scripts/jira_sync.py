@@ -686,6 +686,16 @@ def plan(ticket: dict, event: str, cfg: dict) -> dict:
     return out
 
 
+def transition_arguments(transition, key: str, cloud_id: str) -> dict:
+    """The arguments transitionJiraIssue takes: {"cloudId", "issueIdOrKey", "transitionId": "<id as a string>"}."""
+    tid = transition.get("id") if isinstance(transition, dict) else transition
+    return {"cloudId": str(cloud_id), "issueIdOrKey": str(key), "transitionId": str(tid if tid is not None else "")}
+
+
+TRANSITION_ARGS = ('{"cloudId": "<cloudId>", "issueIdOrKey": "<KEY>", "transitionId": "<id as a string>"} '
+                   '(transitionId is a string such as "61"; never transition: {"id": ...}, which answers RESOLUTION_UNAVAILABLE)')
+
+
 def pick(
     transitions: list[dict],
     target: str,
@@ -844,9 +854,9 @@ def instruction(p: dict) -> str:
     return (
         f"jira: {p['id']} ({p['jiraKey']}): {VERB[p['event']]} \"{p['target']}\" through the connected Jira MCP server. "
         f"Read the issue with {TOOL_ISSUE} and its transitions with {TOOL_TRANSITIONS} "
-        f"(or {TOOL_TRANSITIONS_ALT} if that is the name the server lists), then run: python3 {me} pick --kind {p['kind']} --target \"{p['target']}\"{ahead} "
+        f"(or {TOOL_TRANSITIONS_ALT} if that is the name the server lists), then run: python3 {me} pick --kind {p['kind']} --target \"{p['target']}\"{ahead} --key {p['jiraKey']} "
         f"--current '<{{\"name\":..., \"category\":...}}>' --transitions '<json>'. "
-        f"Call {TOOL_TRANSITION} with the id it picks (argument transition.id, or transitionId if that is the schema's field). "
+        f"pick prints call.arguments; pass exactly that object to {TOOL_TRANSITION}: {TRANSITION_ARGS}. "
         f"Then record: python3 {me} record --beam <beam> --id {p['id']} --event {p['event']} "
         f"--result moved|already|skipped|unavailable|no-transition|failed|not-found --from '<old status>' --to '<new status>'. "
         + tail
@@ -1013,7 +1023,7 @@ def _todo_payload(ticket: dict, actions: list[dict], cfg: dict, mode: str) -> di
             "issue": TOOL_ISSUE,
             "transitions": [TOOL_TRANSITIONS, TOOL_TRANSITIONS_ALT],
             "transition": TOOL_TRANSITION,
-            "transitionArg": "id from pick, passed as transition.id or as transitionId, matching the tool schema",
+            "transitionArg": TRANSITION_ARGS,
             "comment": [TOOL_COMMENT, TOOL_COMMENT_ALT],
             "commentArg": "commentBody",
         },
@@ -1072,7 +1082,7 @@ def render(ticket: dict, actions: list[dict], cfg: dict) -> str:
         + f" cloudId: call {TOOL_RESOURCES} on that server.{site_bit} Every Jira call needs cloudId and issue key {key}. Do not pass {ticket.get('id')}.",
         (
             f"jira: tools: {TOOL_ISSUE}; {TOOL_TRANSITIONS} (or {TOOL_TRANSITIONS_ALT} if that is the name listed); "
-            f"{TOOL_TRANSITION}; {TOOL_COMMENT} with commentBody (or {TOOL_COMMENT_ALT} if that is the name listed)."
+            f"{TOOL_TRANSITION} with {TRANSITION_ARGS}; {TOOL_COMMENT} with commentBody (or {TOOL_COMMENT_ALT} if that is the name listed)."
         ),
     ]
     for a in actions:
@@ -1496,7 +1506,9 @@ def record_resolved(
         return f"jira: unknown ticket {tid}; nothing recorded"
     if t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced"):
         kept = jira_key(t, prefixes_from(settings(beam_path, beam))) or t.get("jiraKey")
-        return f"jira: {tid} has a manual key ({kept}); left as is"
+        if kept:
+            return f"jira: {tid} has a manual key ({kept}); left as is"
+        # A manual source with no key is unset (1.7.15). Before, resolve refused with "manual key (None); left as is".
     norm = normalize_key(key)
     if not norm:
         return f"jira: {key!r} is not a Jira issue key (PROJECT-123). Nothing was stored."
@@ -2407,8 +2419,8 @@ def prepare_resolve(beam_path: Path, only_ids: Optional[list[str]] = None, write
     for tid, t in (beam.get("tickets") or {}).items():
         if wanted is not None and tid not in wanted:
             continue
-        if t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced"):
-            continue
+        if (t.get("jiraKeySource") == "manual" or t.get("jiraKeyForced")) and t.get("jiraKey"):
+            continue  # a manual key with no value is unset and is looked up (1.7.15)
         if jira_key(t, prefixes):
             continue
         rows.append(
@@ -3587,6 +3599,8 @@ def main() -> None:
     pk.add_argument("--kind", choices=["start", "review", "qa", "done", "restore"], default="start")
     pk.add_argument("--ahead", help="comma-separated statuses already past this move")
     pk.add_argument("--no-category", action="store_true")
+    pk.add_argument("--key", default="", help="issue key: print the exact transitionJiraIssue arguments (1.7.15)")
+    pk.add_argument("--cloud-id", dest="cloud_id", default="")
     pr = sub.add_parser("record")
     pr.add_argument("--beam", default=".warp/beam.json")
     pr.add_argument("--id", required=True)
@@ -3688,7 +3702,13 @@ def _dispatch(args) -> None:
         transitions = data.get("transitions", []) if isinstance(data, dict) else data
         current = json.loads(args.current) if args.current else None
         ahead = [part.strip() for part in (args.ahead or "").split(",") if part.strip()]
-        print(json.dumps(pick(transitions, args.target, current, not args.no_category, args.kind, ahead), indent=2))
+        chosen = pick(transitions, args.target, current, not args.no_category, args.kind, ahead)
+        if chosen.get("transition") is not None:
+            # The exact argument object for the call (1.7.15): transitionId is a string. transition: {"id": ...}
+            # returns RESOLUTION_UNAVAILABLE on the Atlassian MCP server.
+            chosen["call"] = {"tool": TOOL_TRANSITION,
+                              "arguments": transition_arguments(chosen["transition"], args.key or "<KEY>", args.cloud_id or "<cloudId>")}
+        print(json.dumps(chosen, indent=2))
     elif args.cmd == "record":
         print(record(Path(args.beam), args.id, args.event, args.result, args.frm, args.to, args.detail, args.error))
     elif args.cmd == "record-comment":

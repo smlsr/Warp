@@ -510,9 +510,13 @@ class ReapTests(Base):
             self.assertEqual(self.reason(data), state)
             self.assertEqual(self.reason(data, "listener", "", "listener"), state)
             self.assertEqual(self.reason(data, "session-a", "", "parent"), state)
-        done = beam_of(ticket(status="merged"), ticket("T-2", status="parked"))
+        done = beam_of(ticket(status="merged"), ticket("T-2", status="skipped", skipReason="duplicate of T-1"))
         self.save(done)
         self.assertEqual(self.reason(done), "done")
+        # 1.7.15: a parked ticket keeps the run open; the listener is not reaped as done.
+        parked = beam_of(ticket(status="merged"), ticket("T-2", status="parked"))
+        self.save(parked)
+        self.assertNotEqual(self.reason(parked, "listener", "", "listener"), "done")
 
     def test_a_settled_ticket_exits_and_other_tickets_continue(self):
         data = self.started()

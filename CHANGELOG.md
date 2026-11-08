@@ -1,5 +1,93 @@
 # Changelog
 
+## 1.7.15
+
+Two parts. Part 1 fixes a run with live work that read as finished (seen on Forge-QA run core, 8 Nov 2026: 1202 merged, 163 parked, 147 skipped, 7 done). Part 2 makes Warp a self-driving supervisor: it now does on each tick what a human coordinator used to do by hand. There is no 1.7.14; this follows 1.7.13.
+
+Part 1: a run with live work never reads as finished
+
+- Fixed: parked and skipped tickets counted as settled.
+  - What went wrong: spawns closed, `halt_state` said `done` and `parent_may_exit` was true, while about 160 parked rows were open pull requests being driven by coordinators outside Warp.
+  - One helper, `beam.is_terminal` (`terminal.py`), now decides for every place that checked settled: `spawns_open`, `halt_state`, `pipeline_unfinished`, `listener_should_run`, `parent_may_exit`, `program_done` and `runs.finished`.
+  - Terminal means merged, done, or skipped with a won't-do or duplicate reason. Parked is not terminal.
+  - "The run is open" (any ticket not terminal) is now separate from "something can be dispatched" (`terminal.dispatchable`).
+  - A base fix that is skipped because the base went green is recorded as won't-do.
+- New: status `external`, for a ticket whose pull request is open and whose owner is outside Warp. It keeps the run open, is never dispatched, and is still polled for merge and close.
+- Fixed: the listener started and was reaped in a loop.
+  - The supervise listener path, the reaper and the wake heartbeat now ask the same open-run question.
+  - A closed run prints `listener: idle reason=done` once.
+  - A listener that ends because the run closed (`reap: exit done`) no longer counts as churn.
+  - A run with parked or external work keeps its listener, so `warp:` commands are still read.
+- Fixed: parked tickets never reopened. On each pass, every parked row is looked at again:
+  - its pull request merged: it becomes `merged`;
+  - closed without a merge: it is queued again, or skipped when the closing reason is won't-do or duplicate;
+  - every blocker its park names has merged: it is queued, and the refill prints its `start` line in the same pass;
+  - an open pull request with an owner outside Warp: it becomes `external`.
+- New: `warp: unpark <id|all-runnable>` and `wake.py unpark`.
+- Fixed: merged tickets with no Jira key alarmed forever (712 of 1512 had no key). A pass now prints one batched search for up to 50 keyless merged tickets: JQL `labels in ("warp:<ID>", …)` and the `[<ID>]` summary prefix. `jira_autokey.py apply` then matches each one by label, then by summary prefix, then by the warp-jira-match exact or prefix match, maps the key, and prints the Done move in the same output. When nothing matches, `no-issue` is recorded once and never asked or alarmed again. The reminder for a keyed ticket still not Done is now hourly.
+- Fixed: `jira_sync.py resolve` refused with "manual key (None); left as is". A manual source with no key is now treated as unset, and the resolve lookup includes it.
+- Fixed: the Jira transition instructions. `transitionJiraIssue` takes `{"cloudId", "issueIdOrKey", "transitionId": "61"}`, with transitionId as a string. `transition: {"id": …}` answers RESOLUTION_UNAVAILABLE. The `jira: tools` line says so, and `jira_sync.py pick --key <KEY>` prints the exact argument object.
+- Fixed: the GitHub GraphQL quota ran out and merges stalled. GitHub is now REST first (`ghrest.py`):
+  - reads: `GET /pulls/N` plus check-runs and statuses;
+  - merges: `PUT /pulls/N/merge` with the reviewed head as the `sha` guard;
+  - retargets: `PATCH /pulls/N base=main`.
+  `gh pr view` and `gh pr merge` are used only when REST cannot answer. `WARP_GITHUB_GRAPHQL_FIRST=1` asks GraphQL first and falls back to REST on a rate limit.
+- Fixed: wakes took 95-395 s. The provider read is incremental:
+  - one `GET /pulls?state=all&sort=updated` per pass says which pull requests changed;
+  - only those are read again, plus any whose CI or Bugbot was still pending and any not read for 15 minutes;
+  - the read has a `providerReadSeconds` budget (45), and what does not fit waits a pass.
+
+Part 2: a self-driving supervisor
+
+- New: cadences (`cadence:` in config). Each is a `wake.py` subcommand, and `wake.py run` runs the ones that are due from `.warp/cadence.json`. Sweep, audit and deep run in the background under a lease, and the next tick prints their result.
+  - tick: 300 s
+  - sweep: 900 s
+  - audit: 1800 s
+  - deep: 21600 s
+- New: the tick (`drive.tick`, under 90 s).
+  - Blocker graph (`blockgraph.py`): built from stack parents, live holds, main-red waivers, migration order and "waits on" notes. Score = dependents × age, and the top `blockers.topN` go first. `wake.py blockers` prints them.
+  - READY/GAPPR intake (`intake.py`): reads ticket logs and coordinator outboxes, and verifies each line over REST before it is queued (head == sha, checks green or waived, Bugbot finished on that head with no findings, mergeable clean).
+  - Merge lane (`lane.py`): squash with the sha guard. After each merge, children are retargeted to main and a stacked child is rebuilt (merge the parent's pre-squash head, then main; only its own files; one push). Holds that named the merge are lifted.
+  - Union files (GAP-REPORT.md rows, test-verify.md, changelog.d, append-only registries) are resolved keeping both sides, with no owner push.
+  - Stale pull requests get one REFRESH per head within a budget, and are restaffed after `refresh.timeout`.
+- New: main red (`waivers.py`).
+  - The breaking commit is found by bisecting main's last merges by their CI result.
+  - A waiver is written to `.warp/waivers.json`, scoped to heads that contain that commit (the CI merge ref counts), with an owner, a fix gap, and an expiry when the fix merges.
+  - The merge gate applies waivers strictly: the test must be the only failure in its package, and a head the waiver does not cover is not waived.
+  - The waiver retires once, when the fix merges.
+- New: force-push exceptions in `.warp/exceptions.json`: an approved, logged one-off with a tree-identical check.
+- New: hung CI is cancelled once after `ci.hungMinutes` (60) with no step progress, and never rerun.
+- New: Bugbot.
+  - A pull request skipped as too large gets one `bugbot run`.
+  - Findings on a head that was sent as GAPPR go back to its owner all at once.
+- New: one sole pusher per pull request, recorded on the beam (`prOwners`). Every agent Warp starts records its parent, so `relay.py` can reach a grandchild.
+- New: batching. One fix round per head:
+  - a fix waits until every check on the head has finished and Bugbot has reported (at most `batchWaitMinutes`, 20);
+  - it then gets every red check and every open Bugbot finding at once, headed `ONE ROUND, ONE PUSH`, and pushes once;
+  - every main failure from one break goes into one gap ticket, and a failure that shows up while the fix is open joins it.
+  The Shuttle instructions say the same.
+- New: the sweep (`fleet.py`, 15 min).
+  - Cloud agents are inventoried and joined with the registry, the beam and the owners.
+  - Each is classified: active, stalled, duplicate, finished-running, stale-wait or orphan.
+  - Then it acts: stop the duplicate or finished agent, nudge and then restaff a stalled one, tell an owner what it is waiting on already happened, assign an orphan to the least-loaded coordinator.
+  - An agent nobody can stop gets one `needs-human-stop` line.
+  - Report: `.warp/sweep/<ts>.md`.
+- New: the audit (`audit.py`, 30 min).
+  - Throughput over REST and a load table per coordinator.
+  - Whole stacked chains are rebalanced, with the `HANDED-OFF <coordinator> <head>` handoff.
+  - Area coordinators are started past `load.spawnAt` and retired after two empty audits. `maxAgents` is per coordinator, under `agents.ceiling` (120).
+  - Gap discovery: GAP-REPORT rows, RESULT.json follow-ups, and the same red across several pull requests.
+  - Report: `.warp/audit/<ts>.md`, plus a 5-line Slack summary.
+- New: gap tickets (`gaps.py`).
+  - Id `G-<AREA>-<SHORT>`, deduped by label, summary and GAP-REPORT row.
+  - Each gets holds on what waits for it, a Jira issue with label `warp:<id>`, a row in `.warp/gap-owners.md`, and staffing when its blocker score is in the top N.
+- New: human asks (`asks.py`).
+  - Only the `humanAsk` categories stop for a person, as one question with options and a recommended default. Everything else keeps moving.
+  - `warp: decide <id> <option>` or `wake.py decide` records the answer in `.warp/decisions.md`.
+  - Any other stall climbs a ladder: nudge, restaff, new coordinator, then a question with a default.
+- Fixed: "Launch hit agent cap 20" parked tickets. A launch that hits the agent cap is now queued and retried on the next tick. It is never parked and never counted as a recovery.
+- Docs: CONFIG.md, `config.html`, the Warp skill and the Shuttle instructions cover the new keys and lines.
+
 ## 1.7.13
 
 A flow audit traced every ticket state and path through a pass, looking for places a run could sit still with no line telling the parent what to do. Each finding below was reproduced against the real pass code first.

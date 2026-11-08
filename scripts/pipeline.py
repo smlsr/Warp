@@ -285,9 +285,10 @@ def red_reasons(ticket: dict, config: Optional[dict]) -> list:
     for item in findings_of(ticket):
         reasons.append("bugbot: %s" % item)
     ci = orchestrator._for_head(pr, "ci", "ciSha")
-    if ci == "red":
+    waived = _waived(ticket) if ci == "red" or orchestrator.provider_rollup(ticket) == "red" else False
+    if ci == "red" and not waived:
         reasons.append("ci red")
-    if orchestrator.provider_rollup(ticket) == "red":
+    if orchestrator.provider_rollup(ticket) == "red" and not waived:
         reasons.append("rollup red")
     if orchestrator.check_command(config) and ticket.get("repoRole") != "sibling":
         if orchestrator._for_head(pr, "check", "checkSha") in _RED_WORD:
@@ -296,6 +297,49 @@ def red_reasons(ticket: dict, config: Optional[dict]) -> list:
         if value not in _PASS:
             reasons.append("ac %s %s" % (name, value))
     return reasons
+
+
+def _record_owners(data: dict, now=None) -> None:
+    """One sole pusher per pull request, on the beam (`prOwners`, 1.7.15): the ticket's Shuttle, its outside owner
+    for an external ticket, or whoever the lane or the audit handed it to. Only a new pull request is recorded here;
+    a handoff changes it elsewhere."""
+    import beam as beam_mod
+    import relay
+
+    now_s = beam_mod.coerce_now(now)[1]
+    owners = data.get("prOwners") if isinstance(data.get("prOwners"), dict) else {}
+    for tid, ticket in (data.get("tickets") or {}).items():
+        if not isinstance(ticket, dict):
+            continue
+        match = re.search(r"/pull/(\d+)", str((ticket.get("pr") or {}).get("url") or ""))
+        if not match or match.group(1) in owners:
+            continue
+        if ticket.get("status") == "external":
+            relay.set_owner(data, match.group(1), str(ticket.get("externalOwner") or "outside Warp"),
+                            coordinator=str(ticket.get("externalOwner") or ""), now_s=now_s)
+        else:
+            relay.set_owner(data, match.group(1), str(tid), agent=str(ticket.get("agent") or ""), coordinator="warp",
+                            now_s=now_s)
+        owners = data.get("prOwners") or {}
+
+
+_WAIVER_CTX: dict = {}
+
+
+def _waived(ticket: dict) -> bool:
+    """Every red check on this head is waived by a main-red waiver that covers it, strictly (waivers.gate, 1.7.15)."""
+    rows = _WAIVER_CTX.get("waivers") or {}
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    failed = [name for name in pr.get("failedChecks") or [] if "bugbot" not in str(name).lower()]
+    if not rows or not failed:
+        return False
+    import waivers
+
+    ok, why = waivers.gate({"waivers": rows}, str(pr.get("headSha") or ""), failed, contains=_WAIVER_CTX.get("contains"))
+    pr["waived"] = sorted(failed) if ok else []
+    if not ok:
+        pr["waiverRefused"] = why
+    return ok
 
 
 def gate_open(ticket: dict, config: Optional[dict]) -> bool:
@@ -464,6 +508,12 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
         pr["checkLog"] = snap["checkLog"]
     if isinstance(snap.get("failedChecks"), list):
         pr["failedChecks"] = list(snap["failedChecks"])
+    for key in ("base", "headRef", "author", "mergeStateStatus"):
+        # 1.7.15: the stack and the owner, for the blocker graph, the lane and the sweep.
+        if snap.get(key):
+            pr[key] = snap[key]
+    if "checksPending" in snap:
+        pr["checksPending"] = int(snap.get("checksPending") or 0)
         pr["failedChecksSha"] = new_sha or head_now
     passed = str(snap.get("bugbot") or "").strip().casefold() == "pass"
     if "findings" in snap and (passed or not (by_hand and not snap.get("findings"))):
@@ -609,6 +659,10 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
         if alarm not in reasons:
             reasons.insert(0, alarm)
     bugbot = any(str(item).startswith("bugbot") for item in reasons) if reasons else False
+    if reasons:
+        wait = batch_wait(ticket, config or {})
+        if wait:
+            return {"id": tid, "rank": 9, "sub": 9, "kind": "batch-wait", "why": wait}
     if reasons and not bugbot:
         return {"id": tid, "rank": 1, "sub": 2, "kind": "ci", "reasons": reasons}
     if bugbot:
@@ -618,10 +672,63 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
     return None
 
 
+BATCH_WAIT_MINUTES = 20
+
+
+def batch_wait(ticket: dict, config: dict) -> str:
+    """Why a fix round waits, or "" (1.7.15). A fix that starts while other checks still run on the head, or before
+    Bugbot has reported on it, fixes part of the failures, pushes, reruns CI, and fails again on the rest: CI time and
+    money for nothing. So the round waits until every check on the head finished and Bugbot reported (at most
+    `batchWaitMinutes`, default 20, after the first red), and then one round gets all of them. `batch.fixes: false`
+    turns it off."""
+    import beam as beam_mod
+
+    batch = config.get("batch") if isinstance(config.get("batch"), dict) else {}
+    if str(batch.get("fixes", config.get("batchFixes", True))).strip().lower() in {"false", "no", "off", "0"}:
+        return ""
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    head = str(pr.get("headSha") or "")
+    if not head:
+        return ""
+    if pr.get("redSeenSha") != head:
+        pr["redSeenSha"] = head
+        pr["redSeenAt"] = beam_mod.utcnow()
+    seen = beam_mod.parse_ts(str(pr.get("redSeenAt") or ""))
+    try:
+        limit = float(config.get("batchWaitMinutes") or BATCH_WAIT_MINUTES)
+    except (TypeError, ValueError):
+        limit = BATCH_WAIT_MINUTES
+    if seen is not None and (beam_mod.coerce_now(None)[0] - seen).total_seconds() >= limit * 60:
+        return ""
+    running = int(pr.get("checksPending") or 0)
+    if running > 0:
+        return "%d check%s still running on %s" % (running, "" if running == 1 else "s", head[:12])
+    if orchestrator.bugbot_applies(ticket, config) and str(pr.get("bugbot") or "") in {"pending", "running"} \
+            and str(pr.get("bugbotSha") or "") in {"", head}:
+        return "Bugbot has not reported on %s" % head[:12]
+    return ""
+
+
+def batched(reasons: list) -> list:
+    """The fix round's reasons, headed by the one-push rule the Shuttle follows (1.7.15)."""
+    items = [str(r) for r in reasons if str(r).strip()]
+    if len(items) < 2:
+        return items
+    return ["ONE ROUND, ONE PUSH: fix all %d items below together, run the gate for all of them, then push once "
+            "(a partial push reruns CI and fails on the rest)" % len(items)] + items
+
+
 def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
     if pending(ticket):
         return
     kind = item.get("kind")
+    if kind == "batch-wait":
+        pr = ticket.setdefault("pr", {})
+        if pr.get("batchWaitSaid") != (pr.get("headSha"), item.get("why")):
+            pr["batchWaitSaid"] = [pr.get("headSha"), item.get("why")]
+            lines.append("fix: %s waits for the whole batch (%s), so one fix round covers every failure with one push"
+                         % (ticket.get("id"), item.get("why")))
+        return
     if kind == "rebase":
         start_rebase(data, ticket, lines)
         return
@@ -634,7 +741,7 @@ def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
         lines.extend(_start_lines(data, ticket, "fix", str(detail)))
         return
     reasons = list(item.get("reasons") or []) or red_reasons(ticket, data.get("config") or {}) or ["fix"]
-    begin_fix(data, ticket, reasons, lines)
+    begin_fix(data, ticket, batched(reasons), lines)
 
 
 def dispatch_fix_workers(data: dict, lines: list, scan: bool = False) -> None:
@@ -906,16 +1013,25 @@ def cold_start(beam_path) -> list:
     return lines
 
 
-def live_provider(data: dict, beam_path) -> dict:
-    """Pull request state from GitHub when supervise was started without --provider."""
-    import provider as provider_mod
+def live_provider(data: dict, beam_path, fetch=None, runner=None) -> dict:
+    """Pull request state from GitHub when supervise was started without --provider.
 
+    1.7.15: incremental and REST first (ghrest.incremental). One `GET /pulls?sort=updated` per repo says which pull
+    requests changed; only those, the ones whose CI or Bugbot was still pending, and any not read for 15 minutes are
+    read again. The rest reuse the cached snapshot. Reading stops at `providerReadSeconds` (default 45); what is left
+    is read next pass. Before, every non-merged pull request (about 160) was read with `gh pr view` each wake, which
+    spent the GraphQL quota and took most of a 95-395 s wake.
+    """
+    import beam as beam_mod
+    import ghrest
     import multirepo
+    import provider as provider_mod
 
     root = Path(beam_path).resolve().parent.parent
     ci_of = {}
     found = {}
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    by_repo: dict = {}
     for ticket in tickets.values():
         if not isinstance(ticket, dict):
             continue
@@ -925,15 +1041,37 @@ def live_provider(data: dict, beam_path) -> dict:
         if not url:
             continue
         repo = multirepo.root_for(data, ticket, root)
-        snap = provider_mod.fetch_pr_state(repo, url)
-        if snap:
+        by_repo.setdefault(str(repo), []).append((ticket, str(url)))
+    try:
+        budget = float(beam_mod.config_int(data, Path(beam_path), "providerReadSeconds", 45))
+    except Exception:
+        budget = 45.0
+    stats_all = {"read": 0, "cached": 0, "deferred": 0}
+    for repo_s, rows in by_repo.items():
+        repo = Path(repo_s)
+        read = fetch or (lambda url, _repo=repo: provider_mod.fetch_pr_state(_repo, url))
+        snaps, stats = ghrest.incremental(Path(beam_path), repo, [url for _t, url in rows], read, runner=runner,
+                                          budget_s=max(5.0, budget / max(1, len(by_repo))),
+                                          name="" if repo == root else repo.name)
+        for key in stats_all:
+            stats_all[key] += int(stats.get(key) or 0)
+        for ticket, url in rows:
+            snap = snaps.get(url)
+            if not snap:
+                continue
+            snap = dict(snap)
             # parent-exit --wait compares this with one `gh pr list` and wakes the parent when it changes.
             ticket["pr"]["signal"] = provider_mod.signal_of(snap)
             if repo not in ci_of:
                 ci_of[repo] = provider_mod.repo_has_ci(repo)
             snap["ciConfigured"] = ci_of[repo]
             found[ticket.get("id")] = snap
+    LAST_READ.clear()
+    LAST_READ.update(stats_all)
     return found
+
+
+LAST_READ: dict = {}
 
 
 def _returned(ticket: dict, snap: Optional[dict]) -> bool:
@@ -1891,14 +2029,24 @@ def _hold_or_queue(ticket: dict, lines: list) -> None:
 
 def _advance_one(data: dict, ticket: dict, snap: Optional[dict], lines: list, deferred: list, now=None) -> None:
     status = ticket.get("status")
-    if status == "parked" and str((snap or {}).get("prState") or "").upper() == "MERGED":
-        # Parked, and a person merged its pull request by hand: it is merged (1.7.12; before, never recorded, and its
-        # dependents waited for good).
-        finish_merge(data, ticket, lines, sha=str((snap or {}).get("mergeSha") or ""), how="merged on the provider while parked")
-        return
+    if status in {"parked", "external"}:
+        # Parked is reconsidered every pass, and external is polled (1.7.15): merged -> merged, closed -> queued,
+        # named blockers merged -> queued (the refill below starts it), open with an outside owner -> external.
+        import beam as beam_mod
+        import unpark
+
+        moved = unpark.reconsider(data, ticket, snap, lines, now_s=beam_mod.coerce_now(now)[1])
+        if moved == "merged":
+            finish_merge(data, ticket, lines, sha=str((snap or {}).get("mergeSha") or ""),
+                         how="merged on the provider while %s" % status)
+            return
+        if moved:
+            return
     if status in orchestrator.SETTLED:
         if status == "parked":
             ticket["phase"] = "parked"
+        elif status == "external":
+            ticket["phase"] = "external"
         elif status == "skipped":
             ticket.setdefault("phase", "parked")
         else:
@@ -2454,7 +2602,12 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
                            "shows the pull request merged." % (tid, detail[:12]))
                 continue
             out.append("merge: %s through the provider (%s)" % (tid, detail))
-        outcome, detail = (merger or provider_mod.merge_connected)(repo, number, cfg)
+        merge_fn = merger or provider_mod.merge_connected
+        if _takes(merge_fn, "sha"):
+            # REST first with the reviewed head as the sha guard (1.7.15).
+            outcome, detail = merge_fn(repo, number, cfg, sha=str((ticket.get("pr") or {}).get("headSha") or ""), url=str(url))
+        else:
+            outcome, detail = merge_fn(repo, number, cfg)
         if outcome == "merged":
             ticket.setdefault("pr", {})["mergeMethod"] = method
             finish_merge(data, ticket, out, sha=detail if re.fullmatch(r"[0-9a-f]{7,40}", detail or "") else "",
@@ -2486,6 +2639,15 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
     return out
 
 
+def _takes(fn, name: str) -> bool:
+    import inspect
+
+    try:
+        return name in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 DONE_ASKS = 3
 OLDER_PER_PASS = 5
 _FINAL_DONE = {"no-transition", "not-found"}
@@ -2500,6 +2662,7 @@ def jira_done_lines(data: dict, beam_path, lines: list) -> list:
     DONE_ASKS times; then one Slack alarm, and a one-line reminder each pass with the catch-up command. A recorded
     `no-transition` or `not-found` ends it (the outbox already says Jira was not updated). Mutates `lines`.
     """
+    import jira_autokey
     import jira_sync
 
     path = Path(beam_path)
@@ -2507,11 +2670,20 @@ def jira_done_lines(data: dict, beam_path, lines: list) -> list:
     just = {m.group(1) for m in (_MERGED_LINE.match(line) for line in lines) if m}
     out = []
     older = 0
+    try:
+        prefixes = jira_sync.prefixes_from(jira_sync.settings(path, data))
+    except Exception:
+        prefixes = []
+    keyless = False
     for tid, ticket in sorted(tickets.items(), key=lambda kv: str(kv[0])):
         if not isinstance(ticket, dict) or ticket.get("status") != "merged" or ticket.get("followUpOf"):
             continue
         jira = ticket.get("jira") if isinstance(ticket.get("jira"), dict) else {}
-        if jira.get("doneAt"):
+        if jira.get("doneAt") or jira.get("noIssue"):
+            continue
+        if not jira_sync.jira_key(ticket, prefixes):
+            # No key: resolve it in one batched search (jira_autokey), never ask and alarm (1.7.15).
+            keyless = True
             continue
         last = jira.get("lastAttempt") if isinstance(jira.get("lastAttempt"), dict) else {}
         if last.get("event") == "done" and last.get("result") in _FINAL_DONE:
@@ -2541,8 +2713,22 @@ def jira_done_lines(data: dict, beam_path, lines: list) -> list:
             jira["doneAlarmed"] = True
             out.append("herald: ALARM %s (%s) merged, and its Jira issue was not moved to Done after %d asks." % (
                 tid, ticket.get("jiraKey") or "no key", DONE_ASKS))
+        # The reminder is hourly, not every pass (1.7.15): an alarm that only repeats is noise.
+        import beam as beam_mod
+
+        now_dt, now_s = beam_mod.coerce_now(None)
+        said = beam_mod.parse_ts(str(jira.get("doneRemindAt") or ""))
+        if said is not None and (now_dt - said).total_seconds() < 3600:
+            continue
+        ticket.setdefault("jira", jira)
+        jira["doneRemindAt"] = now_s
         out.append("jira: %s merged, Jira still not Done. python3 %s/jira_sync.py catchup --beam %s --id %s" % (
             tid, orchestrator.scripts_dir(), path.resolve(), tid))
+    if keyless:
+        try:
+            out.extend(jira_autokey.ask_lines(path, data))
+        except Exception as exc:
+            out.append("jira: missing keys not resolved this pass (%s)" % exc)
     return out
 
 
@@ -2834,6 +3020,11 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
     if beam_path is not None:
         data["_repoRoot"] = str(Path(beam_path).resolve().parent.parent)
         owned_root = True
+    _WAIVER_CTX.clear()
+    if isinstance(data.get("waivers"), dict) and data["waivers"] and beam_path is not None:
+        import waivers
+
+        _WAIVER_CTX.update(waivers=data["waivers"], contains=waivers.git_contains(Path(beam_path).resolve().parent.parent))
     try:
         if orchestrator.needs_base_fix(data):
             # A red base with no fix ticket gets one first, so this pass's refill starts it (1.7.12).
@@ -2850,6 +3041,7 @@ def advance(data: dict, provider: Optional[dict] = None, beam_path: Optional[Pat
                 continue
             tid = ticket.get("id")
             _advance_one(data, ticket, provider.get(tid) or {}, lines, deferred, now=now)
+        _record_owners(data, now=now)
         dispatch_fix_workers(data, lines)
         dispatch_replacements(data, lines)
         note_spent(data, beam_path, now=now)

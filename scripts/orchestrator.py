@@ -95,7 +95,10 @@ LOCK_HELD = {
 # The Agent is still in the slot. A green PR is not in this set.
 SLOT_HELD = {"claimed", "recovering", "planning", "coding", "bugbot_running", "fix"}
 MERGED_ON_BASE = {"merged", "done"}
-SETTLED = {"merged", "done", "parked", "skipped"}
+import terminal as _terminal  # noqa: E402
+
+# Warp works nothing in these (1.7.15: external added). Whether the run is finished is terminal.run_open, not this.
+SETTLED = set(_terminal.INACTIVE)
 MERGE_STEPS = ("rebase", "check", "merge", "delete-branch", "dispatch")
 _FALSE = {"false", "no", "off", "0"}
 
@@ -364,14 +367,17 @@ def append_only_paths(config: Optional[dict]) -> list:
 
 
 def blockers(ticket: dict) -> list:
-    """Dependency list plus the plan's after list. Order kept, duplicates dropped."""
+    """Dependency list plus the plan's after list, plus live holds that name a ticket or gap (1.7.15; a hold lifts
+    when what it names merges). Order kept, duplicates dropped."""
     found = []
-    for key in ("deps", "after", "blockedBy"):
+    for key in ("deps", "after", "blockedBy", "holds"):
         raw = ticket.get(key) or []
         if isinstance(raw, str):
             raw = [raw]
         for item in raw:
             dep = str(item).strip()
+            if key == "holds" and dep.startswith("#"):
+                continue  # a pull request number is resolved by the blocker graph, not the ready queue
             if dep and dep not in found:
                 found.append(dep)
     return found
@@ -1234,7 +1240,7 @@ def program_done(beam: dict) -> bool:
         return False
     if not base_is_green(beam):
         return False
-    return all((t.get("status") in SETTLED) for t in tickets)
+    return all(_terminal.is_terminal(t) for t in tickets)
 
 
 def merge_queue_configured(config: Optional[dict]) -> bool:
@@ -1815,9 +1821,9 @@ def pipeline_unfinished(beam: dict, now=None) -> bool:
     if not isinstance(beam, dict):
         return False
     tickets = beam.get("tickets") if isinstance(beam.get("tickets"), dict) else {}
-    for ticket in tickets.values():
-        if isinstance(ticket, dict) and ticket.get("status") not in SETTLED:
-            return True
+    if tickets and _terminal.run_open(beam):
+        # Parked, external, and skipped-without-a-won't-do ticket keep the run open (1.7.15).
+        return True
     import pipeline
 
     if pipeline.bugbot_runs_here(beam):
@@ -1826,10 +1832,10 @@ def pipeline_unfinished(beam: dict, now=None) -> bool:
 
 
 def listener_should_run(beam: dict) -> bool:
-    """The listener stays up until every ticket is merged or parked.
+    """The listener stays up while the run is running and open: any ticket not terminal (terminal.py).
 
-    Pause and stop stop it. A running loop with nothing left to merge or
-    park does not keep the listener up.
+    Pause and stop stop it. Parked and external tickets keep it up, so warp: commands (unpark, reset) are still
+    read when nothing is dispatchable (1.7.15).
     """
     if not isinstance(beam, dict):
         return False
@@ -1839,11 +1845,8 @@ def listener_should_run(beam: dict) -> bool:
 
 
 def parent_may_exit(beam: dict) -> bool:
-    """Exit when the run is paused or stopped, or every ticket is settled.
-
-    Settled is merged, done, parked, or skipped. A ticket still implementing,
-    in review, fixing, or queued keeps the parent and the listener up.
-    """
+    """Exit when the run is paused or stopped, or every ticket is terminal (merged, done, or skipped as won't-do or
+    duplicate). A parked or external ticket keeps the parent and the listener up (1.7.15)."""
     return not listener_should_run(beam)
 
 
@@ -2260,6 +2263,8 @@ def _returned_reason(folded: str) -> str:
         return "rotated"
     if "orphan" in folded:
         return "orphaned"
+    if "exit done" in folded:
+        return "done"
     if "stopped" in folded or folded in _LISTENER_STOP or folded.startswith("warp:pause") or folded.startswith("warp:stop"):
         return "stopped"
     return "polled"
@@ -2324,7 +2329,7 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         closing_stop = listener_returned_stop(folded)
     if not listener_should_run(data):
-        return ["listener: idle"]
+        return _idle_lines(data, beam_path, now_s)
     if _explicit_stop(folded):
         return ["listener: idle"]
     if closing_stop:
@@ -2372,12 +2377,34 @@ def _supervise_body(beam_path: Path, returned: Optional[str], now, beam_mod, ign
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
         return ["listener: hold reason=await-return generation=%s" % inbound.generation_of(data)]
     churned = inbound.down_lines(data, now_dt, now_s) + _churn_lines(data, now_dt, now_s)
+    (data.get("listener") or {}).pop("idleDoneAt", None)
     begin_listener_poll(data, beam_path, now=now_dt)
     beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
     return lost + churned + ["listener: poll"]
 
 
 CHURN_POST_MINUTES = 60
+
+
+def _idle_lines(data: dict, beam_path: Path, now_s: str) -> list:
+    """No listener is due. A closed run (every ticket terminal) says `listener: idle reason=done` once, and never
+    counts as churn; a paused or stopped run says why (1.7.15). Before, every wake of a run that only had parked
+    tickets asked for `listener: poll`, and the listener exited 1-2 minutes later with `reap: exit done`."""
+    import beam as beam_mod
+
+    state = data.get("runState") or ("paused" if data.get("paused") else "running")
+    if data.get("paused") or state in {"paused", "stopped"}:
+        return ["listener: idle"]
+    raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
+    if raw.get("idleDoneAt"):
+        return ["listener: idle"]
+    raw["idleDoneAt"] = now_s
+    data["listener"] = raw
+    try:
+        beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
+    except OSError:
+        pass
+    return ["listener: idle reason=done (every ticket is merged, done, or skipped as won't-do or duplicate)"]
 
 
 def _churn_lines(data: dict, now_dt, now_s: str) -> list:

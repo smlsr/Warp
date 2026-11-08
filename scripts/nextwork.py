@@ -200,7 +200,7 @@ def stall_news(data: dict, lines: list, work: list, moved: bool) -> list:
 
     stall = data.get("stall") if isinstance(data.get("stall"), dict) else {}
     tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
-    unfinished = any(isinstance(t, dict) and t.get("status") not in orchestrator.SETTLED for t in tickets.values())
+    unfinished = any(isinstance(t, dict) and t.get("status") not in orchestrator.SETTLED for t in tickets.values())  # dispatchable work
     idle = unfinished and not moved and _live_count(data) == 0
     out = []
     if not idle:

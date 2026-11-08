@@ -375,7 +375,7 @@ const CATS = [
   { key: "qa", label: "QA Ready" },
   { key: "todo", label: "To Do" },
 ];
-const STATUS_CAT = {"queued": "todo", "claimed": "prog", "recovering": "prog", "planning": "prog", "coding": "prog", "fix": "prog", "review": "rev", "bugbot_running": "rev", "merging": "rev", "awaiting_approval": "qa", "merged": "done", "done": "done", "skipped": "done", "blocked": "err", "alarm": "err", "parked": "err"};
+const STATUS_CAT = {"queued": "todo", "claimed": "prog", "recovering": "prog", "planning": "prog", "coding": "prog", "fix": "prog", "review": "rev", "bugbot_running": "rev", "merging": "rev", "awaiting_approval": "qa", "merged": "done", "done": "done", "skipped": "done", "blocked": "err", "alarm": "err", "parked": "err", "external": "rev"};
 const STATUS_ALIAS = { in_progress: "coding", inprogress: "coding", in_review: "review", qa_ready: "awaiting_approval", qa: "awaiting_approval", to_do: "queued", todo: "queued", completed: "done", complete: "done", errored: "alarm", error: "alarm", failed: "alarm", bugbot: "bugbot_running", ready: "queued" };
 // Ticket state.json (ticket_state.py STATES) -> beam status. heartbeat and done do not move it.
 const STATE_STATUS = { started: "claimed", planning: "planning", coding: "coding", review: "review", bugbot: "bugbot_running", fix: "fix", "pr-opened": "review", "check-red": "fix", "check-green": "review", "lock-escape": "alarm", alarm: "alarm", failed: "alarm" };

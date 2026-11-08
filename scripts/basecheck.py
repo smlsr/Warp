@@ -110,7 +110,7 @@ def apply(data: dict, found: Optional[dict], now_s: str, base: str = "main") -> 
             for tid, row in (data.get("tickets") or {}).items():
                 if isinstance(row, dict) and row.get("baseFix") and row.get("status") in {"queued", "blocked"}:
                     row["status"] = "skipped"
-                    row["skipReason"] = "%s went green before it started" % base
+                    row["skipReason"] = "won't-do: %s went green before it started" % base
                     lines.append("base: %s skipped; %s is green without it" % (tid, base))
             lines.append("herald: %s is green again at %s. Pull requests that waited on it go on." % (base, sha[:12]))
         else:

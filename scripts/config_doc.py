@@ -54,6 +54,9 @@ SECTIONS = [
         "jiraInReviewStatus", "jiraQaReadyStatus", "jiraDoneStatus", "jiraDoneOnManualMerge", "jiraRestoreOnRelease",
         "jiraExternalIdField", "jiraMatchOnText", "jiraWriteExternalId", "jiraExternalIdFieldName",
         "jiraCreateExternalIdField", "jiraExternalIdFallback"]),
+    ("Self-driving supervisor", "The tick, sweep, audit and deep cadences, and what they may do without a person (1.7.15).", [
+        "cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps", "humanAsk", "batchFixes",
+        "batchWaitMinutes", "providerReadSeconds"]),
     ("Git provider", "Where pull requests are opened, and which branch tickets start from.", [
         "gitProvider", "githubMcp", "bitbucketMcp", "ghCli", "pushMerge", "baseBranch"]),
 ]
@@ -72,8 +75,10 @@ ENUMS = {
     "jiraExternalIdFallback": ["label", "remote-link", "none"],
     "autoMergeSizes": ["S", "M", "L", "XL"],  # several at once; the defaults are S and M
 }
-LISTS = {"appendOnlyPaths", "paths", "jiraKeyPrefixes", "mergeWindows", "notifyAllow", "startAfter"}
-MAPS = {"siblingRepos", "repoRuns", "externalRepos", "jiraKeyMap"}
+LISTS = {"appendOnlyPaths", "paths", "jiraKeyPrefixes", "mergeWindows", "notifyAllow", "startAfter", "humanAsk"}
+MAPS = {"siblingRepos", "repoRuns", "externalRepos", "jiraKeyMap", "cadence", "blockers", "refresh", "ci", "sweep", "load",
+        "agents", "gaps"}
+SETTING_MAPS = {"cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps"}
 MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "listenerModel"}
 
 
@@ -129,7 +134,7 @@ def values(key: str, default_cell: str) -> tuple[str, list[str]]:
     if raw in {"true", "false"}:
         return "switch", ["true", "false"]
     if key in MAPS:
-        return "map", ["{repo: git url}" if key == "siblingRepos" else "{plan or run: value}"]
+        return "map", ["{repo: git url}" if key == "siblingRepos" else "{setting: value}" if key in SETTING_MAPS else "{plan or run: value}"]
     if key in LISTS:
         return "list", ["comma-separated"]
     if key in MODELS:
