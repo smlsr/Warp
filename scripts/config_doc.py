@@ -55,7 +55,7 @@ SECTIONS = [
         "jiraExternalIdField", "jiraMatchOnText", "jiraWriteExternalId", "jiraExternalIdFieldName",
         "jiraCreateExternalIdField", "jiraExternalIdFallback"]),
     ("Self-driving supervisor", "The tick, sweep, audit and deep cadences, and what they may do without a person (1.7.15).", [
-        "cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps", "humanAsk", "batchFixes",
+        "cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps", "humanAsk", "coordinatorModel", "batchFixes",
         "batchWaitMinutes", "providerReadSeconds"]),
     ("Git provider", "Where pull requests are opened, and which branch tickets start from.", [
         "gitProvider", "githubMcp", "bitbucketMcp", "ghCli", "pushMerge", "baseBranch"]),
@@ -79,7 +79,7 @@ LISTS = {"appendOnlyPaths", "paths", "jiraKeyPrefixes", "mergeWindows", "notifyA
 MAPS = {"siblingRepos", "repoRuns", "externalRepos", "jiraKeyMap", "cadence", "blockers", "refresh", "ci", "sweep", "load",
         "agents", "gaps"}
 SETTING_MAPS = {"cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps"}
-MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "listenerModel"}
+MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "listenerModel", "coordinatorModel"}
 
 
 def rows(text: str) -> list[dict]:

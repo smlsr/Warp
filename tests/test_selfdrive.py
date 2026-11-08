@@ -325,7 +325,8 @@ class LoadTest(Beam):
         cfg = selfdrive.config({}, self.path)
         table = audit.load_table(data, coords, [])
         lines = audit.coordinators_step(self.path, data, coords, table, {"UI": 3}, cfg, now=NOW)
-        self.assertTrue(any(line.startswith("coordinator: MUST DO start coord-ui") for line in lines), lines)
+        self.assertTrue(any(line.startswith("coordinator: start coord-ui") for line in lines), lines)
+        self.assertTrue(coords["coordinators"]["coord-ui"]["start"])
         empty = {"tickets": {}, "prOwners": {}, "config": {"maxAgents": 4}}
         for when in ("2026-11-08T14:30:00Z", "2026-11-08T15:00:00Z"):
             out = audit.coordinators_step(self.path, empty, coords, audit.load_table(empty, coords, []), {}, cfg, now=when)
@@ -497,6 +498,148 @@ class GapTest(Beam):
         self.assertIn("already covers it", lines[0])
         ledger = (self.tmp / ".warp" / "gap-owners.md").read_text()
         self.assertIn("| G-AUTH-RBAC | AUTH | warp |", ledger)
+
+
+class AgentsApiTest(Beam):
+    """1.7.16: Warp messages, starts and stops agents itself through the Cloud Agents API."""
+
+    def transport(self, answers):
+        self.calls = []
+
+        def call(method, url, key, body):
+            self.calls.append((method, url.replace("https://api.cursor.com", ""), body))
+            for (m, suffix), reply in answers.items():
+                if m == method and url.endswith(suffix):
+                    return reply() if callable(reply) else reply
+            return 404, {}
+        return call
+
+    def test_a_message_is_a_follow_up_run_and_a_busy_agent_gets_it_later(self):
+        import relay
+
+        busy = {"n": 0}
+
+        def runs():
+            busy["n"] += 1
+            return (409, {}) if busy["n"] == 1 else (201, {"id": "run-2"})
+
+        call = self.transport({("POST", "/v1/agents/bc-1/runs"): runs})
+        data = {}
+        lines = relay.send(self.path, data, "coord-ui", "REFRESH #5: merge main once, push once.", agent_id="bc-1",
+                           transport=call, env={"CURSOR_API_KEY": "k"})
+        self.assertIn("mid-run", lines[0])
+        self.assertEqual(self.calls[0][:2], ("POST", "/v1/agents/bc-1/runs"))
+        self.assertEqual(self.calls[0][2], {"prompt": {"text": "REFRESH #5: merge main once, push once."}})
+        later = relay.retry_pending(self.path, transport=call, env={"CURSOR_API_KEY": "k"})
+        self.assertTrue(later[0].startswith("relay: sent to coord-ui"), later)
+        self.assertEqual(relay.retry_pending(self.path, transport=call, env={"CURSOR_API_KEY": "k"}), [])
+
+    def test_a_named_coordinator_is_messaged_through_its_agent(self):
+        import relay
+
+        (self.tmp / ".warp" / "coordinators.json").write_text(json.dumps({"coordinators": {"coord-ui": {"agentId": "bc-9"}}}))
+        call = self.transport({("POST", "/v1/agents/bc-9/runs"): (201, {"id": "r"})})
+        lines = relay.send(self.path, {}, "coord-ui", "You take over #7.", transport=call, env={"CURSOR_API_KEY": "k"})
+        self.assertTrue(lines[0].startswith("relay: sent to coord-ui (https://cursor.com/agents?id=bc-9)"), lines)
+
+    def test_the_audit_starts_and_stops_coordinators_itself(self):
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", "git@github.com:o/r.git"], cwd=self.tmp, check=True)
+        call = self.transport({("POST", "/v1/agents"): (201, {"id": "bc-new"}),
+                               ("GET", "/v1/agents/bc-new"): (200, {"latestRunId": "run-1"}),
+                               ("POST", "/runs/run-1/cancel"): (200, {}), ("POST", "/v1/agents/bc-new/archive"): (200, {})})
+        env = drive.Env(agents=call, env={"CURSOR_API_KEY": "k"})
+        coords = {"coordinators": {"coord-ui": {"area": "UI", "start": True}}}
+        lines = drive._coordinator_agents(self.path, {"config": {"maxAgents": 4}, "prOwners": {"5": {"coordinator": "coord-ui"}}},
+                                          coords, self.tmp, env, now=NOW)
+        self.assertTrue(lines[0].startswith("coordinator: started coord-ui (bc-new) for area UI"), lines)
+        method, url, body = self.calls[0]
+        self.assertEqual((method, url), ("POST", "/v1/agents"))
+        self.assertEqual(body["repos"], [{"url": "https://github.com/o/r", "startingRef": "main"}])
+        self.assertIn("You are **coord-ui**", body["prompt"]["text"])
+        self.assertIn("#5", body["prompt"]["text"])
+        self.assertTrue((self.tmp / ".warp" / "rules.md").is_file())
+        self.assertEqual(coords["coordinators"]["coord-ui"]["agentId"], "bc-new")
+        coords["coordinators"]["coord-ui"]["stop"] = True
+        lines = drive._coordinator_agents(self.path, {}, coords, self.tmp, env, now=NOW)
+        self.assertEqual(lines, ["coordinator: stopped coord-ui (bc-new)"])
+
+    def test_a_restaff_worker_starts_on_the_pull_request(self):
+        import coordinators
+
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/o/r.git"], cwd=self.tmp, check=True)
+        call = self.transport({("POST", "/v1/agents"): (201, {"agent": {"id": "bc-w"}})})
+        aid, lines = coordinators.worker(self.path, {}, URL % 9, "Take over #9.", "k", self.tmp, transport=call)
+        self.assertEqual(aid, "bc-w")
+        self.assertEqual(self.calls[0][2]["repos"], [{"url": "https://github.com/o/r", "prUrl": URL % 9}])
+        self.assertIn("Fetch the remote head", self.calls[0][2]["prompt"]["text"])
+
+
+class PushChainTest(Beam):
+    """1.7.16: GITHUB_TOKEN, then the checkout's credentials, then the parent's Cursor GitHub tools, then the coordinator."""
+
+    def setUp(self):
+        super().setUp()
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/o/r.git"], cwd=self.tmp, check=True)
+
+    def runner(self, token_ok=False, origin_ok=False):
+        self.cmds = []
+
+        def run(cmd, cwd=None):
+            self.cmds.append(cmd)
+            if cmd[:2] == ["git", "push"]:
+                good = token_ok if "x-access-token" in cmd[3] else origin_ok
+                return subprocess.CompletedProcess(cmd, 0 if good else 1, stdout="",
+                                                   stderr="" if good else "fatal: Authentication failed for %s" % cmd[3])
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return run
+
+    def test_the_token_is_tried_first_and_never_printed(self):
+        import pusher
+
+        ok, how, why = pusher.push(self.tmp, "a" * 40, "warp/x", run=self.runner(token_ok=True), env={"GITHUB_TOKEN": "ghp_secret"})
+        self.assertEqual((ok, how), (True, "GITHUB_TOKEN"))
+        self.assertEqual(self.cmds[0][3], "https://x-access-token:ghp_secret@github.com/o/r.git")
+        ok, how, why = pusher.push(self.tmp, "a" * 40, "warp/x", run=self.runner(origin_ok=True), env={"GITHUB_TOKEN": "ghp_secret"})
+        self.assertEqual((ok, how), (True, "origin credentials"))
+        ok, how, why = pusher.push(self.tmp, "a" * 40, "warp/x", run=self.runner(), env={"GITHUB_TOKEN": "ghp_secret"})
+        self.assertFalse(ok)
+        self.assertNotIn("ghp_secret", why)
+        self.assertIn("GITHUB_TOKEN:", why)
+        self.assertIn("origin:", why)
+        ok, how, _ = pusher.push(self.tmp, "a" * 40, "warp/x", run=self.runner(origin_ok=True), env={})
+        self.assertEqual(how, "origin credentials")
+        self.assertFalse(any("x-access-token" in " ".join(c) for c in self.cmds))
+
+    def test_parent_tools_then_the_coordinator(self):
+        import pusher
+
+        run = self.runner()
+        lines = pusher.fallback(self.path, self.tmp, "b" * 40, "warp/x", "origin: refused", pr="5", owner="UI-5",
+                                coordinator="coord-ui", redo="merge origin/main into warp/x keeping both sides, push once",
+                                files=["GAP-REPORT.md"], run=run)
+        self.assertTrue(lines[0].startswith("push: MUST DO warp/x (#5): Warp could not push bbbbbbbbbbbb"), lines)
+        self.assertIn("git push origin refs/warp/pending/warp/x:refs/heads/warp/x", lines[0])
+        self.assertIn(["git", "update-ref", "refs/warp/pending/warp/x", "b" * 40], self.cmds)
+        told = []
+        rest_head = {"sha": "c" * 40}
+
+        def rest(cmd, cwd=None):
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"object": rest_head}), stderr="")
+
+        send = lambda owner, text, agent="": told.append((owner, text)) or ["relay: sent to %s" % owner]
+        out = pusher.check_pending(self.path, self.tmp, send, runner=rest, now=NOW)
+        self.assertEqual(told[0][0], "coord-ui")
+        self.assertIn("merge origin/main into warp/x keeping both sides", told[0][1])
+        self.assertEqual(pusher.check_pending(self.path, self.tmp, send, runner=rest, now=NOW), [])
+        self.assertEqual(len(told), 1)
+        # The parent did push it before the tick: done, nobody is told.
+        pusher.fallback(self.path, self.tmp, "d" * 40, "warp/y", "x", coordinator="coord-ui", run=run)
+        rest_head["sha"] = "d" * 40
+        done = pusher.check_pending(self.path, self.tmp, send, runner=rest, now=NOW)
+        self.assertIn("push: warp/y is at dddddddddddd; pushed by the parent", done)
 
 
 if __name__ == "__main__":

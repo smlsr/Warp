@@ -152,9 +152,10 @@ def prompt_text(beam_path: Path, data: dict) -> str:
         "   - `wake: new work` lines: create the ticket with the `wake.py add-ticket` command it prints, then its Jira issue, "
         "then record the key with `jira_sync.py resolve`.",
         "   - The self-driving lines (1.7.15; the tick runs every wake, sweep, audit and deep when due):",
-        "     `relay: MUST DO tell <owner>: …` send that text to that agent or coordinator; `coordinator: MUST DO start …` "
-        "start that coordinator with the shared rules and .warp/waivers.json; `restaff: …` start the replacement from the "
-        "remote head; `gap: … created` and `jira: … MUST DO resolve …` create or find the Jira issue and record it with "
+        "     Warp messages agents, starts coordinators and restaffs through the Cloud Agents API itself; only without "
+        "CURSOR_API_KEY do you get `relay: MUST DO tell <owner>: …` (send it over Slack or to that agent) or "
+        "`coordinator: MUST DO start …`; `push: MUST DO <branch> …` push it with your Cursor GitHub tools (the command it prints, "
+        "or the GitHub MCP), since GITHUB_TOKEN and the checkout's credentials were refused; `gap: … created` and `jira: … MUST DO resolve …` create or find the Jira issue and record it with "
         "the command printed; `ask: <id> …` post that one question once and keep everything else moving; "
         "`needs-human-stop <url>` tell the person once, nothing else.",
         "   - Fixes are batched: one fix round per head covers every red check and every Bugbot finding, with one push.",
