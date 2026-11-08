@@ -131,6 +131,9 @@ On start, resume, and after every merge, failure, and freed slot: rebuild when t
   - Post the audit's `herald:` summary. The report is `.warp/audit/<ts>.md`.
 - `ask: ASK-xxxxxx <kind>: <question> Options: …`: post it once. Only what it names waits. `warp: decide <id> <option>` or `wake.py decide` records the answer in `.warp/decisions.md`.
 - `dispatch: <id> launch hit the agent cap; queued` needs nothing. The next tick retries it.
+- `gap: <id> created …; parked: needs triage` (1.7.17): an imported gap has no locks or acceptance criteria yet. Nothing claims it. Add both, and the next pass queues it. To park any ticket by hand, run `beam.py park --beam .warp/beam.json --id <id> --reason "<why>"`; only its merge or `warp: unpark <id>` reopens it.
+- `fix: <id> #n is owned by <owner> (<why>); told it to <kind>, and no Warp agent starts` (1.7.17) needs nothing. Never start a fix, rebase or restaff agent on a pull request another coordinator owns. The relay line after it delivered the instruction.
+- `merge|retarget|comment|cancel: MUST DO #n with the GitHub MCP …` means REST and gh both failed. Do it with your Cursor GitHub tools. The next tick checks it, and tells the pull request's coordinator to do it if it still has not happened. `<kind>: #n done …` needs nothing.
 
 ## Status file
 

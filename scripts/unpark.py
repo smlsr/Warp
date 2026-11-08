@@ -144,6 +144,16 @@ def reconsider(data: dict, ticket: dict, snap: Optional[dict], lines: list, now_
     state = str(snap.get("prState") or "").upper()
     if state == "MERGED":
         return "merged"
+    if ticket.get("triage"):
+        # 1.7.17: an imported gap waits for locks and acceptance criteria, then is queued.
+        if ticket.get("locks") and ticket.get("acs"):
+            ticket.pop("triage", None)
+            _reopen(ticket, "triage done: it has locks and acceptance criteria", now_s)
+            lines.append("unpark: %s has locks and acceptance criteria now; queued" % tid)
+            return "queued"
+        return ""
+    if ticket.get("parkedBy") == "hand":
+        return ""  # parked by a person (beam.py park): only its merge or warp: unpark <id> moves it
     if state == "CLOSED":
         pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
         closed = pr.get("url") or ""
@@ -181,7 +191,7 @@ def reconsider(data: dict, ticket: dict, snap: Optional[dict], lines: list, now_
 
 def runnable(data: dict, ticket: dict) -> bool:
     """A parked row that can start again: no open pull request owned elsewhere, every named blocker terminal."""
-    if str(ticket.get("status") or "") != "parked":
+    if str(ticket.get("status") or "") != "parked" or ticket.get("triage") or ticket.get("parkedBy") == "hand":
         return False
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     if outside_owner(ticket) and pr.get("url"):

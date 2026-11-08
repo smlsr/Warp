@@ -26,7 +26,15 @@ LEDGER = "gap-owners.md"
 
 def gap_id(area: str, short: str) -> str:
     clean = lambda text, n: re.sub(r"[^A-Z0-9]+", "-", str(text or "").upper()).strip("-")[:n] or "X"
-    return "G-%s-%s" % (clean(area, 12), clean(short, 24))
+    area_c, short_c = clean(area, 12), clean(short, 24)
+    # A short that already carries the prefix and area is not prefixed again (1.7.17: G-001 became G-G-G-001).
+    for lead in ("G-%s-" % area_c, "G-", "%s-" % area_c):
+        if short_c.startswith(lead) and short_c != lead.rstrip("-"):
+            short_c = short_c[len(lead):] or short_c
+            break
+    if area_c == "G":
+        return "G-%s" % short_c
+    return "G-%s-%s" % (area_c, short_c)
 
 
 def _norm(text: str) -> str:
@@ -53,14 +61,19 @@ def find(data: dict, gid: str = "", summary: str = "", row: str = "") -> str:
 
 def create(beam_path: Path, data_reader, area: str, short: str, summary: str, blocks: Optional[list] = None,
            acs: Optional[list] = None, locks: Optional[list] = None, source: str = "", row: str = "",
-           score_rank: Optional[int] = None, top_n: int = 10, now=None) -> tuple:
-    """(gap id, lines). `data_reader()` returns the current beam (the beam is written under the run lock)."""
+           score_rank: Optional[int] = None, top_n: int = 10, now=None, gid: str = "", triage: Optional[bool] = None) -> tuple:
+    """(gap id, lines). `data_reader()` returns the current beam (the beam is written under the run lock).
+
+    1.7.17: a gap with no locks or no acceptance criteria (an imported GAP-REPORT row, a follow-up, a repeated red) is
+    created parked with `needs triage`: nothing claims it until it has both, and then the next pass queues it."""
     import beam as beam_mod
     import beamlock
     import wake
 
     path = Path(beam_path)
-    gid = gap_id(area, short)
+    gid = gid or gap_id(area, short)
+    if triage is None:
+        triage = not (locks and acs)
     data = data_reader()
     found = find(data, gid, summary, row)
     lines: list = []
@@ -79,17 +92,24 @@ def create(beam_path: Path, data_reader, area: str, short: str, summary: str, bl
             ticket["acs"] = [{"id": "AC-%d" % (n + 1), "text": text} for n, text in enumerate(acs or [])] or ticket.get("acs") or []
             if row:
                 ticket["gapRow"] = row
-            staffed = score_rank is not None and score_rank < top_n
+            staffed = score_rank is not None and score_rank < top_n and not triage
             if staffed:
                 ticket["rank"] = 0
                 ticket["priority"] = "high"
+            if triage:
+                ticket["status"] = "parked"
+                ticket["phase"] = "parked"
+                ticket["triage"] = True
+                ticket["parkedBy"] = "triage"
+                ticket["parkReason"] = "needs triage: add locks and acceptance criteria; it is queued once it has both"
             beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
         else:
             staffed = False
     lines.extend(_hold(path, gid, blocks or [], now))
     _ledger(path, gid, area, summary, source, now)
     lines.append("gap: %s created (%s): %s%s" % (gid, source or area, summary[:120],
-                                                 "; staffed at the top of the queue" if staffed else "; queued"))
+                                                 "; parked: needs triage (no locks or acceptance criteria yet)" if triage
+                                                 else "; staffed at the top of the queue" if staffed else "; queued"))
     return gid, lines
 
 
