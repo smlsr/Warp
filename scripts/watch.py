@@ -358,8 +358,12 @@ def _ci_never_started(ticket: dict, snap: Optional[dict]) -> bool:
 def choose_fix(data: dict, ticket: dict, snap: Optional[dict]) -> str:
     """One fixer action, or empty when this ticket should wait."""
     snap = snap or {}
-    if ticket.get("status") in _HIDDEN or ticket.get("status") == "parked":
+    if ticket.get("status") in _HIDDEN or ticket.get("status") in {"parked", "external"}:
         return ""
+    import ownership
+
+    if ownership.hands_off(data, ticket):
+        return ""  # 1.7.18: its owner fixes it; the fixer never counts an attempt or parks it
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     alarm = str(ticket.get("alarm") or "")
     stalled = bool(ticket.get("stalled"))

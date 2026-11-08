@@ -99,10 +99,14 @@ def _swept(beam_path: Path) -> dict:
 
     path = Path(beam_path).parent / "sweep" / "last.json"
     try:
-        fresh = path.is_file() and time.time() - path.stat().st_mtime < 1200
+        mtime = path.stat().st_mtime if path.is_file() else 0
+        fresh = bool(mtime) and time.time() - mtime < 1200
+        if fresh and _CACHE.get("sweptAt") == (str(path), mtime):
+            return _CACHE["swept"]
         rows = json.loads(path.read_text()) if fresh else None
     except (OSError, ValueError):
         rows = None
+        mtime = 0
     if rows is None:
         return _live(beam_path)
     out = {}
@@ -110,6 +114,7 @@ def _swept(beam_path: Path) -> dict:
         if isinstance(row, dict) and row.get("pr") and row.get("class") in {"active", "stalled", "stale-wait"} \
                 and str(row.get("parent") or "") not in {"", "warp"}:
             out[str(row["pr"])] = (str(row.get("parent")), str(row.get("id") or ""))
+    _CACHE.update(swept=out, sweptAt=(str(path), mtime))
     return out
 
 
@@ -148,6 +153,21 @@ def owner(data: dict, ticket: dict, beam_path: Optional[Path] = None) -> tuple:
     if named:
         return named, "", "its notes name an owner outside Warp"
     return "", "", ""
+
+
+def hands_off(data: dict, ticket: dict, beam_path: Optional[Path] = None) -> str:
+    """Who Warp must leave this ticket's pull request to: an outside owner, or "" when Warp may work it (1.7.18).
+    External tickets are always hands off. Every repair path asks this before it touches a ticket: the repair sweep,
+    the watch fixer, the auto-scan, heal on resume, begin_fix, start_rebase and start_ci."""
+    if not isinstance(ticket, dict):
+        return ""
+    if ticket.get("status") == "external":
+        return str(ticket.get("externalOwner") or "outside Warp")
+    if beam_path is None:
+        raw = data.get("_agentBeam") or ""
+        root = data.get("_repoRoot") or ""
+        beam_path = Path(raw) if raw else (Path(root) / ".warp" / "beam.json" if root else None)
+    return owner(data, ticket, beam_path)[0]
 
 
 _ASK = {

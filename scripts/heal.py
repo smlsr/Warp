@@ -342,7 +342,14 @@ def heal(beam_path: Path, dry_run: bool = False, now=None) -> list:
     if any(action != "retry" for _tid, action, _d in rows):
         data["metrics"] = beam_mod.metrics(data)
         beam_mod.atomic_write(beam_path, json.dumps(data, indent=2) + "\n", data=data)
+    import ownership
+
     for tid in retry:
+        held_by = ownership.hands_off(data, (data.get("tickets") or {}).get(tid) or {}, beam_path)
+        if held_by:
+            # 1.7.18: /warp-resume never sends a coordinator's pull request back to fix.
+            lines.append("heal: %s is owned by %s; left to it, not requeued" % (tid, held_by))
+            continue
         text = inbound._requeue(beam_path, tid, by="resume")
         lines.append("heal: " + text.splitlines()[0])
     beam_mod.journal(beam_path, {"type": "heal", "tickets": [tid for tid, _a, _d in rows]})
