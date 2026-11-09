@@ -11,10 +11,12 @@ After each merge:
               the parent's pre-squash head, then main; check that its diff against main holds only its own files;
               push once (the lane is the sole pusher for that one push, recorded on the beam)
   holds       every hold that named the merged pull request, ticket or gap is lifted, and live runs are re-dispatched
-  union files docs/dev/testing/test-verify.md sections, changelog.d fragments and append-only registries are
-              resolved by keeping both sides, without asking the owner to push. GAP-REPORT.md is not a line union
-              (1.7.19): its rows merge by gap id (gapreport.merge3), and a result with duplicate or stale rows is
-              never pushed (gapreport.problems)
+  union files changelog.d fragments and append-only registries and ledgers are resolved by keeping both sides,
+              without asking the owner to push. Files edited in place are never a line union (1.7.20):
+              GAP-REPORT.md merges row by row on gap id (gapreport.gap_resolve) and docs/dev/testing/test-verify.md
+              section by section on its headings (gapreport.section_resolve). Before any lane push, gap_check compares
+              the merged gap report with main and with the owner's own head, and a merge that adds rows, repeats a
+              row or leaves a stale open copy is not pushed (conflict: the owner gets a REFRESH)
 
 Stale pull requests: a pull request dirty against main (or its base, for a stacked one) gets one REFRESH to its
 owner: "merge <base> once, run the gate, push once, re-send READY". A conflict only in union files is refreshed by
@@ -32,8 +34,13 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-UNION = ("GAP-REPORT.md", "**/GAP-REPORT.md", "docs/dev/testing/test-verify.md", "changelog.d/*", "**/changelog.d/*",
-         "**/*.registry.md", "**/registry.jsonl", "**/*.ledger.md")
+# Append-only files only (1.7.20: GAP-REPORT.md and test-verify.md are edited in place and have keyed resolvers).
+UNION = ("changelog.d/*", "**/changelog.d/*", "**/*.registry.md", "**/registry.jsonl", "**/*.ledger.md")
+
+
+def resolvable(path: str, extra=()) -> bool:
+    """A conflict here is resolved by the lane: a keyed resolver, or an append-only union."""
+    return gapreport.keyed_resolver(path) is not None or is_union(path, extra)
 
 
 # ---- union files ------------------------------------------------------------------------------------------------
@@ -97,18 +104,19 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
             if _ok(done):
                 continue
             conflicted = [p for p in _out(_git(run, tmp, "diff", "--name-only", "--diff-filter=U")).splitlines() if p]
-            other = [p for p in conflicted if not is_union(p, extra_union)]
+            other = [p for p in conflicted if not resolvable(p, extra_union)]
             if other or not conflicted:
                 _git(run, tmp, "merge", "--abort")
                 return "conflict", ", ".join(other or ["(merge failed)"])
             for rel in conflicted:
                 target = tmp / rel
-                if gapreport.is_gap_report(rel):
-                    # 1.7.19: rows merge by gap id, never line by line (a line union kept the old open row next to
-                    # the new closed one).
-                    stage = lambda n: _out(_git(run, tmp, "show", ":%d:%s" % (n, rel))) + "\n"
+                resolver = gapreport.keyed_resolver(rel)
+                if resolver is not None:
+                    # 1.7.20: keyed three-way merge. Stage 2 is the branch being refreshed (the PR), stage 3 is what
+                    # is merged into it (main).
+                    stage = lambda n: _stage(run, tmp, n, rel)
                     try:
-                        target.write_text(gapreport.merge3(stage(1), stage(2), stage(3)))
+                        target.write_text(resolver(stage(1), stage(3), stage(2)))
                     except gapreport.Conflict as exc:
                         _git(run, tmp, "merge", "--abort")
                         return "conflict", "%s (%s)" % (rel, exc)
@@ -121,10 +129,12 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
         after = _out(_git(run, tmp, "rev-parse", "HEAD"))
         if after == before:
             return "unchanged", after
-        # 1.7.19: never push a gap report with duplicate or stale rows, however the merge produced it.
-        bad = gap_report_problems(tmp, before, "HEAD", run)
+        # 1.7.20: never push a gap report the merge made worse, however the merge produced it. The PR side is the
+        # owner's own head, not a head that already carries an earlier lane merge.
+        bad = gap_report_findings(tmp, onto, owner_head(run, tmp, before), "HEAD", run)
         if bad:
-            return "refused", "the gap report would have %s" % "; ".join(bad[:6])
+            _git(run, tmp, "reset", "-q", "--hard", before)
+            return "conflict", "the gap report merge would add %s" % "; ".join(bad[:6])
         if push:
             import pusher
 
@@ -136,30 +146,62 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
         _git(run, root, "worktree", "remove", "--force", str(tmp))
 
 
-def gap_report_problems(cwd: Path, old: str, new: str, run: Callable) -> list:
-    """Problems in every GAP-REPORT.md that changed between `old` and `new` (gapreport.problems), as read at `new`."""
-    names = [p for p in _out(_git(run, cwd, "diff", "--name-only", old, new)).splitlines() if gapreport.is_gap_report(p)]
+LANE_AUTHOR = "Warp"
+
+
+def _stage(run: Callable, cwd: Path, n: int, rel: str) -> str:
+    done = _git(run, cwd, "show", ":%d:%s" % (n, rel))
+    return (getattr(done, "stdout", "") or "") if _ok(done) else ""
+
+
+def owner_head(run: Callable, cwd: Path, head: str) -> str:
+    """The newest commit on the branch the owner made: commits the lane itself pushed (author Warp) are skipped, so
+    extras an earlier lane merge added never count as the PR's own rows."""
+    done = _git(run, cwd, "log", "--first-parent", "--format=%H %an", "-n", "50", head)
+    for line in _out(done).splitlines():
+        sha, _, author = line.partition(" ")
+        if author.strip() != LANE_AUTHOR:
+            return sha
+    return head
+
+
+def _show(run: Callable, cwd: Path, ref: str, rel: str) -> Optional[str]:
+    done = _git(run, cwd, "show", "%s:%s" % (ref, rel))
+    return (getattr(done, "stdout", "") or "") if _ok(done) else None
+
+
+def gap_report_findings(cwd: Path, main: str, pr: str, merged: str, run: Callable) -> list:
+    """gap_check for every GAP-REPORT.md the merge changed relative to the PR side: main, the PR side, the result."""
+    names = set()
+    for old in (main, pr):
+        names |= {p for p in _out(_git(run, cwd, "diff", "--name-only", old, merged)).splitlines() if gapreport.is_gap_report(p)}
     found = []
-    for rel in names:
-        shown = _git(run, cwd, "show", "%s:%s" % (new, rel))
-        if _ok(shown):
-            found.extend("%s: %s" % (rel, item) for item in gapreport.problems(getattr(shown, "stdout", "") or ""))
+    for rel in sorted(names):
+        result = _show(run, cwd, merged, rel)
+        if result is None:
+            continue
+        found.extend("%s: %s" % (rel, item) for item in gapreport.gap_check(_show(run, cwd, main, rel) or "",
+                                                                           _show(run, cwd, pr, rel) or "", result))
     return found
 
 
 def check_merge_ref(root: Path, number: str, base: str = "main", run: Optional[Callable] = None) -> list:
-    """What GitHub's own merge of pull request `number` would leave in the gap report (refs/pull/N/merge), before
-    the lane or supervise merges it. [] when clean or when the ref cannot be read."""
+    """What GitHub's own merge of pull request `number` (refs/pull/N/merge) would do to the gap report, compared with
+    main and with the PR's head (refs/pull/N/head), before the lane or supervise merges it. [] when clean or when the
+    refs cannot be read. Twins already on main are not findings."""
     import provider
 
     run = run or provider._run
-    ref = "refs/warp/check/%s" % number
-    if not _ok(_git(run, root, "fetch", "-q", "origin", "+refs/pull/%s/merge:%s" % (number, ref))):
+    merge_ref, head_ref = "refs/warp/check/%s-merge" % number, "refs/warp/check/%s-head" % number
+    got = _git(run, root, "fetch", "-q", "origin", "+refs/pull/%s/merge:%s" % (number, merge_ref),
+               "+refs/pull/%s/head:%s" % (number, head_ref))
+    if not _ok(got):
         return []
     try:
-        return gap_report_problems(root, "origin/%s" % base, ref, run)
+        return gap_report_findings(root, "origin/%s" % base, owner_head(run, root, head_ref), merge_ref, run)
     finally:
-        _git(run, root, "update-ref", "-d", ref)
+        _git(run, root, "update-ref", "-d", merge_ref)
+        _git(run, root, "update-ref", "-d", head_ref)
 
 
 def own_files(root: Path, child: str, parent_head: str, run: Optional[Callable] = None) -> set:
@@ -185,7 +227,7 @@ def rebuild_child(root: Path, child: str, parent_head: str, base: str = "main", 
     # Check before pushing: the rebuilt head, diffed against main, has only the child's own files.
     tmp_head = detail
     diff = {p for p in _out(_git(run, root, "diff", "--name-only", "origin/%s" % base, tmp_head)).splitlines() if p}
-    foreign = sorted(diff - mine - {p for p in diff if is_union(p)})
+    foreign = sorted(diff - mine - {p for p in diff if resolvable(p)})
     if foreign:
         return "foreign", ", ".join(foreign[:8])
     if outcome == "unchanged":
@@ -328,7 +370,7 @@ def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable,
             continue
         row = book.get(str(pr["number"])) if isinstance(book.get(str(pr["number"])), dict) else {"sent": 0}
         conflicts = list(pr.get("conflicts") or [])
-        if conflicts and all(is_union(p) for p in conflicts) and not pr.get("ownedBy"):
+        if conflicts and all(resolvable(p) for p in conflicts) and not pr.get("ownedBy"):
             outcome, detail = union_merge(pr["branch"], "origin/%s" % (pr.get("base") or "main"))
             if outcome == "merged":
                 out.append("lane: #%s conflicted only in union files (%s); merged %s into it keeping both sides, one "
@@ -367,3 +409,29 @@ def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable,
         row.update(sent=int(row.get("sent") or 0) + 1, sentAt=now_s, head=pr.get("head"))
         book[str(pr["number"])] = row
     return out
+
+
+def main(argv: Optional[list] = None) -> int:
+    """`lane.py gap-dedupe --report docs/spec/GAP-REPORT.md [--write] [--rename-twins]` (1.7.20): the one-time cleanup.
+    It removes only identical repeated rows and stale open copies of closed rows; twins (one id, different gaps) are
+    reported, or renamed with --rename-twins. --write refuses on main: run it from a branch and merge a normal PR."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="The merge lane's tools")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    gd = sub.add_parser("gap-dedupe")
+    gd.add_argument("--report", required=True)
+    gd.add_argument("--write", action="store_true")
+    gd.add_argument("--rename-twins", dest="rename_twins", action="store_true")
+    args = parser.parse_args(argv)
+    code, lines = gapreport.cleanup(Path(args.report), write=args.write, rename_twins=args.rename_twins)
+    print("\n".join(lines))
+    return code
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.exit(main())

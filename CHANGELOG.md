@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.7.20
+
+- Fixed: union-merging GAP-REPORT.md duplicated rows and reopened closed gaps. The merge lane listed GAP-REPORT.md in `UNION` and resolved its conflicts with `union_resolve`, which keeps both sides line by line. A gap report is a table keyed by gap id, and pull requests edit its rows in place, so the merge left an edited row next to the old one. That reopened closed gaps, duplicated rows, and let a stale open copy above a closed row make the status test, `/warp-status` and the audit read a finished gap as open. One lane merge of #1451 on Forge-QA produced 17 identical duplicates and 8 stale open copies. About 20 pull requests touching the file had to be held.
+  - GAP-REPORT.md is out of `UNION`. Its conflicts go through `gap_resolve(base, main, pr)`, a three-way merge on the table: rows are keyed by gap id, or by (id, occurrence) for twins, and compared normalized. For each key:
+    - changed on one side: that side wins;
+    - changed on both: the row with a terminal status wins; otherwise main's row is kept, plus any cell the PR filled that main left empty, and never two rows for one key.
+    Main's order is kept, and rows new on the PR go at the end of their table. Rows are written exactly as the chosen side had them. Text outside the tables is merged with `git merge-file`, and a conflict there sends the owner a REFRESH; it is never unioned.
+  - New guard: before every lane push, `gap_check(main, pr, merged)` compares the merged report with main and with the owner's own head. Commits the lane itself pushed earlier are skipped, so their rows never count as the PR's. The merge is not pushed (outcome `conflict`, the owner gets a REFRESH) if any of these is true:
+    - an id's row count is not max(main, PR);
+    - an identical row, with the status cell normalized, is repeated more often than on either side;
+    - an open row sits next to a closed row of its id and exists on neither side.
+    The lane and supervise also run the check against GitHub's own merge (`refs/pull/N/merge` against `refs/pull/N/head`) before merging. Twins already on main are never findings.
+  - `docs/dev/testing/test-verify.md` had the same problem, so it now merges section by section on its headings (`section_resolve`); a clash inside one section is a conflict. `union_resolve` remains only for append-only files: changelog.d fragments, registries and ledgers. The rebase resolver (`orchestrator.py resolve`) uses the keyed merges too, even when `appendOnlyPaths` lists the file.
+- Fixed: 1.7.19's `gapreport.py dedupe --write` deleted real gaps. Its rule, one row per gap id, removed twins: different gaps that reuse one number, such as G-1034 RUN-002 (E16-S03 vs E48-S05) and G-1620/G-1621 ADM-22. On Forge-QA it removed 89 rows, of which only 23 were real copies, and three offline verification suites went red.
+  - The cleanup is now `lane.py gap-dedupe --report docs/spec/GAP-REPORT.md [--write]`; `gapreport.py dedupe` does the same. It removes only:
+    - true copies, identical after normalizing whitespace and the status cell (the first is kept, or the closed one);
+    - stale open copies of a closed row whose title or evidence cell matches.
+  - A twin is never deleted. `--rename-twins` keeps every twin and renames the later ones `<id>-B`, `<id>-C`, listing each repo, beam and Jira reference to the old id so the caller can update them.
+  - `--write` refuses to run on main, so the cleanup goes in through a normal pull request.
+  - `gapreport.py check` reports twins as their own kind, "reused id, different gaps", which does not fail the check.
+  - New: `gapreport.py restore <report> --from <commit before the 1.7.19 cleanup> --write` puts back the rows that cleanup deleted, and only those; true copies and stale copies stay out.
+- The audit no longer files work for a repeated row or a stale open copy of a closed gap.
+
 ## 1.7.19
 
 - Fixed: the merge lane merged `GAP-REPORT.md` line by line, as a "union" file. A gap report is a table whose rows pull requests edit in place, for example to close a gap. So a merge kept the old open row next to the new closed one, and rows that differed only slightly both survived. On Forge-QA one merge of #1451 added 23 bad rows, leaving main with 5 duplicated gaps and 11 closed gaps with a stale open copy. `gapreport.merge3` now matches rows by gap id and merges them cell by cell against the base:

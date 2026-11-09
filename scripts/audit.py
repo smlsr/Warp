@@ -305,7 +305,15 @@ def discover(root: Path, data: dict, red_by_check: dict, report_files=None) -> l
         except OSError:
             continue
         lands = -1
-        for line in text.splitlines():
+        import gapreport
+
+        # 1.7.20: a repeated row or a stale open copy of a closed gap is not an open gap (the audit used to file new
+        # work for gaps that were already closed).
+        shape = gapreport.classify(text)
+        skip = set(shape["copies"]) | set(shape["stale"])
+        for number, line in enumerate(text.splitlines()):
+            if number in skip:
+                continue
             if line.startswith("|") and not _GAP_ROW.match(line):
                 cells = [c.strip() for c in line.strip().strip("|").split("|")]
                 if cells and not set("".join(cells)) <= set("-: "):

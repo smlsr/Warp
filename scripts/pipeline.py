@@ -2618,7 +2618,7 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             if bad:
                 out.append("merge: not merged %s: the merge would leave the gap report with %s" % (tid, "; ".join(bad[:4])))
                 begin_fix(data, ticket, ["gap-report: %s. Merge main and keep one row per gap id (the closed copy when "
-                                         "a gap is closed); run `python3 %s/gapreport.py check <file>` before you push"
+                                         "a gap is closed; twins stay); run `python3 %s/gapreport.py check <file>` before you push"
                                          % ("; ".join(bad[:6]), scripts)], out)
                 continue
         if sibling:
