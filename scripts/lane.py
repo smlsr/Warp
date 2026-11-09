@@ -11,8 +11,10 @@ After each merge:
               the parent's pre-squash head, then main; check that its diff against main holds only its own files;
               push once (the lane is the sole pusher for that one push, recorded on the beam)
   holds       every hold that named the merged pull request, ticket or gap is lifted, and live runs are re-dispatched
-  union files GAP-REPORT.md rows, docs/dev/testing/test-verify.md sections, changelog.d fragments and append-only
-              registries are resolved by keeping both sides, without asking the owner to push
+  union files docs/dev/testing/test-verify.md sections, changelog.d fragments and append-only registries are
+              resolved by keeping both sides, without asking the owner to push. GAP-REPORT.md is not a line union
+              (1.7.19): its rows merge by gap id (gapreport.merge3), and a result with duplicate or stale rows is
+              never pushed (gapreport.problems)
 
 Stale pull requests: a pull request dirty against main (or its base, for a stacked one) gets one REFRESH to its
 owner: "merge <base> once, run the gate, push once, re-send READY". A conflict only in union files is refreshed by
@@ -24,6 +26,8 @@ from __future__ import annotations
 
 import fnmatch
 import re
+
+import gapreport
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -99,7 +103,17 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
                 return "conflict", ", ".join(other or ["(merge failed)"])
             for rel in conflicted:
                 target = tmp / rel
-                target.write_text(union_resolve(target.read_text()))
+                if gapreport.is_gap_report(rel):
+                    # 1.7.19: rows merge by gap id, never line by line (a line union kept the old open row next to
+                    # the new closed one).
+                    stage = lambda n: _out(_git(run, tmp, "show", ":%d:%s" % (n, rel))) + "\n"
+                    try:
+                        target.write_text(gapreport.merge3(stage(1), stage(2), stage(3)))
+                    except gapreport.Conflict as exc:
+                        _git(run, tmp, "merge", "--abort")
+                        return "conflict", "%s (%s)" % (rel, exc)
+                else:
+                    target.write_text(union_resolve(target.read_text()))
                 _git(run, tmp, "add", rel)
             done = _git(run, tmp, "-c", "user.name=Warp", "-c", "user.email=warp@localhost", "commit", "--no-edit", "-q")
             if not _ok(done):
@@ -107,6 +121,10 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
         after = _out(_git(run, tmp, "rev-parse", "HEAD"))
         if after == before:
             return "unchanged", after
+        # 1.7.19: never push a gap report with duplicate or stale rows, however the merge produced it.
+        bad = gap_report_problems(tmp, before, "HEAD", run)
+        if bad:
+            return "refused", "the gap report would have %s" % "; ".join(bad[:6])
         if push:
             import pusher
 
@@ -116,6 +134,32 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
         return "merged", after
     finally:
         _git(run, root, "worktree", "remove", "--force", str(tmp))
+
+
+def gap_report_problems(cwd: Path, old: str, new: str, run: Callable) -> list:
+    """Problems in every GAP-REPORT.md that changed between `old` and `new` (gapreport.problems), as read at `new`."""
+    names = [p for p in _out(_git(run, cwd, "diff", "--name-only", old, new)).splitlines() if gapreport.is_gap_report(p)]
+    found = []
+    for rel in names:
+        shown = _git(run, cwd, "show", "%s:%s" % (new, rel))
+        if _ok(shown):
+            found.extend("%s: %s" % (rel, item) for item in gapreport.problems(getattr(shown, "stdout", "") or ""))
+    return found
+
+
+def check_merge_ref(root: Path, number: str, base: str = "main", run: Optional[Callable] = None) -> list:
+    """What GitHub's own merge of pull request `number` would leave in the gap report (refs/pull/N/merge), before
+    the lane or supervise merges it. [] when clean or when the ref cannot be read."""
+    import provider
+
+    run = run or provider._run
+    ref = "refs/warp/check/%s" % number
+    if not _ok(_git(run, root, "fetch", "-q", "origin", "+refs/pull/%s/merge:%s" % (number, ref))):
+        return []
+    try:
+        return gap_report_problems(root, "origin/%s" % base, ref, run)
+    finally:
+        _git(run, root, "update-ref", "-d", ref)
 
 
 def own_files(root: Path, child: str, parent_head: str, run: Optional[Callable] = None) -> set:
@@ -158,7 +202,8 @@ def rebuild_child(root: Path, child: str, parent_head: str, base: str = "main", 
 
 
 def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callable, retarget: Callable,
-             rebuild: Callable, send: Callable, max_merges: int = 3, now=None, push_failed: Optional[Callable] = None) -> list:
+             rebuild: Callable, send: Callable, max_merges: int = 3, now=None, push_failed: Optional[Callable] = None,
+             precheck: Optional[Callable] = None) -> list:
     """Merge the queue in score order. merge(entry) -> (outcome, detail); list_children(branch) -> [{number, url,
     branch, owner, agent, mergeable}]; retarget(url, base) -> (ok, why); rebuild(child_branch, parent_head) ->
     (outcome, detail); send(owner, text, agent) -> lines."""
@@ -180,6 +225,15 @@ def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callab
             out.append("lane: %d more verified pull request%s wait for the next tick (maxMergesPerPass %d)" % (
                 len(queue) - merged, "" if len(queue) - merged == 1 else "s", max_merges))
             break
+        bad = precheck(entry) if precheck is not None else []
+        if bad:
+            queue.pop(key, None)
+            seen[key] = "refused: gap report"
+            out.append("lane: #%s not merged: its merge would leave the gap report with %s" % (entry["pr"], "; ".join(bad[:4])))
+            out.extend(send(relay_owner(data, entry), "#%s is not merged: GitHub's merge of it would leave the gap report "
+                            "with %s. Merge main, keep one row per gap id (the closed copy when a gap is closed), push "
+                            "once, re-send READY." % (entry["pr"], "; ".join(bad[:6])), relay_agent(data, entry)))
+            continue
         outcome, detail = merge(entry)
         if outcome != "merged":
             queue.pop(key, None)
@@ -241,6 +295,20 @@ def run_lane(beam_path: Path, data: dict, merge: Callable, list_children: Callab
     return out
 
 
+def relay_owner(data: dict, entry: dict) -> str:
+    import relay
+
+    row = relay.owner_of(data, str(entry.get("pr")))
+    return str(row.get("coordinator") if row.get("coordinator") not in {"", "warp", None} else row.get("owner")
+               or entry.get("ticket") or "warp")
+
+
+def relay_agent(data: dict, entry: dict) -> str:
+    import relay
+
+    return str(relay.owner_of(data, str(entry.get("pr"))).get("agent") or "")
+
+
 def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable, send: Callable, cfg: dict,
                   now=None, push_failed: Optional[Callable] = None) -> list:
     """prs: [{number, branch, base, dirty, conflicts, owner, agent, head}]. Union-only conflicts: the lane merges the
@@ -267,6 +335,8 @@ def refresh_stale(beam_path: Path, data: dict, prs: list, union_merge: Callable,
                            "push (%s), no owner push" % (pr["number"], ", ".join(conflicts), pr.get("base") or "main", detail[:12]))
                 book.pop(str(pr["number"]), None)
                 continue
+            if outcome in {"refused", "conflict"}:
+                conflicts = conflicts + [detail]
             if outcome == "push-failed" and push_failed is not None:
                 sha, _, why = detail.partition(" ")
                 out.extend(push_failed(pr["branch"], sha, why, pr["number"], pr.get("owner") or "", pr.get("agent") or "",

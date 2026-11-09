@@ -154,7 +154,8 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
             list_children=lambda branch: _children(root, slug, branch, data, env),
             retarget=writes.retarget,
             rebuild=lambda child, head: lane.rebuild_child(root, child, head, base=base, run=env.git),
-            send=send, max_merges=cap, now=now, push_failed=_push_failed(path, data, root, env, now)))
+            send=send, max_merges=cap, now=now, push_failed=_push_failed(path, data, root, env, now),
+            precheck=lambda e: lane.check_merge_ref(root, str(e["pr"]), base=base, run=env.git)))
     except Exception as exc:
         lines.append("tick: lane skipped (%s)" % exc)
     # Stale pull requests: one REFRESH per head; union-only conflicts are merged by the lane.
