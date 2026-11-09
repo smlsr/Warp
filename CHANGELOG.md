@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.7.19
+
+- Fixed: the merge lane merged `GAP-REPORT.md` line by line, as a "union" file. A gap report is a table whose rows pull requests edit in place, for example to close a gap. So a merge kept the old open row next to the new closed one, and rows that differed only slightly both survived. On Forge-QA one merge of #1451 added 23 bad rows, leaving main with 5 duplicated gaps and 11 closed gaps with a stale open copy. `gapreport.merge3` now matches rows by gap id and merges them cell by cell against the base:
+  - when one side changed a cell, its change wins;
+  - when both sides changed a cell differently, a closing status wins over an open one; any other clash is a real conflict, and the owner gets a REFRESH;
+  - a row deleted on one side and left alone on the other is deleted;
+  - new rows are kept once, in place.
+  The rebase resolver (`orchestrator.resolve_file`) uses the same merge, even when `appendOnlyPaths` lists the report.
+- New: the gap report is checked before anything is pushed or merged. `gapreport.problems` finds:
+  - duplicate gap ids;
+  - a gap that is both open and closed;
+  - the same gap under two ids, such as G-003 and G-G-G-003;
+  - leftover conflict markers.
+  The lane does not push a merge with any of these. Before the lane or supervise merges a pull request that touches the report, Warp reads GitHub's own merge of it (`refs/pull/N/merge`); if that would leave bad rows, the pull request is not merged and goes back to its owner, or to a Warp fix round when Warp owns it, with the rows named.
+- New: a one-time cleanup, `python3 scripts/gapreport.py dedupe docs/spec/GAP-REPORT.md --write`. It keeps one row per gap id: a closed copy wins over an open one, and among copies with the same status the newest wins. `gapreport.py check <file>` exits 1 when the file has problems. `gapreport.py merge BASE OURS THEIRS` is the same merge as a git merge driver.
+
 ## 1.7.18
 
 - Fixed: the repair sweep (`sweep.py`) sent coordinator-owned pull requests back to `fix`. On Forge-QA that was 43 of them, among them #517, #1418 and #1442, and the next wake would have started a second agent on each. Its ticket loop skipped only parked tickets, and it never asked who owned the pull request. It now skips `external` tickets, and it skips any pull request `ownership.py` says someone else owns. That owner gets the instruction once per head, in place of a fix round.

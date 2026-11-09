@@ -1119,6 +1119,17 @@ def merge_append(base: str, ours: str, theirs: str) -> str:
 
 
 def resolve_file(path: str, base: str, ours: str, theirs: str, append_only: list) -> dict:
+    import gapreport
+
+    if gapreport.is_gap_report(path):
+        # 1.7.19: a gap report is a table edited in place: rows merge by gap id, never as an append-only file.
+        try:
+            text = gapreport.merge3(base, ours, theirs)
+        except gapreport.Conflict:
+            return {"action": "send-back", "path": _norm(path)}
+        if gapreport.problems(text):
+            return {"action": "send-back", "path": _norm(path)}
+        return {"action": "resolved", "path": _norm(path), "text": text}
     if not is_append_only(path, append_only):
         return {"action": "send-back", "path": _norm(path)}
     return {"action": "resolved", "path": _norm(path), "text": merge_append(base, ours, theirs)}

@@ -2609,6 +2609,18 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             continue
         number = str(url).rstrip("/").split("/")[-1]
         method = provider_mod.merge_method(cfg)
+        if merger is None and not sibling and number.isdigit():
+            # 1.7.19: a merge that would leave the gap report with duplicate or stale rows is not made. The pull
+            # request goes back to its owner (or a Warp fix) to merge the rows by gap id.
+            import lane
+
+            bad = lane.check_merge_ref(repo, number, base=multirepo.base_for(data, ticket, "main"))
+            if bad:
+                out.append("merge: not merged %s: the merge would leave the gap report with %s" % (tid, "; ".join(bad[:4])))
+                begin_fix(data, ticket, ["gap-report: %s. Merge main and keep one row per gap id (the closed copy when "
+                                         "a gap is closed); run `python3 %s/gapreport.py check <file>` before you push"
+                                         % ("; ".join(bad[:6]), scripts)], out)
+                continue
         if sibling:
             # gh merges by URL in the sibling clone, never by number in the parent: #24 there is a different pull request.
             number = str(url)
