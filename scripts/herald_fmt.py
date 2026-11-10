@@ -13,7 +13,8 @@ repo or in different ones, are told apart. No instance yet means no suffix.
 
 `render` returns three views of one message:
   text    plain text, for .warp/outbox.md and connectors that take text only
-  slack   {"text": mrkdwn fallback, "blocks": Block Kit} (header, section, context)
+  slack   {"message": the whole message in Slack markdown, the argument slack_send_message takes (1.7.21),
+           "text": mrkdwn fallback, "blocks": Block Kit} (header, section, context)
   teams   {"markdown": ...} for a Teams channel message
 
 Herald posts `slack` to Slack channels and `teams` to Teams channels. Warp has
@@ -229,9 +230,22 @@ def render(head: str, title: str, intro: Optional[str] = None, facts=(), bullets
 
     return {
         "text": "\n".join(plain),
-        "slack": {"text": f"*{_slack_esc(head)}* — {_slack_esc(title)}", "blocks": blocks},
+        # `message` is the argument the Slack MCP's slack_send_message takes (with `channel_id`); it has no `text`
+        # argument (1.7.21). `text` stays the Block Kit fallback for a tool that takes blocks.
+        "slack": {"message": f"*{_slack_esc(head)}*\n{section}" + (f"\n_{_slack_esc(footer)}_" if footer else ""),
+                  "text": f"*{_slack_esc(head)}* — {_slack_esc(title)}", "blocks": blocks},
         "teams": {"markdown": "\n\n".join(md)},
     }
+
+
+SLACK_MESSAGE_ARG = "message"
+SLACK_CHANNEL_ARG = "channel_id"
+
+
+def slack_arguments(channel: str, view: dict) -> dict:
+    """The exact arguments for the Slack MCP's slack_send_message: {"channel_id", "message"}. Not `text` (1.7.21)."""
+    body = view.get("message") or view.get("text") or ""
+    return {SLACK_CHANNEL_ARG: str(channel or ""), SLACK_MESSAGE_ARG: str(body)}
 
 
 def message(root: Path, title: str, **kw) -> dict:

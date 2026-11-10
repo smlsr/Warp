@@ -121,6 +121,84 @@ def _repo_root(beam_path: Path) -> Optional[Path]:
     return Path(text) if text else None
 
 
+def _sprint_retry(root: Path, data: dict, ticket: dict, state: Optional[dict], rows: list, lines: list) -> bool:
+    import productdiff
+
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    try:
+        why = productdiff.branch_verdict(root, str(ticket.get("branch") or ""), _base_branch(root), state=state, rows=rows,
+                                         step=str(shuttle.get("step") or ""))
+    except Exception:
+        return False
+    if not why:
+        return False
+    import pipeline
+
+    _remote(ticket)["state"] = "failed"
+    pipeline.no_product_retry(data, ticket, why, lines)
+    return True
+
+
+def _no_product(root: Path, state: dict, step: str, folder: Path, tid: str = "", push: bool = False) -> str:
+    """Why `done` cannot stand for this turn (productdiff.verdict), or ""."""
+    import productdiff
+
+    where = _checkout(root, tid, push)
+    if where is None:
+        return ""
+    step = step or str(state.get("turnStep") or "")
+    reviewed = False
+    turn_rows = []
+    for row in _read_log(folder / "log.jsonl"):
+        if row.get("state") == "started":
+            turn_rows = []
+        turn_rows.append(row)
+    for row in turn_rows:
+        if row.get("state") in REVIEW_STATES or row.get("acs") or row.get("state") == "acceptance":
+            reviewed = True
+    return productdiff.verdict(where, _base_branch(root), turn_base=str(state.get("turnBase") or ""), step=step,
+                               reviewed=reviewed)
+
+
+def _checkout(root: Optional[Path] = None, tid: str = "", push: bool = False) -> Optional[Path]:
+    """The Shuttle's own checkout, or None when it cannot be told (then the done guard does not apply):
+      - on its own VM (`--push`): the clone it runs in, `root`
+      - in a worktree: the ticket's worktree from the parent's beam, else the current directory when it is a worktree
+        of the same repository as `root`"""
+    import subprocess
+
+    def top(path: Path) -> str:
+        done = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(path), capture_output=True, text=True)
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    def common(path: Path) -> str:
+        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=str(path),
+                              capture_output=True, text=True)
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    try:
+        if root is None:
+            here = top(Path.cwd())
+            return Path(here) if here else None
+        root = Path(root)
+        if push:
+            return Path(top(root)) if top(root) else None
+        beam_file = root / ".warp" / "beam.json"
+        if beam_file.is_file() and tid:
+            ticket = (json.loads(beam_file.read_text()).get("tickets") or {}).get(tid) or {}
+            rel = str(ticket.get("worktree") or "")
+            if rel:
+                path = Path(rel) if Path(rel).is_absolute() else root / rel
+                if path.is_dir() and top(path):
+                    return path
+        here = top(Path.cwd())
+        if here and common(Path(here)) and common(Path(here)) == common(root) and Path(here).resolve() != root.resolve():
+            return Path(here)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return None
+
+
 def _base_branch(root: Path) -> str:
     config = root / ".warp" / "config.yaml"
     if config.is_file():
@@ -1037,8 +1115,14 @@ def observe_locked(
             checks = checks_fn(root, ticket) if checks_fn else None
         except Exception:
             checks = None
+        was_done = _remote(ticket).get("state") == "done"
         if apply_directory(beam_path, data, ticket, state, log_rows, now_s, heralded, lines, checks):
             changed = True
+        if remote and not was_done and _remote(ticket).get("state") == "done" and fetch is None and reader is None:
+            # 1.7.21: a done with no product work (a one-second started/coding/pr-opened/done sprint on an open pull
+            # request) is a retry, not a return to review.
+            if _sprint_retry(root, data, ticket, state, log_rows, lines):
+                changed = True
         if local and _apply_activity(root, ticket, now_s):
             changed = True
     if changed:
@@ -1104,6 +1188,7 @@ def append_status(
     sha: str = "",
     source: str = "",
     acs: Optional[dict] = None,
+    step: str = "",
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -1115,6 +1200,15 @@ def append_status(
     folder.mkdir(parents=True, exist_ok=True)
     stamp = when or beam.utcnow()
     current = _load_state(folder / "state.json")
+    refused = ""
+    if state == "done":
+        # 1.7.21: a code step is not done without a product commit. Before, a Shuttle on an open pull request wrote
+        # started, coding, pr-opened and done in one second, committed only its ticket folder, and Warp recorded ok.
+        refused = _no_product(root, current if isinstance(current, dict) else {}, step, folder, tid, push)
+        if refused:
+            print("refuse: done %s: %s. Recorded as failed (alarm no-product-commit): fix the work and push a product "
+                  "commit, or write failed with the reason." % (tid, refused))
+            state, error, alarm = "failed", "no product commit: %s" % refused, "no-product-commit"
     body = _blank_state(tid)
     body.update(current if isinstance(current, dict) else {})
     body["id"] = tid
@@ -1123,6 +1217,15 @@ def append_status(
     body["updatedAt"] = stamp
     if agent:
         body["agent"] = agent
+    if state == "started":
+        # The head this turn starts from: done later needs a product change since here (productdiff).
+        import productdiff
+
+        where = _checkout(root, tid, push)
+        body["turnBase"] = (productdiff.head(where) if where else "") or ""
+        body["turnStep"] = step or ""
+    elif step:
+        body["turnStep"] = step
     cloud = _cloud_agent() if push else ""
     if cloud:
         # A Shuttle that pushes its folder is on its own VM. The parent binds
@@ -1216,6 +1319,8 @@ def append_status(
     print("state: %s" % state)
     print("dir: .warp/tickets/%s" % tid)
     code = 0 if not push else _push_dir(root, tid, state)
+    if refused and code == 0:
+        code = 3
     for line in _reap_lines(root, tid, agent or _current_agent(root, tid) or str(body.get("agent") or ""), remote=bool(push)):
         print(line)
     if not push:
@@ -1357,6 +1462,8 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
     add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default) or hand")
     add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
+    add.add_argument("--step", default="", help="the Shuttle's step (implement, fix, restart, repair, review, verify); "
+                                                "done on a code step needs a product commit (1.7.21)")
     watch = sub.add_parser("observe", help="fetch in-flight branches and patch the live beam")
     watch.add_argument("--beam", default=".warp/beam.json")
     watch.add_argument("--root", default=".")
@@ -1383,6 +1490,7 @@ def main(argv: Optional[list] = None) -> int:
             sha=args.sha,
             source=args.source,
             acs=_parse_acs(args.ac),
+            step=args.step,
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)

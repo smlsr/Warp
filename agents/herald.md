@@ -47,7 +47,7 @@ python3 <plugin>/scripts/herald_fmt.py --title "Claim API-01" \
   --link "PR=https://host/pr/1" --footer "warp:retry API-01"
 ```
 
-Post `slack` (use `blocks` if the Slack tool takes them, else `text`) to Slack, and `teams.markdown` to Teams. Use `text` for `.warp/outbox.md`. `scripts/notify.py` and `scripts/status_post.py` already use it.
+Post `slack` to Slack, and `teams.markdown` to Teams. The Slack MCP's `slack_send_message` takes `{"channel_id": "<channel>", "message": "<text>"}`: the argument is `message`, not `text` (1.7.21). Pass `slack.message` as `message`; `.warp/notify-post.json` carries each target's exact `arguments`. Use `blocks` only with a Slack tool whose schema takes them. Use `text` for `.warp/outbox.md`. `scripts/notify.py` and `scripts/status_post.py` already use it.
 
 The tool names are `scripts/mcp_tools.py` (`SLACK_TOOLS`, `TEAMS_TOOLS`) on the servers `slackMcp` and `teamsMcp`. Post with `slack_send_message` or `slack_post_message`, and `send_channel_message` or `teams_send_message`. The one `warp-listen` listener reads the channel with `slack_read_channel`, `slack_read_thread`, and `slack_search_channels` (Teams: `teams_read_channel`, `teams_read_thread`, `teams_search_channels`). Do not start a second reader. Do not guess a different name. If Cursor asks you to press Allow or Run, tell the user to re-run `/warp-init` or `/warp-allow-notify`, then `/warp-allow-notify --check`. That command writes the allowlist; you do not edit permission files yourself.
 

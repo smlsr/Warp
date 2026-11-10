@@ -77,7 +77,7 @@ class ConfigTest(Beam):
     def test_cadences_and_lease(self):
         cfg = selfdrive.config({}, self.path)
         start = 1_000_000.0
-        self.assertEqual(selfdrive.due(self.path, cfg, start), ["tick", "sweep", "audit", "deep"])
+        self.assertEqual(selfdrive.due(self.path, cfg, start), ["tick", "sweep", "audit", "fullAudit", "deep"])
         self.assertTrue(selfdrive.take_lease(self.path, "audit", cfg, start, "background"))
         self.assertFalse(selfdrive.take_lease(self.path, "audit", cfg, start + 1, "inline"))
         self.assertNotIn("audit", selfdrive.due(self.path, cfg, start + 10))

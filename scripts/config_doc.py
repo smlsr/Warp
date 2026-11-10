@@ -37,7 +37,7 @@ SECTIONS = [
         "publishOnChange", "pushStateNew", "deleteBranchOnMerge", "mergeQueue", "appendOnlyPaths", "maxFixAttempts",
         "respectMergeWindows", "mergeWindows"]),
     ("Cursor Bugbot", "When Bugbot is required, how it is asked, and how long Warp waits for it.", [
-        "bugbotRequired", "bugbotManual", "bugbotTrigger", "bugbotStartMinutes", "bugbotPollSeconds"]),
+        "bugbotRequired", "bugbotManual", "bugbotTrigger", "bugbotManualCommand", "bugbotStartMinutes", "bugbotPollSeconds"]),
     ("Stalls and repair", "When a ticket counts as stalled or stuck, and how often Warp tries to repair it.", [
         "stuckAfterMinutes", "stallImplementingMinutes", "stallPrOpenMinutes", "stallReviewingMinutes",
         "stallFixingMinutes", "stallReadyMinutes", "stallMergingMinutes", "stallQueuedMinutes", "stallApprovalMinutes",
@@ -54,7 +54,7 @@ SECTIONS = [
         "jiraInReviewStatus", "jiraQaReadyStatus", "jiraDoneStatus", "jiraDoneOnManualMerge", "jiraRestoreOnRelease",
         "jiraExternalIdField", "jiraMatchOnText", "jiraWriteExternalId", "jiraExternalIdFieldName",
         "jiraCreateExternalIdField", "jiraExternalIdFallback"]),
-    ("Self-driving supervisor", "The tick, sweep, audit and deep cadences, and what they may do without a person (1.7.15).", [
+    ("Self-driving supervisor", "The tick, sweep, audit, full-audit and deep cadences, and what they may do without a person (1.7.15).", [
         "cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps", "humanAsk", "coordinatorModel", "batchFixes",
         "batchWaitMinutes", "providerReadSeconds"]),
     ("Git provider", "Where pull requests are opened, and which branch tickets start from.", [

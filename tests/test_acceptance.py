@@ -96,9 +96,9 @@ class PromptTest(Repo):
         text = orchestrator.subagent_prompt(ticket, {}, "warp/WV-01", "/w/WV-01", "/repo")
         self.assertIn("acceptance: AC-1: build | AC-2: test", text)
         self.assertIn("  AC-1: build", text.splitlines())
-        self.assertIn("--state done --agent shuttle-WV-01-r3 --root /repo --ac AC-1=pass|fail --ac AC-2=pass|fail", text)
+        self.assertIn("--state done --agent shuttle-WV-01-r3 --root /repo --step restart --ac AC-1=pass|fail --ac AC-2=pass|fail", text)
         vm = orchestrator.subagent_vm_prompt(ticket, {}, "warp/WV-01")
-        self.assertIn("--state done --agent shuttle-WV-01-r3 --push --ac AC-1=pass|fail --ac AC-2=pass|fail", vm)
+        self.assertIn("--state done --agent shuttle-WV-01-r3 --push --step restart --ac AC-1=pass|fail --ac AC-2=pass|fail", vm)
         ticket["shuttle"]["step"] = "verify"
         text = orchestrator.subagent_prompt(ticket, {}, "warp/WV-01", "/w/WV-01", "/repo")
         self.assertIn("VERIFY ONLY. Do not change code, commit, or push.", text)

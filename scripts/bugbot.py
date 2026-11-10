@@ -156,13 +156,25 @@ def ask_manual(data: dict, ticket: dict, lines: list) -> None:
     beam_file = data.get("_agentBeam") or (str(Path(data["_repoRoot"]) / ".warp" / "beam.json") if data.get("_repoRoot") else ".warp/beam.json")
     scripts = Path(__file__).resolve().parent
     lines.append("bugbot: manual %s %s branch=%s" % (tid, url, branch))
+    command = manual_command(data, url)
     lines.append(
-        "bugbot: MUST DO %s: Bugbot cannot be started from here (%s: manual). Get a Bugbot review of %s "
-        "(branch %s, head %s) the way this setup allows, then record it: python3 %s/bugbot.py record --beam %s "
-        "--id %s --result pass|fail [--finding \"<what is wrong>\" ...]. The ticket waits in review until it is recorded."
-        % (tid, TRIGGER_KEY, url or "the pull request", branch, head[:12] or "?", scripts, beam_file, tid)
+        "bugbot: MUST DO %s: Bugbot cannot be started from here (%s: manual). Run `%s` for %s (branch %s, head %s), "
+        "then record it: python3 %s/bugbot.py record --beam %s --id %s --result pass|fail [--finding \"<what is wrong>\" "
+        "...]. The ticket waits in review until it is recorded."
+        % (tid, TRIGGER_KEY, command, url or "the pull request", branch, head[:12] or "?", scripts, beam_file, tid)
     )
     lines.append("herald: %s needs a Bugbot review by hand: %s. It waits in review until the result is recorded." % (tid, url or branch))
+
+
+MANUAL_COMMAND = "/review-bugbot {pr}"
+
+
+def manual_command(data: dict, url: str) -> str:
+    """The command a person or the parent runs to get a Bugbot review by hand (`bugbotManualCommand`, default
+    `/review-bugbot <pr number>`; 1.7.21)."""
+    template = str((data.get("config") or {}).get("bugbotManualCommand") or MANUAL_COMMAND)
+    number = re.search(r"/pull/(\d+)", str(url or ""))
+    return template.replace("{pr}", number.group(1) if number else str(url or "")).replace("{url}", str(url or ""))
 
 
 def on_request(data: dict, ticket: dict, lines: list) -> None:
@@ -173,6 +185,88 @@ def on_request(data: dict, ticket: dict, lines: list) -> None:
     elif mode == "manual":
         ask_manual(data, ticket, lines)
     # shuttle: the Shuttle reviews its own work; the parent starts a review Shuttle if it did not.
+
+
+# ---- one round for all findings (1.7.21) --------------------------------------------------------------------------
+#
+# Bugbot found N things on a head. All N go to one fix round (one Shuttle, one push). Warp does not ask Bugbot for
+# another review until every one of those N threads is addressed on the pull request: resolved, outdated (the code it
+# pointed at changed), or answered "Fixed in <sha>". A push that leaves some open goes straight back to fix with the
+# ones left, and no Bugbot review is asked for on it. So Bugbot reviews whole rounds, not single fixes.
+
+THREADS: Optional[Callable] = None  # tests replace it: (root, url) -> threads
+
+
+def open_round(ticket: dict, findings: list) -> None:
+    """Record the findings this fix round must clear (joining an open round)."""
+    pr = _pr(ticket)
+    rnd = pr.get("bugbotRound") if isinstance(pr.get("bugbotRound"), dict) else {}
+    head = _head(pr)
+    if not rnd.get("open"):
+        rnd = {"open": True, "sha": head, "findings": [], "at": beam_mod.utcnow()}
+    for item in findings:
+        text = str(item).strip()
+        if text and text not in rnd["findings"]:
+            rnd["findings"].append(text)
+    pr["bugbotRound"] = rnd
+
+
+def _addressed(thread: dict) -> bool:
+    return bool(thread.get("resolved") or thread.get("outdated") or thread.get("replied"))
+
+
+def round_left(data: dict, ticket: dict) -> Optional[list]:
+    """The open round's findings not addressed yet, [] when all are, None when there is no open round or the threads
+    cannot be read (then Warp does not hold the review)."""
+    pr = _pr(ticket)
+    rnd = pr.get("bugbotRound") if isinstance(pr.get("bugbotRound"), dict) else {}
+    if not rnd.get("open") or not pr.get("url"):
+        return None
+    if THREADS is None and not data.get("_live"):
+        return None  # only a live pass reads the threads
+    root = _root(data) or Path(".")
+    reader = THREADS or (lambda r, u: __import__("provider").bugbot_threads(r, u))
+    try:
+        threads = reader(root, pr["url"])
+    except Exception:
+        threads = None
+    if threads is None:
+        return None
+    wanted = set(rnd.get("findings") or [])
+    mine = [t for t in threads if str(t.get("commit") or "").startswith(str(rnd.get("sha") or "")[:7]) or t.get("line") in wanted]
+    return [t["line"] for t in mine if not _addressed(t)]
+
+
+def round_gate(data: dict, ticket: dict, lines: list) -> bool:
+    """True when the next Bugbot review must wait: some of the round's findings are still open on the new head. The
+    ticket goes back to fix with exactly those, in one round."""
+    pr = _pr(ticket)
+    rnd = pr.get("bugbotRound") if isinstance(pr.get("bugbotRound"), dict) else {}
+    if not rnd.get("open"):
+        return False
+    head = _head(pr)
+    if head and head == rnd.get("sha"):
+        return False  # the fix has not pushed yet
+    left = round_left(data, ticket)
+    if left is None:
+        lines.append("bugbot: round on %s: its threads could not be read; asking for the review" % str(rnd.get("sha"))[:12])
+        rnd["open"] = False
+        return False
+    total = len(rnd.get("findings") or []) or len(left)
+    if not left:
+        rnd["open"] = False
+        rnd["closedAt"] = beam_mod.utcnow()
+        rnd["closedSha"] = head
+        lines.append("bugbot: all %d finding%s from %s are addressed on %s; asking for the next review" % (
+            total, "" if total == 1 else "s", str(rnd.get("sha"))[:12], head[:12]))
+        return False
+    lines.append("bugbot: hold %s: %d of %d findings from %s are still open on %s (%s); no new Bugbot review until all "
+                 "are addressed. Back to fix with the ones left, in one round" % (
+                     ticket.get("id"), len(left), total, str(rnd.get("sha"))[:12], head[:12], "; ".join(left[:4])))
+    import pipeline
+
+    pipeline.begin_fix(data, ticket, ["bugbot: %s" % item for item in left], lines)
+    return True
 
 
 def set_trigger(data: dict, value: str, root=None) -> bool:

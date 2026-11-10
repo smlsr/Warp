@@ -37,6 +37,8 @@ Do not edit permission files. Tell the user the tool name from the dialog and to
 
 ## When you finish
 
+A code step (implement, fix, restart, repair, rebase) is not done until this turn pushed at least one commit that changes a file outside `.warp/` (1.7.21). Never write `done` on state files alone: Warp refuses it, records `failed` with alarm `no-product-commit`, and sends the ticket back. On a restart of an open pull request, rebase onto main if it is dirty, run `checkCommand` to green, fix every finding in one push, or write `failed` with the reason. Fix every Bugbot finding in one round, reply `Fixed in <sha>` on each thread and resolve it; the next review waits until all of them are addressed.
+
 Open the pull request, include the plan record and a result record (`orchestrator.py record --plan --result`), report the check result, and exit. One ticket, then stop. Contract or doc updates belong in the pull request when the ticket says those paths were touched. Run `scripts/session_note.py --type subagent-stop --beam .warp/beam.json`. Plugin hooks do not run on cloud runners. The parent reconciles this ticket from the beam.
 
 ## Forbidden
