@@ -117,7 +117,7 @@ class RepoTest(unittest.TestCase):
         out = subprocess.run([sys.executable, str(ROOT / "scripts/scan.py"), "scan", "--folder", "PLAN", "--out", ".warp/beam.json"], cwd=root, capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("repo: Core — 5 of 6 tickets", out.stdout)
-        self.assertIn("gate order deps", out.stdout)
+        self.assertIn("gate order strict (gates in order", out.stdout)  # 1.7.21: the default, whatever the schedule says
         b = json.loads((root / ".warp/beam.json").read_text())
         self.assertEqual(len(b["tickets"]), 5)
         self.assertEqual(b["tickets"]["AD-04"]["after"], ["admin-ui:AU-01"])
@@ -130,7 +130,7 @@ class RepoTest(unittest.TestCase):
         gates = {g["key"]: g for g in b["gates"]}
         self.assertEqual((gates["G0"]["hold"], gates["G0"]["onGreen"], gates["G-RBAC"]["starts"]), ("red", "make gate-close GATE=G0", ["Demo-UI"]))
         self.assertEqual(blocks.keys(b), ["G0", "G-RBAC", "G1", "G2"])
-        self.assertEqual(blocks.order_mode(b), "deps")
+        self.assertEqual(blocks.order_mode(b), "strict")  # 1.7.21: the schedule no longer decides the order
 
 
 def mini_beam():

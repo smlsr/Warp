@@ -354,5 +354,85 @@ class BugbotLadderTest(unittest.TestCase):
         self.assertIn("aireview", productdiff.NO_CODE_STEPS)
 
 
+class GateOrderTest(unittest.TestCase):
+    """1.7.21: work is pulled gate by gate, lowest first, in plan order; `/warp-start all` pulls all available work."""
+
+    def beam(self, **extra):
+        import test_blocks
+
+        data = test_blocks.plan_beam(**extra)
+        data["tickets"]["A-2"]["status"] = "merged"  # G0 cleared: G1 is the open gate
+        data["tickets"]["B-1"].update(rank=5, planned={"start": 3.0})
+        data["tickets"]["B-2"].update(rank=2, planned={"start": 9.0})
+        data["tickets"]["B-3"] = dict(data["tickets"]["B-1"], id="B-3", rank=5, planned={"start": 1.0}, locks=["src/b3"])
+        data["gates"][1]["members"].append("B-3")
+        return data
+
+    def ids(self, data):
+        import beam as beam_mod
+
+        return [row["id"] for row in beam_mod.ready(data)]
+
+    def test_a_build_schedule_no_longer_starts_every_gate_at_once(self):
+        import blocks
+
+        data = self.beam(program={"criticalPath": [], "gateOrder": "deps", "schedule": {"gateOrder": "deps"}})
+        self.assertEqual(blocks.order_mode(data), "strict")
+        # Only G1 (the lowest gate not cleared), in plan order: rank, then the planned start.
+        self.assertEqual(self.ids(data), ["B-2", "B-3", "B-1"])
+        self.assertIn("order: gates in order (default). G1 is open", blocks.order_line(data))
+
+    def test_a_run_started_before_carries_no_deps_over(self):
+        import blocks
+
+        data = self.beam(gateOrder="deps", program={"criticalPath": [], "gateOrder": "deps"})
+        self.assertEqual(self.ids(data), ["B-2", "B-3", "B-1"])
+        data["config"]["gateOrder"] = "deps"
+        self.assertEqual(blocks.order_mode(data), "deps", "config still decides")
+
+    def test_pull_all_takes_every_gate_lowest_first_and_ordered_goes_back(self):
+        import blocks
+
+        data = self.beam()
+        lines = blocks.set_order(data, "all")
+        self.assertTrue(lines[0].startswith("order: all available work."), lines)
+        self.assertTrue(data["pullAll"])
+        self.assertEqual(self.ids(data), ["B-2", "B-3", "B-1", "C-1", "D-1"])
+        blocks.set_order(data, "ordered")
+        self.assertNotIn("pullAll", data)
+        self.assertEqual(self.ids(data), ["B-2", "B-3", "B-1"])
+        self.assertTrue(blocks.set_order(data, "sideways")[0].startswith("refuse: "))
+
+    def test_start_all_and_resume_keep_it_and_a_plain_start_goes_back(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        import scan
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".warp").mkdir()
+        (tmp / ".warp" / "config.yaml").write_text("runner: local\n")
+        path = tmp / ".warp" / "beam.json"
+        path.write_text(json.dumps(self.beam(runState="stopped", paused=True)))
+
+        def go(gates, verb="start"):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), mock.patch("notify.report", lambda *a, **k: None):
+                code = scan.go(path, None, force=True, gates=gates, verb=verb)
+            return code, buf.getvalue(), json.loads(path.read_text())
+
+        code, out, saved = go("all")
+        self.assertEqual(code, 0, out)
+        self.assertEqual((saved["gateOrder"], saved.get("pullAll")), ("deps", True))
+        self.assertIn("order: all available work.", out)
+        code, out, saved = go("", verb="resume")
+        self.assertEqual(saved["gateOrder"], "deps", "a resume keeps this run's `all`")
+        code, out, saved = go("")
+        self.assertEqual((saved["gateOrder"], saved.get("pullAll")), ("strict", None))
+        self.assertIn("order: gates in order (default).", out)
+
+
 if __name__ == "__main__":
     unittest.main()
