@@ -1050,9 +1050,13 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
         return []
     import multirepo
 
+    import blocks
+
     base_red = not orchestrator.base_is_green(beam)
     candidates = startable(beam)
-    candidates.sort(key=lambda t: orchestrator.sort_key(t, base_red=base_red))
+    info = blocks.plan(beam)
+    # 1.7.21: the lowest gate first, then plan order inside it (with `/warp-start all` too).
+    candidates.sort(key=lambda t: orchestrator.sort_key(t, base_red=base_red, block=blocks.block_index(info, t.get("id"))))
     chosen = []
     for t in candidates:
         if len(chosen) >= agent_slots:

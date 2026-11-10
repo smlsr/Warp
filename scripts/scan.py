@@ -962,7 +962,7 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     # Start and resume decide what starts: one at a time with a supervise pass, Slack commands, and launches.
     with beamlock.run_lock(Path(beam_path)):
         with contextlib.redirect_stdout(tee):
-            code = _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now)
+            code = _go(beam_path, reason, force=force, run=run, takeover=takeover, gates=gates, now=now, verb=verb)
         printed = tee.lines()
         if code == 0 and Path(beam_path).is_file():
             alarms = orchestrator.announce_alarms(Path(beam_path), printed)
@@ -977,7 +977,8 @@ def go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "
     return code
 
 
-def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False) -> int:
+def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = "", takeover: bool = False, gates: str = "", now: bool = False,
+        verb: str = "start") -> int:
     """`start` and `resume`. They are the same command.
 
     Load the beam from main when this checkout has none, run the prompt
@@ -1042,6 +1043,9 @@ def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = 
     if refusal and not now:
         print(refusal)
         return 2
+    mode_word = blocks.order_word(gates)
+    if mode_word is not None:
+        gates = ""  # `/warp-start all` or `/warp-start ordered`: an order, not a range
     ok, range_lines = blocks.apply(load_json(beam_path), gates)
     if not ok:
         for line in range_lines:
@@ -1053,7 +1057,14 @@ def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = 
     held = load_json(beam_path)
     blocks.apply(held, gates)
     cfg = prompt_gate.effective_config(held, root)
-    held["gateOrder"] = blocks.order_mode({"config": cfg, "program": held.get("program")})
+    if mode_word is not None:
+        blocks.set_order(held, mode_word)
+    elif verb == "resume" and held.get("pullAll"):
+        held["gateOrder"] = "deps"  # a resume keeps this run's `all`
+    else:
+        # 1.7.21: gates in order unless config says deps; the schedule's own order no longer decides it.
+        held.pop("pullAll", None)
+        held["gateOrder"] = blocks.order_mode({"config": cfg})
     held["paths"] = runs.parse_paths(cfg.get("paths"))
     import buildsched
 
@@ -1072,6 +1083,7 @@ def _go(beam_path: Path, reason: Optional[str], force: bool = False, run: str = 
     for line in range_lines:
         print(line)
     print(blocks.open_line(load_json(beam_path)))
+    print(blocks.order_line(load_json(beam_path)))
     after = load_json(beam_path)
     for line in blocks.holds(after):
         print(line)
@@ -1341,6 +1353,8 @@ def main() -> None:
             sp.add_argument("--gates", default="", help="run only some blocks: G0-, G0-G3, -G2, or G5. None runs to the end")
             sp.add_argument("gates_arg", nargs="?", default="", help="the same range as --gates")
             sp.add_argument("--now", action="store_true", help="start even though startAfter is not met")
+            sp.add_argument("--all", dest="pull_all", action="store_true",
+                            help="pull all available work from every gate (default: gates in order, lowest first)")
             sp.add_argument("--takeover", action="store_true", help="take over a named run another machine is running")
             sp.add_argument("--run", default="", help="take up this named run from the repo first (a fresh checkout or cloud agent)")
     import usage
@@ -1415,13 +1429,13 @@ def main() -> None:
                     print(line)
                 sys.exit(2)
             sched_meta = graph.get("schedule") or {}
-            own = sched_meta.get("gateOrder") or "deps"
             cfg_order = str(local.get("gateOrder") or "").strip().lower()
-            order = cfg_order if cfg_order in ("strict", "deps") else own
+            order = cfg_order if cfg_order in ("strict", "deps") else "strict"
+            # 1.7.21: gates run in order by default, whatever the schedule's model says; `/warp-start all` pulls all.
             print(f"schedule: {sched_meta.get('program') or '-'} build-schedule/2, gate order {order}"
-                  + (" (gates are milestones: only a red gate holds work)" if order == "deps" else "")
-                  + (f" — gateOrder: {cfg_order} in .warp/config.yaml overrides the schedule's {own}; delete that line to use the schedule's"
-                     if cfg_order in ("strict", "deps") and cfg_order != own else ""))
+                  + (" (gates in order: the lowest open gate's unblocked tickets start first; /warp-start all pulls all available work)"
+                     if order == "strict" else " (all available work: every ticket whose blockers merged starts)")
+                  + (" — from gateOrder in .warp/config.yaml" if cfg_order in ("strict", "deps") else ""))
             for line in repo_lines:
                 print(line)
         if run:
@@ -1601,7 +1615,7 @@ def main() -> None:
     elif args.cmd == "bundle":
         bundle(Path(args.beam), Path(args.out))
     elif args.cmd in {"start", "resume"}:
-        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "", takeover=bool(getattr(args, "takeover", False)), gates=(getattr(args, "gates", "") or getattr(args, "gates_arg", "") or ""), now=bool(getattr(args, "now", False)), verb=args.cmd)
+        code = go(Path(args.beam), args.reason, force=bool(getattr(args, "force", False)), run=getattr(args, "run", "") or "", takeover=bool(getattr(args, "takeover", False)), gates=("all" if getattr(args, "pull_all", False) else (getattr(args, "gates", "") or getattr(args, "gates_arg", "") or "")), now=bool(getattr(args, "now", False)), verb=args.cmd)
         if code != 0:
             sys.exit(code)
     elif args.cmd in {"pause", "stop"}:
