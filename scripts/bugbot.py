@@ -54,7 +54,7 @@ import beam as beam_mod  # noqa: E402
 TRIGGER_KEY = "bugbotTrigger"
 START_KEY = "bugbotStartMinutes"
 COMMENT_BODY = "bugbot run"
-DEFAULT_START_MINUTES = 10
+DEFAULT_START_MINUTES = 20  # 1.7.21: each rung of the ladder waits this long (bugbotStartMinutes)
 MAX_COMMENTS = 2
 TRIGGERS = ("auto", "comment", "manual", "shuttle")
 MAX_REVIEW_SHUTTLES = 2
@@ -150,6 +150,8 @@ def ask_manual(data: dict, ticket: dict, lines: list) -> None:
     if head and str(pr.get("bugbotManualAsked") or "") == head:
         return
     pr["bugbotManualAsked"] = head
+    pr["bugbotCommandSha"] = head
+    pr["bugbotCommandAt"] = beam_mod.utcnow()
     tid = ticket.get("id")
     url = pr.get("url") or ""
     branch = ticket.get("branch") or ""
@@ -175,6 +177,53 @@ def manual_command(data: dict, url: str) -> str:
     template = str((data.get("config") or {}).get("bugbotManualCommand") or MANUAL_COMMAND)
     number = re.search(r"/pull/(\d+)", str(url or ""))
     return template.replace("{pr}", number.group(1) if number else str(url or "")).replace("{url}", str(url or ""))
+
+
+# ---- the ladder (1.7.21) ----------------------------------------------------------------------------------------------
+#
+# When Warp asks for Bugbot (auto, comment, manual), each head climbs: `bugbot run` (2 tries) -> `/review-bugbot <pr>`
+# -> Warp's own AI review (aireview.py). Each rung waits bugbotStartMinutes (20). Once on AI review, a pull request stays
+# there: its later heads are reviewed by AI too, so a fix round does not wait another hour for a Bugbot that never runs.
+
+
+def ask_command(data: dict, ticket: dict, lines: list, why: str, now_s: str = "") -> None:
+    """Rung 2: the parent runs `/review-bugbot <pr>` (bugbotManualCommand). Once per head."""
+    pr = _pr(ticket)
+    head = _head(pr)
+    if head and str(pr.get("bugbotCommandSha") or "") == head:
+        return
+    pr["bugbotCommandSha"] = head
+    pr["bugbotCommandAt"] = now_s or beam_mod.utcnow()
+    tid = ticket.get("id")
+    url = pr.get("url") or ""
+    command = manual_command(data, url)
+    minutes = start_minutes(data)
+    lines.append("bugbot: command %s %s" % (tid, url))
+    lines.append(
+        "bugbot: MUST DO %s: %s on %s (head %s). Run `%s` now. If Bugbot has still not reported in %d minutes, Warp's own "
+        "AI review takes this pull request over." % (tid, why, url or "the pull request", head[:12] or "?", command, minutes))
+    lines.append("herald: %s: Bugbot has not run (%s). Asked with `%s`; Warp's AI review takes over in %d minutes if it "
+                 "still does not." % (tid, why, command, minutes))
+
+
+def go_ai(data: dict, ticket: dict, lines: list, why: str, now_s: str = "") -> None:
+    """Rung 3: Warp's AI review takes the pull request over (aireview.py)."""
+    pr = _pr(ticket)
+    if pr.get("aiReview"):
+        return
+    pr["aiReview"] = True
+    pr["aiReviewSince"] = now_s or beam_mod.utcnow()
+    pr["aiReviewSha"] = _head(pr)
+    pr["aiReviewWhy"] = why
+    rnd = pr.get("bugbotRound") if isinstance(pr.get("bugbotRound"), dict) else {}
+    if rnd.get("open"):
+        rnd["open"] = False  # Bugbot threads no longer gate the next review: the AI review does
+    tid = ticket.get("id")
+    lines.append(
+        "bugbot: ai-review %s %s: %s. Warp's own AI review takes this pull request over: review, fix every finding in one "
+        "push, review again until clean, then approve and merge." % (tid, pr.get("url") or "", why))
+    lines.append("herald: %s: Bugbot never ran (%s). Warp's AI review takes over; it posts its findings here and on the "
+                 "pull request, then approves and merges a clean head." % (tid, why))
 
 
 def on_request(data: dict, ticket: dict, lines: list) -> None:
@@ -516,6 +565,8 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
     """A requested Bugbot that never started. Returns True when it queued a comment or warned."""
     pr = _pr(ticket)
     head = _head(pr)
+    if pr.get("aiReview"):
+        return False  # on Warp's AI review: pipeline starts its Shuttle
     if not pr.get("bugbotRequested") or answered(ticket):
         return False
     if head and str(pr.get("bugbotRequestedSha") or head) != head:
@@ -526,12 +577,14 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
             return False  # pipeline starts a review Shuttle; nothing to post
         # The Shuttle reviewed this head and Cursor Bugbot has not started on it: ask Bugbot with a comment.
         mode = "comment"
+    now_dt, now_s = beam_mod.coerce_now(now)
     if mode == "manual":
-        # Nothing to wait for: a person records the result. Ask once per head.
+        # Comments do not reach Bugbot here: rung 2 at once (`/review-bugbot`, once per head), then the AI review.
         before = len(lines)
         ask_manual(data, ticket, lines)
-        return len(lines) > before
-    now_dt, now_s = beam_mod.coerce_now(now)
+        if len(lines) > before:
+            return True
+        return _command_timed_out(data, ticket, lines, now_dt, now_s, "`%s` got no Bugbot review" % manual_command(data, pr.get("url") or ""))
     count = comments_on_head(pr)
     since = pr.get("bugbotCommentAt") if count else pr.get("bugbotRequestedAt")
     age = _age_minutes(since, now_dt)
@@ -549,10 +602,24 @@ def check_silence(data: dict, ticket: dict, lines: list, now=None) -> bool:
     if count < MAX_COMMENTS:
         ask(ticket, lines)
         return True
+    # 1.7.21: two `bugbot run` comments, each given its wait, and no Bugbot: `/review-bugbot`, then the AI review. The
+    # repo is no longer switched to manual: the next pull request starts at `bugbot run` again.
     pr["bugbotSilentSha"] = head
-    pr["bugbotSilentAt"] = now_s
-    lines.extend(switch_to_manual(data, ticket, count))
-    ask_manual(data, ticket, lines)
+    pr["bugbotSilentAt"] = pr.get("bugbotSilentAt") if str(pr.get("bugbotCommandSha") or "") == head else now_s
+    if str(pr.get("bugbotCommandSha") or "") != head:
+        lines.append("bugbot: silent %s" % ticket.get("id"))
+        ask_command(data, ticket, lines, "Bugbot did not answer %d `%s` comments, %d minutes apart" % (count, COMMENT_BODY, minutes), now_s)
+        return True
+    return _command_timed_out(data, ticket, lines, now_dt, now_s,
+                              "no Bugbot after %d `%s` comments and `%s`" % (count, COMMENT_BODY, manual_command(data, pr.get("url") or "")))
+
+
+def _command_timed_out(data: dict, ticket: dict, lines: list, now_dt, now_s: str, why: str) -> bool:
+    pr = _pr(ticket)
+    age = _age_minutes(pr.get("bugbotCommandAt"), now_dt)
+    if age is None or age < start_minutes(data):
+        return False
+    go_ai(data, ticket, lines, why, now_s)
     return True
 
 
@@ -623,6 +690,10 @@ def record_result(ticket: dict, result: str, findings: Optional[list] = None, ev
         fields["shuttleReview"] = result
         fields["shuttleReviewSha"] = head
     pr.update(fields)
+    if source == "ai":
+        import aireview
+
+        aireview.note_result(pr, head, result, found if result == "fail" else [str(i).strip() for i in (findings or []) if str(i).strip()], now_s)
     return fields
 
 
@@ -676,7 +747,7 @@ def apply_review(beam_path, ticket: dict, event: dict, stamp: str, lines: list, 
     key = (tid, "review-" + result)
     if key not in heralded:
         heralded.add(key)
-        who = "the Shuttle" if source == "shuttle" else "hand"
+        who = {"shuttle": "the Shuttle", "ai": "Warp's AI review"}.get(source, "hand")
         if result == "pass":
             lines.append("herald: %s Bugbot review by %s: pass." % (tid, who))
         else:

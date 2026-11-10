@@ -143,7 +143,7 @@ def check(data: dict, beam_path: Path, snaps: dict, live: Callable, now=None, st
             head = str(snap.get("headSha") or pr.get("headSha") or "")
             reasons = pipeline.red_reasons(ticket, cfg)
             ran = str(pr.get("bugbotSha") or "") == head or row["bugbot"] in {"pass", "fail"}
-            if orchestrator.bugbot_applies(ticket, cfg) and not ran and not is_live:
+            if orchestrator.bugbot_applies(ticket, cfg) and not ran and not is_live and not pr.get("aiReview"):
                 row["issues"].append("Bugbot has not run on %s" % head[:12])
                 if str(pr.get("auditBugbotAsked") or "") != head:
                     pr["auditBugbotAsked"] = head

@@ -259,5 +259,100 @@ class SlackArgumentTest(unittest.TestCase):
         self.assertNotIn("text", args)
 
 
+class BugbotLadderTest(unittest.TestCase):
+    """1.7.21: when Warp asks for Bugbot: `bugbot run` x2 -> `/review-bugbot` -> Warp's AI review, 20 minutes a rung; a
+    clean AI review posts its findings, approves and merges."""
+
+    def setUp(self):
+        import aireview
+
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.tmp, check=True)
+        (self.tmp / ".warp").mkdir()
+        self.calls = []
+
+        class Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def run(cmd):
+            self.calls.append(cmd)
+            return Done()
+
+        aireview.RUN = run
+        self.addCleanup(setattr, aireview, "RUN", None)
+        self.head = "c" * 40
+
+    def data(self, trigger, **pr):
+        (self.tmp / ".warp" / "config.yaml").write_text("bugbotRequired: true\nbugbotTrigger: %s\n" % trigger)
+        base = {"url": URL % 9, "headSha": self.head, "rollup": "green", "ci": "green", "ciSha": self.head,
+                "bugbotRequested": True, "bugbotRequestedSha": self.head, "bugbotRequestedAt": "2026-11-10T10:00:00Z",
+                "acResults": {"AC-1": "pass"}}
+        base.update(pr)
+        ticket = {"id": "AI-1", "status": "review", "phase": "reviewing", "size": "L", "autoMerge": False, "locks": ["src"],
+                  "branch": "warp/x/AI-1", "pr": base}
+        data = {"version": 1, "runState": "running", "config": {"bugbotTrigger": trigger, "runner": "local"},
+                "tickets": {"AI-1": ticket}, "_repoRoot": str(self.tmp)}
+        (self.tmp / ".warp" / "beam.json").write_text(json.dumps(data))
+        return data, ticket
+
+    def test_manual_mode_asks_review_bugbot_at_once_then_hands_over_to_ai(self):
+        data, ticket = self.data("manual")
+        lines = []
+        bugbot.ask_manual(data, ticket, lines)
+        self.assertTrue(any("Run `/review-bugbot 9`" in l for l in lines), lines)
+        ticket["pr"]["bugbotCommandAt"] = "2026-11-10T10:00:00Z"
+        lines = []
+        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-11-10T10:15:00Z"))
+        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-11-10T10:21:00Z"))
+        self.assertTrue(lines[0].startswith("bugbot: ai-review AI-1"), lines)
+        self.assertTrue(ticket["pr"]["aiReview"])
+
+    def test_ai_review_starts_its_shuttle_and_a_clean_head_is_posted_approved_and_merged(self):
+        import aireview
+
+        data, ticket = self.data("comment", aiReview=True, aiReviewWhy="no Bugbot after 2 `bugbot run` comments and `/review-bugbot 9`")
+        lines = []
+        pipeline._advance_one(data, ticket, None, lines, [], now="2026-11-10T12:00:00Z")
+        self.assertTrue(any(l.startswith("start AI-1") and "step=aireview" in l for l in lines), lines)
+        self.assertIn("bugbot: ai-review-shuttle AI-1 1/2", lines)
+        self.assertFalse(any(l.startswith("bugbot: comment") for l in lines), "no `bugbot run` once on AI review")
+        prompt = "\n".join(orchestrator.review_lines(ticket, data["config"], str(self.tmp)))
+        self.assertIn("--source ai", prompt)
+        self.assertIn("repeat steps 2-3 until a pass finds nothing", prompt)
+        # The AI review fixed two findings and passed the final head.
+        ticket.pop("shuttle", None)
+        bugbot.record_result(ticket, "pass", ["src/a.py:3 null deref (fixed in c1)", "src/b.py:9 race (fixed in c1)"],
+                             now="2026-11-10T12:30:00Z", source="ai", sha=self.head)
+        lines = []
+        pipeline._advance_one(data, ticket, None, lines, [], now="2026-11-10T12:31:00Z")
+        text = "\n".join(lines)
+        self.assertIn("bugbot: ai-review clean AI-1 on %s; approving and merging" % self.head[:12], text)
+        comment = [c for c in self.calls if c[:3] == ["gh", "pr", "comment"]]
+        approve = [c for c in self.calls if c[:3] == ["gh", "pr", "review"] and "--approve" in c]
+        self.assertEqual(len(comment), 1)
+        self.assertIn("src/a.py:3 null deref (fixed in c1)", comment[0][-1])
+        self.assertEqual(len(approve), 1)
+        self.assertEqual(ticket["pr"]["approvedBy"], aireview.APPROVER)
+        self.assertEqual((ticket["status"], ticket["phase"]), ("review", "ready"), "approved: queued to merge, not waiting")
+        self.assertNotIn("approve: wait AI-1", text)
+        # Once per head.
+        self.calls.clear()
+        pipeline._advance_one(data, ticket, None, [], [], now="2026-11-10T12:32:00Z")
+        self.assertEqual(self.calls, [])
+
+    def test_a_failed_ai_review_goes_to_one_fix_round(self):
+        data, ticket = self.data("comment", aiReview=True)
+        bugbot.record_result(ticket, "fail", ["src/a.py:3 still wrong"], now="2026-11-10T12:30:00Z", source="ai", sha=self.head)
+        reasons = pipeline.red_reasons(ticket, data["config"])
+        self.assertIn("bugbot: src/a.py:3 still wrong", reasons)
+        self.assertEqual(ticket["pr"]["aiReviewLog"][-1]["result"], "fail")
+
+    def test_the_ai_step_is_exempt_from_the_product_commit_rule(self):
+        self.assertIn("aireview", productdiff.NO_CODE_STEPS)
+
+
 if __name__ == "__main__":
     unittest.main()

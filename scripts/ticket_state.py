@@ -474,7 +474,7 @@ def _apply_check(beam_path: Path, data: dict, ticket: dict, result: str, name: s
 
 # Steps whose Shuttle works on a pull request that may already exist. Their return cannot be
 # read from "a pull request appeared", so the folder says it.
-_RETURN_STEPS = {"implement", "restart", "fix", "repair", "review", "verify"}
+_RETURN_STEPS = {"implement", "restart", "fix", "repair", "review", "verify", "aireview"}
 _RETURN_STATES = {"done", "check-green", "check-red", "review-pass", "review-fail"}
 # A Shuttle's last line when it stops on a problem instead of finishing: it has returned too (1.7.5). Before, only
 # `done` (and a check or a review) counted, so a Shuttle that wrote one of these and returned still held its slot
@@ -500,7 +500,7 @@ def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[l
     stop = state in _STOP_STATES
     if not stop and (state not in _RETURN_STATES or (state != "done" and step not in _RETURN_STEPS)):
         return False
-    if state in {"review-pass", "review-fail"} and step != "review":
+    if state in {"review-pass", "review-fail"} and step not in {"review", "aireview"}:
         # The working Shuttle records its review before it returns its own line; "done" or the
         # check ends that step. Only a review Shuttle's job ends with the review.
         return False
@@ -1460,7 +1460,7 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--at", default="", help="timestamp; default is now")
     add.add_argument("--sha", default="", help="with review-pass or review-fail: the head commit that was reviewed")
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
-    add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default) or hand")
+    add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default), ai (Warp's AI review, 1.7.21) or hand")
     add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
     add.add_argument("--step", default="", help="the Shuttle's step (implement, fix, restart, repair, review, verify); "
                                                 "done on a code step needs a product commit (1.7.21)")

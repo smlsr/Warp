@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 CODE_STEPS = {"implement", "fix", "restart", "repair", "rebase", ""}
-NO_CODE_STEPS = {"review", "verify"}
+NO_CODE_STEPS = {"review", "verify", "aireview"}  # aireview records a review; a clean head needs no commit
 
 
 def _git(root: Path, *args: str, run: Optional[Callable] = None):

@@ -87,7 +87,7 @@ class BugbotTriggerTest(Repo):
         # Inside the start window: nothing yet.
         self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:05:00Z"))
         self.assertEqual(lines, [])
-        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:20:00Z"))
+        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:22:00Z"))
         self.assertTrue(lines[0].startswith("config: bugbotTrigger comment. Bugbot did not start on its own for WV-01"))
         self.assertTrue(lines[1].startswith("herald: Bugbot did not start on its own on WV-01."), lines)
         self.assertEqual(lines[-1], "bugbot: comment WV-01 %s" % URL)
@@ -104,7 +104,8 @@ class BugbotTriggerTest(Repo):
             self.assertFalse(bugbot.check_silence(data, data["tickets"]["WV-01"], lines, now="2026-10-13T21:00:00Z"))
             self.assertEqual(lines, [])
 
-    def test_comment_mode_asks_on_request_then_twice_then_switches_to_manual(self):
+    def test_comment_mode_climbs_the_ladder_to_warps_ai_review(self):
+        # 1.7.21: `bugbot run` twice, 20 minutes apart; then `/review-bugbot 4`; 20 minutes later Warp's AI review.
         self.config.write_text("bugbotRequired: true\nbugbotTrigger: comment\n")
         data = self.data([row()])
         ticket = data["tickets"]["WV-01"]
@@ -116,22 +117,27 @@ class BugbotTriggerTest(Repo):
         lines = []
         bugbot.on_request(data, ticket, lines)
         self.assertEqual(lines, [], "one comment per head on request")
-        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:05:00Z"))
-        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:13:00Z"))
+        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:13:00Z"))
+        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:23:00Z"))
         self.assertEqual(lines, ["bugbot: comment WV-01 %s" % URL])
-        bugbot.record(ticket, now="2026-10-13T19:13:00Z")
+        bugbot.record(ticket, now="2026-10-13T19:23:00Z")
         lines = []
-        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:30:00Z"))
-        self.assertTrue(lines[0].startswith("config: bugbotTrigger manual. Bugbot did not answer 2 `bugbot run` comments"), lines)
-        self.assertIn("not listening on smlsr/WarpDemo", lines[0])
+        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:40:00Z"))
+        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:44:00Z"))
         self.assertIn("bugbot: silent WV-01", lines)
-        self.assertIn("bugbot: manual WV-01 %s branch=warp/view/WV-01-WAR-47" % URL, lines)
-        self.assertTrue(any(line.startswith("bugbot: MUST DO WV-01: Bugbot cannot be started from here") for line in lines))
-        self.assertIn("bugbotTrigger: manual", self.config.read_text())
-        self.assertEqual(bugbot.trigger(data), "manual")
+        self.assertIn("bugbot: command WV-01 %s" % URL, lines)
+        self.assertTrue(any(line.startswith("bugbot: MUST DO WV-01: Bugbot did not answer 2 `bugbot run` comments") and
+                            "Run `/review-bugbot 4` now" in line for line in lines), lines)
+        self.assertNotIn("bugbotTrigger: manual", self.config.read_text(), "the repo is not switched to manual")
         lines = []
-        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:45:00Z"))
-        self.assertEqual(lines, [], "manual asks once per head")
+        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T19:55:00Z"))
+        self.assertEqual(lines, [], "the command is asked once per head")
+        self.assertTrue(bugbot.check_silence(data, ticket, lines, now="2026-10-13T20:05:00Z"))
+        self.assertTrue(lines[0].startswith("bugbot: ai-review WV-01 %s: no Bugbot after 2 `bugbot run` comments and `/review-bugbot 4`" % URL), lines)
+        self.assertTrue(ticket["pr"]["aiReview"])
+        lines = []
+        self.assertFalse(bugbot.check_silence(data, ticket, lines, now="2026-10-13T21:00:00Z"))
+        self.assertEqual(lines, [])
 
     def test_manual_mode_asks_at_once_and_once_per_head(self):
         self.config.write_text("bugbotRequired: true\nbugbotTrigger: manual\nbugbotManual: true\n")

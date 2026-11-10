@@ -1338,9 +1338,10 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None, now=
         return
     if data is None:
         data = {}
+    import aireview
     import bugbot as bugbot_gate
 
-    if bugbot_gate.round_gate(data, ticket, lines):
+    if not aireview.on(pr) and bugbot_gate.round_gate(data, ticket, lines):
         # 1.7.21: the last review's findings are not all addressed yet; no review on a partial fix.
         return
     agents.note_bugbot(data, ticket, beam_path=_beam_path(data))
@@ -1350,7 +1351,8 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None, now=
     lines.append("bugbot: request %s %s" % (ticket.get("id"), pr.get("url") or ""))
     import bugbot
 
-    bugbot.on_request(data, ticket, lines)
+    if not aireview.on(pr):
+        bugbot.on_request(data, ticket, lines)  # on AI review no `bugbot run` is posted (1.7.21)
     _queue_in_review(data, ticket, lines)
 
 
@@ -2007,14 +2009,24 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
             and not findings_of(ticket)
         )
         if clean:
+            import aireview
+
             _assign_auto(ticket, cfg)
             _ensure_records(ticket)
             _phase(ticket, "ready", lines)
+            if aireview.clean_on_head(ticket):
+                # 1.7.21: the AI review passed this head: findings posted, approved, and it merges.
+                aireview.on_clean(data, ticket, lines)
             _hold_or_queue(ticket, lines)
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
+            import aireview
             import bugbot
 
+            if aireview.on(ticket.get("pr") or {}):
+                # Bugbot never ran on this pull request: Warp's AI review reviews every head (1.7.21).
+                aireview.start(data, ticket, lines)
+                return
             if bugbot.trigger(data) == "shuttle":
                 pr_now = ticket.get("pr") or {}
                 head = str(pr_now.get("headSha") or "")
