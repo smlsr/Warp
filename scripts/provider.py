@@ -1040,6 +1040,40 @@ def current_bugbot_findings(root: Path, url: str, head: str, runner=None) -> Opt
     return out
 
 
+_FIXED_REPLY = re.compile(r"\b(fixed|addressed|resolved|done) in\b|\bfixed\b.*\b[0-9a-f]{7,40}\b", re.I)
+
+
+def bugbot_threads(root: Path, url: str, runner=None) -> Optional[list]:
+    """Every Bugbot finding thread on the pull request, open or not (1.7.21):
+    [{id, commit, line, resolved, outdated, replied}] where replied means a reply says "Fixed in <sha>". None when
+    the comments cannot be read."""
+    owner, repo, number = _repo_and_number(url)
+    if not number:
+        return None
+    run = runner or (lambda cmd: _run(cmd, root, timeout=30))
+    done = run(["gh", "api", "--paginate", "repos/%s/%s/pulls/%s/comments" % (owner, repo, number)])
+    if done.returncode != 0:
+        return None
+    text = (done.stdout or "").strip()
+    try:
+        rows = json.loads(text) if text.startswith("[") and text.count("][") == 0 else json.loads("[" + text.replace("][", ",")[1:-1] + "]")
+    except json.JSONDecodeError:
+        return None
+    top = [r for r in rows if isinstance(r, dict) and is_bugbot_comment(r) and not r.get("in_reply_to_id")]
+    replies: dict = {}
+    for r in rows if isinstance(rows, list) else []:
+        if isinstance(r, dict) and r.get("in_reply_to_id") and _FIXED_REPLY.search(str(r.get("body") or "")):
+            replies[int(r["in_reply_to_id"])] = True
+    resolved = resolved_thread_comment_ids(owner, repo, number, run) if top else set()
+    out = []
+    for r in top:
+        ident = int(r["id"]) if r.get("id") is not None else None
+        out.append({"id": ident, "commit": str(r.get("original_commit_id") or r.get("commit_id") or ""),
+                    "line": finding_line(r), "resolved": ident in resolved, "outdated": _outdated(r),
+                    "replied": bool(ident is not None and replies.get(ident))})
+    return out
+
+
 def _bugbot_neutral(checks: list) -> bool:
     """Every Bugbot check finished `neutral` (it found something, or left threads open), none failed outright."""
     rows = [item for item in checks if isinstance(item, dict) and _bugbot_check(item)]

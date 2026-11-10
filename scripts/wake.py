@@ -28,6 +28,7 @@ stopped, or finished says to delete it.
   python3 scripts/wake.py setup --beam .warp/beam.json       the timer lines /warp-start prints
   python3 scripts/wake.py tick|sweep|audit|deep --beam .warp/beam.json    one cadence now (wake.py run runs the due ones)
   python3 scripts/wake.py blockers --beam .warp/beam.json                 the top blockers, by dependents x age
+  python3 scripts/wake.py full-audit --beam .warp/beam.json               the hourly full audit now (every ticket, fixed and listed)
   python3 scripts/wake.py decide ASK-1A2B3C <option> --beam .warp/beam.json   answer a human ask
   python3 scripts/wake.py unpark all-runnable --beam .warp/beam.json   reopen parked tickets that can run (or one id)
   python3 scripts/wake.py add-ticket --beam .warp/beam.json --id UI-90 --summary "…" --from UI-12 [--locks a,b]
@@ -511,10 +512,10 @@ def main(argv: Optional[list] = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("prompt", "armed", "run", "status", "setup", "add-ticket", "unpark", "tick", "sweep", "audit", "deep",
-                 "decide", "blockers"):
+                 "decide", "blockers", "full-audit"):
         p = sub.add_parser(name)
         p.add_argument("--beam", default=".warp/beam.json")
-        if name in {"tick", "sweep", "audit", "deep"}:
+        if name in {"tick", "sweep", "audit", "deep", "full-audit"}:
             p.add_argument("--lease", default="inline", help="background: a job started by wake.py run")
         if name == "decide":
             p.add_argument("ask_id")
@@ -557,10 +558,10 @@ def main(argv: Optional[list] = None) -> int:
         for line in status_lines(path):
             print(line)
         return 0
-    if args.cmd in {"tick", "sweep", "audit", "deep"}:
+    if args.cmd in {"tick", "sweep", "audit", "deep", "full-audit"}:
         import drive
 
-        for line in drive.run_one(path, args.cmd, holder=args.lease):
+        for line in drive.run_one(path, "fullAudit" if args.cmd == "full-audit" else args.cmd, holder=args.lease):
             print(line)
         return 0
     if args.cmd == "decide":

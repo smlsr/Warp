@@ -683,6 +683,46 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
     return None
 
 
+NO_PRODUCT_RETRIES = 3
+RESTART_RULE = ("The last Shuttle returned done (or ok) without a product commit: {why}. This turn: (a) fetch origin and "
+                "merge origin/{base} into the branch if it is DIRTY or conflicting; (b) run the check command "
+                "(checkCommand, default `make ci`) until it is green; (c) fix every red check and every open Bugbot "
+                "finding, or write `failed` with the reason; (d) never write done without at least one commit that "
+                "changes a file outside .warp/ pushed in this turn (ticket_state.py refuses it).")
+
+
+def no_product_retry(data: dict, ticket: dict, why: str, lines: list) -> None:
+    """A Shuttle said done or ok with no product work (1.7.21). Not a completion: the ticket goes back with the restart
+    rule spelled out, a fix round when its pull request is open, a fresh implement otherwise. Three in a row raise
+    one alarm and climb the ladder instead of looping."""
+    tid = str(ticket.get("id") or "")
+    count = int(ticket.get("noProductRetries") or 0) + 1
+    ticket["noProductRetries"] = count
+    ticket["noProductWhy"] = why
+    pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
+    pr.pop("agentFinished", None)
+    base = str((data.get("config") or {}).get("baseBranch") or "main")
+    lines.append("shuttle: retry %s: it returned done with no product commit (%s); not recorded as done" % (tid, why))
+    if count > NO_PRODUCT_RETRIES:
+        ticket["status"] = "alarm"
+        ticket["alarm"] = "no-product-commit"
+        lines.append("herald: ALARM %s: %d Shuttles in a row returned done without a product commit (%s). The ladder "
+                     "restaffs it with a stronger model next." % (tid, count - 1, why))
+        return
+    ticket["alarm"] = "no-product-commit"
+    rule = RESTART_RULE.format(why=why, base=base)
+    if pr.get("url"):
+        begin_fix(data, ticket, [rule], lines)
+    else:
+        ticket["status"] = "queued"
+        ticket.pop("phase", None)
+        shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+        for key in ("pending", "step", "startedAt", "launching", "launchLines"):
+            shuttle.pop(key, None)
+        ticket["restartRule"] = rule
+        lines.append("dispatch: %s queued again; its next Shuttle gets the no-empty-done rule" % tid)
+
+
 BATCH_WAIT_MINUTES = 20
 
 
@@ -725,8 +765,13 @@ def batched(reasons: list) -> list:
     items = [str(r) for r in reasons if str(r).strip()]
     if len(items) < 2:
         return items
-    return ["ONE ROUND, ONE PUSH: fix all %d items below together, run the gate for all of them, then push once "
-            "(a partial push reruns CI and fails on the rest)" % len(items)] + items
+    head = ["ONE ROUND, ONE PUSH: fix all %d items below together, run the gate for all of them, then push once "
+            "(a partial push reruns CI and fails on the rest)" % len(items)]
+    if any(i.startswith("bugbot") for i in items):
+        head.append("BUGBOT: fix every Bugbot finding below before you push; never push one finding at a time. Then reply "
+                    "`Fixed in <sha>` on each finding's thread and resolve it. Warp asks for the next Bugbot review only "
+                    "when every thread is addressed")
+    return head + items
 
 
 def _launch_fix(data: dict, ticket: dict, item: dict, lines: list) -> None:
@@ -1230,6 +1275,12 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     """One red round. Past maxFixAttempts (default 5) the ticket parks and does not start a Shuttle."""
     import ownership
 
+    found = [str(r)[len("bugbot: "):] for r in reasons if str(r).startswith("bugbot: ")]
+    if found:
+        import bugbot as bugbot_round
+
+        # 1.7.21: every finding of this review is one round; the next review waits until all are addressed.
+        bugbot_round.open_round(ticket, found)
     if ownership.hands_off(data, ticket, _beam_path(data)):
         # 1.7.18: never a fix round, an attempt, or a park on a pull request someone else owns: tell its owner.
         bugbot = any(str(r).startswith("bugbot") for r in reasons)
@@ -1287,6 +1338,12 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None, now=
         return
     if data is None:
         data = {}
+    import aireview
+    import bugbot as bugbot_gate
+
+    if not aireview.on(pr) and bugbot_gate.round_gate(data, ticket, lines):
+        # 1.7.21: the last review's findings are not all addressed yet; no review on a partial fix.
+        return
     agents.note_bugbot(data, ticket, beam_path=_beam_path(data))
     pr["bugbotRequestedCycle"] = cycle
     ticket["status"] = "review" if rollup in _GREEN_ROLLUP else "bugbot_running"
@@ -1294,7 +1351,8 @@ def _request_bugbot(ticket: dict, lines: list, data: Optional[dict] = None, now=
     lines.append("bugbot: request %s %s" % (ticket.get("id"), pr.get("url") or ""))
     import bugbot
 
-    bugbot.on_request(data, ticket, lines)
+    if not aireview.on(pr):
+        bugbot.on_request(data, ticket, lines)  # on AI review no `bugbot run` is posted (1.7.21)
     _queue_in_review(data, ticket, lines)
 
 
@@ -1951,14 +2009,24 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
             and not findings_of(ticket)
         )
         if clean:
+            import aireview
+
             _assign_auto(ticket, cfg)
             _ensure_records(ticket)
             _phase(ticket, "ready", lines)
+            if aireview.clean_on_head(ticket):
+                # 1.7.21: the AI review passed this head: findings posted, approved, and it merges.
+                aireview.on_clean(data, ticket, lines)
             _hold_or_queue(ticket, lines)
             return
         if orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
+            import aireview
             import bugbot
 
+            if aireview.on(ticket.get("pr") or {}):
+                # Bugbot never ran on this pull request: Warp's AI review reviews every head (1.7.21).
+                aireview.start(data, ticket, lines)
+                return
             if bugbot.trigger(data) == "shuttle":
                 pr_now = ticket.get("pr") or {}
                 head = str(pr_now.get("headSha") or "")

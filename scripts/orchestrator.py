@@ -1496,6 +1496,10 @@ def review_lines(ticket: dict, config: Optional[dict], parent: str, scripts: str
         "python3 %s/ticket_state.py append --root %s --id %s --state review-pass|review-fail --sha <head sha> "
         "--agent %s --source shuttle [--finding \"<file:line what is wrong>\" ...]" % (scripts, parent, tid, agent_of(ticket))
     )
+    if step == "aireview":
+        import aireview
+
+        return aireview.prompt_lines(ticket, parent, scripts, agent_of(ticket), REVIEW_FOCUS)
     if step == "review":
         return [
             "REVIEW ONLY. bugbotTrigger: shuttle. Do not change code, commit, or push.",
@@ -1520,6 +1524,9 @@ def done_lines(ticket: dict, done_cmd: str, push: bool = False) -> list:
     import acceptance
 
     step = str((ticket.get("shuttle") or {}).get("step") or "") if isinstance(ticket.get("shuttle"), dict) else ""
+    if step and " --step " not in done_cmd:
+        # 1.7.21: ticket_state.py checks a code step's done for a product commit; review and verify are exempt.
+        done_cmd = "%s --step %s" % (done_cmd, step)
     if step == "verify":
         listed = acceptance.items(ticket)
         return [
@@ -1596,13 +1603,31 @@ def step_lines(ticket: dict) -> list:
             "the change affects. Run the check command, then commit and push a NEW commit. A fix that pushes nothing has not "
             "fixed anything: never record review-pass on the commit the findings were made on. If you cannot fix an item, "
             "return `result: %s failed <why>`." % tid)
+    elif step == "aireview" and detail:
+        lines.append("AI REVIEW %s: %s" % (tid, detail))
     elif step in {"review", "verify"} and detail:
         lines.append("%s ONLY %s: %s" % (step.upper(), tid, detail))
     elif detail:
         lines.append("detail: %s" % detail)
+    if step not in {"review", "verify", "aireview"} and (pr.get("url") or step in {"restart", "repair"} or ticket.get("restartRule")):
+        # 1.7.21: a Shuttle on an open pull request (a restart, a repair, a replacement) once read "the PR exists, the
+        # work was done earlier" as "nothing to do" and wrote done in one second.
+        lines.append(RESTART_LINES % {"id": tid, "url": pr.get("url") or "(none yet)"})
+        if ticket.get("restartRule"):
+            lines.append(str(ticket["restartRule"]))
     if step not in {"review", "verify"}:
         lines.append(PROGRESS_LINE)
     return lines
+
+
+RESTART_LINES = (
+    "%(id)s IS NOT DONE. Pull request %(url)s is open on this branch and is not merged: something is still wrong with it. "
+    "This turn you must: (a) fetch origin, and merge origin/main into the branch if it is DIRTY or conflicts; (b) run the "
+    "check command (checkCommand, default `make ci`) until it is green; (c) fix every red check and every open Bugbot "
+    "finding on the head, or write `failed --error \"<why>\"`; (d) NEVER write done without at least one commit pushed in "
+    "this turn that changes a file outside .warp/. A done with only the ticket folder changed is refused and recorded "
+    "as failed (no-product-commit)."
+)
 
 
 PROGRESS_LINE = (

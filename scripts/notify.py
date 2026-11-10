@@ -218,6 +218,11 @@ def build(kind: str, root: Path, info: Optional[dict] = None, msg: Optional[dict
         payload.update(msg)
         payload["header"] = fmt.header(root, cfg)
         tg, notes = targets(cfg)
+        for target in tg:
+            if target.get("messenger") == "slack" and isinstance(payload.get("slack"), dict):
+                # The exact tool arguments (1.7.21): slack_send_message takes channel_id and message, not text.
+                target["tool"] = "slack_send_message"
+                target["arguments"] = fmt.slack_arguments(target.get("channel") or "", payload["slack"])
         payload["targets"], payload["notes"] = tg, notes
         payload.update(extra or {})
         if cfg["notify"] == "quiet" and kind != PASS_KIND:
@@ -247,7 +252,9 @@ def report_lines(payload: dict) -> list:
         where = ", ".join(f"{t['messenger']} {t['channel']}" for t in payload["targets"])
         passed = payload.get("kind") == PASS_KIND
         name = PASS_PAYLOAD if passed else PAYLOAD
-        out.append(f"herald: post .warp/{name} to {where} through the connected MCP server (slack view to Slack, teams view to Teams).")
+        out.append(f"herald: post .warp/{name} to {where} through the connected MCP server (slack view to Slack, teams view to Teams). "
+                   f"Slack: call slack_send_message with each target's `arguments` as they are: "
+                   f"{{\"channel_id\": <channel>, \"message\": <text>}}; the argument is `message`, not `text`.")
         if passed:
             out.append(f"herald: then run: python3 {Path(__file__).resolve()} posted --root .")
         out.append(f"herald: if the connector is missing or errors, run: python3 {Path(__file__).resolve()} outbox --root .{' --pass' if passed else ''}")

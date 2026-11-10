@@ -38,7 +38,8 @@ from typing import Callable, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 DEFAULTS = {
-    "cadence": {"tick": 300, "sweep": 900, "audit": 1800, "deep": 21600, "background": True, "leaseSeconds": 1500},
+    "cadence": {"tick": 300, "sweep": 900, "audit": 1800, "fullAudit": 3600, "deep": 21600, "background": True,
+                "leaseSeconds": 1500},
     "blockers": {"topN": 10},
     "refresh": {"timeout": 30, "budget": 2},
     "ci": {"hungMinutes": 60},
@@ -50,7 +51,7 @@ DEFAULTS = {
     "ladder": {"nudgeAfter": 1, "restaffAfter": 3, "coordinatorAfter": 6, "askAfter": 10},
     "batch": {"fixes": True},
 }
-CADENCES = ("tick", "sweep", "audit", "deep")
+CADENCES = ("tick", "sweep", "audit", "fullAudit", "deep")
 CADENCE_FILE = "cadence.json"
 
 
@@ -271,7 +272,8 @@ def scripts_dir() -> str:
 def background(beam_path: Path, name: str) -> bool:
     """Start `wake.py <name> --beam <beam> --lease bg` detached. True when it started."""
     try:
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent / "wake.py"), name, "--beam",
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent / "wake.py"),
+                          "full-audit" if name == "fullAudit" else name, "--beam",
                           str(Path(beam_path).resolve()), "--lease", "background"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                          start_new_session=True, cwd=str(Path(beam_path).resolve().parent.parent))

@@ -484,7 +484,7 @@ def _note_live(data: dict, ticket: dict) -> None:
 
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
     step = str(shuttle.get("step") or "")
-    if step not in {"implement", "fix", "restart", "repair", "review", "verify"}:
+    if step not in {"implement", "fix", "restart", "repair", "review", "verify", "aireview"}:
         if ticket.get("status") == "fix" or ticket.get("phase") == "fixing":
             step = "fix"
         else:
@@ -884,6 +884,19 @@ def record_result(
     named, _reason, line_agent = agents.stopped_result(line)
     folder_agent = "" if line_agent else _cloud_agent_from_folder(root, tid)
     agents.note_stopped_result(data, tid, line, beam_path=beam_path, agent_id=folder_agent)
+    why = _no_product_result(data, ticket, root)
+    if why:
+        # 1.7.21: `ok` with no product work is a retry, never a completion.
+        import beam as beam_mod
+        import pipeline
+        import reconcile
+
+        reconcile.mark_returned(ticket, beam_mod.utcnow(), why="checkout.py result (no product commit)")
+        lines: list = []
+        pipeline.no_product_retry(data, ticket, why, lines)
+        for out in lines:
+            print(out)
+        return "no-product"
     if not named:
         # 1.7.1: the Agent is back, whatever its folder says. The next pass handles the return at once
         # (a missing pull request is opened or sent back to fix) instead of waiting staleMinutes for it.
@@ -893,6 +906,26 @@ def record_result(
         if reconcile.mark_returned(ticket, beam_mod.utcnow(), why="checkout.py result"):
             print("shuttle: returned %s; run the next pass now" % tid)
     return "ok"
+
+
+def _no_product_result(data: dict, ticket: dict, root: Optional[Path]) -> str:
+    """Why a Shuttle's `ok` cannot stand (productdiff.branch_verdict), or "" (1.7.21)."""
+    if root is None:
+        return ""
+    import productdiff
+    import ticket_state
+
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    step = str(shuttle.get("step") or "")
+    branch = str(ticket.get("branch") or orchestrator.branch_name(ticket, data.get("config") or {}) or "")
+    if not branch or not (Path(root) / ".git").exists():
+        return ""
+    try:
+        state, rows = ticket_state._default_read(Path(root), branch, str(ticket.get("id")))
+        base = multirepo.base_for(data, ticket, str((data.get("config") or {}).get("baseBranch") or "main"))
+        return productdiff.branch_verdict(Path(root), branch, base, state=state, rows=rows, step=step)
+    except Exception:
+        return ""
 
 
 def _cloud_agent_from_folder(root: Optional[Path], tid: str) -> str:
@@ -1024,6 +1057,10 @@ def _other(root, path, data, ticket, branch, base, args, cfg) -> int:
             beam_path=path,
         )
         _save(path, data)
+        if outcome == "no-product":
+            _save(path, data)
+            print("result: retry %s (no product commit)" % args.id)
+            return 0
         if outcome == "queued-cap":
             print("dispatch: %s launch hit the agent cap; queued, and the next tick retries it (not parked, not a "
                   "recovery)" % args.id)

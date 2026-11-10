@@ -677,7 +677,14 @@ def deep(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
     return out + ["deep: report %s" % report.relative_to(path.parent.parent)]
 
 
-RUNNERS = {"tick": tick, "sweep": sweep, "audit": audit, "deep": deep}
+def full_audit(beam_path: Path, env: Optional[Env] = None, now=None) -> list:
+    """The hourly full audit (fullaudit.py, 1.7.21)."""
+    import fullaudit
+
+    return fullaudit.run(Path(beam_path), env=env, now=now)
+
+
+RUNNERS = {"tick": tick, "sweep": sweep, "audit": audit, "fullAudit": full_audit, "deep": deep}
 
 
 def run_one(beam_path: Path, name: str, env: Optional[Env] = None, now=None, holder: str = "inline") -> list:
@@ -712,7 +719,8 @@ def due_lines(beam_path: Path, env: Optional[Env] = None, now=None, inline: Opti
         names = ["tick"] + names
     background = cfg["cadence"].get("background", True) and not selfdrive.in_test() and inline is not True
     for name in names:
-        if name == "tick" or not background:
+        if name in {"tick", "fullAudit"} or not background:
+            # The full audit runs inline: its start and MUST DO lines are for this wake's parent (1.7.21).
             out.extend(run_one(path, name, env=env, now=now))
         elif selfdrive.background(path, name):
             out.append("%s: started in the background under a lease; the next tick prints what it found" % name)
