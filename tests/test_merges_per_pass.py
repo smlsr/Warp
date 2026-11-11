@@ -1,4 +1,4 @@
-"""1.7.9: up to maxMergesPerPass (default 3) merges in one pass, and every merge asks for its Jira move to Done in full
+"""1.7.9: up to maxMergesPerPass (default 0, no cap, since 1.7.25; 3 before) merges in one pass, and every merge asks for its Jira move to Done in full
 until it is recorded."""
 
 from __future__ import annotations
@@ -55,8 +55,15 @@ class PerPassTest(unittest.TestCase):
         (tmp / ".warp" / "config.yaml").write_text("gitProvider: github\n")
         return tmp / ".warp" / "beam.json"
 
-    def test_three_ready_merges_in_one_pass_by_default_and_the_fourth_waits(self):
+    def test_every_ready_pull_request_merges_in_one_pass_by_default(self):
+        # 1.7.25: maxMergesPerPass 0 (no cap) is the default; before, 3.
         data = beam([ready("A", 1), ready("B", 2), ready("C", 3), ready("D", 4)])
+        lines = pipeline.advance(data, {}, now=NOW)
+        self.assertEqual(merged_ids(lines), ["A", "B", "C", "D"], lines)
+        self.assertIn("merge: 4 pull requests taken this pass (maxMergesPerPass 0, no cap)", lines)
+
+    def test_three_ready_merges_in_one_pass_with_a_cap_of_3_and_the_fourth_waits(self):
+        data = beam([ready("A", 1), ready("B", 2), ready("C", 3), ready("D", 4)], maxMergesPerPass=3)
         lines = pipeline.advance(data, {}, now=NOW)
         self.assertEqual(merged_ids(lines), ["A", "B", "C"], lines)
         self.assertIn("merge: 3 pull requests taken this pass (maxMergesPerPass 3)", lines)
@@ -72,7 +79,7 @@ class PerPassTest(unittest.TestCase):
 
     def test_a_live_pass_asks_for_three_and_run_merges_merges_each(self):
         path = self.github_checkout()
-        data = beam([ready("A", 1), ready("B", 2), ready("C", 3), ready("D", 4)])
+        data = beam([ready("A", 1), ready("B", 2), ready("C", 3), ready("D", 4)], maxMergesPerPass=3)
         data["_live"] = True
         lines = pipeline.advance(data, {}, beam_path=path, now=NOW)
         asked = [line.split()[2] for line in lines if line.startswith("merge: request ")]

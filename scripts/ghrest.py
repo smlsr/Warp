@@ -357,3 +357,15 @@ def incremental(beam_path: Path, root: Path, urls: list, fetch: Callable, runner
     except OSError:
         pass
     return out, stats
+
+
+def update_branch(root: Path, pr, head: str = "", runner: Optional[Callable] = None) -> tuple:
+    """(True, "") | (False, why): GitHub merges the base into the pull request branch itself (1.7.25), with the head as
+    the guard. No agent and no clone: one server-side commit, then CI runs on the new head."""
+    number = number_of(pr)
+    slug = slug_of(root, str(pr))
+    if not number or not slug:
+        return False, "no GitHub pull request number or repository for %s" % pr
+    fields = {"expected_head_sha": head} if head else {}
+    ok, _doc, text = call(root, "PUT", "repos/%s/pulls/%s/update-branch" % (slug, number), fields, runner=runner, timeout=60)
+    return ok, "" if ok else (text.splitlines() or ["update-branch refused"])[-1][:300]

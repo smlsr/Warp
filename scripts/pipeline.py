@@ -266,7 +266,12 @@ def bugbot_state(ticket: dict) -> str:
 def bugbot_finished(ticket: dict, config: Optional[dict]) -> bool:
     if not orchestrator.bugbot_applies(ticket, config):
         return True
-    return bugbot_state(ticket) in {"pass", "fail"}
+    if bugbot_state(ticket) in {"pass", "fail"}:
+        return True
+    import fastlane
+
+    # 1.7.25: Bugbot reviewed this pull request before and every thread is addressed on this head.
+    return fastlane.on(config) and fastlane.bugbot_clear(ticket)
 
 
 def red_reasons(ticket: dict, config: Optional[dict]) -> list:
@@ -355,7 +360,10 @@ def gate_open(ticket: dict, config: Optional[dict]) -> bool:
     if not bugbot_finished(ticket, config):
         return False
     if orchestrator.bugbot_applies(ticket, config) and bugbot_state(ticket) != "pass":
-        return False
+        import fastlane
+
+        if not (fastlane.on(config) and fastlane.bugbot_clear(ticket)):
+            return False  # 1.7.25: open Bugbot threads hold it; a pass on this head, or every thread addressed, does not
     if findings_of(ticket):
         return False
     if not orchestrator.checks_green(ticket, config):
@@ -518,6 +526,9 @@ def _apply_snapshot(ticket: dict, snap: Optional[dict], now=None, cfg: Optional[
     if "checksPending" in snap:
         pr["checksPending"] = int(snap.get("checksPending") or 0)
         pr["failedChecksSha"] = new_sha or head_now
+    import fastlane
+
+    fastlane.remember_review(pr, str(snap.get("bugbot") or ""), new_sha or head_now)
     passed = str(snap.get("bugbot") or "").strip().casefold() == "pass"
     if "findings" in snap and (passed or not (by_hand and not snap.get("findings"))):
         pr["bugbotFindings"] = coerce_findings(snap.get("findings"))
@@ -582,10 +593,16 @@ def start_rebase(data: dict, ticket: dict, lines: list) -> None:
     import beam as beam_count
     import effort
 
-    effort.note_fix(ticket, ["rebase: the branch conflicts with the base"], beam_count.utcnow(),
-                    (ticket.get("pr") or {}).get("headSha") or "")
+    import fastlane
+
+    cfg = data.get("config") or {}
+    if fastlane.on(cfg):
+        detail, kinds = fastlane.rebase_round(ticket, cfg)
+    else:
+        detail, kinds = rebase_detail(ticket), ["rebase: the branch conflicts with the base"]
+    effort.note_fix(ticket, kinds, beam_count.utcnow(), (ticket.get("pr") or {}).get("headSha") or "")
     mark_shuttle(ticket, "fix", data)
-    lines.extend(_start_lines(data, ticket, "fix", rebase_detail(ticket)))
+    lines.extend(_start_lines(data, ticket, "fix", detail))
     lines.append("fixer: %s rebase" % ticket.get("id"))
 
 
@@ -616,9 +633,13 @@ def start_ci(data: dict, ticket: dict, lines: list) -> None:
     lines.append("fixer: %s ci-start" % tid)
 
 
-def _conflicted(ticket: dict) -> bool:
+def _conflicted(ticket: dict, config: Optional[dict] = None) -> bool:
+    """A real conflict. Under fastMerge (1.7.25, the default) BEHIND is not one: a behind pull request whose checks are
+    green merges, and when GitHub insists on an up-to-date branch it updates the branch itself (fastlane.py)."""
+    import fastlane
+
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
-    if pr.get("conflict") or pr.get("behind"):
+    if pr.get("conflict") or (pr.get("behind") and not fastlane.on(config)):
         return True
     mergeable = str(pr.get("mergeable") or "").upper()
     state = str(pr.get("mergeStateStatus") or "").upper()
@@ -662,7 +683,7 @@ def _fix_class(ticket: dict, config: Optional[dict] = None) -> Optional[dict]:
         return None
     pr = ticket.get("pr") if isinstance(ticket.get("pr"), dict) else {}
     tid = str(ticket.get("id") or "")
-    if _conflicted(ticket):
+    if _conflicted(ticket, config):
         return {"id": tid, "rank": 1, "sub": 0, "kind": "rebase"}
     if pr.get("ciAbsent"):
         return {"id": tid, "rank": 1, "sub": 1, "kind": "ci-start"}
@@ -1610,7 +1631,7 @@ def _review_only_left(data: dict, ticket: dict) -> bool:
         return False
     if not orchestrator.bugbot_applies(ticket, cfg) or bugbot_finished(ticket, cfg):
         return False
-    if red_reasons(ticket, cfg) or _conflicted(ticket):
+    if red_reasons(ticket, cfg) or _conflicted(ticket, cfg):
         return False
     return True
 
@@ -1933,7 +1954,7 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         if _fix_class(ticket, cfg):
             _defer_fix(data, ticket)
         return
-    if _conflicted(ticket):
+    if _conflicted(ticket, cfg):
         _defer_fix(data, ticket)
         return
     if (ticket.get("pr") or {}).get("ciAbsent"):
@@ -1987,10 +2008,18 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
         ticket["phase"] = "reviewing"
         phase = "reviewing"
     if phase == "reviewing":
+        import fastlane
+
         pr = ticket.get("pr") or {}
         rollup = str(pr.get("rollup") or "").strip().casefold()
         if rollup in _GREEN_ROLLUP:
             ticket["status"] = "review"
+        if fastlane.on(cfg) and _conflicted(ticket, cfg):
+            # 1.7.25: a real conflict rebases now; it does not wait for Bugbot or the old head's checks.
+            start_rebase(data, ticket, lines)
+            return
+        if fastlane.on(cfg) and orchestrator.bugbot_applies(ticket, cfg) and not bugbot_finished(ticket, cfg):
+            fastlane.note_bugbot_clear(data, ticket, cfg, lines)
         reasons = red_reasons(ticket, cfg)
         if reasons and _waits_for_base(data, ticket, reasons, lines):
             return
@@ -2048,7 +2077,7 @@ def _follow(data: dict, ticket: dict, lines: list, now=None) -> None:
                 return
             _request_bugbot(ticket, lines, data, now=now)
             return
-        if _conflicted(ticket):
+        if _conflicted(ticket, cfg):
             start_rebase(data, ticket, lines)
             return
         if _acceptance_only_left(data, ticket):
@@ -2357,22 +2386,25 @@ def _queue_claim(data: dict, ticket: dict, lines: list) -> None:
         lines.extend(text.splitlines())
 
 
-DEFAULT_MERGES_PER_PASS = 3
+DEFAULT_MERGES_PER_PASS = 0
+NO_CAP = 10 ** 6
 
 
 def merges_per_pass(data: dict) -> int:
-    """`maxMergesPerPass` (default 3, at least 1): how many ready pull requests one pass merges, in queue order (1.7.9;
-    before, one)."""
+    """`maxMergesPerPass`: how many ready pull requests one pass merges, in queue order. 0, the default since 1.7.25,
+    is every ready pull request (before, 3)."""
     import beam as beam_mod
 
     path = _beam_path(data)
     try:
         if path is not None:
-            return max(1, int(beam_mod.config_int(data, path, "maxMergesPerPass", DEFAULT_MERGES_PER_PASS)))
-        raw = (data.get("config") or {}).get("maxMergesPerPass")
-        return max(1, int(raw)) if raw not in (None, "") else DEFAULT_MERGES_PER_PASS
+            raw = int(beam_mod.config_int(data, path, "maxMergesPerPass", DEFAULT_MERGES_PER_PASS))
+        else:
+            value = (data.get("config") or {}).get("maxMergesPerPass")
+            raw = int(value) if value not in (None, "") else DEFAULT_MERGES_PER_PASS
     except Exception:
-        return DEFAULT_MERGES_PER_PASS
+        raw = DEFAULT_MERGES_PER_PASS
+    return NO_CAP if raw <= 0 else raw
 
 
 def _merge_ready(data: dict, provider: Optional[dict], lines: list) -> int:
@@ -2397,7 +2429,7 @@ def _merge_ready(data: dict, provider: Optional[dict], lines: list) -> int:
         _merge_one(data, provider, lines, row)
         taken += 1
     if taken > 1:
-        lines.append("merge: %d pull requests taken this pass (maxMergesPerPass %d)" % (taken, cap))
+        lines.append("merge: %d pull requests taken this pass (maxMergesPerPass %s)" % (taken, cap if cap < NO_CAP else "0, no cap"))
     return taken
 
 
@@ -2647,7 +2679,13 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
         if sibling:
             ticket_cfg.pop("checkCommand", None)
         mode = mode_of(repo)
-        verdict, check_detail = (checker or provider_mod.pre_merge_check)(repo, ticket, ticket_cfg)
+        import fastlane
+
+        if fastlane.on(cfg) and checker is None and fastlane.ci_ran_green(ticket, cfg):
+            # 1.7.25: CI already ran green on this head; the local merge check would only repeat it, one PR at a time.
+            verdict, check_detail = "skip", "CI is green on %s (fastMerge)" % str((ticket.get("pr") or {}).get("headSha") or "")[:12]
+        else:
+            verdict, check_detail = (checker or provider_mod.pre_merge_check)(repo, ticket, ticket_cfg)
         if verdict == "red":
             # The tests fail on this head: not merged. The fix Shuttle gets the failing output.
             first = check_detail.splitlines()[0] if check_detail else "the merge check"
@@ -2728,6 +2766,24 @@ def run_merges(data: dict, beam_path, lines: list, merger=None, checker=None) ->
             out.append("merge: %s not merged after %d merge%s in this pass (%s); it is asked again next pass" % (
                 tid, merged_here, "" if merged_here == 1 else "s", (detail or "rejected").splitlines()[0]))
             continue
+        if fastlane.on(cfg) and fastlane.behind_refusal(detail) and not sibling:
+            # 1.7.25: the branch must be up to date. GitHub updates it itself; no agent, no rebase round.
+            ok, why = fastlane.update_branch(data, ticket, repo)
+            if ok:
+                pr = ticket["pr"]
+                pr.pop("mergeRequestedSha", None)
+                pr.pop("mergeRequestedAt", None)
+                ticket["status"] = "review"
+                ticket["phase"] = "ready"
+                out.append("merge: %s is behind %s; GitHub is updating the branch (no agent). It merges as soon as CI "
+                           "is green on the new head." % (tid, multirepo.base_for(data, ticket, "main")))
+                continue
+            if re.search(r"conflict", why or "", re.I):
+                ticket["pr"]["conflict"] = True
+                out.append("merge: %s cannot be brought up to date on GitHub (%s); rebase round" % (tid, why))
+                start_rebase(data, ticket, out)
+                continue
+            out.append("merge: %s: GitHub could not update the branch (%s)" % (tid, why))
         out.append("merge: not merged %s: %s" % (tid, (detail or "rejected").splitlines()[0]))
         out.append(
             "merge: MUST DO %s: merge %s (%s) with the GitHub MCP merge tool (merge_pull_request, merge_method %s) or `gh pr merge %s --%s`, "
