@@ -366,6 +366,9 @@ def _apply_heartbeat(ticket: dict, stamp: str) -> bool:
     if not _newer(stamp, ticket.get("lastSeenAt")):
         return False
     ticket["lastSeenAt"] = stamp
+    import effort
+
+    effort.seen(ticket, stamp)
     return True
 
 
@@ -832,6 +835,9 @@ def apply_directory(
         seen.add(key)
         if not _owns(row, tid):
             continue
+        import effort
+
+        effort.seen(ticket, str(row.get("at") or ""))  # 1.7.22: a sign of life for the working-time bound
         if _apply_event(beam_path, data, ticket, row, now, heralded, out):
             changed = True
     remote["seen"] = sorted(seen)

@@ -534,6 +534,15 @@ def prepare_launch(
             _now_dt, now_s = beam_mod.coerce_now(now)
             for row in _rows(doc):
                 if isinstance(row, dict) and row.get("id") == resume_id:
+                    if row.get("ended"):
+                        # 1.7.22: keep the turn that ended; the time between turns is not AI work.
+                        turns = row.get("turns") if isinstance(row.get("turns"), list) else []
+                        turns.append([row.get("turnStart") or row.get("started"), row.get("ended")])
+                        row["turns"] = turns[-50:]
+                    row["turnStart"] = now_s
+                    row["step"] = step
+                    if step == "fix" and ticket.get("fixKinds"):
+                        row["fixKinds"] = list(ticket.get("fixKinds") or [])
                     row["state"] = "running"
                     row["ended"] = None
                     row["endReason"] = ""
@@ -583,6 +592,8 @@ def prepare_launch(
             "ended": None,
             "state": "starting",
             "lastSeenAt": ticket.get("lastSeenAt") or "",
+            "step": step,
+            **({"fixKinds": list(ticket.get("fixKinds") or [])} if step == "fix" and ticket.get("fixKinds") else {}),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": agent, "step": step})
@@ -619,6 +630,7 @@ def record_replacement(
             "started": now_s,
             "ended": None,
             "state": "starting",
+            "step": str((ticket.get("shuttle") or {}).get("step") or ""),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": new_id, "step": "replace"})
@@ -2951,7 +2963,56 @@ def hook_stop(payload: dict, root: Optional[Path] = None) -> dict:
         )
     except OSError:
         pass
+    if role == "shuttle" and isinstance(payload.get("duration_ms"), (int, float)):
+        note_run_ms(base, tid, float(payload["duration_ms"]))
     return {}
+
+
+ORPHAN_MINUTES = 60
+
+
+def close_orphans(data: dict, beam_path: Optional[Path] = None, now=None) -> int:
+    """1.7.22: end Shuttle rows still marked starting or running that no longer belong to anything: the ticket is
+    finished, or another agent owns it, and the row is over an hour old. On Forge-QA 42 rows sat in `starting` for two
+    days. Their time counted as agent work until 1.7.22; now they count 0 and are closed `orphan`."""
+    doc = registry(data, beam_path)
+    now_dt, now_s = beam_mod.coerce_now(now)
+    tickets = data.get("tickets") or {}
+    closed = 0
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "shuttle" or row.get("state") not in _LIVE:
+            continue
+        start = beam_mod.parse_ts(str(row.get("turnStart") or row.get("started") or ""))
+        if start is None or (now_dt - start).total_seconds() < ORPHAN_MINUTES * 60:
+            continue
+        ticket = tickets.get(str(row.get("ticket") or "")) if isinstance(tickets, dict) else None
+        ticket = ticket if isinstance(ticket, dict) else {}
+        finished = str(ticket.get("status") or "") in beam_mod.TERMINAL or not ticket
+        replaced = bool(ticket.get("agent")) and str(ticket.get("agent")) != str(row.get("id") or "")
+        if not (finished or replaced):
+            continue
+        row["endReason"] = "orphan never launched" if row.get("state") == "starting" else "orphan"
+        row["state"] = "ended"
+        row["ended"] = now_s
+        closed += 1
+    if closed:
+        flush(data, beam_path)
+    return closed
+
+
+def note_run_ms(base: Path, tid: str, duration_ms: float) -> bool:
+    """1.7.22: Cursor's measured run time of a Shuttle turn, onto its latest registry row (runMs adds up turns)."""
+    candidates = [Path(base) / ".warp" / "beam.json"] + sorted((Path(base) / ".warp" / "runs").glob("*/beam.json"))
+    for beam_path in candidates:
+        doc = load_file(beam_path)
+        rows = [r for r in _rows(doc) if isinstance(r, dict) and r.get("role") == "shuttle" and str(r.get("ticket")) == str(tid)]
+        if not rows:
+            continue
+        row = max(rows, key=lambda r: str(r.get("turnStart") or r.get("started") or ""))
+        row["runMs"] = float(row.get("runMs") or 0) + max(0.0, duration_ms)
+        save_file(beam_path, doc)
+        return True
+    return False
 
 
 def check_line(data: dict) -> str:

@@ -579,6 +579,11 @@ def start_rebase(data: dict, ticket: dict, lines: list) -> None:
         return
     ticket["status"] = "fix"
     ticket["phase"] = "fixing"
+    import beam as beam_count
+    import effort
+
+    effort.note_fix(ticket, ["rebase: the branch conflicts with the base"], beam_count.utcnow(),
+                    (ticket.get("pr") or {}).get("headSha") or "")
     mark_shuttle(ticket, "fix", data)
     lines.extend(_start_lines(data, ticket, "fix", rebase_detail(ticket)))
     lines.append("fixer: %s rebase" % ticket.get("id"))
@@ -1299,6 +1304,11 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
         lines.append("herald: %s parked." % ticket.get("id"))
         return
     ticket["alarm"] = None
+    import beam as beam_count
+    import effort
+
+    # 1.7.22: count the round by why it went back (bug, ci, acceptance, conflict, restart, stalled, other).
+    effort.note_fix(ticket, reasons, beam_count.utcnow(), (ticket.get("pr") or {}).get("headSha") or "")
     _phase(ticket, "fixing", lines)
     mark_shuttle(ticket, "fix", data)
     lines.extend(_start_lines(data, ticket, "fix", text))
@@ -1551,33 +1561,14 @@ def note_claim(ticket: dict, now=None) -> None:
 
 
 def note_spent(data: dict, beam_path=None, now=None) -> None:
-    """Spent minutes per ticket: the sum of its Shuttles' time out, from the agent registry.
+    """Each ticket's AI working time, AI runs by step, and code written (effort.py, 1.7.22).
 
-    A Shuttle rarely reports its own minutes (`beam.py spend`), so Spent was empty. A larger reported total is kept.
+    Before 1.7.22 this was the clock time of every Shuttle row until Warp marked it ended (or now), and it never came
+    down: idle, phantom and overlapping rows all counted. Now it is recomputed each pass from working turns only.
     """
-    import agents
-    import beam as beam_mod
+    import effort
 
-    try:
-        doc = agents.registry(data, beam_path)
-    except Exception:
-        return
-    now_dt, _now_s = beam_mod.coerce_now(now)
-    totals: dict = {}
-    for row in agents._rows(doc):
-        if not isinstance(row, dict) or row.get("role") != "shuttle" or not row.get("ticket"):
-            continue
-        start = beam_mod.parse_ts(row.get("started"))
-        if start is None:
-            continue
-        end = beam_mod.parse_ts(row.get("ended")) or (now_dt if row.get("state") in {"starting", "running"} else None)
-        if end is None or end < start:
-            continue
-        totals[str(row["ticket"])] = totals.get(str(row["ticket"]), 0.0) + (end - start).total_seconds() / 60.0
-    for tid, minutes in totals.items():
-        ticket = (data.get("tickets") or {}).get(tid)
-        if isinstance(ticket, dict) and int(round(minutes)) > int(ticket.get("minutes") or 0):
-            ticket["minutes"] = int(round(minutes))
+    effort.update(data, beam_path, now=now)
 
 
 def _hold_for_bugbot(data: dict, ticket: dict, snap: Optional[dict]) -> None:

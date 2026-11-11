@@ -31,7 +31,7 @@ SECTIONS = [
     ("Agents and models", "How many Shuttles run, where they run, and which model each one uses.", [
         "runner", "launch", "worktreeRoot", "subagentVm", "memoryCheck", "cloudSnapshot", "maxAgents", "maxInProgress",
         "model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter", "staleMinutes", "maxRecoveries",
-        "maxSpawnsPerTicket", "maxSpawnsPerHour", "requireCursorApiKey"]),
+        "maxSpawnsPerTicket", "maxSpawnsPerHour", "requireCursorApiKey", "effort"]),
     ("Merging", "What has to pass before a merge, how the merge is made, and what is published after it.", [
         "autoMergeSizes", "checkCommand", "mergeCheck", "mergeCheckMinutes", "maxMergesPerPass", "mergeMethod", "stateInMerge",
         "publishOnChange", "pushStateNew", "deleteBranchOnMerge", "mergeQueue", "appendOnlyPaths", "maxFixAttempts",

@@ -1,0 +1,188 @@
+"""1.7.22: AI working time only (no idle), every AI use by step, code written, and bugs vs CI send-backs."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "scripts"))
+
+import agents  # noqa: E402
+import beam  # noqa: E402
+import effort  # noqa: E402
+import pipeline  # noqa: E402
+
+NOW = "2026-11-10T12:00:00Z"
+
+
+def shuttle(tid, started, ended=None, state="ended", reason="returned", **extra):
+    row = {"id": "shuttle-%s-%s" % (tid, started[11:16]), "ticket": tid, "role": "shuttle", "started": started,
+           "ended": ended, "state": state, "endReason": reason}
+    row.update(extra)
+    return row
+
+
+class WorkTimeTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / ".warp").mkdir()
+        self.path = self.tmp / ".warp" / "beam.json"
+
+    def run_rows(self, rows, tickets=None, spawns=None):
+        data = {"version": 1, "config": {}, "tickets": tickets or {}}
+        self.path.write_text(json.dumps(data))
+        (self.tmp / ".warp" / "agents.json").write_text(json.dumps({"agents": rows, "spawns": spawns or []}))
+        return effort.compute(data, self.path, now=NOW), data
+
+    def test_forge_qa_replacements_count_their_work_not_39_hours_each(self):
+        # G-EXPLORATION-USER-TRIGGER: 8 Shuttles 20 minutes apart, all closed together 39 hours later.
+        starts = ["2026-11-08T22:%02d:00Z" % m for m in (0, 20, 40)] + ["2026-11-08T23:%02d:00Z" % m for m in (0, 20, 40)] + \
+                 ["2026-11-09T00:00:00Z", "2026-11-09T00:20:00Z"]
+        rows = [shuttle("G-X", s, "2026-11-10T14:04:40Z", reason="stopped") for s in starts]
+        stamps = ["2026-11-08T22:15:00Z", "2026-11-08T23:05:00Z", "2026-11-09T00:35:00Z"]
+        work, _ = self.run_rows(rows, {"G-X": {"id": "G-X", "status": "merged", "aiSeen": stamps}})
+        hours = work["G-X"]["minutes"] / 60
+        self.assertLess(hours, 4, work["G-X"])  # was 310 h
+        self.assertGreater(work["G-X"]["dropped"] / 60, 300)
+
+    def test_phantoms_and_rows_stuck_in_starting_count_zero(self):
+        rows = [shuttle("P-1", "2026-11-09T10:00:00Z", "2026-11-09T22:00:00Z", reason="phantom-start never launched"),
+                shuttle("P-1", "2026-11-09T23:00:00Z", None, state="starting", reason="")]
+        work, _ = self.run_rows(rows, {"P-1": {"id": "P-1", "status": "queued"}})
+        self.assertEqual(work["P-1"]["minutes"], 0)
+
+    def test_a_turn_ends_at_its_last_sign_of_life_plus_grace(self):
+        rows = [shuttle("L-1", "2026-11-10T08:00:00Z", "2026-11-10T11:00:00Z")]
+        work, _ = self.run_rows(rows, {"L-1": {"id": "L-1", "status": "review",
+                                               "aiSeen": ["2026-11-10T08:10:00Z", "2026-11-10T08:42:00Z"]}})
+        self.assertAlmostEqual(work["L-1"]["minutes"], 47, delta=0.5)  # 42 + 5 grace, not 180
+
+    def test_a_silent_turn_is_capped_and_marked_estimated(self):
+        rows = [shuttle("S-1", "2026-11-10T08:00:00Z", "2026-11-10T11:00:00Z")]
+        work, _ = self.run_rows(rows, {"S-1": {"id": "S-1", "status": "review"}})
+        self.assertAlmostEqual(work["S-1"]["minutes"], 30, delta=0.5)
+        self.assertAlmostEqual(work["S-1"]["estimated"], 30, delta=0.5)
+
+    def test_cursor_run_time_wins_and_a_resume_skips_the_gap(self):
+        rows = [shuttle("R-1", "2026-11-10T06:00:00Z", "2026-11-10T09:00:00Z", runMs=25 * 60000),
+                shuttle("R-2", "2026-11-10T06:00:00Z", "2026-11-10T10:20:00Z",
+                        turns=[["2026-11-10T06:00:00Z", "2026-11-10T06:20:00Z"]], turnStart="2026-11-10T10:00:00Z")]
+        tickets = {"R-1": {"id": "R-1"}, "R-2": {"id": "R-2", "aiSeen": ["2026-11-10T06:15:00Z", "2026-11-10T10:15:00Z"]}}
+        work, _ = self.run_rows(rows, tickets)
+        self.assertEqual(round(work["R-1"]["minutes"]), 25)
+        self.assertEqual(round(work["R-2"]["minutes"]), 40)  # 06:00-06:20 and 10:00-10:20; the 3h40 between is not work
+
+    def test_runs_and_minutes_by_step(self):
+        rows = [shuttle("K-1", "2026-11-10T06:00:00Z", "2026-11-10T06:30:00Z", step="implement"),
+                shuttle("K-1", "2026-11-10T07:00:00Z", "2026-11-10T07:10:00Z", step="fix", fixKinds=["bug", "ci"])]
+        work, _ = self.run_rows(rows, {"K-1": {"id": "K-1", "aiSeen": ["2026-11-10T06:30:00Z", "2026-11-10T07:10:00Z"]}})
+        self.assertEqual(work["K-1"]["runs"], {"implement": 1, "fix": 1})
+        self.assertEqual(work["K-1"]["byFix"], {"bug": 10, "ci": 10})
+
+    def test_update_recomputes_and_never_ratchets(self):
+        rows = [shuttle("U-1", "2026-11-10T06:00:00Z", "2026-11-10T06:20:00Z")]
+        self.run_rows(rows, {"U-1": {"id": "U-1", "minutes": 9999, "aiSeen": ["2026-11-10T06:20:00Z"]}})
+        data = json.loads(self.path.read_text())
+        effort.update(data, self.path, now=NOW)
+        self.assertEqual(data["tickets"]["U-1"]["minutes"], 20)
+        self.assertEqual(data["tickets"]["U-1"]["ai"]["runs"], {"work": 1})
+
+    def test_orphan_rows_are_closed(self):
+        rows = [shuttle("O-1", "2026-11-08T21:18:16Z", None, state="starting", reason=""),
+                shuttle("O-2", "2026-11-10T11:30:00Z", None, state="starting", reason="")]
+        rows[1]["id"] = "subagent:O-2"
+        self.run_rows(rows, {"O-1": {"id": "O-1", "status": "merged"}, "O-2": {"id": "O-2", "status": "coding", "agent": "subagent:O-2"}})
+        data = json.loads(self.path.read_text())
+        self.assertEqual(agents.close_orphans(data, self.path, now=NOW), 1)
+        doc = json.loads((self.tmp / ".warp" / "agents.json").read_text())
+        self.assertEqual([r["endReason"] for r in doc["agents"]], ["orphan never launched", ""])
+
+    def test_the_hook_stores_cursors_run_time(self):
+        rows = [shuttle("H-1", "2026-11-10T06:00:00Z", None, state="running", reason="")]
+        self.run_rows(rows, {"H-1": {"id": "H-1"}})
+        self.assertTrue(agents.note_run_ms(self.tmp, "H-1", 1_500_000))
+        doc = json.loads((self.tmp / ".warp" / "agents.json").read_text())
+        self.assertEqual(doc["agents"][0]["runMs"], 1_500_000)
+
+
+class SendBackTest(unittest.TestCase):
+    def test_classify(self):
+        self.assertEqual(effort.classify(["bugbot: a.py:3 null deref"]), ["bug"])
+        self.assertEqual(effort.classify(["ci red", "rollup red"]), ["ci"])
+        both = pipeline.batched(["bugbot fail", "bugbot: x", "check red"])
+        self.assertEqual(effort.classify(both), ["bug", "ci"])
+        self.assertEqual(effort.classify(["shuttle review fail", "review: y"]), ["bug"])
+        self.assertEqual(effort.classify(["merge check red: go test"]), ["ci"])
+        self.assertEqual(effort.classify(["ac AC-2 fail"]), ["acceptance"])
+        self.assertEqual(effort.classify(["rebase: the branch conflicts with the base"]), ["conflict"])
+
+    def test_begin_fix_counts_bug_and_ci_rounds(self):
+        ticket = {"id": "F-1", "status": "review", "locks": ["src"], "size": "S", "pr": {"url": "https://github.com/o/r/pull/1", "headSha": "h1"}}
+        data = {"tickets": {"F-1": ticket}, "config": {}}
+        pipeline.begin_fix(data, ticket, pipeline.batched(["bugbot: a", "ci red"]), [])
+        ticket.pop("shuttle", None)
+        pipeline.begin_fix(data, ticket, ["ci red"], [])
+        self.assertEqual(ticket["fixCounts"], {"rounds": 2, "bug": 1, "ci": 2})
+        self.assertEqual(ticket["fixLog"][0]["kinds"], ["bug", "ci"])
+        totals = effort.totals(data)
+        self.assertEqual((totals["fixCounts"]["bug"], totals["fixCounts"]["ci"]), (1, 2))
+        self.assertEqual(totals["ticketsBack"], {"bug": 1, "ci": 1})
+
+
+class CodeCountTest(unittest.TestCase):
+    def test_lines_and_approximate_tokens_outside_warp(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+
+        def git(*a):
+            subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *a],
+                           cwd=tmp, check=True, capture_output=True)
+
+        git("init", "-q", "-b", "main")
+        (tmp / "a.py").write_text("x = 1\n")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        (tmp / "a.py").write_text("x = 1\ndef add(a, b):\n    return a + b\n")
+        (tmp / ".warp").mkdir()
+        (tmp / ".warp" / "state.json").write_text("{" + "x" * 400 + "}\n")
+        git("add", "-A")
+        git("commit", "-qm", "work")
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp, capture_output=True, text=True).stdout.strip()
+        ticket = {"id": "C-1", "status": "merged", "pr": {"url": "u", "mergeSha": sha}}
+        got = effort.code_for(ticket, tmp, "main")
+        chars = len("def add(a, b):") + len("    return a + b")
+        self.assertEqual((got["added"], got["deleted"], got["files"]), (2, 0, 1))
+        self.assertEqual(got["tokens"], -(-chars // 4))
+        data = {"tickets": {"C-1": ticket}, "config": {}, "_repoRoot": str(tmp)}
+        self.assertEqual(effort.code_pass(data, tmp / ".warp" / "beam.json"), 1)
+        self.assertEqual(effort.totals(data)["code"]["added"], 2)
+        self.assertEqual(effort.code_pass(data, tmp / ".warp" / "beam.json"), 0, "counted once per sha")
+
+
+class SpendTest(unittest.TestCase):
+    def test_spend_minutes_replace_and_stay_apart(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".warp").mkdir()
+        path = tmp / ".warp" / "beam.json"
+        path.write_text(json.dumps({"version": 1, "config": {}, "tickets": {"Z-1": {"id": "Z-1", "status": "coding", "minutes": 12}}}))
+        import argparse
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            for total in (10, 20, 30):
+                beam.cmd_spend(path, argparse.Namespace(id="Z-1", tokens=0, minutes=total))
+        t = json.loads(path.read_text())["tickets"]["Z-1"]
+        self.assertEqual((t["reportedMinutes"], t["minutes"]), (30, 12))
+
+
+if __name__ == "__main__":
+    unittest.main()

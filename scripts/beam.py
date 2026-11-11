@@ -1072,6 +1072,15 @@ def ready(beam: dict, limit: Optional[int] = None) -> list[dict]:
     return chosen
 
 
+def _effort_totals(beam: dict) -> dict:
+    try:
+        import effort
+
+        return effort.totals(beam)
+    except Exception:
+        return {}
+
+
 def metrics(beam: dict) -> dict:
     by = defaultdict(int)
     tokens = 0
@@ -1117,6 +1126,7 @@ def metrics(beam: dict) -> dict:
         "etaHours": round(eta_hours, 1),
         "bySize": dict(by_size),
         "byModule": dict(by_mod),
+        "effort": _effort_totals(beam),
         "computedAt": utcnow(),
     }
 
@@ -1287,7 +1297,11 @@ def cmd_spend(beam_path: Path, args: argparse.Namespace) -> None:
     if not t:
         sys.exit(f"unknown ticket {args.id}")
     t["tokens"] = int(t.get("tokens") or 0) + int(args.tokens or 0)
-    t["minutes"] = int(t.get("minutes") or 0) + int(args.minutes or 0)
+    if args.minutes:
+        # 1.7.22: the Shuttle's own minute total replaces its last report (the skill says totals), kept apart from
+        # `minutes`, which Warp computes from working turns each pass. Before, every checkpoint's total was added.
+        t["reportedMinutes"] = int(args.minutes or 0)
+        t["minutes"] = max(int(t.get("minutes") or 0), 0)
     t["updatedAt"] = utcnow()
     beam["metrics"] = metrics(beam)
     atomic_write(beam_path, json.dumps(beam, indent=2) + "\n", data=beam)
@@ -1745,6 +1759,9 @@ def cmd_heartbeat(beam_path: Path, args: argparse.Namespace) -> None:
     stamp = utcnow()
     ticket["agent"] = agent
     ticket["lastSeenAt"] = stamp
+    import effort
+
+    effort.seen(ticket, stamp)
     ticket["updatedAt"] = stamp
     if not ticket.get("workerStartedAt"):
         ticket["workerStartedAt"] = ticket.get("claimedAt") or stamp

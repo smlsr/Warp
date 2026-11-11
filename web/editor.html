@@ -796,7 +796,10 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       wave: num(t.wave),
       priorityGate: t.priorityGate || t.priority_gate || null,
       checks: list(t.checks).filter((c) => c != null).map((c) => isObj(c) ? { name: c.name || "", check: c.check || "" } : { name: "", check: String(c) }),
-      planned: isObj(t.planned) ? { ...t.planned } : null
+      planned: isObj(t.planned) ? { ...t.planned } : null,
+      ai: isObj(t.ai) ? t.ai : null,
+      fixCounts: isObj(t.fixCounts) ? t.fixCounts : null,
+      code: isObj(t.code) ? t.code : null
     };
   }
   var checkText = (c) => typeof c === "string" ? c : isObj(c) ? c.check || c.name || "" : "";
@@ -1360,7 +1363,10 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       cost: num(t.cost),
       size,
       critical: !!t.critical,
-      agent: t.agent || null
+      agent: t.agent || null,
+      ai: t.ai && typeof t.ai === "object" ? t.ai : null,
+      fixCounts: t.fixCounts && typeof t.fixCounts === "object" ? t.fixCounts : null,
+      code: t.code && typeof t.code === "object" ? t.code : null
     };
   }
   var ticketsOf = (run) => run && Array.isArray(run.tickets) ? run.tickets.filter(Boolean) : [];
@@ -1408,6 +1414,7 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
     let elapsed = null;
     let eta = null;
     let humanPlan = null;
+    const effort = { runs: 0, estMin: 0, dropMin: 0, rounds: 0, bug: 0, ci: 0, ticketsBug: 0, ticketsCi: 0, added: 0, deleted: 0, codeTokens: 0, codeTickets: 0, steps: {} };
     for (const run of list3) {
       const approval = approvalOf(run);
       const tickets = ticketsOf(run);
@@ -1418,6 +1425,29 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
         if (!f.autoMerge) human[f.bucket] += approval;
         if (!f.fromTicket) sizeDerived++;
         actualMin += f.minutes;
+        if (f.ai) {
+          for (const [k, v] of Object.entries(f.ai.runs || {})) {
+            effort.runs += num(v) || 0;
+            const s = effort.steps[k] || (effort.steps[k] = { runs: 0, minutes: 0 });
+            s.runs += num(v) || 0;
+          }
+          for (const [k, v] of Object.entries(f.ai.minutes || {})) (effort.steps[k] || (effort.steps[k] = { runs: 0, minutes: 0 })).minutes += num(v) || 0;
+          effort.estMin += num(f.ai.estimatedMinutes) || 0;
+          effort.dropMin += num(f.ai.droppedMinutes) || 0;
+        }
+        if (f.fixCounts) {
+          effort.rounds += num(f.fixCounts.rounds) || 0;
+          effort.bug += num(f.fixCounts.bug) || 0;
+          effort.ci += num(f.fixCounts.ci) || 0;
+          if (num(f.fixCounts.bug) > 0) effort.ticketsBug++;
+          if (num(f.fixCounts.ci) > 0) effort.ticketsCi++;
+        }
+        if (f.code && f.code.source) {
+          effort.codeTickets++;
+          effort.added += num(f.code.added) || 0;
+          effort.deleted += num(f.code.deleted) || 0;
+          effort.codeTokens += num(f.code.tokens) || 0;
+        }
         tokens += f.tokens;
         if (f.cost != null) {
           cost += f.cost;
@@ -1464,6 +1494,7 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       humanPlan,
       sizeDerived,
       actualH: actualMin / 60,
+      effort,
       tokens,
       cost: costSeen ? cost : null,
       gatesTotal,
@@ -1494,7 +1525,15 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
     const active = all.filter((f) => ACTIVE.has(f.status)).length;
     const spentH = sum(all.map((f) => f.minutes)) / 60;
     const estimates = list3.map((r) => r.estimate ? num(r.estimate.agentHours) : null).filter((x) => x != null);
-    const estH = estimates.length ? sum(estimates) || null : null;
+    const startH = estimates.length ? sum(estimates) || null : null;
+    const estH = sum(all.map((f) => f.hours)) || startH;
+    const steps = {};
+    let bug = 0, ci = 0, rounds = 0;
+    for (const f of all) {
+      for (const [k, v] of Object.entries(f.ai && f.ai.runs || {})) (steps[k] || (steps[k] = { runs: 0, minutes: 0 })).runs += num(v) || 0;
+      for (const [k, v] of Object.entries(f.ai && f.ai.minutes || {})) (steps[k] || (steps[k] = { runs: 0, minutes: 0 })).minutes += num(v) || 0;
+      if (f.fixCounts) { bug += num(f.fixCounts.bug) || 0; ci += num(f.fixCounts.ci) || 0; rounds += num(f.fixCounts.rounds) || 0; }
+    }
     const done = all.filter((f) => f.cat === "done").length;
     const bySize = group(tickets, (f) => f.size || "\u2014").sort((a, b) => SIZE_ORDER.indexOf(a.key) - SIZE_ORDER.indexOf(b.key));
     const byAgent = group(tickets, (f) => f.agent || "unassigned").sort((a, b) => natCmp(a.key, b.key));
@@ -1503,6 +1542,11 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       cap,
       spentH,
       estH,
+      startH,
+      steps,
+      bug,
+      ci,
+      rounds,
       tokens: sum(all.map((f) => f.tokens)),
       done,
       total: all.length,
@@ -2547,13 +2591,15 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       `<span>Elapsed <b>${fmtH(m.elapsed)}</b></span><span>ETA left <b>${m.eta == null ? "\u2014" : "~" + fmtH(m.eta)}</b></span>` + (m.finish ? `<span title="${many ? "Each run's planned finish on its swimlane, added" : "Planned finish on the swimlane, with blocks in order"}">Swimlane <b>T+${Math.round(m.finish)}h</b></span>` : "") + `<span title="The plan's elapsed estimate, split by agent-hour share">split by agent-hours</span>`,
       assume
     );
+    const back = m.effort && (m.effort.rounds || m.effort.added) ? `<div class="foot"><span title="Fix rounds sent back for Bugbot, Warp AI review or a failed review">Back for bugs <b>${fmtN(m.effort.bug)}</b> (${fmtN(m.effort.ticketsBug)} tickets)</span><span title="Fix rounds sent back for red CI, rollup, check command or merge check">for CI <b>${fmtN(m.effort.ci)}</b> (${fmtN(m.effort.ticketsCi)} tickets)</span>${m.effort.added ? `<span title="Lines outside .warp/ in ${fmtN(m.effort.codeTickets)} tickets' diffs; tokens are added characters / 4, approximate">Code <b>+${fmtN(m.effort.added)} / \u2212${fmtN(m.effort.deleted)}</b> \u2248 ${fmtN(m.effort.codeTokens)} tokens</span>` : ""}</div>` : "";
     const agent = card(
       "Agent hours",
       "estimate",
       fmtH(m.agentTotal),
       stackBar2(m.agent, m.agentTotal),
       rowsFor(m.agent, m.agentTotal, (v) => fmtH(v)),
-      `<span>Actual <b>${m.actualH ? fmtH(m.actualH) : "\u2014"}</b></span><span>Tokens <b>${m.tokens ? fmtN(m.tokens) : "\u2014"}</b></span><span>Cost <b>${m.cost == null ? "\u2014" : "$" + m.cost.toFixed(2)}</b></span>` + (m.sizeDerived ? `<span title="S=4, M=7, L=11, XL=16 (scan.py)">${fmtN(m.sizeDerived)} from size</span>` : "")
+      `<span title="AI working time only (1.7.22): each Shuttle turn from its start to its last sign of life, never idle or waiting time. ${m.effort.estMin ? fmtH(m.effort.estMin / 60) + " of it estimated for turns with no sign of life; " : ""}${fmtH(m.effort.dropMin / 60)} of clock time left out as idle.">AI working <b>${m.actualH ? fmtH(m.actualH) : "\u2014"}</b></span>${m.effort.runs ? `<span>AI runs <b>${fmtN(m.effort.runs)}</b></span>` : ""}<span>Tokens <b>${m.tokens ? fmtN(m.tokens) : "\u2014"}</b></span><span>Cost <b>${m.cost == null ? "\u2014" : "$" + m.cost.toFixed(2)}</b></span>` + (m.sizeDerived ? `<span title="S=4, M=7, L=11, XL=16 (scan.py)">${fmtN(m.sizeDerived)} from size</span>` : ""),
+      back
     );
     const human = card(
       "People hours",
@@ -2583,8 +2629,8 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
   function renderUtil(u) {
     const cap = num(u.cap);
     const est = num(u.estH);
-    const head = `${u.active} active of ${fmtN(cap)} agents \xB7 ${fmtH(u.spentH)} spent${est ? " of " + fmtH(est) + " estimated" : ""} \xB7 ${fmtN(u.tokens)} tokens`;
-    return `<summary>Utilization <span class="muted">${head}</span></summary><div class="util-b"><div class="meter">` + meter("Active agents / maxAgents", u.active, cap, `${u.active} / ${fmtN(cap)}`) + meter("Agent hours / estimate", u.spentH, est, `${fmtH(u.spentH)} / ${fmtH(est)}`) + meter("Tickets done", u.done, u.total, `${u.done} / ${u.total}`) + `<div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are the minutes Warp recorded per ticket.</div></div><div>${miniTable(u.bySize || [], "size", SIZE_ORDER2)}</div><div>${miniTable(u.byAgent || [], "agent")}</div></div>`;
+    const head = `${u.active} active of ${fmtN(cap)} agents \xB7 ${fmtH(u.spentH)} AI working${est ? " of " + fmtH(est) + " planned" : ""} \xB7 back for bugs ${fmtN(u.bug || 0)}, for CI ${fmtN(u.ci || 0)} \xB7 ${fmtN(u.tokens)} tokens`;
+    return `<summary>Utilization <span class="muted">${head}</span></summary><div class="util-b"><div class="meter">` + meter("Active agents / maxAgents", u.active, cap, `${u.active} / ${fmtN(cap)}`) + meter("AI working hours / plan", u.spentH, est, `${fmtH(u.spentH)} / ${fmtH(est)}`) + (u.rounds ? meter("Back for bugs / for CI", u.bug, u.bug + u.ci, `${fmtN(u.bug)} bugs \u00B7 ${fmtN(u.ci)} CI`) : "") + meter("Tickets done", u.done, u.total, `${u.done} / ${u.total}`) + `<div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are AI working time: each Shuttle turn up to its last sign of life, never idle time (1.7.22). The plan is today's tickets${num(u.startH) && num(u.startH) !== est ? "; the estimate at the start was " + fmtH(num(u.startH)) : ""}.${Object.keys(u.steps || {}).length ? " AI runs by step: " + Object.entries(u.steps).sort((a, b) => b[1].runs - a[1].runs).map(([k, v]) => `${esc(k)} ${fmtN(v.runs)} (${fmtH(v.minutes / 60)})`).join(" \u00B7 ") : ""}</div></div><div>${miniTable(u.bySize || [], "size", SIZE_ORDER2)}</div><div>${miniTable(u.byAgent || [], "agent")}</div></div>`;
   }
   function renderActions(actions, state) {
     const out = [];
