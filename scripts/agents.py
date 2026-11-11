@@ -282,7 +282,7 @@ def confirmed_dead(ticket: dict, data: dict, now=None, turn_returned: bool = Fal
         return True
     now_dt, _now_s = beam_mod.coerce_now(now)
     started = ticket.get("workerStartedAt") or ticket.get("claimedAt") or shuttle.get("startedAt")
-    return beam_mod.worker_is_dead(ticket.get("lastSeenAt"), started, now_dt, stale_minutes(data))
+    return beam_mod.shuttle_dead(ticket, data, started, now_dt, stale_minutes(data))
 
 
 def _rows(doc: dict) -> list:
@@ -921,6 +921,7 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
     if shuttle is not None:
         shuttle["model"] = chosen[0]
+        shuttle["heartbeatContract"] = orchestrator.HEARTBEAT_CONTRACT  # its prompt carries the HEARTBEAT RULE (1.7.23)
     lines = ["%s %s checkout=%s branch=%s%s step=%s" % (verb, tid, kind, branch, extra, step)]
     if detail:
         lines.append("fix: %s %s" % (tid, detail))

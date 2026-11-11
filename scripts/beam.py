@@ -1557,6 +1557,50 @@ def worker_is_dead(last_seen, started, now: datetime, stale_minutes: int) -> boo
     return (now - start).total_seconds() / 60.0 > stale_minutes
 
 
+HEARTBEAT_DEFAULTS = {"shuttleHeartbeatIntervalSeconds": 90, "shuttleHeartbeatReapAfterSeconds": 180,
+                      "shuttleHeartbeatGracePeriodSeconds": 300}
+
+
+def heartbeat_seconds(data: Optional[dict], key: str) -> float:
+    cfg = (data or {}).get("config") if isinstance((data or {}).get("config"), dict) else {}
+    try:
+        return float(cfg.get(key) if cfg.get(key) not in (None, "") else HEARTBEAT_DEFAULTS[key])
+    except (TypeError, ValueError):
+        return float(HEARTBEAT_DEFAULTS[key])
+
+
+def reap_due(last_seen, started, now: datetime, reap_after: float, grace: float, busy_until=None) -> bool:
+    """1.7.23: a Shuttle on the heartbeat contract is dead when its last heartbeat is older than reap_after seconds,
+    or it has written none and started more than grace seconds ago. A heartbeat's `--busy` keeps it alive until then."""
+    busy = parse_ts(str(busy_until or "")) if busy_until else None
+    if busy is not None and now < busy:
+        return False
+    seen = parse_ts(last_seen)
+    if seen is not None:
+        return (now - seen).total_seconds() > reap_after
+    start = parse_ts(started)
+    if start is None:
+        return False
+    return (now - start).total_seconds() >= grace
+
+
+def shuttle_dead(ticket: dict, data: Optional[dict], started, now: datetime, stale_minutes: int) -> bool:
+    """The dead check every reaper uses. A Shuttle launched with the 1.7.23 heartbeat contract is held to the heartbeat
+    window (shuttleHeartbeatReapAfterSeconds, 180; a Shuttle that has written no heartbeat yet gets
+    shuttleHeartbeatGracePeriodSeconds, 300). One launched before 1.7.23 was told to beat every 5 minutes, so it keeps
+    the staleMinutes rule: an upgrade mid-run does not reap the Shuttles already out."""
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    if shuttle.get("heartbeatContract"):
+        return reap_due(ticket.get("lastSeenAt"), started, now,
+                        heartbeat_seconds(data, "shuttleHeartbeatReapAfterSeconds"),
+                        heartbeat_seconds(data, "shuttleHeartbeatGracePeriodSeconds"),
+                        busy_until=ticket.get("busyUntil"))
+    busy = parse_ts(str(ticket.get("busyUntil") or "")) if ticket.get("busyUntil") else None
+    if busy is not None and now < busy:
+        return False
+    return worker_is_dead(ticket.get("lastSeenAt"), started, now, stale_minutes)
+
+
 def _run_live(data: dict) -> tuple:
     state = data.get("runState") or ("paused" if data.get("paused") else "running")
     if data.get("paused") or state == "paused":
@@ -1604,7 +1648,7 @@ def _recover_shuttles(data: dict, beam_path: Path, now: datetime, now_s: str, st
             # It came back (its last state is in its folder). Stopping its heartbeat is not dying.
             lines.append("shuttle: returned %s" % tid)
             continue
-        if not worker_is_dead(ticket.get("lastSeenAt"), _shuttle_anchor(ticket), now, stale):
+        if not shuttle_dead(ticket, data, _shuttle_anchor(ticket), now, stale):
             kind = "alive" if ticket.get("lastSeenAt") else "fresh"
             lines.append("shuttle: %s %s" % (kind, tid))
             continue
@@ -1904,6 +1948,11 @@ def default_config() -> dict:
         "maxMergesPerPass": 3,
         "watchSeconds": 300,
         "stallNoPushMinutes": 30,
+        "shuttleHeartbeatIntervalSeconds": 90,
+        "shuttleHeartbeatReapAfterSeconds": 180,
+        "shuttleHeartbeatGracePeriodSeconds": 300,
+        "requireLocalCiGreenBeforePush": True,
+        "localCiCommand": "./scripts/ci/local.sh",
         "launchGraceMinutes": 10,
         "autoScan": 600,
         "autoScanResets": 5,

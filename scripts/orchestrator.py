@@ -864,7 +864,8 @@ def shuttle_is_live(ticket: dict, beam: Optional[dict] = None, now=None) -> bool
 
     now_dt, _now_s = beam_mod.coerce_now(now)
     started = ticket.get("workerStartedAt") or shuttle.get("startedAt")
-    if beam_mod.worker_is_dead(ticket.get("lastSeenAt"), started, now_dt, _stale_minutes(beam if isinstance(beam, dict) else {})):
+    if beam_mod.shuttle_dead(ticket, beam if isinstance(beam, dict) else {}, started, now_dt,
+                             _stale_minutes(beam if isinstance(beam, dict) else {})):
         return False
     return True
 
@@ -1314,6 +1315,26 @@ VM_LINE = (
     "not a git worktree on this machine."
 )
 
+LOCAL_CI_CLAUSE = (
+    "LOCAL CI IS MANDATORY BEFORE OPENING THE PULL REQUEST. Before you open the PR, run `./scripts/ci/local.sh` (or the "
+    "repo's configured `checkCommand`) in your worktree. If it exits non-zero, FIX the findings, re-run, and keep looping "
+    "— FIX → RUN → FIX → RUN with no iteration cap — until it exits 0 GREEN. Only then push the final commit and open the "
+    "PR. Do NOT push a red commit to let GitHub Actions surface the errors; every red-push wastes ~20 minutes of CI "
+    "budget per PR. Never self-report an AC as pass without executing its actual test locally and seeing green. A push "
+    "on red local CI is a bug in the work."
+)
+HEARTBEAT_CLAUSE = (
+    "HEARTBEAT RULE — write a `heartbeat` state every ~90 seconds while actively coding, testing, pushing, or waiting "
+    "locally. Use `python3 .cursor/plugins/warp/scripts/ticket_state.py append --id <id> --state heartbeat --agent "
+    "<your-agent-id> --root <repo-root>` so your beam registry row records an updated `heartbeatAt` ISO-8601 UTC. The "
+    "dispatcher reaps any Shuttle whose row has `state=coding` but no recent `heartbeatAt`. Missing a heartbeat = losing "
+    "uncommitted work; a lost replace stamp wipes real commits. Write a heartbeat BEFORE any long-running step (`go test "
+    "-race`, `module-verify`, large build, rebase), between loops of local CI, and after every push. Keep the same agent "
+    "id you were started with."
+)
+DEFAULT_LOCAL_CI = "./scripts/ci/local.sh"
+HEARTBEAT_CONTRACT = "1.7.23"  # a Shuttle launched with HEARTBEAT_CLAUSE is reaped on the shorter heartbeat window
+
 WORKER_CONTRACT = (
     "You are one worker for one ticket. Do this step and return one line. "
     "You never start another agent of any kind. "
@@ -1324,6 +1345,39 @@ WORKER_CONTRACT = (
     "Never run `git stash`: every worktree of this repo shares one stash list, so another Shuttle's pop takes your "
     "edits and yours takes theirs. Commit work in progress on your branch, or discard it with `git checkout -- <path>`."
 )
+def _truthy(value, default: bool = True) -> bool:
+    if value is None or value == "":
+        return default
+    return str(value).strip().casefold() not in {"false", "no", "off", "0"}
+
+
+def local_ci_command(config: Optional[dict]) -> str:
+    """The repo's checkCommand, else localCiCommand, else ./scripts/ci/local.sh (1.7.23)."""
+    cfg = config or {}
+    return str(check_command(cfg) or cfg.get("localCiCommand") or DEFAULT_LOCAL_CI).strip()
+
+
+def contract_lines(ticket: dict, config: Optional[dict], beat_cmd: str, beat_note: str = "") -> list:
+    """The worker contract every Shuttle prompt carries (implement, fix, rebase, restart, repair, and a resume, which
+    gets the same prompt): LOCAL CI IS MANDATORY (when requireLocalCiGreenBeforePush, the default), the HEARTBEAT
+    RULE, both verbatim, then this ticket's exact commands, then the rest of the contract (1.7.23)."""
+    cfg = config or {}
+    lines = []
+    if _truthy(cfg.get("requireLocalCiGreenBeforePush"), True):
+        lines.append(LOCAL_CI_CLAUSE)
+        lines.append("Your local CI command: `%s`." % local_ci_command(cfg))
+    lines.append(HEARTBEAT_CLAUSE)
+    try:
+        every = int(float(cfg.get("shuttleHeartbeatIntervalSeconds") or 90))
+    except (TypeError, ValueError):
+        every = 90
+    lines.append("Your heartbeat, every ~%ds: `%s`.%s Before a step that can run longer than the heartbeat window "
+                 "(a full test suite, a large build), add `--busy <seconds it may take>` to that heartbeat so the "
+                 "dispatcher waits that long." % (every, beat_cmd, (" " + beat_note) if beat_note else ""))
+    lines.append(WORKER_CONTRACT)
+    return lines
+
+
 REAP_RULE = (
     "Run the reap check first, and read the reap line after every state you write. "
     "`reap: exit` means stop now and return `result: %s stopped <reason> agent=%s`. "
@@ -1655,8 +1709,9 @@ RESTART_LINES = (
 
 PROGRESS_LINE = (
     "Commit as you go: a commit at least every 20 minutes of work (a work-in-progress commit is fine). While the branch has "
-    "no pull request open, push each commit too. The parent reads the branch and flags a Shuttle with no new commit for "
-    "stallNoPushMinutes (default 30) as stalled."
+    "no pull request open, push each commit too: it keeps your work if this turn dies, and with no pull request there is "
+    "no Bugbot. Once the pull request is open, push only commits that passed local CI. The parent reads the branch and "
+    "flags a Shuttle with no new commit for stallNoPushMinutes (default 30) as stalled."
 )
 
 
@@ -1671,7 +1726,10 @@ def subagent_vm_prompt(ticket: dict, config: Optional[dict], branch: str, reused
             VM_LINE,
             "Fetch the latest main, clone it, and create %s yourself." % branch,
             "First step: run `hostname` and `free -g`. Report that output with your branch name and working directory.",
-            WORKER_CONTRACT,
+            *contract_lines(ticket, config, "python3 <plugin>/scripts/ticket_state.py append --id %s --state heartbeat "
+                            "--agent %s --push" % (tid, agent),
+                            "On your VM `--push` sends the heartbeat to refs/warp/beat/%s, not your branch: it runs no CI "
+                            "and no Bugbot." % tid),
             REAP_RULE % (tid, agent),
             "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
             "Write .warp/tickets/%s/ on your own branch and push it. `ticket_state.py append --push` prints the reap line too." % tid,
@@ -1711,7 +1769,8 @@ def subagent_prompt(
             "parent: %s" % parent,
             "state: %s/state.json" % state_dir,
             "log: %s/log.jsonl" % state_dir,
-            WORKER_CONTRACT,
+            *contract_lines(ticket, config, "python3 %s/ticket_state.py append --root %s --id %s --state heartbeat --agent %s"
+                            % (scripts, parent, tid, agent)),
             "Work only inside %s." % worktree,
             "Commit, push, and open the pull request from that worktree.",
             "Never merge. Never touch the parent checkout %s. Never call Jira or Slack." % parent,
@@ -1780,7 +1839,8 @@ def implement_prompt(ticket: dict, config: Optional[dict] = None, branch_state: 
     lines.extend(
         [
             "agent: %s" % agent,
-            WORKER_CONTRACT,
+            *contract_lines(ticket, config, "python3 <plugin>/scripts/ticket_state.py append --id %s --state heartbeat "
+                            "--agent %s --push" % (tid, agent)),
             REAP_RULE % (tid, agent),
             "python3 <plugin>/scripts/agents.py reap --remote --id %s --ticket %s" % (agent, tid),
         ]

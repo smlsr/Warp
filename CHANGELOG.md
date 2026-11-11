@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.7.23
+
+Fixes two OnSpek/Forge incidents on 1.7.22 (2026-11-11): the D-001 desktop reap (a Shuttle with ~11 local commits was counted dead, replaced and told `reap: exit replaced`, so nothing was pushed) and C-101 (pull request #234 pushed with 4 red checks, including the test the ticket was meant to add, with its acceptance criterion reported as passing). Both were patched by hand in each VM's copy of `orchestrator.py`; new VMs fetched the unpatched plugin.
+
+- WORKER_CONTRACT: every Shuttle prompt (implement, fix, rebase, restart, repair, and a resume, which gets the same prompt; worktree, own-VM, and `launch: agent`) now carries two clauses, verbatim, above the rest of the contract:
+  - LOCAL CI IS MANDATORY BEFORE OPENING THE PULL REQUEST: loop local CI (FIX → RUN → FIX → RUN, no cap) until it exits 0 before the push and `gh pr create`; never push red for GitHub Actions to find; never report an acceptance criterion as passing without running its test. The prompt names this repo's command (`checkCommand`, else `localCiCommand`, `./scripts/ci/local.sh`). `requireLocalCiGreenBeforePush: false` leaves it out.
+  - HEARTBEAT RULE: a `heartbeat` every ~90 seconds while coding, testing, pushing or waiting, before every long step, between local CI loops, and after every push, with the same agent id. The prompt gives the exact command for this Shuttle.
+- Heartbeats from a Shuttle on its own VM no longer commit to its branch: `ticket_state.py append --state heartbeat --push` pushes the ticket folder to `refs/warp/beat/<id>`, which no workflow runs on, so a heartbeat every 90 seconds runs no CI and no Bugbot. The parent reads that ref with the branch.
+- `--busy <seconds>` on a heartbeat, before a step that can run longer than the window (`go test -race`, a large build): the dispatcher waits that long before it counts the Shuttle dead.
+- The reaper: a Shuttle launched with the HEARTBEAT RULE is dead when its last heartbeat is older than `shuttleHeartbeatReapAfterSeconds` (180), or when it has written none and is older than `shuttleHeartbeatGracePeriodSeconds` (300, the boot window). Shuttles launched before 1.7.23 were told to beat every 5 minutes, so they keep the `staleMinutes` rule: an upgrade mid-run does not reap the Shuttles already out. The same check is used by every reaper (the recovery pass, slot counting, and the replace decision).
+- The progress line: while the branch has no pull request, work-in-progress commits are still pushed (that keeps the work if the turn dies, the D-001 loss); once the pull request is open, only commits that passed local CI are pushed.
+- Config: `shuttleHeartbeatIntervalSeconds` (90), `shuttleHeartbeatReapAfterSeconds` (180), `shuttleHeartbeatGracePeriodSeconds` (300), `requireLocalCiGreenBeforePush` (true), `localCiCommand` (`./scripts/ci/local.sh`), all defaulted and commented in `assets/config.example.yaml`.
+- Tests: `tests/test_worker_contract_prompt.py` pins both clauses verbatim in the implement, fix, rebase and resume prompts; `tests/test_reap_grace.py` pins the heartbeat window.
+
 ## 1.7.22
 
 - Fixed: agent hours counted idle time. A ticket's `minutes` were the clock time of every Shuttle row until Warp marked it ended, or until now while it still said starting or running, and the total never came down. On Forge-QA that showed 20,973 agent-hours against a 5,045-hour estimate: phantom agents that never ran (3,429 h), 42 rows stuck in `starting` for two days (2,032 h and growing), rows left open until a sweep or the merge closed them (12,800 h), and replacement Shuttles on one ticket counted at the same time (~3,800 h). One size-M ticket showed 310 h.
