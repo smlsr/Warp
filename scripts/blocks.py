@@ -9,11 +9,21 @@ parent's block and never holds a block that was cleared: it fixes work already
 merged, so the plan does not wait on it. A range is not complete while one is open.
 
 With the default `gateOrder: strict`, a ticket in block N does not start until
-every block before it is cleared. A block is cleared when every ticket in it is
+every block before it is cleared. That is the default for every plan, a build
+schedule included (1.7.21: before, a build-schedule/2 plan ran `deps` unless it
+said otherwise, so tickets from every gate started at once). Inside the block
+that is open, tickets whose blockers are merged start in plan order: the
+critical chain, a priority gate's path, priority, rank, then the schedule's
+planned start. A block is cleared when every ticket in it is
 merged, done, or skipped and its gate is not red. A parked ticket holds the
 blocks after it. `gateOrder: deps` turns that off: only dependencies and a
 blocking gate that is not green hold a ticket back, as before. Open tickets
 always finish. This only decides what starts.
+
+`/warp-start all` pulls all available work: every ticket whose blockers are merged
+starts, from any gate, lowest gate first (`gateOrder: deps` for this run).
+`/warp-start ordered`, or a start without `all`, goes back to gates in order.
+`blocks.py order all|ordered` switches a running run without a restart.
 
 `/warp-start` takes an optional range:
 
@@ -29,6 +39,7 @@ run pauses with a summary of each block. A start with no range clears it.
   python3 scripts/blocks.py ?
   python3 scripts/blocks.py show --beam .warp/beam.json
   python3 scripts/blocks.py check --beam .warp/beam.json
+  python3 scripts/blocks.py order all|ordered --beam .warp/beam.json
 
 ?, help, -h, and --help print this text. Quote ? if the shell expands it.
 """
@@ -50,6 +61,19 @@ TERMINAL = {"merged", "done", "skipped"}
 GATE_RE = re.compile(r"^G(\d+)$", re.I)
 RANGE_RE = re.compile(r"^\s*(?:G?(\d+))?\s*(-|\.\.|:)?\s*(?:G?(\d+))?\s*$", re.I)
 ORDERS = ("strict", "deps")
+# Words for the override (1.7.21): `/warp-start all` pulls every ticket whose blockers merged; `ordered` goes back.
+ALL_WORDS = {"all", "--all", "any", "available", "everything", "all-available", "deps"}
+ORDERED_WORDS = {"ordered", "--ordered", "order", "gates", "in-order", "strict"}
+
+
+def order_word(text: str) -> Optional[str]:
+    """"deps" for `all`, "strict" for `ordered`, else None (a range, or nothing)."""
+    word = str(text or "").strip().casefold()
+    if word in ALL_WORDS:
+        return "deps"
+    if word in ORDERED_WORDS:
+        return "strict"
+    return None
 
 
 def utcnow() -> str:
@@ -83,10 +107,62 @@ def keys(beam: dict) -> list:
 
 
 def order_mode(beam: dict) -> str:
-    """beam gateOrder, else config gateOrder, else the schedule's (build-schedule/2: deps), else strict."""
-    raw = beam.get("gateOrder") or (beam.get("config") or {}).get("gateOrder") or (beam.get("program") or {}).get("gateOrder") or "strict"
+    """beam gateOrder (this run: set at start, `/warp-start all` makes it deps), else config gateOrder, else strict.
+
+    1.7.21: a build schedule's own order (build-schedule/2 says deps unless it names strict) no longer decides it.
+    Its gates are still milestones: a pending gate holds nothing; only the block order holds work back."""
+    cfg_raw = (beam.get("config") or {}).get("gateOrder")
+    run_raw = beam.get("gateOrder")
+    from_schedule = order_word((beam.get("program") or {}).get("gateOrder")) == "deps"
+    if order_word(run_raw) == "deps" and from_schedule and not beam.get("pullAll") and order_word(cfg_raw) != "deps":
+        # A run started before 1.7.21 stored the schedule's deps on its beam. Only `/warp-start all` or config keeps it.
+        run_raw = None
+    raw = run_raw or cfg_raw or "strict"
     text = str(raw).strip().lower()
-    return text if text in ORDERS else "strict"
+    word = order_word(text)
+    return word or (text if text in ORDERS else "strict")
+
+
+def order_line(beam: dict) -> str:
+    """How this run picks work, for start, status and the switch."""
+    info = plan(beam)
+    if order_mode(beam) == "deps":
+        return ("order: all available work. Every ticket whose blockers are merged starts, from any gate, lowest gate "
+                "first. `/warp-start ordered` goes back to gates in order.")
+    if not info:
+        return "order: plan order (no gates): tickets whose blockers are merged start by critical chain, priority and rank."
+    lo = info["lo"] or 0
+    current = next((i for i in range(lo, len(info["rows"])) if not info["rows"][i]["cleared"]), None)
+    if current is None:
+        return "order: gates in order. Every block is cleared."
+    row = info["rows"][current]
+    later = [info["order"][i] for i in range(current + 1, len(info["order"])) if info["rows"][i]["total"]]
+    return ("order: gates in order (default). %s is open: %d of %d tickets merged; its tickets with no open blockers "
+            "start in plan order. %s wait%s for %s to clear. `/warp-start all` pulls all available work instead."
+            % (row["key"], row["merged"], row["total"], ", ".join(later[:6]) + ("..." if len(later) > 6 else "") or "Nothing",
+               "" if len(later) != 1 else "s", row["key"]))
+
+
+def set_order(beam: dict, word: str) -> list:
+    """`all` or `ordered` on this run's beam. The caller writes it."""
+    mode = order_word(word)
+    if mode is None:
+        return ["refuse: %r is not an order. Use all or ordered." % word]
+    beam["gateOrder"] = mode
+    if mode == "deps":
+        beam["pullAll"] = True
+    else:
+        beam.pop("pullAll", None)
+    return [order_line(beam), "herald: Warp now pulls %s." % (
+        "all available work, from every gate" if mode == "deps" else "work gate by gate, lowest gate first")]
+
+
+def block_index(info: Optional[dict], tid: str) -> int:
+    """The ticket's block position in run order; 0 without gates."""
+    if not info:
+        return 0
+    key = info["assign"].get(tid)
+    return int(info["rank"].get(key, 0)) if key is not None else 0
 
 
 def _blockers(ticket: dict) -> list:
@@ -450,16 +526,32 @@ def main(argv: Optional[list] = None) -> int:
     for name in ("show", "check"):
         p = sub.add_parser(name)
         p.add_argument("--beam", default=".warp/beam.json")
+    p = sub.add_parser("order", help="all: pull all available work; ordered: gates in order (the default)")
+    p.add_argument("mode")
+    p.add_argument("--beam", default=".warp/beam.json")
     import usage
 
     args = parser.parse_args(usage.normalize_argv(argv))
     path = Path(args.beam)
+    if args.cmd == "order":
+        import beam as beam_mod
+        import beamlock
+
+        with beamlock.run_lock(path):
+            data = json.loads(path.read_text())
+            lines = set_order(data, args.mode)
+            if not lines[0].startswith("refuse: "):
+                beam_mod.atomic_write(path, json.dumps(data, indent=2) + "\n", data=data)
+        for line in lines:
+            print(line)
+        return 2 if lines[0].startswith("refuse: ") else 0
     if args.cmd == "check":
         for line in check(path):
             print(line)
         return 0
     beam = json.loads(path.read_text())
     print(open_line(beam))
+    print(order_line(beam))
     info = plan(beam)
     if info:
         for row in info["rows"]:

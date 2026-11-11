@@ -547,8 +547,17 @@ def _rank_key(ticket: dict):
     return (1, -days)
 
 
-def sort_key(ticket: dict, base_red: bool = False):
-    """Starred (critical chain) first, then a priority gate's path, then priority, then lowest rank.
+def _planned_start(ticket: dict):
+    planned = ticket.get("planned") if isinstance(ticket.get("planned"), dict) else {}
+    try:
+        return (0, float(planned.get("start")))
+    except (TypeError, ValueError):
+        return (1, 0.0)
+
+
+def sort_key(ticket: dict, base_red: bool = False, block: int = 0):
+    """The lowest gate block first (1.7.21), then starred (critical chain), then a priority gate's path, then priority,
+    then lowest rank, then the schedule's planned start.
 
     A base fix sorts ahead of every rank while the base branch is red. `priorityGate` comes from
     build-schedule/2 (priority_gate): members and ancestors of a priority gate go ahead of rank.
@@ -558,7 +567,9 @@ def sort_key(ticket: dict, base_red: bool = False):
     pgate = 0 if ticket.get("priorityGate") else 1
     pri_bucket, pri_value = _priority_key(ticket)
     rank_bucket, rank_value = _rank_key(ticket)
-    return (fix, star, pgate, pri_bucket, pri_value, rank_bucket, rank_value, str(ticket.get("id") or ""))
+    start_bucket, start_value = _planned_start(ticket)
+    return (fix, int(block or 0), star, pgate, pri_bucket, pri_value, rank_bucket, rank_value, start_bucket, start_value,
+            str(ticket.get("id") or ""))
 
 
 def base_is_green(beam: dict) -> bool:
@@ -1337,7 +1348,19 @@ def fix_round(ticket: dict) -> int:
     return total
 
 
-def model_for(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> tuple:
+def model_for(ticket: dict, config: Optional[dict], step: Optional[str] = None, down: Optional[dict] = None, now=None) -> tuple:
+    """(slug, why), with the backup model when the chosen one is marked down (1.7.22, modelfail.py)."""
+    slug, why = _chosen_model(ticket, config, step)
+    try:
+        import modelfail
+
+        spare = modelfail.fallback(ticket, config, slug, down=down, now=now)
+    except Exception:
+        spare = None
+    return spare or (slug, why)
+
+
+def _chosen_model(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> tuple:
     """(slug, why) for this ticket's Shuttle.
 
     `model<Size>` (modelS, modelM, modelL, modelXL) when set for the ticket's size, else `model`,

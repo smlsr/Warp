@@ -589,6 +589,7 @@ def summarize(data: dict, ctx: dict, now: datetime, partial: bool) -> dict:
         "autoMerged": str(auto_merged),
         "manualMerged": str(manual_merged),
         "agentHours": _show_hours(estimate.get("agentHours") if estimate.get("agentHours") is not None else program.get("agentHours")),
+        **_effort_fields(tickets),
         "elapsed": elapsed,
         "humanEstimate": _show_hours(estimate.get("humanHours")),
         "humanActual": fmt_dur(human_actual) if human_known else "n/a",
@@ -642,6 +643,14 @@ def totals_plain(summary: dict) -> str:
         "Auto-merged (sizes in autoMergeSizes): {}".format(t["autoMerged"]),
         "Manual merged (sizes not in autoMergeSizes): {}".format(t["manualMerged"]),
         "Agent hours (estimate): {}".format(t["agentHours"]),
+        "AI working hours (1.7.22, no idle time): {}{}".format(t.get("aiHours", "n/a"), t.get("aiEstimatedNote", "")),
+        "AI runs by step: {}".format(t.get("aiRuns", "n/a")),
+        "Sent back to fix: {} rounds; for bugs {} ({} tickets), for CI {} ({} tickets), other {}".format(
+            t.get("fixRounds", "0"), t.get("fixBug", "0"), t.get("ticketsBug", "0"), t.get("fixCi", "0"),
+            t.get("ticketsCi", "0"), t.get("fixOther", "0")),
+        "Code written (outside .warp/): {}".format(t.get("code", "n/a")),
+        "AI by model: {}".format(t.get("aiModels", "n/a")),
+        "Fix rounds by model: {}".format(t.get("fixModels", "n/a")),
         "Elapsed (wall): {}".format(t["elapsed"]),
         "Human time (estimate): {}".format(t["humanEstimate"]),
         "Human time (actual): {}".format(t["humanActual"]),
@@ -1148,5 +1157,42 @@ def main(argv: Optional[list] = None) -> int:
     return 0
 
 
+
+def _effort_fields(tickets) -> dict:
+    """1.7.22: AI working time, AI runs by step, send-backs by why, and code written."""
+    try:
+        import effort
+
+        rows = tickets if isinstance(tickets, list) else list((tickets or {}).values())
+        tot = effort.totals({"tickets": {str(i): t for i, t in enumerate(rows) if isinstance(t, dict)}})
+    except Exception:
+        return {}
+    minutes = sum(int(t.get("minutes") or 0) for t in rows if isinstance(t, dict))
+    fc = tot.get("fixCounts") or {}
+    code = tot.get("code") or {}
+    runs = tot.get("aiRuns") or {}
+    est = int(tot.get("estimatedMinutes") or 0)
+    return {
+        "aiHours": "%.1fh" % (minutes / 60.0),
+        "aiEstimatedNote": " (%.1fh of it estimated: turns with no sign of life)" % (est / 60.0) if est else "",
+        "aiRuns": ", ".join("%s %d" % (k, v) for k, v in sorted(runs.items(), key=lambda kv: -kv[1])) or "n/a",
+        "fixRounds": str(int(fc.get("rounds") or 0)),
+        "fixBug": str(int(fc.get("bug") or 0)),
+        "fixCi": str(int(fc.get("ci") or 0)),
+        "fixOther": str(sum(int(fc.get(k) or 0) for k in ("acceptance", "conflict", "restart", "stalled", "other"))),
+        "ticketsBug": str(int((tot.get("ticketsBack") or {}).get("bug") or 0)),
+        "ticketsCi": str(int((tot.get("ticketsBack") or {}).get("ci") or 0)),
+        "aiModels": "; ".join("%s %d runs, %.1fh (%s)" % (m, v.get("runs", 0), v.get("minutes", 0) / 60.0,
+                                                          ", ".join("%s %d" % kv for kv in sorted((v.get("steps") or {}).items())))
+                              for m, v in sorted((tot.get("aiByModel") or {}).items(), key=lambda kv: -kv[1].get("minutes", 0))) or "n/a",
+        "fixModels": "; ".join("%s %d rounds (bug %d, ci %d)" % (m, v.get("rounds", 0), v.get("bug", 0), v.get("ci", 0))
+                               for m, v in sorted((tot.get("fixByModel") or {}).items(), key=lambda kv: -kv[1].get("rounds", 0))) or "n/a",
+        "code": ("+%d / -%d lines in %d files over %d tickets, about %d output tokens (added characters / 4)"
+                 % (code.get("added", 0), code.get("deleted", 0), code.get("files", 0), code.get("tickets", 0),
+                    code.get("tokens", 0))) if code.get("tickets") else "n/a",
+    }
+
+
 if __name__ == "__main__":
     sys.exit(main())
+

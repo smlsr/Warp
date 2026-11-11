@@ -522,6 +522,7 @@ def prepare_launch(
     replacing: bool = False,
     now=None,
     beam_path: Optional[Path] = None,
+    model: Optional[tuple] = None,
 ) -> dict:
     """Decide start, resume, hold, closed, or cap. Records the registry row."""
     tid = str(ticket.get("id") or "")
@@ -534,6 +535,21 @@ def prepare_launch(
             _now_dt, now_s = beam_mod.coerce_now(now)
             for row in _rows(doc):
                 if isinstance(row, dict) and row.get("id") == resume_id:
+                    if row.get("ended"):
+                        # 1.7.22: keep the turn that ended; the time between turns is not AI work.
+                        turns = row.get("turns") if isinstance(row.get("turns"), list) else []
+                        turns.append([row.get("turnStart") or row.get("started"), row.get("ended")])
+                        row["turns"] = turns[-50:]
+                    if turns_kept := (row.get("turns") if isinstance(row.get("turns"), list) else None):
+                        if row.get("model") and len(turns_kept[-1]) == 2:
+                            turns_kept[-1].append(row.get("model"))  # the model of the turn that ended
+                    row["turnStart"] = now_s
+                    row["step"] = step
+                    if model:
+                        row["model"], row["modelWhy"] = model[0], model[1]
+                        row.pop("modelUsed", None)
+                    if step == "fix" and ticket.get("fixKinds"):
+                        row["fixKinds"] = list(ticket.get("fixKinds") or [])
                     row["state"] = "running"
                     row["ended"] = None
                     row["endReason"] = ""
@@ -583,6 +599,9 @@ def prepare_launch(
             "ended": None,
             "state": "starting",
             "lastSeenAt": ticket.get("lastSeenAt") or "",
+            "step": step,
+            **({"fixKinds": list(ticket.get("fixKinds") or [])} if step == "fix" and ticket.get("fixKinds") else {}),
+            **({"model": model[0], "modelWhy": model[1]} if model else {}),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": agent, "step": step})
@@ -619,6 +638,8 @@ def record_replacement(
             "started": now_s,
             "ended": None,
             "state": "starting",
+            "step": str((ticket.get("shuttle") or {}).get("step") or ""),
+            **({"model": str((ticket.get("shuttle") or {}).get("model"))} if (ticket.get("shuttle") or {}).get("model") else {}),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": new_id, "step": "replace"})
@@ -852,7 +873,22 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     """The one line the parent uses. `resume` does not create an agent."""
     import orchestrator
 
-    decision = prepare_launch(data, ticket, step, replacing=replacing, now=now, beam_path=beam_path)
+    model_cfg = dict(data.get("config") or {})
+    if beam_path is not None:
+        try:
+            import prompt_gate
+
+            model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
+        except Exception:
+            model_cfg = dict(data.get("config") or {})
+    chosen = orchestrator.model_for(ticket, model_cfg, step, down=data.get("modelDown"), now=now)
+    if str(chosen[1]).startswith("backupModel") and not isinstance(ticket.get("modelFallback"), dict):
+        # The run marked this model down: the ticket's prompt names the backup too.
+        primary = orchestrator._chosen_model(ticket, model_cfg, step)[0]
+        mark = (data.get("modelDown") or {}).get(primary) or {}
+        ticket["modelFallback"] = {"from": primary, "to": chosen[0], "until": mark.get("until"),
+                                   "reason": mark.get("reason") or "model down", "at": mark.get("since")}
+    decision = prepare_launch(data, ticket, step, replacing=replacing, now=now, beam_path=beam_path, model=chosen)
     tid = ticket.get("id")
     action = decision["action"]
     if action == "hold":
@@ -881,15 +917,10 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     if decision.get("id"):
         extra += " agent=%s" % decision["id"]
     verb = "resume" if action == "resume" else "start"
-    model_cfg = dict(cfg)
-    if beam_path is not None:
-        try:
-            import prompt_gate
-
-            model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
-        except Exception:
-            model_cfg = dict(cfg)
-    extra += " model=%s" % orchestrator.model_for(ticket, model_cfg, step)[0]
+    extra += " model=%s" % chosen[0]
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+    if shuttle is not None:
+        shuttle["model"] = chosen[0]
     lines = ["%s %s checkout=%s branch=%s%s step=%s" % (verb, tid, kind, branch, extra, step)]
     if detail:
         lines.append("fix: %s %s" % (tid, detail))
@@ -2917,6 +2948,11 @@ def hook_start(payload: dict, root: Optional[Path] = None, now=None) -> dict:
     if verdict.get("deny"):
         what = "The listener poll" if role == "listener" else "Ticket %s" % tid
         return _spawn_denied(beam_path, role, tid, "duplicate", "%s already has its agent. Do not start a second one." % what)
+    if role == "shuttle" and hook_model(payload):
+        try:
+            note_turn(base, tid, None, hook_model(payload))
+        except Exception:
+            pass
     return allow
 
 
@@ -2951,7 +2987,76 @@ def hook_stop(payload: dict, root: Optional[Path] = None) -> dict:
         )
     except OSError:
         pass
+    if role == "shuttle" and (isinstance(payload.get("duration_ms"), (int, float)) or hook_model(payload)):
+        note_turn(base, tid, payload.get("duration_ms") if isinstance(payload.get("duration_ms"), (int, float)) else None,
+                  hook_model(payload))
     return {}
+
+
+def hook_model(payload: dict) -> str:
+    """The model in a Cursor hook payload, when Cursor sends one."""
+    for key in ("model", "model_name", "modelName", "subagent_model"):
+        value = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("id") or value.get("slug")
+        if value and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+ORPHAN_MINUTES = 60
+
+
+def close_orphans(data: dict, beam_path: Optional[Path] = None, now=None) -> int:
+    """1.7.22: end Shuttle rows still marked starting or running that no longer belong to anything: the ticket is
+    finished, or another agent owns it, and the row is over an hour old. On Forge-QA 42 rows sat in `starting` for two
+    days. Their time counted as agent work until 1.7.22; now they count 0 and are closed `orphan`."""
+    doc = registry(data, beam_path)
+    now_dt, now_s = beam_mod.coerce_now(now)
+    tickets = data.get("tickets") or {}
+    closed = 0
+    for row in _rows(doc):
+        if not isinstance(row, dict) or row.get("role") != "shuttle" or row.get("state") not in _LIVE:
+            continue
+        start = beam_mod.parse_ts(str(row.get("turnStart") or row.get("started") or ""))
+        if start is None or (now_dt - start).total_seconds() < ORPHAN_MINUTES * 60:
+            continue
+        ticket = tickets.get(str(row.get("ticket") or "")) if isinstance(tickets, dict) else None
+        ticket = ticket if isinstance(ticket, dict) else {}
+        finished = str(ticket.get("status") or "") in beam_mod.TERMINAL or not ticket
+        replaced = bool(ticket.get("agent")) and str(ticket.get("agent")) != str(row.get("id") or "")
+        if not (finished or replaced):
+            continue
+        row["endReason"] = "orphan never launched" if row.get("state") == "starting" else "orphan"
+        row["state"] = "ended"
+        row["ended"] = now_s
+        closed += 1
+    if closed:
+        flush(data, beam_path)
+    return closed
+
+
+def note_run_ms(base: Path, tid: str, duration_ms: float) -> bool:
+    return note_turn(base, tid, duration_ms, "")
+
+
+def note_turn(base: Path, tid: str, duration_ms: Optional[float] = None, model: str = "") -> bool:
+    """1.7.22: what Cursor says about a Shuttle turn, onto its latest registry row: the measured run time (runMs adds
+    up turns) and the model that really ran (modelUsed)."""
+    candidates = [Path(base) / ".warp" / "beam.json"] + sorted((Path(base) / ".warp" / "runs").glob("*/beam.json"))
+    for beam_path in candidates:
+        doc = load_file(beam_path)
+        rows = [r for r in _rows(doc) if isinstance(r, dict) and r.get("role") == "shuttle" and str(r.get("ticket")) == str(tid)]
+        if not rows:
+            continue
+        row = max(rows, key=lambda r: str(r.get("turnStart") or r.get("started") or ""))
+        if duration_ms is not None:
+            row["runMs"] = float(row.get("runMs") or 0) + max(0.0, float(duration_ms))
+        if model:
+            row["modelUsed"] = model
+        save_file(beam_path, doc)
+        return True
+    return False
 
 
 def check_line(data: dict) -> str:

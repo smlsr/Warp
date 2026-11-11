@@ -366,6 +366,9 @@ def _apply_heartbeat(ticket: dict, stamp: str) -> bool:
     if not _newer(stamp, ticket.get("lastSeenAt")):
         return False
     ticket["lastSeenAt"] = stamp
+    import effort
+
+    effort.seen(ticket, stamp)
     return True
 
 
@@ -525,6 +528,15 @@ def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[l
     return True
 
 
+def _from_current_shuttle(ticket: dict, event: dict) -> bool:
+    """The line was written after this ticket's current Shuttle started (or no start is known)."""
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    since = shuttle.get("startedAt") or ticket.get("workerStartedAt")
+    started = beam.parse_ts(str(since)) if since else None
+    at = beam.parse_ts(str(event.get("at") or ""))
+    return started is None or at is None or at >= started
+
+
 def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: str, heralded: set, lines: list) -> bool:
     """Patch one log line onto this ticket. Returns True when the beam changed."""
     state = str(event.get("state") or "").strip()
@@ -532,6 +544,27 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
         return False
     noted = _apply_acs(ticket, event, lines, heralded)
     returned = note_shuttle_return(ticket, event, str(event.get("at") or now), lines)
+    if state == "failed" and (returned or _from_current_shuttle(ticket, event)):
+        import modelfail
+
+        error = " ".join(str(event.get(k) or "") for k in ("error", "alarm"))
+        if modelfail.is_model_error(error) and modelfail.backup(data.get("config") or {}):
+            # 1.7.22: the Shuttle failed because of its model: start the step again on backupModel.
+            said = modelfail.note(data, ticket, error, model=str(event.get("model") or ""), now=now)
+            if lines is not None:
+                lines.extend(said)
+            try:
+                import agents
+
+                agents.note_closed(data, ticket, "model-failure", beam_path=beam_path)
+            except Exception:
+                pass
+            if ticket.get("alarm") != "model-failure":
+                modelfail.retry(data, ticket)
+                if lines is not None:
+                    lines.append("result: retry %s on the backup model (queued; not a recovery)" % ticket.get("id"))
+            _remote(ticket)["state"] = "failed"
+            return True
     if returned and state in _STOP_STATES:
         # Its turn is over: end its registry row now, so a restart or a repair is not held for a live Shuttle.
         try:
@@ -832,6 +865,11 @@ def apply_directory(
         seen.add(key)
         if not _owns(row, tid):
             continue
+        import effort
+
+        effort.seen(ticket, str(row.get("at") or ""))  # 1.7.22: a sign of life for the working-time bound
+        if row.get("model"):
+            effort.seen_model(ticket, str(row.get("at") or ""), str(row.get("model")))
         if _apply_event(beam_path, data, ticket, row, now, heralded, out):
             changed = True
     remote["seen"] = sorted(seen)
@@ -1189,6 +1227,7 @@ def append_status(
     source: str = "",
     acs: Optional[dict] = None,
     step: str = "",
+    model: str = "",
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -1292,6 +1331,9 @@ def append_status(
     }
     if agent:
         line["agent"] = agent
+    if model:
+        line["model"] = str(model).strip()
+        body["model"] = line["model"]
     if pr:
         line["pr"] = pr
     if name:
@@ -1462,6 +1504,7 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
     add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default), ai (Warp's AI review, 1.7.21) or hand")
     add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
+    add.add_argument("--model", default="", help="1.7.22: the model this Shuttle runs as, for the reports (on started)")
     add.add_argument("--step", default="", help="the Shuttle's step (implement, fix, restart, repair, review, verify); "
                                                 "done on a code step needs a product commit (1.7.21)")
     watch = sub.add_parser("observe", help="fetch in-flight branches and patch the live beam")
@@ -1491,6 +1534,7 @@ def main(argv: Optional[list] = None) -> int:
             source=args.source,
             acs=_parse_acs(args.ac),
             step=args.step,
+            model=args.model,
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)

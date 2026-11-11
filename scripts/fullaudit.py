@@ -175,6 +175,11 @@ def check(data: dict, beam_path: Path, snaps: dict, live: Callable, now=None, st
                         if not (isinstance(tickets.get(d), dict) and terminal.is_terminal(tickets[d]))]
             if blockers:
                 row["issues"].append("waits on %s" % ", ".join(blockers[:6]))
+            import blocks
+
+            held_by = blocks.hold_reason(blocks.plan(data), tid)
+            if held_by:
+                row["issues"].append("gate order: %s" % held_by)
         out.append((row, lines))
     return out
 
