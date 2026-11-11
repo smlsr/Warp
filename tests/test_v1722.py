@@ -184,5 +184,83 @@ class SpendTest(unittest.TestCase):
         self.assertEqual((t["reportedMinutes"], t["minutes"]), (30, 12))
 
 
+class ModelTest(unittest.TestCase):
+    """1.7.22: the model of every run (chosen and, when seen, really used), and of every fix round."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / ".warp").mkdir()
+        self.path = self.tmp / ".warp" / "beam.json"
+
+    def test_the_launch_row_records_the_chosen_model_and_the_hook_the_real_one(self):
+        cfg = {"model": "sonnet-5-5", "modelL": "opus-5-5", "fixModel": "opus-5-5-max", "fixModelAfter": 2, "runner": "local"}
+        ticket = {"id": "M-1", "status": "queued", "size": "L", "locks": ["src"], "attempts": 0}
+        data = {"version": 1, "runState": "running", "config": cfg, "tickets": {"M-1": ticket}}
+        self.path.write_text(json.dumps(data))
+        lines = agents.launch_lines(data, ticket, "implement", beam_path=self.path)
+        self.assertTrue(any("model=opus-5-5" in l for l in lines), lines)
+        agents.flush(data, self.path)
+        row = [r for r in json.loads((self.tmp / ".warp" / "agents.json").read_text())["agents"] if r.get("ticket") == "M-1"][-1]
+        self.assertEqual((row["model"], row["modelWhy"], row["step"]), ("opus-5-5", "modelL for size L", "implement"))
+        self.assertTrue(agents.note_turn(self.tmp, "M-1", 600000, "claude-opus-5-5"))
+        row = [r for r in json.loads((self.tmp / ".warp" / "agents.json").read_text())["agents"] if r.get("ticket") == "M-1"][-1]
+        self.assertEqual(row["modelUsed"], "claude-opus-5-5")
+        self.assertEqual(agents.hook_model({"model": {"name": "gpt-6"}}), "gpt-6")
+
+    def test_fix_rounds_name_their_model_and_totals_split_by_model(self):
+        cfg = {"model": "sonnet-5-5", "fixModel": "opus-5-5", "fixModelAfter": 2}
+        ticket = {"id": "F-2", "status": "review", "locks": ["src"], "size": "S", "attempts": 0,
+                  "pr": {"url": "https://github.com/o/r/pull/2", "headSha": "h1"}}
+        data = {"tickets": {"F-2": ticket}, "config": cfg}
+        pipeline.begin_fix(data, ticket, ["ci red"], [])
+        ticket.pop("shuttle", None)
+        ticket["attempts"] = 2
+        pipeline.begin_fix(data, ticket, ["bugbot: a.py:1 x"], [])
+        self.assertEqual([e["model"] for e in ticket["fixLog"]], ["sonnet-5-5", "opus-5-5"])
+        ticket["ai"] = {"models": {"sonnet-5-5": {"runs": 2, "minutes": 50, "steps": {"implement": 1, "fix": 1}},
+                                   "opus-5-5": {"runs": 1, "minutes": 20, "steps": {"fix": 1}}}}
+        tot = effort.totals(data)
+        self.assertEqual(tot["aiByModel"]["sonnet-5-5"]["minutes"], 50)
+        self.assertEqual(tot["fixByModel"], {"sonnet-5-5": {"rounds": 1, "ci": 1}, "opus-5-5": {"rounds": 1, "bug": 1}})
+
+    def test_working_time_by_model_prefers_what_really_ran(self):
+        rows = [shuttle("W-1", "2026-11-10T06:00:00Z", "2026-11-10T06:30:00Z", step="implement", model="sonnet-5-5"),
+                shuttle("W-1", "2026-11-10T07:00:00Z", "2026-11-10T07:20:00Z", step="fix", model="sonnet-5-5"),
+                shuttle("W-1", "2026-11-10T08:00:00Z", "2026-11-10T08:10:00Z", step="fix", model="opus-5-5",
+                        modelUsed="claude-opus-5-5-max")]
+        ticket = {"id": "W-1", "aiSeen": ["2026-11-10T06:30:00Z", "2026-11-10T07:20:00Z", "2026-11-10T08:10:00Z"],
+                  "aiModels": [["2026-11-10T07:01:00Z", "gpt-6"]]}
+        data = {"version": 1, "config": {}, "tickets": {"W-1": ticket}}
+        self.path.write_text(json.dumps(data))
+        (self.tmp / ".warp" / "agents.json").write_text(json.dumps({"agents": rows}))
+        effort.update(data, self.path, now=NOW)
+        models = data["tickets"]["W-1"]["ai"]["models"]
+        self.assertEqual(sorted(models), ["claude-opus-5-5-max", "gpt-6", "sonnet-5-5"])
+        self.assertEqual(models["gpt-6"], {"runs": 1, "minutes": 20, "steps": {"fix": 1}})
+        self.assertEqual(models["sonnet-5-5"]["steps"], {"implement": 1})
+
+    def test_the_shuttle_reports_its_model_in_its_folder(self):
+        import contextlib
+        import io
+        import os
+
+        import ticket_state
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.tmp, check=True)
+        cwd = Path.cwd()
+        os.chdir(self.tmp)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ticket_state.append_status(self.tmp, "R-9", "started", step="review", model="claude-sonnet-5-5")
+        finally:
+            os.chdir(cwd)
+        rows = [json.loads(l) for l in (self.tmp / ".warp" / "tickets" / "R-9" / "log.jsonl").read_text().splitlines()]
+        self.assertEqual(rows[-1]["model"], "claude-sonnet-5-5")
+        ticket = {"id": "R-9"}
+        effort.seen_model(ticket, rows[-1]["at"], rows[-1]["model"])
+        self.assertEqual(ticket["aiModels"][-1][1], "claude-sonnet-5-5")
+
+
 if __name__ == "__main__":
     unittest.main()

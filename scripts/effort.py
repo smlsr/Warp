@@ -26,6 +26,12 @@ failed), `ci` (CI, the rollup, the check command, a red merge check), `acceptanc
 (no product commit), `stalled`, `other`. A round with Bugbot findings and red CI counts once in each, and once in
 `rounds`.
 
+Models (1.7.22): every Shuttle row records the model Warp chose for it (`model`, `modelWhy`: model<Size>, model, or
+fixModel after fixModelAfter rounds). The model that really ran is recorded when Warp can see it (`modelUsed`): the
+subagent hook's payload, or the Shuttle's own `ticket_state.py append --model`. Working time and runs are kept by model
+(`ai.models`), and each fix round names the model sent to fix it (`fixLog[].model`), so a report can say which model
+wrote the code, which one fixed the bugs, and which one fixed CI.
+
 Code: lines added and deleted outside `.warp/` and an approximate count of the output tokens that code took (added
 characters / 4), from git (`<merge sha>^1..<merge sha>`, or `origin/<base>...origin/<branch>` while open). Approximate:
 it measures the final diff, not every draft the model wrote.
@@ -77,7 +83,7 @@ def classify(reasons) -> list:
     return kinds or ["other"]
 
 
-def note_fix(ticket: dict, reasons, now_s: str, head: str = "") -> list:
+def note_fix(ticket: dict, reasons, now_s: str, head: str = "", model: str = "") -> list:
     """Count one fix round on the ticket. Returns its kinds (also kept for the launch row)."""
     kinds = classify(reasons)
     counts = ticket.get("fixCounts") if isinstance(ticket.get("fixCounts"), dict) else {}
@@ -86,8 +92,11 @@ def note_fix(ticket: dict, reasons, now_s: str, head: str = "") -> list:
         counts[kind] = int(counts.get(kind) or 0) + 1
     ticket["fixCounts"] = counts
     log = ticket.get("fixLog") if isinstance(ticket.get("fixLog"), list) else []
-    log.append({"at": now_s, "head": str(head or "")[:12], "kinds": kinds,
-                "reasons": [str(r)[:160] for r in (reasons or []) if str(r).strip()][:6]})
+    entry = {"at": now_s, "head": str(head or "")[:12], "kinds": kinds,
+             "reasons": [str(r)[:160] for r in (reasons or []) if str(r).strip()][:6]}
+    if model:
+        entry["model"] = model
+    log.append(entry)
     ticket["fixLog"] = log[-30:]
     ticket["fixKinds"] = kinds
     return kinds
@@ -106,6 +115,36 @@ def seen(ticket: dict, stamp: str) -> None:
         return
     marks.append(stamp)
     ticket["aiSeen"] = sorted(set(marks))[-200:]
+
+
+def seen_model(ticket: dict, stamp: str, model: str) -> None:
+    """The model a Shuttle says it runs as (ticket_state.py append --model), with when it said it."""
+    model = str(model or "").strip()
+    if not model:
+        return
+    marks = ticket.get("aiModels") if isinstance(ticket.get("aiModels"), list) else []
+    row = [str(stamp or ""), model]
+    if row not in marks:
+        marks.append(row)
+    ticket["aiModels"] = marks[-100:]
+
+
+UNKNOWN_MODEL = "unknown"
+
+
+def row_model(row: dict, ticket: dict, now_dt=None) -> str:
+    """The model behind a row: what really ran (hook, self-report in the row's window), else what Warp chose."""
+    used = str(row.get("modelUsed") or "").strip()
+    if used:
+        return used
+    start = _parse(row.get("started"))
+    end = _parse(row.get("ended")) or now_dt
+    said = ""
+    for stamp, model in (ticket.get("aiModels") or []):
+        when = _parse(stamp)
+        if when is not None and start is not None and when >= start and (end is None or when <= end):
+            said = str(model)
+    return said or str(row.get("model") or "").strip() or UNKNOWN_MODEL
 
 
 def _parse(stamp):
@@ -262,6 +301,7 @@ def compute(data: dict, beam_path: Optional[Path] = None, now=None, doc: Optiona
         runs: dict = {}
         by_step: dict = {}
         by_fix: dict = {}
+        by_model: dict = {}
         for index, row in enumerate(rows):
             nxt = None
             for later in rows[index + 1:]:
@@ -277,12 +317,19 @@ def compute(data: dict, beam_path: Optional[Path] = None, now=None, doc: Optiona
             step = _step_of(row, spawns)
             runs[step] = runs.get(step, 0) + 1
             by_step[step] = by_step.get(step, 0.0) + counted
+            model = row_model(row, ticket, now_dt)
+            slot = by_model.setdefault(model, {"runs": 0, "minutes": 0.0, "steps": {}})
+            slot["runs"] += 1
+            slot["minutes"] += counted
+            slot["steps"][step] = slot["steps"].get(step, 0) + 1
             if step == "fix":
                 for kind in row.get("fixKinds") or ["unknown"]:
                     by_fix[kind] = by_fix.get(kind, 0.0) + counted
         out[tid] = {"minutes": total, "dropped": dropped, "estimated": guessed, "runs": runs,
                     "byStep": {k: round(v) for k, v in by_step.items()},
-                    "byFix": {k: round(v) for k, v in by_fix.items()}}
+                    "byFix": {k: round(v) for k, v in by_fix.items()},
+                    "byModel": {k: {"runs": v["runs"], "minutes": round(v["minutes"]), "steps": v["steps"]}
+                                for k, v in by_model.items()}}
     return out
 
 
@@ -304,6 +351,7 @@ def update(data: dict, beam_path: Optional[Path] = None, now=None, run: Optional
             continue
         ticket["minutes"] = int(round(row["minutes"]))
         ticket["ai"] = {"runs": row["runs"], "minutes": row["byStep"], "fixMinutes": row["byFix"],
+                        "models": row.get("byModel") or {},
                         "droppedMinutes": int(round(row["dropped"])), "estimatedMinutes": int(round(row["estimated"]))}
     try:
         code_pass(data, beam_path, run=run)
@@ -409,6 +457,8 @@ def totals(data: dict) -> dict:
     fix_minutes: dict = {}
     fix_counts: dict = {}
     code = {"added": 0, "deleted": 0, "files": 0, "tokens": 0, "tickets": 0}
+    by_model: dict = {}
+    fix_by_model: dict = {}
     dropped = estimated = 0
     for t in tickets:
         ai = t.get("ai") if isinstance(t.get("ai"), dict) else {}
@@ -418,6 +468,19 @@ def totals(data: dict) -> dict:
             minutes[k] = minutes.get(k, 0) + int(v or 0)
         for k, v in (ai.get("fixMinutes") or {}).items():
             fix_minutes[k] = fix_minutes.get(k, 0) + int(v or 0)
+        for model, v in (ai.get("models") or {}).items():
+            slot = by_model.setdefault(model, {"runs": 0, "minutes": 0, "steps": {}})
+            slot["runs"] += int(v.get("runs") or 0)
+            slot["minutes"] += int(v.get("minutes") or 0)
+            for step, n in (v.get("steps") or {}).items():
+                slot["steps"][step] = slot["steps"].get(step, 0) + int(n or 0)
+        for entry in t.get("fixLog") or []:
+            if not isinstance(entry, dict):
+                continue
+            slot = fix_by_model.setdefault(str(entry.get("model") or UNKNOWN_MODEL), {"rounds": 0})
+            slot["rounds"] += 1
+            for kind in entry.get("kinds") or []:
+                slot[kind] = slot.get(kind, 0) + 1
         dropped += int(ai.get("droppedMinutes") or 0)
         estimated += int(ai.get("estimatedMinutes") or 0)
         for k, v in (t.get("fixCounts") or {}).items():
@@ -430,4 +493,4 @@ def totals(data: dict) -> dict:
     back = {k: sum(1 for t in tickets if int((t.get("fixCounts") or {}).get(k) or 0) > 0) for k in ("bug", "ci")}
     return {"aiRuns": runs, "aiMinutes": minutes, "fixMinutes": fix_minutes, "fixCounts": fix_counts,
             "ticketsBack": back, "droppedMinutes": dropped,
-            "estimatedMinutes": estimated, "code": code}
+            "estimatedMinutes": estimated, "code": code, "aiByModel": by_model, "fixByModel": fix_by_model}

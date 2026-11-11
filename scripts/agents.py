@@ -522,6 +522,7 @@ def prepare_launch(
     replacing: bool = False,
     now=None,
     beam_path: Optional[Path] = None,
+    model: Optional[tuple] = None,
 ) -> dict:
     """Decide start, resume, hold, closed, or cap. Records the registry row."""
     tid = str(ticket.get("id") or "")
@@ -539,8 +540,14 @@ def prepare_launch(
                         turns = row.get("turns") if isinstance(row.get("turns"), list) else []
                         turns.append([row.get("turnStart") or row.get("started"), row.get("ended")])
                         row["turns"] = turns[-50:]
+                    if turns_kept := (row.get("turns") if isinstance(row.get("turns"), list) else None):
+                        if row.get("model") and len(turns_kept[-1]) == 2:
+                            turns_kept[-1].append(row.get("model"))  # the model of the turn that ended
                     row["turnStart"] = now_s
                     row["step"] = step
+                    if model:
+                        row["model"], row["modelWhy"] = model[0], model[1]
+                        row.pop("modelUsed", None)
                     if step == "fix" and ticket.get("fixKinds"):
                         row["fixKinds"] = list(ticket.get("fixKinds") or [])
                     row["state"] = "running"
@@ -594,6 +601,7 @@ def prepare_launch(
             "lastSeenAt": ticket.get("lastSeenAt") or "",
             "step": step,
             **({"fixKinds": list(ticket.get("fixKinds") or [])} if step == "fix" and ticket.get("fixKinds") else {}),
+            **({"model": model[0], "modelWhy": model[1]} if model else {}),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": agent, "step": step})
@@ -631,6 +639,7 @@ def record_replacement(
             "ended": None,
             "state": "starting",
             "step": str((ticket.get("shuttle") or {}).get("step") or ""),
+            **({"model": str((ticket.get("shuttle") or {}).get("model"))} if (ticket.get("shuttle") or {}).get("model") else {}),
         }
     )
     doc.setdefault("spawns", []).append({"at": now_s, "ticket": tid, "role": "shuttle", "id": new_id, "step": "replace"})
@@ -864,7 +873,16 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     """The one line the parent uses. `resume` does not create an agent."""
     import orchestrator
 
-    decision = prepare_launch(data, ticket, step, replacing=replacing, now=now, beam_path=beam_path)
+    model_cfg = dict(data.get("config") or {})
+    if beam_path is not None:
+        try:
+            import prompt_gate
+
+            model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
+        except Exception:
+            model_cfg = dict(data.get("config") or {})
+    chosen = orchestrator.model_for(ticket, model_cfg, step)
+    decision = prepare_launch(data, ticket, step, replacing=replacing, now=now, beam_path=beam_path, model=chosen)
     tid = ticket.get("id")
     action = decision["action"]
     if action == "hold":
@@ -893,15 +911,10 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
     if decision.get("id"):
         extra += " agent=%s" % decision["id"]
     verb = "resume" if action == "resume" else "start"
-    model_cfg = dict(cfg)
-    if beam_path is not None:
-        try:
-            import prompt_gate
-
-            model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
-        except Exception:
-            model_cfg = dict(cfg)
-    extra += " model=%s" % orchestrator.model_for(ticket, model_cfg, step)[0]
+    extra += " model=%s" % chosen[0]
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else None
+    if shuttle is not None:
+        shuttle["model"] = chosen[0]
     lines = ["%s %s checkout=%s branch=%s%s step=%s" % (verb, tid, kind, branch, extra, step)]
     if detail:
         lines.append("fix: %s %s" % (tid, detail))
@@ -2929,6 +2942,11 @@ def hook_start(payload: dict, root: Optional[Path] = None, now=None) -> dict:
     if verdict.get("deny"):
         what = "The listener poll" if role == "listener" else "Ticket %s" % tid
         return _spawn_denied(beam_path, role, tid, "duplicate", "%s already has its agent. Do not start a second one." % what)
+    if role == "shuttle" and hook_model(payload):
+        try:
+            note_turn(base, tid, None, hook_model(payload))
+        except Exception:
+            pass
     return allow
 
 
@@ -2963,9 +2981,21 @@ def hook_stop(payload: dict, root: Optional[Path] = None) -> dict:
         )
     except OSError:
         pass
-    if role == "shuttle" and isinstance(payload.get("duration_ms"), (int, float)):
-        note_run_ms(base, tid, float(payload["duration_ms"]))
+    if role == "shuttle" and (isinstance(payload.get("duration_ms"), (int, float)) or hook_model(payload)):
+        note_turn(base, tid, payload.get("duration_ms") if isinstance(payload.get("duration_ms"), (int, float)) else None,
+                  hook_model(payload))
     return {}
+
+
+def hook_model(payload: dict) -> str:
+    """The model in a Cursor hook payload, when Cursor sends one."""
+    for key in ("model", "model_name", "modelName", "subagent_model"):
+        value = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("id") or value.get("slug")
+        if value and str(value).strip():
+            return str(value).strip()
+    return ""
 
 
 ORPHAN_MINUTES = 60
@@ -3001,7 +3031,12 @@ def close_orphans(data: dict, beam_path: Optional[Path] = None, now=None) -> int
 
 
 def note_run_ms(base: Path, tid: str, duration_ms: float) -> bool:
-    """1.7.22: Cursor's measured run time of a Shuttle turn, onto its latest registry row (runMs adds up turns)."""
+    return note_turn(base, tid, duration_ms, "")
+
+
+def note_turn(base: Path, tid: str, duration_ms: Optional[float] = None, model: str = "") -> bool:
+    """1.7.22: what Cursor says about a Shuttle turn, onto its latest registry row: the measured run time (runMs adds
+    up turns) and the model that really ran (modelUsed)."""
     candidates = [Path(base) / ".warp" / "beam.json"] + sorted((Path(base) / ".warp" / "runs").glob("*/beam.json"))
     for beam_path in candidates:
         doc = load_file(beam_path)
@@ -3009,7 +3044,10 @@ def note_run_ms(base: Path, tid: str, duration_ms: float) -> bool:
         if not rows:
             continue
         row = max(rows, key=lambda r: str(r.get("turnStart") or r.get("started") or ""))
-        row["runMs"] = float(row.get("runMs") or 0) + max(0.0, duration_ms)
+        if duration_ms is not None:
+            row["runMs"] = float(row.get("runMs") or 0) + max(0.0, float(duration_ms))
+        if model:
+            row["modelUsed"] = model
         save_file(beam_path, doc)
         return True
     return False

@@ -649,6 +649,8 @@ def totals_plain(summary: dict) -> str:
             t.get("fixRounds", "0"), t.get("fixBug", "0"), t.get("ticketsBug", "0"), t.get("fixCi", "0"),
             t.get("ticketsCi", "0"), t.get("fixOther", "0")),
         "Code written (outside .warp/): {}".format(t.get("code", "n/a")),
+        "AI by model: {}".format(t.get("aiModels", "n/a")),
+        "Fix rounds by model: {}".format(t.get("fixModels", "n/a")),
         "Elapsed (wall): {}".format(t["elapsed"]),
         "Human time (estimate): {}".format(t["humanEstimate"]),
         "Human time (actual): {}".format(t["humanActual"]),
@@ -1180,6 +1182,11 @@ def _effort_fields(tickets) -> dict:
         "fixOther": str(sum(int(fc.get(k) or 0) for k in ("acceptance", "conflict", "restart", "stalled", "other"))),
         "ticketsBug": str(int((tot.get("ticketsBack") or {}).get("bug") or 0)),
         "ticketsCi": str(int((tot.get("ticketsBack") or {}).get("ci") or 0)),
+        "aiModels": "; ".join("%s %d runs, %.1fh (%s)" % (m, v.get("runs", 0), v.get("minutes", 0) / 60.0,
+                                                          ", ".join("%s %d" % kv for kv in sorted((v.get("steps") or {}).items())))
+                              for m, v in sorted((tot.get("aiByModel") or {}).items(), key=lambda kv: -kv[1].get("minutes", 0))) or "n/a",
+        "fixModels": "; ".join("%s %d rounds (bug %d, ci %d)" % (m, v.get("rounds", 0), v.get("bug", 0), v.get("ci", 0))
+                               for m, v in sorted((tot.get("fixByModel") or {}).items(), key=lambda kv: -kv[1].get("rounds", 0))) or "n/a",
         "code": ("+%d / -%d lines in %d files over %d tickets, about %d output tokens (added characters / 4)"
                  % (code.get("added", 0), code.get("deleted", 0), code.get("files", 0), code.get("tickets", 0),
                     code.get("tokens", 0))) if code.get("tickets") else "n/a",

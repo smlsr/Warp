@@ -1529,10 +1529,12 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
     const estH = sum(all.map((f) => f.hours)) || startH;
     const steps = {};
     let bug = 0, ci = 0, rounds = 0;
+    const models = {};
     for (const f of all) {
       for (const [k, v] of Object.entries(f.ai && f.ai.runs || {})) (steps[k] || (steps[k] = { runs: 0, minutes: 0 })).runs += num(v) || 0;
       for (const [k, v] of Object.entries(f.ai && f.ai.minutes || {})) (steps[k] || (steps[k] = { runs: 0, minutes: 0 })).minutes += num(v) || 0;
       if (f.fixCounts) { bug += num(f.fixCounts.bug) || 0; ci += num(f.fixCounts.ci) || 0; rounds += num(f.fixCounts.rounds) || 0; }
+      for (const [k, v] of Object.entries(f.ai && f.ai.models || {})) { const s = models[k] || (models[k] = { runs: 0, minutes: 0 }); s.runs += num(v && v.runs) || 0; s.minutes += num(v && v.minutes) || 0; }
     }
     const done = all.filter((f) => f.cat === "done").length;
     const bySize = group(tickets, (f) => f.size || "\u2014").sort((a, b) => SIZE_ORDER.indexOf(a.key) - SIZE_ORDER.indexOf(b.key));
@@ -1544,6 +1546,7 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
       estH,
       startH,
       steps,
+      models,
       bug,
       ci,
       rounds,
@@ -2630,7 +2633,7 @@ table.grid td.t { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
     const cap = num(u.cap);
     const est = num(u.estH);
     const head = `${u.active} active of ${fmtN(cap)} agents \xB7 ${fmtH(u.spentH)} AI working${est ? " of " + fmtH(est) + " planned" : ""} \xB7 back for bugs ${fmtN(u.bug || 0)}, for CI ${fmtN(u.ci || 0)} \xB7 ${fmtN(u.tokens)} tokens`;
-    return `<summary>Utilization <span class="muted">${head}</span></summary><div class="util-b"><div class="meter">` + meter("Active agents / maxAgents", u.active, cap, `${u.active} / ${fmtN(cap)}`) + meter("AI working hours / plan", u.spentH, est, `${fmtH(u.spentH)} / ${fmtH(est)}`) + (u.rounds ? meter("Back for bugs / for CI", u.bug, u.bug + u.ci, `${fmtN(u.bug)} bugs \u00B7 ${fmtN(u.ci)} CI`) : "") + meter("Tickets done", u.done, u.total, `${u.done} / ${u.total}`) + `<div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are AI working time: each Shuttle turn up to its last sign of life, never idle time (1.7.22). The plan is today's tickets${num(u.startH) && num(u.startH) !== est ? "; the estimate at the start was " + fmtH(num(u.startH)) : ""}.${Object.keys(u.steps || {}).length ? " AI runs by step: " + Object.entries(u.steps).sort((a, b) => b[1].runs - a[1].runs).map(([k, v]) => `${esc(k)} ${fmtN(v.runs)} (${fmtH(v.minutes / 60)})`).join(" \u00B7 ") : ""}</div></div><div>${miniTable(u.bySize || [], "size", SIZE_ORDER2)}</div><div>${miniTable(u.byAgent || [], "agent")}</div></div>`;
+    return `<summary>Utilization <span class="muted">${head}</span></summary><div class="util-b"><div class="meter">` + meter("Active agents / maxAgents", u.active, cap, `${u.active} / ${fmtN(cap)}`) + meter("AI working hours / plan", u.spentH, est, `${fmtH(u.spentH)} / ${fmtH(est)}`) + (u.rounds ? meter("Back for bugs / for CI", u.bug, u.bug + u.ci, `${fmtN(u.bug)} bugs \u00B7 ${fmtN(u.ci)} CI`) : "") + meter("Tickets done", u.done, u.total, `${u.done} / ${u.total}`) + `<div class="tlnote">Active means a Warp status from claimed through merging. Hours spent are AI working time: each Shuttle turn up to its last sign of life, never idle time (1.7.22). The plan is today's tickets${num(u.startH) && num(u.startH) !== est ? "; the estimate at the start was " + fmtH(num(u.startH)) : ""}.${Object.keys(u.steps || {}).length ? " AI runs by step: " + Object.entries(u.steps).sort((a, b) => b[1].runs - a[1].runs).map(([k, v]) => `${esc(k)} ${fmtN(v.runs)} (${fmtH(v.minutes / 60)})`).join(" \u00B7 ") : ""}${Object.keys(u.models || {}).length ? ". AI by model: " + Object.entries(u.models).sort((a, b) => b[1].minutes - a[1].minutes).map(([k, v]) => `${esc(k)} ${fmtN(v.runs)} runs (${fmtH(v.minutes / 60)})`).join(" \u00B7 ") : ""}</div></div><div>${miniTable(u.bySize || [], "size", SIZE_ORDER2)}</div><div>${miniTable(u.byAgent || [], "agent")}</div></div>`;
   }
   function renderActions(actions, state) {
     const out = [];

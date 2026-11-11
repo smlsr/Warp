@@ -838,6 +838,8 @@ def apply_directory(
         import effort
 
         effort.seen(ticket, str(row.get("at") or ""))  # 1.7.22: a sign of life for the working-time bound
+        if row.get("model"):
+            effort.seen_model(ticket, str(row.get("at") or ""), str(row.get("model")))
         if _apply_event(beam_path, data, ticket, row, now, heralded, out):
             changed = True
     remote["seen"] = sorted(seen)
@@ -1195,6 +1197,7 @@ def append_status(
     source: str = "",
     acs: Optional[dict] = None,
     step: str = "",
+    model: str = "",
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -1298,6 +1301,9 @@ def append_status(
     }
     if agent:
         line["agent"] = agent
+    if model:
+        line["model"] = str(model).strip()
+        body["model"] = line["model"]
     if pr:
         line["pr"] = pr
     if name:
@@ -1468,6 +1474,7 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
     add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default), ai (Warp's AI review, 1.7.21) or hand")
     add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
+    add.add_argument("--model", default="", help="1.7.22: the model this Shuttle runs as, for the reports (on started)")
     add.add_argument("--step", default="", help="the Shuttle's step (implement, fix, restart, repair, review, verify); "
                                                 "done on a code step needs a product commit (1.7.21)")
     watch = sub.add_parser("observe", help="fetch in-flight branches and patch the live beam")
@@ -1497,6 +1504,7 @@ def main(argv: Optional[list] = None) -> int:
             source=args.source,
             acs=_parse_acs(args.ac),
             step=args.step,
+            model=args.model,
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)

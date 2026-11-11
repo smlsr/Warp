@@ -1308,7 +1308,11 @@ def begin_fix(data: dict, ticket: dict, reasons: list, lines: list) -> None:
     import effort
 
     # 1.7.22: count the round by why it went back (bug, ci, acceptance, conflict, restart, stalled, other).
-    effort.note_fix(ticket, reasons, beam_count.utcnow(), (ticket.get("pr") or {}).get("headSha") or "")
+    try:
+        fix_model = orchestrator.model_for(ticket, data.get("config") or {}, "fix")[0]
+    except Exception:
+        fix_model = ""
+    effort.note_fix(ticket, reasons, beam_count.utcnow(), (ticket.get("pr") or {}).get("headSha") or "", model=fix_model)
     _phase(ticket, "fixing", lines)
     mark_shuttle(ticket, "fix", data)
     lines.extend(_start_lines(data, ticket, "fix", text))
