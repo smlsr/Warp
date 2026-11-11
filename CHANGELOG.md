@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.25
+
+- New: the fast lane (`fastMerge`, default on). Clean pull requests merge as soon as CI is green and Bugbot has no open threads. Every other pull request rebases, passes local CI, then pushes once, all at the same time.
+  - Why it was slow: with many Shuttles, every merge left the other open pull requests BEHIND main, and Warp treated BEHIND as a conflict. Each one got a rebase Shuttle, which pushed, which reran full CI and Bugbot, by which time the next merge had made it BEHIND again; ready pull requests left the merge queue the same way. A conflicting pull request also waited for Bugbot and for every check on its old head before its rebase began, each merge first ran the full test command locally, one pull request at a time, and a pass merged at most 3.
+  - BEHIND is not a conflict. A behind pull request with green checks merges. When GitHub refuses the merge because the branch must be up to date, Warp asks GitHub to update the branch itself (`PUT /pulls/N/update-branch`, guarded by the head): no agent, one server-side commit, and it merges as soon as CI is green on the new head. An update GitHub cannot make because of a conflict goes to a rebase round. ("Base branch was modified" right after another merge in the same pass is still asked again next pass.)
+  - Bugbot gates on open threads. Once Bugbot has reported on a pull request, a later head whose Bugbot threads are all resolved, outdated or answered "Fixed in <sha>", with no findings of its own, does not wait for Bugbot to run again (`bugbot: clear <id> on <sha>`). A pull request Bugbot never reviewed still climbs the 1.7.21 ladder.
+  - Every ready pull request merges in the same pass: `maxMergesPerPass` now defaults to `0`, no cap (was 3), for the supervise pass and the coordinator lane.
+  - The local merge check is skipped when CI ran green on the head; it still runs for a repo with no CI on the pull request.
+  - A real conflict starts its rebase at once, before Bugbot or the old head's checks are waited for. The rebase round also carries every red check and Bugbot finding on the head, runs the local CI command until it exits 0, and pushes once. Rebase rounds of different pull requests start in the same pass, up to `maxAgents` and the locks. Each counts as a `conflict` send-back plus its `ci` and `bug` kinds.
+  - `fastMerge: false` brings back the 1.7.24 behaviour.
+
 ## 1.7.24
 
 - Fix: docs/spec/GATES.md case-collision (was overwriting itself on case-insensitive filesystems); every spec writer now routes through safe_write_spec_md with SPEC_PATH_REGISTRY; pre-commit and pre-push hooks reject case-colliding paths; `make fix-gates` repairs existing checkouts.

@@ -33,7 +33,7 @@ SECTIONS = [
         "model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter", "backupModel", "backupModelMinutes", "staleMinutes", "maxRecoveries",
         "maxSpawnsPerTicket", "maxSpawnsPerHour", "requireCursorApiKey", "effort"]),
     ("Merging", "What has to pass before a merge, how the merge is made, and what is published after it.", [
-        "autoMergeSizes", "checkCommand", "mergeCheck", "mergeCheckMinutes", "maxMergesPerPass", "mergeMethod", "stateInMerge",
+        "autoMergeSizes", "checkCommand", "mergeCheck", "mergeCheckMinutes", "maxMergesPerPass", "fastMerge", "mergeMethod", "stateInMerge",
         "publishOnChange", "pushStateNew", "deleteBranchOnMerge", "mergeQueue", "appendOnlyPaths", "maxFixAttempts",
         "respectMergeWindows", "mergeWindows"]),
     ("Cursor Bugbot", "When Bugbot is required, how it is asked, and how long Warp waits for it.", [

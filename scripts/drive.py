@@ -146,7 +146,8 @@ def tick(beam_path: Path, env: Optional[Env] = None, now=None, base_checks: Opti
     # The lane.
     try:
         method = provider.merge_method(data.get("config") or {})
-        cap = beam_mod.config_int(data, path, "maxMergesPerPass", 3)
+        cap = beam_mod.config_int(data, path, "maxMergesPerPass", 0)
+        cap = cap if cap > 0 else 10 ** 6  # 1.7.25: 0 is every verified pull request
         writes = Writes(path, data, root, slug, env, now)
         lines.extend(lane.run_lane(
             path, data,

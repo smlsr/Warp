@@ -690,6 +690,9 @@ def record_result(ticket: dict, result: str, findings: Optional[list] = None, ev
         fields["shuttleReview"] = result
         fields["shuttleReviewSha"] = head
     pr.update(fields)
+    import fastlane
+
+    fastlane.remember_review(pr, result, head)
     if source == "ai":
         import aireview
 
