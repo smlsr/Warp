@@ -335,6 +335,9 @@ def init(root: Path, channel: Optional[str], dry: bool, allow: bool = True) -> l
     import upgrade
 
     rows = upgrade.install_project_commands(root, PLUGIN_ROOT, dry)
+    import githooks
+
+    steps.extend(githooks.install(root, dry))  # 1.7.24: case-collision pre-commit and pre-push hooks
     wrote = [name for status, name in rows if status == "wrote"]
     if wrote:
         steps.append(("done", "wrote .cursor/commands/ " + ", ".join(wrote)))

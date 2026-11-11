@@ -1333,6 +1333,13 @@ HEARTBEAT_CLAUSE = (
     "id you were started with."
 )
 DEFAULT_LOCAL_CI = "./scripts/ci/local.sh"
+# 1.7.24: docs/spec/gates.md and docs/spec/GATES.md are one file on macOS and two on Linux. Agents must not make the twin.
+SPEC_CASE_LINE = (
+    "docs/spec/ files have one spelling, uppercase: GATES.md, DECISIONS.md, CHANGES.md, GAP-REPORT.md, INFRA.md, "
+    "PROCESSES.md, SEED.md, VERSIONING.md, VERIFICATION.md, DOCS-IN-CODE.md. Edit the file that exists under that "
+    "name; never create or write docs/spec/gates.md or any other casing of these names. The pre-commit hook refuses a "
+    "case collision."
+)
 HEARTBEAT_CONTRACT = "1.7.23"  # a Shuttle launched with HEARTBEAT_CLAUSE is reaped on the shorter heartbeat window
 
 WORKER_CONTRACT = (
@@ -1374,6 +1381,7 @@ def contract_lines(ticket: dict, config: Optional[dict], beat_cmd: str, beat_not
     lines.append("Your heartbeat, every ~%ds: `%s`.%s Before a step that can run longer than the heartbeat window "
                  "(a full test suite, a large build), add `--busy <seconds it may take>` to that heartbeat so the "
                  "dispatcher waits that long." % (every, beat_cmd, (" " + beat_note) if beat_note else ""))
+    lines.append(SPEC_CASE_LINE)
     lines.append(WORKER_CONTRACT)
     return lines
 

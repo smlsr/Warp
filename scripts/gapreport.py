@@ -445,7 +445,9 @@ def cleanup(path: Path, write: bool = False, rename_twins: bool = False, base_br
         if branch in set(base_branches):
             return 2, lines + ["gap-report: refused: you are on %s. Run the cleanup on a branch and merge it as a normal "
                                "pull request." % branch]
-        path.write_text(clean)
+        import safe_write
+
+        safe_write.write_text(path, clean)  # 1.7.24: a docs/spec file keeps its canonical casing
     left, _t = report(clean)
     lines.append("gap-report: %s %d repeated or stale row%s%s%s" % (
         "removed" if write else "would remove", len(removed), "" if len(removed) == 1 else "s",
@@ -527,7 +529,9 @@ def main(argv: Optional[list] = None) -> int:
             if branch in {"main", "master"}:
                 print("gap-report: refused: you are on %s; restore on a branch and merge a normal pull request" % branch)
                 return 2
-            path.write_text(text)
+            import safe_write
+
+            safe_write.write_text(path, text)
         print("gap-report: %s %d row%s" % ("restored" if args.write else "would restore", len(restored), "" if len(restored) == 1 else "s"))
         return 0
     base, main_t, pr = (Path(p).read_text() for p in (args.base, args.main, args.pr))

@@ -259,7 +259,12 @@ _CLOSED = re.compile(r"^[\W_]*(closed|done|fixed|resolved|merged|landed|won'?t[ 
 _TICKET_ID = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[A-Z]?\d+[A-Z0-9]*\b")
 # The living report only (1.7.17). A pack folder's spec/GAP-REPORT.md is a read-only baseline: reading it as well made
 # every row twice, and resolved baseline rows became tickets again.
-REPORT_PATHS = ("docs/spec/GAP-REPORT.md", "docs/GAP-REPORT.md", "GAP-REPORT.md")
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from paths import SPEC_GAP_REPORT_MD  # noqa: E402  (1.7.24: one canonical spelling)
+
+REPORT_PATHS = (SPEC_GAP_REPORT_MD.as_posix(), "docs/GAP-REPORT.md", "GAP-REPORT.md")
 
 
 def report_paths(root: Path, configured=None) -> list:
