@@ -30,6 +30,7 @@ import fnmatch
 import re
 
 import gapreport
+import safe_write
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -116,12 +117,12 @@ def merge_into(root: Path, branch: str, onto: str, run: Optional[Callable] = Non
                     # is merged into it (main).
                     stage = lambda n: _stage(run, tmp, n, rel)
                     try:
-                        target.write_text(resolver(stage(1), stage(3), stage(2)))
+                        safe_write.write_text(target, resolver(stage(1), stage(3), stage(2)))
                     except gapreport.Conflict as exc:
                         _git(run, tmp, "merge", "--abort")
                         return "conflict", "%s (%s)" % (rel, exc)
                 else:
-                    target.write_text(union_resolve(target.read_text()))
+                    safe_write.write_text(target, union_resolve(target.read_text()))
                 _git(run, tmp, "add", rel)
             done = _git(run, tmp, "-c", "user.name=Warp", "-c", "user.email=warp@localhost", "commit", "--no-edit", "-q")
             if not _ok(done):

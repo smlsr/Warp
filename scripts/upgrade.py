@@ -241,6 +241,13 @@ def upgrade(root: Path, source: Optional[Path] = None) -> int:
         if not path.is_file() or path.read_bytes() != blob:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(blob)
+    try:
+        import githooks
+
+        for status, msg in githooks.install(root, plugin_root=plugin):  # 1.7.24: the case-collision hooks
+            print("  [%s] %s" % (status, msg))
+    except Exception as exc:  # never fail an upgrade over the hooks
+        print("  [warn] git hooks not installed: %s" % exc)
     landed = version.version_of(plugin) or version.version_of(source)
     print(version.label(landed))
     print("Reload Cursor (Developer: Reload Window).")

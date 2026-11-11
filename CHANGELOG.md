@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.24
+
+- Fix: docs/spec/GATES.md case-collision (was overwriting itself on case-insensitive filesystems); every spec writer now routes through safe_write_spec_md with SPEC_PATH_REGISTRY; pre-commit and pre-push hooks reject case-colliding paths; `make fix-gates` repairs existing checkouts.
+  - `scripts/paths.py`: `SPEC_GATES_MD` and `SPEC_PATH_REGISTRY`, the canonical uppercase spelling of every docs/spec file (GATES.md, DECISIONS.md, CHANGES.md, GAP-REPORT.md, INFRA.md, PROCESSES.md, SEED.md, VERSIONING.md, VERIFICATION.md, DOCS-IN-CODE.md).
+  - `scripts/safe_write.py`: `safe_write_spec_md` raises on a non-canonical casing (`docs/spec/gates.md`, `docs/spec/Gates.md`), an unknown spec name, or a twin already on disk. Warp's docs/spec writers use it: the GAP-REPORT cleanup and restore (`gapreport.py`), the keyed and union merge driver (`lane.py`); the audit reads `SPEC_GAP_REPORT_MD`. No Warp script wrote GATES.md in either casing: the twin came from outside the plugin, so the hooks and the prompt line are what stop it.
+  - Every Shuttle prompt names the uppercase spellings and says never to create another casing.
+  - `githooks/no-case-collisions.sh`, installed by `/warp-init` and `/warp-upgrade` as `.warp/hooks/no-case-collisions.sh` and run from `.git/hooks/pre-commit` and `.git/hooks/pre-push` (a `# BEGIN WARP HOOK` / `# END WARP HOOK` block placed after the hook's first line, replaced on every run, in the folder `core.hooksPath` names). Pre-commit checks the index (staged files and every tracked file), pre-push the tree of HEAD. It lists each pair with its canonical spelling and suggests `make fix-gates` or `make fix-case-collisions`. `--no-verify` is the escape hatch. `githooks.py install` runs it by hand.
+  - `scripts/fix_gates_case.sh` (`make fix-gates`; `--all` is `make fix-case-collisions`): both spellings in the index are backed up with their mtimes in `docs/spec/.backup/<time>/` (excluded in `.git/info/exclude`), merged into the canonical file with a `---` separator, and the other entry is removed; a lone wrong spelling is renamed with `git mv -f` through a temporary name, which records the casing on macOS too. It adds a 2-line canonical-casing note to the top of docs/spec/GATES.md once. Idempotent. Init and upgrade add both targets to an existing Makefile, between `# BEGIN WARP TARGETS` and `# END WARP TARGETS`.
+  - Tests: `test_paths.py`, `test_safe_write.py`, `test_githooks.py`, and the shell tests `test_no_case_collisions.sh` and `test_fix_gates_case.sh` (run by `test_githooks.py`, so `make ci` covers them).
+
 ## 1.7.23
 
 Fixes two OnSpek/Forge incidents on 1.7.22 (2026-11-11): the D-001 desktop reap (a Shuttle with ~11 local commits was counted dead, replaced and told `reap: exit replaced`, so nothing was pushed) and C-101 (pull request #234 pushed with 4 red checks, including the test the ticket was meant to add, with its acceptance criterion reported as passing). Both were patched by hand in each VM's copy of `orchestrator.py`; new VMs fetched the unpatched plugin.
