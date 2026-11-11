@@ -121,7 +121,7 @@ class PromptTest(unittest.TestCase):
         self.assertIn("- bugbot: %s" % FINDING, vm)
         implement = orchestrator.implement_prompt(dict(ticket, shuttle={"step": "implement"}), {})
         self.assertIn("step: implement", implement)
-        self.assertNotIn("FIX ", implement)
+        self.assertNotIn("FIX WV-11-BB1.", implement)  # 1.7.23: the LOCAL CI clause says "FIX the findings" in every prompt
 
     def test_the_detail_is_kept_for_the_prompt(self):
         data = {"config": {"maxAgents": 4}, "tickets": {}}

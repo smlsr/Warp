@@ -320,6 +320,12 @@ repairSweepMinutes: 15
 # is already queued or running, and starts what it can inside the slot cap.
 # Slack posts only when the sweep starts something new or escalates. Default 15.
 staleMinutes: 15
+# 1.7.23: the HEARTBEAT RULE and LOCAL CI IS MANDATORY in every Shuttle prompt.
+# shuttleHeartbeatIntervalSeconds: 90      # a heartbeat every ~90 s (on a VM: to refs/warp/beat/<id>, no CI)
+# shuttleHeartbeatReapAfterSeconds: 180    # dead when the last heartbeat is older (--busy <s> holds it off)
+# shuttleHeartbeatGracePeriodSeconds: 300  # no heartbeat yet: not reaped before this age
+# requireLocalCiGreenBeforePush: true      # loop local CI to green before the first push / gh pr create
+# localCiCommand: "./scripts/ci/local.sh"  # when the repo has no checkCommand
 # A Shuttle is dead when lastSeenAt is older than this, or it never
 # heartbeated and the claim is older than this. The watchdog replaces a dead
 # Shuttle while the run is running. Pause and stop do not. A fresh heartbeat

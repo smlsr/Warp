@@ -610,6 +610,10 @@ def _apply_event_state(beam_path: Path, data: dict, ticket: dict, event: dict, n
         ticket["agent"] = event.get("agent")
         changed = True
     if state == "heartbeat":
+        busy = event.get("busyUntil") or None
+        if busy != ticket.get("busyUntil"):
+            ticket["busyUntil"] = busy  # 1.7.23: `--busy` on this heartbeat, or none
+            changed = True
         if _apply_heartbeat(ticket, stamp):
             ticket["updatedAt"] = stamp
             return True
@@ -885,6 +889,9 @@ def apply_directory(
     if state and snap_key and snap_key != remote.get("stateKey"):
         if _apply_heartbeat(ticket, str(state.get("heartbeatAt") or "")):
             changed = True
+        if state.get("busyUntil") != ticket.get("busyUntil") and (state.get("busyUntil") or ticket.get("busyUntil")):
+            ticket["busyUntil"] = state.get("busyUntil") or None
+            changed = True
         event = _event_from_state(state)
         if event and _owns(event, tid):
             if _apply_event(beam_path, data, ticket, event, now, heralded, out):
@@ -935,6 +942,14 @@ def _default_read(root: Path, branch: str, tid: str):
         except json.JSONDecodeError:
             parsed = None
         state = parsed if isinstance(parsed, dict) else None
+    if state is None or state.get("cloudAgent") or state.get("heartbeatAt") is not None:
+        # 1.7.23: a VM Shuttle's heartbeats go to refs/warp/beat/<id>, not its branch.
+        beat = _beat_state(root, tid, ([runs.git_rel(run, rel)] if run else []) + [rel])
+        if beat and _newer(str(beat.get("heartbeatAt") or ""), str((state or {}).get("heartbeatAt") or "")):
+            state = dict(state or beat)
+            state["heartbeatAt"] = beat.get("heartbeatAt")
+            if beat.get("busyUntil"):
+                state["busyUntil"] = beat.get("busyUntil")
     rows = []
     if log_text:
         for line in log_text.splitlines():
@@ -1228,6 +1243,7 @@ def append_status(
     acs: Optional[dict] = None,
     step: str = "",
     model: str = "",
+    busy: float = 0,
 ) -> int:
     """Write this ticket's directory only. Does not touch `.warp/beam.json`."""
     tid = _check_id(tid)
@@ -1273,6 +1289,14 @@ def append_status(
         body["cloudAgent"] = cloud
     if state == "heartbeat":
         body["heartbeatAt"] = stamp
+        if busy and float(busy) > 0:
+            # 1.7.23: a heartbeat before a long step: the dispatcher waits this long before it counts the Shuttle dead.
+            import datetime as _dt
+
+            until = beam.parse_ts(stamp) + _dt.timedelta(seconds=min(float(busy), 4 * 3600))
+            body["busyUntil"] = until.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            body.pop("busyUntil", None)
         if not body.get("state"):
             body["state"] = "started"
     else:
@@ -1334,6 +1358,8 @@ def append_status(
     if model:
         line["model"] = str(model).strip()
         body["model"] = line["model"]
+    if state == "heartbeat" and body.get("busyUntil"):
+        line["busyUntil"] = body["busyUntil"]
     if pr:
         line["pr"] = pr
     if name:
@@ -1360,7 +1386,12 @@ def append_status(
     print("ticket: %s" % tid)
     print("state: %s" % state)
     print("dir: .warp/tickets/%s" % tid)
-    code = 0 if not push else _push_dir(root, tid, state)
+    if push and state == "heartbeat":
+        # 1.7.23: a VM heartbeat every ~90 s must not be a commit on the branch (each push would run CI and Bugbot).
+        # It goes to refs/warp/beat/<id>, which no workflow runs on; the parent reads it with the branch.
+        code = _push_beat(root, tid)
+    else:
+        code = 0 if not push else _push_dir(root, tid, state)
     if refused and code == 0:
         code = 3
     for line in _reap_lines(root, tid, agent or _current_agent(root, tid) or str(body.get("agent") or ""), remote=bool(push)):
@@ -1419,6 +1450,70 @@ def _reap_lines(root: Path, tid: str, agent: str, remote: bool = False) -> list:
     if lines and "(no beam" in lines[0]:
         return []
     return lines
+
+
+BEAT_REF = "refs/warp/beat/%s"
+
+
+def _push_beat(root: Path, tid: str) -> int:
+    """Push the ticket folder as a one-commit tree to refs/warp/beat/<id> (force). The branch is not touched."""
+    import os
+    import tempfile
+
+    import runs
+
+    local_rel = ".warp/tickets/%s" % tid
+    run = runs.current(root)
+    rel = runs.git_rel(run, local_rel)
+    if run and rel != local_rel and (root / local_rel).is_dir():
+        import shutil
+
+        shutil.copytree(str(root / local_rel), str(root / rel), dirs_exist_ok=True)
+    if not _has_origin(root):
+        print("beat: %s (no origin)" % tid)
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, env=env)
+
+        git("read-tree", "--empty")
+        added = git("add", "-f", "--", rel)
+        tree = git("write-tree")
+        if added.returncode != 0 or tree.returncode != 0:
+            print("beat: could not stage %s" % rel)
+            return 2
+        commit = git("commit-tree", tree.stdout.strip(), "-m", "Warp heartbeat %s" % tid)
+        if commit.returncode != 0:
+            print("beat: could not commit %s" % rel)
+            return 2
+        pushed = git("push", "-q", "-f", "origin", "%s:%s" % (commit.stdout.strip(), BEAT_REF % tid))
+    if pushed.returncode != 0:
+        print("beat: push failed for %s: %s" % (tid, (pushed.stderr or pushed.stdout).strip()[:200]))
+        return 2
+    print("beat: %s" % (BEAT_REF % tid))
+    return 0
+
+
+def _beat_state(root: Path, tid: str, rels: list) -> Optional[dict]:
+    """The state.json last pushed to refs/warp/beat/<id>, or None."""
+    if not _has_origin(root):
+        return None
+    ref = BEAT_REF % tid
+    fetched = _git(root, "fetch", "-q", "origin", "+%s:%s" % (ref, ref))
+    if fetched.returncode != 0:
+        return None
+    for rel in rels:
+        text = _show(root, ref, rel + "/state.json")
+        if text:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
 
 
 def _push_dir(root: Path, tid: str, summary: str) -> int:
@@ -1504,6 +1599,8 @@ def main(argv: Optional[list] = None) -> int:
     add.add_argument("--finding", action="append", default=[], help="with review-fail: one finding; repeat for each")
     add.add_argument("--source", default="", help="with review-pass or review-fail: shuttle (default), ai (Warp's AI review, 1.7.21) or hand")
     add.add_argument("--ac", action="append", default=[], help="an acceptance result, ID=pass|fail; repeat for each criterion")
+    add.add_argument("--busy", type=float, default=0,
+                     help="1.7.23: with heartbeat, before a long step: seconds the dispatcher waits before it counts this Shuttle dead")
     add.add_argument("--model", default="", help="1.7.22: the model this Shuttle runs as, for the reports (on started)")
     add.add_argument("--step", default="", help="the Shuttle's step (implement, fix, restart, repair, review, verify); "
                                                 "done on a code step needs a product commit (1.7.21)")
@@ -1535,6 +1632,7 @@ def main(argv: Optional[list] = None) -> int:
             acs=_parse_acs(args.ac),
             step=args.step,
             model=args.model,
+            busy=args.busy,
         )
     root = Path(args.root).resolve()
     path = Path(args.beam)
