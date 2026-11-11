@@ -1348,7 +1348,19 @@ def fix_round(ticket: dict) -> int:
     return total
 
 
-def model_for(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> tuple:
+def model_for(ticket: dict, config: Optional[dict], step: Optional[str] = None, down: Optional[dict] = None, now=None) -> tuple:
+    """(slug, why), with the backup model when the chosen one is marked down (1.7.22, modelfail.py)."""
+    slug, why = _chosen_model(ticket, config, step)
+    try:
+        import modelfail
+
+        spare = modelfail.fallback(ticket, config, slug, down=down, now=now)
+    except Exception:
+        spare = None
+    return spare or (slug, why)
+
+
+def _chosen_model(ticket: dict, config: Optional[dict], step: Optional[str] = None) -> tuple:
     """(slug, why) for this ticket's Shuttle.
 
     `model<Size>` (modelS, modelM, modelL, modelXL) when set for the ticket's size, else `model`,

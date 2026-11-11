@@ -528,6 +528,15 @@ def note_shuttle_return(ticket: dict, event: dict, stamp: str, lines: Optional[l
     return True
 
 
+def _from_current_shuttle(ticket: dict, event: dict) -> bool:
+    """The line was written after this ticket's current Shuttle started (or no start is known)."""
+    shuttle = ticket.get("shuttle") if isinstance(ticket.get("shuttle"), dict) else {}
+    since = shuttle.get("startedAt") or ticket.get("workerStartedAt")
+    started = beam.parse_ts(str(since)) if since else None
+    at = beam.parse_ts(str(event.get("at") or ""))
+    return started is None or at is None or at >= started
+
+
 def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: str, heralded: set, lines: list) -> bool:
     """Patch one log line onto this ticket. Returns True when the beam changed."""
     state = str(event.get("state") or "").strip()
@@ -535,6 +544,27 @@ def _apply_event(beam_path: Path, data: dict, ticket: dict, event: dict, now: st
         return False
     noted = _apply_acs(ticket, event, lines, heralded)
     returned = note_shuttle_return(ticket, event, str(event.get("at") or now), lines)
+    if state == "failed" and (returned or _from_current_shuttle(ticket, event)):
+        import modelfail
+
+        error = " ".join(str(event.get(k) or "") for k in ("error", "alarm"))
+        if modelfail.is_model_error(error) and modelfail.backup(data.get("config") or {}):
+            # 1.7.22: the Shuttle failed because of its model: start the step again on backupModel.
+            said = modelfail.note(data, ticket, error, model=str(event.get("model") or ""), now=now)
+            if lines is not None:
+                lines.extend(said)
+            try:
+                import agents
+
+                agents.note_closed(data, ticket, "model-failure", beam_path=beam_path)
+            except Exception:
+                pass
+            if ticket.get("alarm") != "model-failure":
+                modelfail.retry(data, ticket)
+                if lines is not None:
+                    lines.append("result: retry %s on the backup model (queued; not a recovery)" % ticket.get("id"))
+            _remote(ticket)["state"] = "failed"
+            return True
     if returned and state in _STOP_STATES:
         # Its turn is over: end its registry row now, so a restart or a repair is not held for a live Shuttle.
         try:

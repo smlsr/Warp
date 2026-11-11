@@ -876,6 +876,22 @@ def record_result(
         # queued and the next tick retries it. It never counts toward recoveries and never parks.
         agentcap.requeue(data, ticket, line)
         return "queued-cap"
+    import modelfail
+
+    if modelfail.is_model_error(line) and modelfail.backup(data.get("config") or {}):
+        # 1.7.22: the model failed (trial, vendor down, limits, withdrawn). Start again on backupModel.
+        said = modelfail.note(data, ticket, line)
+        data["_modelLines"] = said
+        try:
+            import agents
+
+            agents.note_closed(data, ticket, "model-failure", beam_path=beam_path)
+        except Exception:
+            pass
+        if ticket.get("alarm") == "model-failure":
+            return "model-alarm"
+        modelfail.retry(data, ticket)
+        return "model-retry"
     if _result_failed(line, forced):
         orchestrator.note_subagent_failure(ticket)
         return "worker-died"
@@ -1060,6 +1076,13 @@ def _other(root, path, data, ticket, branch, base, args, cfg) -> int:
         if outcome == "no-product":
             _save(path, data)
             print("result: retry %s (no product commit)" % args.id)
+            return 0
+        if outcome in {"model-retry", "model-alarm"}:
+            for said in data.pop("_modelLines", []) or []:
+                print(said)
+            _save(path, data)
+            if outcome == "model-retry":
+                print("result: retry %s on the backup model (queued; the next tick starts it, not a recovery)" % args.id)
             return 0
         if outcome == "queued-cap":
             print("dispatch: %s launch hit the agent cap; queued, and the next tick retries it (not parked, not a "

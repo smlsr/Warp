@@ -262,5 +262,75 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(ticket["aiModels"][-1][1], "claude-sonnet-5-5")
 
 
+class BackupModelTest(unittest.TestCase):
+    """1.7.22: a model failure starts the ticket again on backupModel (default grok-4.7-high)."""
+
+    def test_what_counts_as_a_model_failure(self):
+        import modelfail
+
+        for text in ("result: A-1 failed: Model claude-opus-5-5 is not available on your plan",
+                     "Error: anthropic API overloaded_error, try again later",
+                     "your free trial has ended; upgrade your plan to keep using this model",
+                     "429 Too Many Requests from the model provider",
+                     "invalid model: gpt-7-ultra", "provider returned 503 Service Unavailable"):
+            self.assertTrue(modelfail.is_model_error(text), text)
+        for text in ("result: A-1 failed: go test ./... FAIL TestModelLoad", "ci red: lint",
+                     "Launch hit agent cap 20", "result: A-1 ok", ""):
+            self.assertFalse(modelfail.is_model_error(text), text)
+
+    def test_result_line_switches_the_ticket_and_the_run_to_the_backup(self):
+        import checkout
+        import modelfail
+        import orchestrator
+
+        cfg = {"model": "claude-opus-5-5"}
+        a = {"id": "A-1", "status": "coding", "size": "M", "locks": ["src/a"], "shuttle": {"step": "implement", "model": "claude-opus-5-5"}}
+        b = {"id": "B-1", "status": "queued", "size": "M", "locks": ["src/b"]}
+        data = {"version": 1, "config": cfg, "tickets": {"A-1": a, "B-1": b}}
+        out = checkout.record_result(data, "A-1", "result: A-1 failed: model claude-opus-5-5 is unavailable (vendor outage)", True)
+        self.assertEqual(out, "model-retry")
+        self.assertEqual(a["status"], "queued")
+        self.assertNotIn("recoveries", a)
+        self.assertTrue(data["_modelLines"][0].startswith("model: claude-opus-5-5 failed for A-1"))
+        self.assertEqual(orchestrator.model_for(a, cfg, "implement")[0], modelfail.DEFAULT_BACKUP)
+        slug, why = orchestrator.model_for(b, cfg, "implement", down=data["modelDown"])
+        self.assertEqual(slug, "grok-4.7-high")
+        self.assertTrue(why.startswith("backupModel: claude-opus-5-5 is down for this run"))
+        # The window ends: the primary is tried again.
+        self.assertEqual(orchestrator.model_for(b, cfg, "implement", down=data["modelDown"], now="2099-01-01T00:00:00Z")[0], "claude-opus-5-5")
+
+    def test_the_backup_failing_too_is_an_alarm_and_none_turns_it_off(self):
+        import checkout
+        import modelfail
+
+        a = {"id": "A-2", "status": "coding", "size": "M", "locks": ["src/a"], "shuttle": {"step": "fix", "model": "grok-4.7-high"}}
+        data = {"version": 1, "config": {"model": "claude-opus-5-5"}, "tickets": {"A-2": a}}
+        self.assertEqual(checkout.record_result(data, "A-2", "failed: grok model rate limit exceeded", True), "model-alarm")
+        self.assertEqual((a["status"], a["alarm"]), ("alarm", "model-failure"))
+        self.assertEqual(modelfail.backup({"backupModel": "none"}), "")
+        c = {"id": "C-2", "status": "coding", "size": "M", "locks": ["src/c"], "shuttle": {"step": "implement"}}
+        off = {"version": 1, "config": {"backupModel": "none"}, "tickets": {"C-2": c}}
+        self.assertEqual(checkout.record_result(off, "C-2", "failed: model is unavailable", True), "worker-died")
+
+    def test_a_shuttle_failed_state_with_a_model_error_retries_on_the_backup(self):
+        import ticket_state
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".warp").mkdir()
+        path = tmp / ".warp" / "beam.json"
+        ticket = {"id": "S-3", "status": "coding", "size": "S", "locks": ["src"], "shuttle": {"step": "implement", "startedAt": "2026-11-10T09:00:00Z", "model": "gpt-6"}}
+        data = {"version": 1, "config": {}, "tickets": {"S-3": ticket}}
+        path.write_text(json.dumps(data))
+        lines = []
+        changed = ticket_state._apply_event(path, data, ticket, {"state": "failed", "at": "2026-11-10T09:05:00Z",
+                                                                 "error": "OpenAI: insufficient_quota for this model", "agent": "subagent:S-3"},
+                                           NOW, set(), lines)
+        self.assertTrue(changed)
+        self.assertEqual(ticket["status"], "queued")
+        self.assertEqual(ticket["modelFallback"]["to"], "grok-4.7-high")
+        self.assertTrue(any(l.startswith("result: retry S-3 on the backup model") for l in lines), lines)
+
+
 if __name__ == "__main__":
     unittest.main()

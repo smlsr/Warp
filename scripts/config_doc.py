@@ -30,7 +30,7 @@ SECTIONS = [
         "baseFixOwner", "checkpointMinutes", "reportOnComplete", "reportPath"]),
     ("Agents and models", "How many Shuttles run, where they run, and which model each one uses.", [
         "runner", "launch", "worktreeRoot", "subagentVm", "memoryCheck", "cloudSnapshot", "maxAgents", "maxInProgress",
-        "model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter", "staleMinutes", "maxRecoveries",
+        "model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "fixModelAfter", "backupModel", "backupModelMinutes", "staleMinutes", "maxRecoveries",
         "maxSpawnsPerTicket", "maxSpawnsPerHour", "requireCursorApiKey", "effort"]),
     ("Merging", "What has to pass before a merge, how the merge is made, and what is published after it.", [
         "autoMergeSizes", "checkCommand", "mergeCheck", "mergeCheckMinutes", "maxMergesPerPass", "mergeMethod", "stateInMerge",
@@ -79,7 +79,7 @@ LISTS = {"appendOnlyPaths", "paths", "jiraKeyPrefixes", "mergeWindows", "notifyA
 MAPS = {"siblingRepos", "repoRuns", "externalRepos", "jiraKeyMap", "cadence", "blockers", "refresh", "ci", "sweep", "load",
         "agents", "gaps"}
 SETTING_MAPS = {"cadence", "blockers", "refresh", "ci", "sweep", "load", "agents", "gaps"}
-MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "listenerModel", "coordinatorModel"}
+MODELS = {"model", "modelS", "modelM", "modelL", "modelXL", "fixModel", "backupModel", "listenerModel", "coordinatorModel"}
 
 
 def rows(text: str) -> list[dict]:

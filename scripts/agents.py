@@ -881,7 +881,13 @@ def launch_lines(data: dict, ticket: dict, step: str, detail: str = "", replacin
             model_cfg = prompt_gate.effective_config(data, Path(beam_path).resolve().parent.parent)
         except Exception:
             model_cfg = dict(data.get("config") or {})
-    chosen = orchestrator.model_for(ticket, model_cfg, step)
+    chosen = orchestrator.model_for(ticket, model_cfg, step, down=data.get("modelDown"), now=now)
+    if str(chosen[1]).startswith("backupModel") and not isinstance(ticket.get("modelFallback"), dict):
+        # The run marked this model down: the ticket's prompt names the backup too.
+        primary = orchestrator._chosen_model(ticket, model_cfg, step)[0]
+        mark = (data.get("modelDown") or {}).get(primary) or {}
+        ticket["modelFallback"] = {"from": primary, "to": chosen[0], "until": mark.get("until"),
+                                   "reason": mark.get("reason") or "model down", "at": mark.get("since")}
     decision = prepare_launch(data, ticket, step, replacing=replacing, now=now, beam_path=beam_path, model=chosen)
     tid = ticket.get("id")
     action = decision["action"]
