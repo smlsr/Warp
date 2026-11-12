@@ -2158,6 +2158,9 @@ def main() -> None:
     import usage
 
     args = p.parse_args(usage.normalize_argv(None))
+    import runs as _runs
+
+    _runs.use_live_beam(args)  # 1.7.26: the exact --beam, run-checked; --mirror-root
     if args.cmd == "ingest":
         cfg = default_config()
         if args.config:

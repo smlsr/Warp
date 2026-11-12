@@ -155,14 +155,186 @@ def live_beam(beam_path) -> tuple:
                        % (beam_path, live))
 
 
+MIRROR_ENV = "WARP_MIRROR_ROOT"
+
+
+def run_of_path(beam_path) -> str:
+    """`<pack>` for `.warp/runs/<pack>/beam.json`, else empty."""
+    if beam_path in (None, "") or not is_published_copy(beam_path):
+        return ""
+    return Path(beam_path).parts[-2]
+
+
+def beam_run(data) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("run") or (data.get("config") or {}).get("run") or "").strip().lower()
+
+
+def _read(path: Path):
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def cross_write_error(beam_path) -> Optional[str]:
+    """Why writing this beam would cross runs, or None (1.7.26).
+
+    `.warp/runs/<X>/beam.json` must carry `run: X`; `.warp/beam.json` must carry the run `.warp/config.yaml` names.
+    A beam with no run stamped yet, or a checkout with no named run, passes."""
+    path = Path(beam_path)
+    data = _read(path)
+    if data is None:
+        return None
+    stamped = beam_run(data)
+    pack = run_of_path(path)
+    if pack:
+        if stamped and stamped != pack:
+            return "%s carries run: %s, but its folder is .warp/runs/%s/; not writing" % (path, stamped, pack)
+        return None
+    if path.name == "beam.json" and path.parent.name == ".warp":
+        live = read_run(path.parent.parent)
+        if live and stamped and live != stamped:
+            return ("%s carries run: %s, but .warp/config.yaml names run: %s; not writing (pass --beam "
+                    ".warp/runs/%s/beam.json for that run)" % (path, stamped, live, stamped))
+    return None
+
+
 def use_live_beam(args) -> None:
-    """Point `args.beam` at the live beam when it names a published copy. Prints the note to stderr."""
-    if not getattr(args, "beam", None):
+    """Bind `args.beam` to the exact file named (1.7.26), once, before anything reads it.
+
+    Until 1.7.26 a published copy (`.warp/runs/<run>/beam.json`) was swapped for this checkout's live beam,
+    `.warp/beam.json`, whenever that file existed. A multi-pack deployment runs one coordinator per pack against
+    `.warp/runs/<pack>/beam.json`, so every pack's heartbeats, phases and Shuttle claims landed on whichever pack held
+    the root beam (Forge: desktop's parent-alive on root run api, web's launch overwriting desktop's 14 claims).
+
+    Now: the path is used as given (absolute when it exists), a beam whose run does not match its folder is refused
+    (exit 2), the process's run is the pack (runs.BOUND), and with `--mirror-root` a successful write to the pack's beam
+    is copied onto `.warp/beam.json` when, and only when, the root beam carries the same run. The one case that still
+    uses the root beam is the 1.7.9 one: the root beam and `.warp/config.yaml` both name this same run, so the root is
+    that run's live beam and the folder only its published copy (without --mirror-root)."""
+    raw = getattr(args, "beam", None)
+    if not raw:
         return
-    chosen, note = live_beam(args.beam)
-    if note:
-        args.beam = chosen
-        print(note, file=sys.stderr)
+    path = bind_path(raw)
+    args.beam = str(path)
+    pack = run_of_path(path)
+    if not pack or BOUND.get("mirror"):
+        return
+    root_beam = repo_root(path) / ".warp" / "beam.json"
+    same_run = root_beam.is_file() and beam_run(_read(root_beam)) == pack
+    if same_run and read_run(repo_root(path)) == pack:
+        # This checkout's live run IS this pack (one pack, or the pack that holds the root): the root beam is its live
+        # beam and the run folder is the copy published from it (1.7.9). Writing the copy would fork the two.
+        args.beam = str(root_beam)
+        print("beam: %s is the run's published copy on the base branch; using this checkout's live beam, %s "
+              "(same run: %s)" % (raw, root_beam, pack), file=sys.stderr)
+    elif same_run:
+        print("beam: writing %s only; the root beam is also run %s: pass --mirror-root to keep it in step"
+              % (path, pack), file=sys.stderr)
+
+
+# What this process is bound to (1.7.26). Reset by every command-line parse (usage.normalize_argv).
+BOUND: dict = {"run": "", "path": "", "mirror": False}
+
+
+def reset_binding() -> None:
+    BOUND.update(run="", path="", mirror=False)
+
+
+def bind_path(raw) -> Path:
+    """Resolve --beam once (absolute when the file exists), refuse a cross-run write (exit 2), bind this process to
+    the pack's run, and arm --mirror-root. Idempotent for the same path."""
+    path = Path(str(raw)).expanduser()
+    if path.exists():
+        path = path.resolve()
+    if BOUND.get("path") == str(path):
+        return path
+    error = cross_write_error(path)
+    if error:
+        print("beam: refuse: %s" % error, file=sys.stderr)
+        sys.exit(2)
+    BOUND["path"] = str(path)
+    pack = run_of_path(path)
+    BOUND["run"] = pack
+    if pack and os.environ.get(MIRROR_ENV) == "1":
+        BOUND["mirror"] = True
+        _arm_mirror(path, repo_root(path) / ".warp" / "beam.json", pack)
+    return path
+
+
+def _arm_mirror(path: Path, root_beam: Path, pack: str) -> None:
+    import atexit
+
+    before = _read(path)
+    atexit.register(_mirror, path, root_beam, pack, before)
+
+
+def beam_patch(before: Optional[dict], after: Optional[dict]) -> dict:
+    """{"set": {top key: value}, "drop": [top keys], "tickets": {id: ticket or None}}: what changed."""
+    before = before or {}
+    after = after or {}
+    patch = {"set": {}, "drop": [], "tickets": {}}
+    for key in set(before) | set(after):
+        if key == "tickets" or key.startswith("_"):
+            continue
+        if key not in after:
+            patch["drop"].append(key)
+        elif before.get(key) != after.get(key):
+            patch["set"][key] = after[key]
+    old_t = before.get("tickets") if isinstance(before.get("tickets"), dict) else {}
+    new_t = after.get("tickets") if isinstance(after.get("tickets"), dict) else {}
+    for tid in set(old_t) | set(new_t):
+        if old_t.get(tid) != new_t.get(tid):
+            patch["tickets"][tid] = new_t.get(tid)
+    return patch
+
+
+def apply_patch(data: dict, patch: dict) -> dict:
+    for key, value in (patch.get("set") or {}).items():
+        data[key] = value
+    for key in patch.get("drop") or []:
+        data.pop(key, None)
+    tickets = data.setdefault("tickets", {})
+    for tid, ticket in (patch.get("tickets") or {}).items():
+        if ticket is None:
+            tickets.pop(tid, None)
+        else:
+            tickets[tid] = ticket
+    return data
+
+
+def _mirror(path: Path, root_beam: Path, pack: str, before: Optional[dict]) -> None:
+    """--mirror-root: copy what this process wrote to the pack's beam onto the root beam, same run only."""
+    after = _read(path)
+    if after is None or after == before:
+        return
+    patch = beam_patch(before, after)
+    if not (patch["set"] or patch["drop"] or patch["tickets"]):
+        return
+    try:
+        import beam as beam_mod
+        import beamlock
+
+        with beamlock.run_lock(root_beam):
+            root = _read(root_beam)
+            if root is None:
+                print("beam: not mirrored: no root beam at %s" % root_beam, file=sys.stderr)
+                return
+            if beam_run(root) != pack:
+                print("beam: not mirrored: the root beam is run %s, not %s" % (beam_run(root) or "(none)", pack),
+                      file=sys.stderr)
+                return
+            apply_patch(root, patch)
+            beam_mod.atomic_write(root_beam, json.dumps(root, indent=2) + "\n", data=root)
+        print("beam: mirrored to %s (%d ticket%s, %d key%s)" % (
+            root_beam, len(patch["tickets"]), "" if len(patch["tickets"]) == 1 else "s",
+            len(patch["set"]) + len(patch["drop"]), "" if len(patch["set"]) + len(patch["drop"]) == 1 else "s"),
+            file=sys.stderr)
+    except Exception as exc:  # the pack's own write already succeeded
+        print("beam: not mirrored: %s" % exc, file=sys.stderr)
 
 
 def is_published_copy(beam_path) -> bool:
@@ -251,7 +423,7 @@ def current(root, data: Optional[dict] = None, branch: Optional[str] = None, exp
     own `run`, then a ticket branch named `warp/<run>/<id>`. The branch is how
     a Shuttle on its own VM, which has no local config, finds its run.
     """
-    for candidate in (explicit, os.environ.get("WARP_RUN", ""), read_run(root)):
+    for candidate in (explicit, BOUND.get("run", ""), os.environ.get("WARP_RUN", ""), read_run(root)):
         name = str(candidate or "").strip().lower()
         if name and valid_name(name)[0]:
             return name
@@ -273,8 +445,9 @@ def for_beam(beam_path, data: Optional[dict] = None) -> str:
 
 
 def branch_prefix(config: Optional[dict]) -> str:
-    """`warp/<run>/` for a named run, `warp/` otherwise."""
-    name = str((config or {}).get("run") or "").strip().lower()
+    """`warp/<run>/` for a named run, `warp/` otherwise. A process bound to a pack's beam (WARP_RUN, set from
+    `--beam .warp/runs/<pack>/beam.json`, runs.BOUND) names branches for that pack (1.7.26)."""
+    name = str(BOUND.get("run") or (config or {}).get("run") or "").strip().lower()
     if name and valid_name(name)[0]:
         return "warp/%s/" % name
     return "warp/"
