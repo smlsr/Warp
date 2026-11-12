@@ -3253,6 +3253,9 @@ def main(argv: Optional[list] = None) -> int:
     sub.add_parser("hook-start", help="subagentStart hook. Reads the hook JSON on stdin.")
     sub.add_parser("hook-stop", help="subagentStop hook. Reads the hook JSON on stdin.")
     args = parser.parse_args(usage.normalize_argv(argv))
+    import runs as _runs
+
+    _runs.use_live_beam(args)  # 1.7.26: the exact --beam, run-checked; --mirror-root
     if args.cmd == "hook-start":
         try:
             verdict = hook_start(_read_hook_input())

@@ -60,6 +60,27 @@ SWITCHES = {
 def normalize_argv(argv: Optional[list[str]], extra_switches: Optional[set[str]] = None) -> list[str]:
     switches = SWITCHES | set(extra_switches or ())
     args = list(sys.argv[1:] if argv is None else argv)
+    import os
+
+    try:
+        import runs as _runs
+
+        _runs.reset_binding()
+    except Exception:
+        _runs = None
+    os.environ.pop("WARP_MIRROR_ROOT", None)
+    if "--mirror-root" in args:
+        # 1.7.26: every script that takes --beam accepts --mirror-root.
+        args = [a for a in args if a != "--mirror-root"]
+        os.environ["WARP_MIRROR_ROOT"] = "1"
+    if _runs is not None:
+        # 1.7.26: bind --beam once, before any handler reads it: exact path, cross-run refusal, the pack's run.
+        for index, arg in enumerate(args):
+            value = args[index + 1] if arg == "--beam" and index + 1 < len(args) else \
+                (arg.split("=", 1)[1] if arg.startswith("--beam=") else None)
+            if value and not value.startswith("-"):
+                _runs.bind_path(value)
+                break
     out: list[str] = []
     take_value = False
     for arg in args:

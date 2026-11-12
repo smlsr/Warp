@@ -401,6 +401,8 @@ def _launch_worktree(root: Path, path: Path, data: dict, ticket: dict, branch: s
     if sibling:
         print("repo: %s (sibling clone %s)" % (sibling, repo))
     cfg = _model_config(root, data)
+    if runs.run_of_path(path):
+        cfg = dict(cfg, _beamPath=str(path))  # 1.7.26: the Shuttle's reap check reads this pack's beam
     prompt = orchestrator.subagent_prompt(ticket, cfg, branch, str(wt), str(root), instance=instance)
     extra = multirepo.prompt_lines(data, ticket, root)
     if extra:
@@ -1025,6 +1027,12 @@ def main(argv: Optional[list] = None) -> int:
             ticket = _ticket(data, args.id)
             base = getattr(args, "base", "") or str(cfg.get("baseBranch") or "HEAD")
             branch = orchestrator.branch_name(ticket, cfg)
+            pack = runs.run_of_path(path)
+            if pack and not str(branch).startswith("warp/%s/" % pack):
+                # 1.7.26: a launch against .warp/runs/<pack>/beam.json only starts warp/<pack>/* branches.
+                print("refuse: %s branch %s is not a warp/%s/ branch; --beam %s belongs to run %s" % (
+                    args.id, branch, pack, path, pack))
+                return 2
             return _launch(root, path, data, ticket, branch, base, args, cfg)
     return _other(root, path, data, ticket, branch, base, args, cfg)
 

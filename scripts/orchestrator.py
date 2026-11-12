@@ -1783,7 +1783,8 @@ def subagent_prompt(
             "Commit, push, and open the pull request from that worktree.",
             "Never merge. Never touch the parent checkout %s. Never call Jira or Slack." % parent,
             REAP_RULE % (tid, agent),
-            "python3 %s/agents.py reap --beam %s/.warp/beam.json --id %s --ticket %s" % (scripts, parent, agent, tid),
+            "python3 %s/agents.py reap --beam %s --id %s --ticket %s" % (
+                scripts, (config or {}).get("_beamPath") or "%s/.warp/beam.json" % parent, agent, tid),
             "Write state with this command. Do not pass --push. It prints the reap line too:",
             "python3 %s/ticket_state.py append --id %s --state coding --agent %s --root %s" % (scripts, tid, agent, parent),
             *review_lines(ticket, config, parent, scripts),
@@ -2807,7 +2808,7 @@ def sync_state(path: Path, by: str = "") -> list:
     return out
 
 
-def parent_alive(beam_path: Path, every: Optional[int] = None, now=None) -> list:
+def parent_alive(beam_path: Path, every: Optional[int] = None, now=None, session: str = "") -> list:
     """A parent heartbeat outside a pass: what a timer or schedule wake runs first (1.7.4).
 
     It writes `listener.parentSeenAt`, so the listener's orphan check sees a live parent, and with `every` records
@@ -2824,6 +2825,13 @@ def parent_alive(beam_path: Path, every: Optional[int] = None, now=None) -> list
     if not inbound.touch_parent(path, now_s, every=every):
         return ["parent: alive; the run is paused, stopped, or finished, so no listener is kept"]
     data = _load(path)
+    if session and isinstance(data.get("listener"), dict) and data["listener"].get("parentSeenSession") != session:
+        import beamlock
+
+        with beamlock.run_lock(path):
+            data = _load(path)
+            data.setdefault("listener", {})["parentSeenSession"] = session
+            _save(path, data)
     raw = data.get("listener") if isinstance(data.get("listener"), dict) else {}
     holder = str(raw.get("holder") or "")
     limit = inbound.orphan_limit_minutes(data, path)
@@ -3074,6 +3082,7 @@ def main(argv: Optional[list] = None) -> int:
     pa = sub.add_parser("parent-alive", help="a parent heartbeat: run it first when a timer or schedule wakes you")
     pa.add_argument("--beam", required=True)
     pa.add_argument("--every", type=int, default=None, help="seconds between your timer wakes; 0 clears it")
+    pa.add_argument("--session", default="", help="1.7.26: the parent session id, recorded with the heartbeat")
 
     ps = sub.add_parser("supervise")
     ps.add_argument("--beam", required=True)
@@ -3165,7 +3174,7 @@ def main(argv: Optional[list] = None) -> int:
             print(line)
         return 0
     if args.cmd == "parent-alive":
-        for line in parent_alive(Path(args.beam), every=args.every):
+        for line in parent_alive(Path(args.beam), every=args.every, session=args.session):
             print(line)
         return 0
     if args.cmd == "supervise":
